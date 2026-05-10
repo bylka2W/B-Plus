@@ -1,0 +1,20 @@
+# Compiled output
+*.bin
+*.obj
+*.exe
+*.wasm
+
+# Build artifacts
+build/
+dist/
+target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store

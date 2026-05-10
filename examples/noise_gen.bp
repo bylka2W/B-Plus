@@ -1,0 +1,52 @@
+-- B+ v1.0
+-- target: auto
+-- safety: total
+
+-- ══════════════════════════════════════════════════════
+-- ТИПЫ: Контракт на выравнивание и доступ
+-- ══════════════════════════════════════════════════════
+type NoiseBuffer[H: Dim, W: Dim] = 
+    @tensor<f32, aligned(64), writeonly>
+    where H % 16 == 0 ∧ W % 16 == 0
+
+-- ══════════════════════════════════════════════════════
+-- ЯДРО: Процедурная генерация с запеченным апскейлом
+-- ══════════════════════════════════════════════════════
+@export("Gen_TSS_Noise")
+@vectorized(width: 512, fma: true)
+@fuse(spatial)
+fn generate_noise[H: Dim, W: Dim](
+    output: NoiseBuffer[H, W],
+    seed: f32,
+    scale: f32
+) {
+    @guard(H > 0 ∧ W > 0, raise: BoundsError("Resolution must be positive"))
+    @guard(scale > 0.0,  raise: ValueError("Scale must be non-zero"))
+
+    body:
+        let x_coord = @index_x * scale + seed
+        let y_coord = @index_y * scale + seed
+        let val = sin(x_coord) * cos(y_coord) * seed
+        
+        @activation(relu) {
+            val >> output[@index_x, @index_y]
+        }
+}
+
+-- ══════════════════════════════════════════════════════
+-- ТОЧКА ВХОДА: Управление потоком и ресурсами
+-- ══════════════════════════════════════════════════════
+@entry_point(abi: "platform_default")
+@pressure(cpu: 20%, ram: 512mb)
+fn main() -> ExitCode {
+    let res_h = @env("NOISE_H"):u32 ?? 1024
+    let res_w = @env("NOISE_W"):u32 ?? 1024
+    
+    let noise_stream = stream::init<f32, shape:[res_h, res_w]>
+    
+    @io_async(prefetch: 2) {
+        run generate_noise[res_h, res_w](noise_stream, 42.0, 0.05)
+    }
+
+    ExitCode::Ok
+}
