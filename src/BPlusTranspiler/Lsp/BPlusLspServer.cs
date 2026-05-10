@@ -450,14 +450,18 @@ public partial class BPlusLspServer
         {
             var t = raw.Trim();
             if (t == "") { sb.AppendLine(); continue; }
-            if (t.StartsWith('}') && depth > 0)
-            {
-                var d = t.TakeWhile(c => c == '}').Count();
-                depth = Math.Max(0, depth - d);
-            }
-            sb.Append(' ', depth * 4);
+
+            var opens = t.Count(c => c == '{');
+            var closes = t.Count(c => c == '}');
+
+            var writeDepth = depth;
+            if (t.Length > 0 && t[0] == '}' && writeDepth > 0)
+                writeDepth--;
+
+            sb.Append(' ', writeDepth * 4);
             sb.AppendLine(t);
-            depth += t.Count(c => c == '{') - t.Count(c => c == '}');
+
+            depth += opens - closes;
             if (depth < 0) depth = 0;
         }
 

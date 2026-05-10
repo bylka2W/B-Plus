@@ -66,6 +66,35 @@ if (args.Length > 0 && args[0] == "watch")
     return 0;
 }
 
+if (args.Length > 0 && args[0] == "format")
+{
+    var fmtInput = args.Length > 1 ? args[1] : null;
+    if (fmtInput == null || !File.Exists(fmtInput))
+    {
+        Console.Error.WriteLine("Usage: bpc format <input.bp>");
+        return 1;
+    }
+    var fmtCheckOnly = args.Contains("--check");
+
+    var fmtSrc = File.ReadAllText(fmtInput);
+    var fmtFormatted = BPlusLspServer.FormatCode(fmtSrc);
+
+    if (fmtCheckOnly)
+    {
+        if (fmtSrc == fmtFormatted)
+        {
+            Console.WriteLine($"{fmtInput} is already formatted.");
+            return 0;
+        }
+        Console.WriteLine($"{fmtInput} needs formatting.");
+        return 1;
+    }
+
+    File.WriteAllText(fmtInput, fmtFormatted);
+    Console.WriteLine($"Formatted: {fmtInput}");
+    return 0;
+}
+
 if (args.Length > 0 && (args[0] == "--visualize" || args[0] == "--vis"))
 {
     var visInput = args.Length > 1 ? args[1] : null;
@@ -125,6 +154,7 @@ if (input == null)
     Console.Error.WriteLine("       bpc --lsp                         (start LSP server)");
     Console.Error.WriteLine("       bpc --install-lsp                  (install LSP for VS Code)");
     Console.Error.WriteLine("       bpc watch <dir> [--target ...]      (watch dir for changes and regenerate)");
+    Console.Error.WriteLine("       bpc format <file.bp> [--check]      (format .bp file)");
     return 1;
 }
 
