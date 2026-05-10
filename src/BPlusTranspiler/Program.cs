@@ -7,6 +7,7 @@ using BPlusTranspiler.Visualizer;
 using BPlusTranspiler.DocGen;
 using BPlusTranspiler.Debugger;
 using BPlusTranspiler.Profiler;
+using BPlusTranspiler.Plugins;
 
 if (args.Length > 0 && (args[0] == "profile" || args[0] == "prof"))
 {
@@ -218,6 +219,7 @@ if (args.Length > 0 && (args[0] == "--visualize" || args[0] == "--vis"))
 var target = "all";
 var output = "./gen";
 var optimize = false;
+string? plugin = null;
 string? input = null;
 
 for (int i = 0; i < args.Length; i++)
@@ -228,13 +230,15 @@ for (int i = 0; i < args.Length; i++)
         output = args[++i];
     else if (args[i] == "--optimize")
         optimize = true;
+    else if (args[i] == "--plugin" && i + 1 < args.Length)
+        plugin = args[++i];
     else if (!args[i].StartsWith("-"))
         input = args[i];
 }
 
 if (input == null)
 {
-    Console.Error.WriteLine("Usage: bpc <input.bp> [--target python|cpp|csharp|c|all] [--optimize] [--output ./dir]");
+    Console.Error.WriteLine("Usage: bpc <input.bp> [--target python|cpp|csharp|c|all] [--optimize] [--output ./dir] [--plugin unity|unreal|godot|web]");
     Console.Error.WriteLine("       bpc --lsp                         (start LSP server)");
     Console.Error.WriteLine("       bpc --install-lsp                  (install LSP for VS Code)");
     Console.Error.WriteLine("       bpc watch <dir> [--target ...]      (watch dir for changes and regenerate)");
@@ -242,6 +246,7 @@ if (input == null)
     Console.Error.WriteLine("       bpc docs <file.bp> [--output ./dir]  (generate documentation)");
     Console.Error.WriteLine("       bpc debug <file.bp>                  (interactive state machine debugger)");
     Console.Error.WriteLine("       bpc profile <file.bp> [iterations]   (profile transition frequencies)");
+    Console.Error.WriteLine("       bpc <input> --plugin unity|unreal|godot|web  (engine-specific code generation)");
     return 1;
 }
 
@@ -277,6 +282,25 @@ if (optimize)
     program = BPlusOptimizer.Optimize(program);
     generators.Add(new CppOptimizedGenerator());
     target = "cpp_opt";
+}
+
+if (plugin != null)
+{
+    var pluginGen = (plugin.ToLower()) switch
+    {
+        "unity" => (ICodeGenerator)new UnityPlugin(),
+        "unreal" => new UnrealPlugin(),
+        "godot" => new GodotPlugin(),
+        "web" or "ts" or "typescript" => new WebPlugin(),
+        _ => null
+    };
+    if (pluginGen == null)
+    {
+        Console.Error.WriteLine($"Unknown plugin: {plugin}. Use: unity, unreal, godot, web");
+        return 1;
+    }
+    generators.Clear();
+    generators.Add(pluginGen);
 }
 
 if (target != "all" && target != "cpp_opt")
