@@ -4,6 +4,7 @@ using BPlusTranspiler.Parser;
 
 var target = "all";
 var output = "./gen";
+var optimize = false;
 string? input = null;
 
 for (int i = 0; i < args.Length; i++)
@@ -12,13 +13,15 @@ for (int i = 0; i < args.Length; i++)
         target = args[++i];
     else if (args[i] == "--output" && i + 1 < args.Length)
         output = args[++i];
+    else if (args[i] == "--optimize")
+        optimize = true;
     else if (!args[i].StartsWith("-"))
         input = args[i];
 }
 
 if (input == null)
 {
-    Console.Error.WriteLine("Usage: bpc <input.bp> [--target python|cpp|csharp|c|all] [--output ./dir]");
+    Console.Error.WriteLine("Usage: bpc <input.bp> [--target python|cpp|csharp|c|all] [--optimize] [--output ./dir]");
     return 1;
 }
 
@@ -49,7 +52,13 @@ var generators = new List<ICodeGenerator>
     new CGenerator()
 };
 
-if (target != "all")
+if (optimize)
+{
+    generators.Add(new CppOptimizedGenerator());
+    target = "cpp_opt";
+}
+
+if (target != "all" && target != "cpp_opt")
 {
     generators = generators.Where(g =>
         g.GetLanguageName().Equals(target, StringComparison.OrdinalIgnoreCase) ||
@@ -73,7 +82,7 @@ foreach (var gen in generators)
     {
         var outputFile = Path.Combine(output, name);
         File.WriteAllText(outputFile, code);
-        Console.WriteLine($"  [{gen.GetLanguageName(),-7}] {outputFile}");
+        Console.WriteLine($"  [{gen.GetLanguageName(),-10}] {outputFile}");
         count++;
     }
 }
