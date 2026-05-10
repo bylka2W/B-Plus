@@ -1,5 +1,6 @@
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Generators;
+using BPlusTranspiler.Optimizer;
 using BPlusTranspiler.Parser;
 
 var target = "all";
@@ -54,6 +55,7 @@ var generators = new List<ICodeGenerator>
 
 if (optimize)
 {
+    program = BPlusOptimizer.Optimize(program);
     generators.Add(new CppOptimizedGenerator());
     target = "cpp_opt";
 }

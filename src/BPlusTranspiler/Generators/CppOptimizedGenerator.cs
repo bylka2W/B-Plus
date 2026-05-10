@@ -304,4 +304,13 @@ public class CppOptimizedGenerator : ICodeGenerator
 
         return sb.ToString();
     }
+
+    private static string[] SplitBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return [];
+        var lines = body.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < lines.Length; i++)
+            lines[i] = lines[i].Trim().TrimEnd(';');
+        return lines;
+    }
 }
