@@ -8,6 +8,49 @@ using BPlusTranspiler.DocGen;
 using BPlusTranspiler.Debugger;
 using BPlusTranspiler.Profiler;
 using BPlusTranspiler.Plugins;
+using BPlusTranspiler.PackageManager;
+using BPlusTranspiler.TestRunner;
+
+if (args.Length > 0 && (args[0] == "test" || args[0] == "tests"))
+{
+    var testFile = "";
+    if (args.Length > 2 && args[1] == "run") testFile = args[2];
+    else if (args.Length > 1) testFile = args[1];
+    if (!File.Exists(testFile))
+    {
+        Console.Error.WriteLine("Usage: bpc test run <input.bp>");
+        return 1;
+    }
+    return BPlusTestRunner.RunTestsFromFiles(testFile, null);
+}
+
+if (args.Length > 0 && args[0] == "bpm")
+{
+    var sub = args.Length > 1 ? args[1] : "help";
+    switch (sub)
+    {
+        case "init": return Bpm.Init(args.Length > 2 ? args[2] : "my-package");
+        case "install": return Bpm.Install(args.Length > 2 ? args[2] : ".");
+        case "list": return Bpm.List();
+        case "search": return Bpm.Search(args.Length > 2 ? args[2] : "");
+        case "publish": return Bpm.Publish(args.Length > 2 ? args[2] : ".");
+        case "new" or "create" or "template":
+            return Bpm.Create(args.Length > 2 ? args[2] : "default");
+        default:
+            Console.WriteLine("B+ Package Manager (BPM)");
+            Console.WriteLine();
+            Console.WriteLine("Usage: bpm <command> [args]");
+            Console.WriteLine();
+            Console.WriteLine("Commands:");
+            Console.WriteLine("  init <name>        Create a new package");
+            Console.WriteLine("  install <path>     Install a package");
+            Console.WriteLine("  list               List installed packages");
+            Console.WriteLine("  search <term>      Search packages");
+            Console.WriteLine("  publish <dir>      Publish a package to local registry");
+            Console.WriteLine("  new <template>     Create from template");
+            return 0;
+    }
+}
 
 if (args.Length > 0 && (args[0] == "profile" || args[0] == "prof"))
 {
@@ -247,6 +290,8 @@ if (input == null)
     Console.Error.WriteLine("       bpc debug <file.bp>                  (interactive state machine debugger)");
     Console.Error.WriteLine("       bpc profile <file.bp> [iterations]   (profile transition frequencies)");
     Console.Error.WriteLine("       bpc <input> --plugin unity|unreal|godot|web  (engine-specific code generation)");
+    Console.Error.WriteLine("       bpc bpm <init|install|list|search|publish>   (package manager)");
+    Console.Error.WriteLine("       bpc test run <file.bp>                      (run auto-generated tests)");
     return 1;
 }
 
