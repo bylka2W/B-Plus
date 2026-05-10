@@ -5,6 +5,29 @@ using BPlusTranspiler.Optimizer;
 using BPlusTranspiler.Parser;
 using BPlusTranspiler.Visualizer;
 using BPlusTranspiler.DocGen;
+using BPlusTranspiler.Debugger;
+
+if (args.Length > 0 && (args[0] == "debug" || args[0] == "dbg"))
+{
+    var dbgInput = args.Length > 1 ? args[1] : null;
+    if (dbgInput == null || !File.Exists(dbgInput))
+    {
+        Console.Error.WriteLine("Usage: bpc debug <input.bp>");
+        return 1;
+    }
+    try
+    {
+        var src = File.ReadAllText(dbgInput);
+        var prog = new BPlusParser().Parse(src);
+        new BPlusDebugServer(prog).Run();
+    }
+    catch (ParseException ex)
+    {
+        Console.Error.WriteLine($"Parse error: {ex.Message}");
+        return 1;
+    }
+    return 0;
+}
 
 if (args.Length > 0 && args[0] == "--lsp")
 {
@@ -191,6 +214,7 @@ if (input == null)
     Console.Error.WriteLine("       bpc watch <dir> [--target ...]      (watch dir for changes and regenerate)");
     Console.Error.WriteLine("       bpc format <file.bp> [--check]      (format .bp file)");
     Console.Error.WriteLine("       bpc docs <file.bp> [--output ./dir]  (generate documentation)");
+    Console.Error.WriteLine("       bpc debug <file.bp>                  (interactive state machine debugger)");
     return 1;
 }
 
