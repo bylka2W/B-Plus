@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <Extern href="stdidl.h"/>
+  <Commands package="guidBPlusLanguagePkg">
+    <Groups>
+      <Group guid="guidBPlusLanguageCmdSet" id="BPlusMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDG_VS_MM_BUILDDEBUGRUN"/>
+      </Group>
+    </Groups>
+    <Buttons>
+      <Button guid="guidBPlusLanguageCmdSet" id="cmdidCompileBPlus" priority="0x0100" type="Button">
+        <Parent guid="guidBPlusLanguageCmdSet" id="BPlusMenuGroup"/>
+        <Icon guid="guidImages" id="bmpIcon"/>
+        <Strings>
+          <ButtonText>Compile B+</ButtonText>
+        </Strings>
+      </Button>
+    </Buttons>
+    <Bitmaps>
+      <Bitmap guid="guidImages" href="Resources\BPlusIcon.png" usedList="bmpIcon"/>
+    </Bitmaps>
+  </Commands>
+  <Symbols>
+    <GuidSymbol name="guidBPlusLanguagePkg" value="{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"/>
+    <GuidSymbol name="guidBPlusLanguageCmdSet" value="{B2C3D4E5-F6A7-8901-BCDE-F12345678901}"/>
+    <GuidSymbol name="guidImages" value="{C3D4E5F6-A7B8-9012-CDEF-123456789012}"/>
+    <IDSymbol name="BPlusMenuGroup" value="0x1020"/>
+    <IDSymbol name="cmdidCompileBPlus" value="0x0100"/>
+    <IDSymbol name="bmpIcon" value="1"/>
+  </Symbols>
+</CommandTable>

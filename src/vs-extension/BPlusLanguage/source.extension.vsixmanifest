@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Id="BPlusLanguage.97f3b2a1-5c6d-4e8f-9a0b-1c2d3e4f5a6b" Version="1.0.0" Publisher="CapGames221" />
+    <DisplayName>B+ Language v1.0</DisplayName>
+    <Description>Language support for B+ — GPU/TSS programming language with typed effects, zero-copy compute, and DirectX 12 integration.</Description>
+    <License>LICENSE</License>
+    <Icon>Resources\BPlusIcon.png</Icon>
+    <PreviewImage>Resources\BPlusIcon.png</PreviewImage>
+    <Tags>b+;bplus;gpu;compute;shader;dx12</Tags>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 18.0)" />
+  </Installation>
+  <Dependencies>
+    <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" Version="[4.7.2,)" />
+    <Dependency Id="Microsoft.VisualStudio.MPF.17.0" DisplayName="Visual Studio MPF 17.0" Version="[17.0,)" />
+  </Dependencies>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.MefComponent" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%|" />
+    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%|" />
+  </Assets>
+</PackageManifest>
