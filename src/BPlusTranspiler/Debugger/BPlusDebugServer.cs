@@ -80,8 +80,7 @@ public class BPlusDebugServer
                     break;
 
                 case "step" or "s":
-                    _stepping = true;
-                    Console.WriteLine("Step mode: waiting for event...");
+                    Console.WriteLine("Step mode: enter an event name to fire it manually.");
                     break;
 
                 case "bp" or "breakpoint":

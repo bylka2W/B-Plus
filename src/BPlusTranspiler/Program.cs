@@ -6,6 +6,32 @@ using BPlusTranspiler.Parser;
 using BPlusTranspiler.Visualizer;
 using BPlusTranspiler.DocGen;
 using BPlusTranspiler.Debugger;
+using BPlusTranspiler.Profiler;
+
+if (args.Length > 0 && (args[0] == "profile" || args[0] == "prof"))
+{
+    var profInput = args.Length > 1 ? args[1] : null;
+    var profIter = 100_000;
+    if (profInput == null || !File.Exists(profInput))
+    {
+        Console.Error.WriteLine("Usage: bpc profile <input.bp> [iterations]");
+        return 1;
+    }
+    if (args.Length > 2 && int.TryParse(args[2], out var n)) profIter = n;
+    try
+    {
+        var src = File.ReadAllText(profInput);
+        var prog = new BPlusParser().Parse(src);
+        var profiler = new BPlusProfiler(prog);
+        profiler.Run(profIter);
+    }
+    catch (ParseException ex)
+    {
+        Console.Error.WriteLine($"Parse error: {ex.Message}");
+        return 1;
+    }
+    return 0;
+}
 
 if (args.Length > 0 && (args[0] == "debug" || args[0] == "dbg"))
 {
@@ -215,6 +241,7 @@ if (input == null)
     Console.Error.WriteLine("       bpc format <file.bp> [--check]      (format .bp file)");
     Console.Error.WriteLine("       bpc docs <file.bp> [--output ./dir]  (generate documentation)");
     Console.Error.WriteLine("       bpc debug <file.bp>                  (interactive state machine debugger)");
+    Console.Error.WriteLine("       bpc profile <file.bp> [iterations]   (profile transition frequencies)");
     return 1;
 }
 
