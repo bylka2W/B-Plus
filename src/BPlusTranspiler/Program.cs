@@ -3,6 +3,7 @@ using BPlusTranspiler.Generators;
 using BPlusTranspiler.Lsp;
 using BPlusTranspiler.Optimizer;
 using BPlusTranspiler.Parser;
+using BPlusTranspiler.Visualizer;
 
 if (args.Length > 0 && args[0] == "--lsp")
 {
@@ -13,6 +14,42 @@ if (args.Length > 0 && args[0] == "--lsp")
 if (args.Length > 0 && args[0] == "--install-lsp")
 {
     InstallLsp();
+    return 0;
+}
+
+if (args.Length > 0 && (args[0] == "--visualize" || args[0] == "--vis"))
+{
+    var visInput = args.Length > 1 ? args[1] : null;
+    if (visInput == null || !File.Exists(visInput))
+    {
+        Console.Error.WriteLine("Usage: bpc --visualize <input.bp> [--output ./dir]");
+        return 1;
+    }
+    var visOutput = "./gen";
+    for (int i = 2; i < args.Length; i++)
+        if (args[i] == "--output" && i + 1 < args.Length) visOutput = args[++i];
+
+    var visSrc = File.ReadAllText(visInput);
+    var visParser = new BPlusParser();
+    try
+    {
+        var visProgram = visParser.Parse(visSrc);
+        Directory.CreateDirectory(visOutput);
+        var visTitle = Path.GetFileNameWithoutExtension(visInput);
+        var visFiles = BPlusVisualizer.GenerateFiles(visProgram, visTitle);
+        foreach (var (name, code) in visFiles)
+        {
+            var visPath = Path.Combine(visOutput, name);
+            File.WriteAllText(visPath, code);
+            Console.WriteLine($"  [visual] {visPath}");
+        }
+        Console.WriteLine($"Done. Open {Path.Combine(visOutput, $"{Sanitize(visTitle)}.html")} in a browser.");
+    }
+    catch (ParseException ex)
+    {
+        Console.Error.WriteLine($"Parse error: {ex.Message}");
+        return 1;
+    }
     return 0;
 }
 
@@ -106,6 +143,9 @@ foreach (var gen in generators)
 
 Console.WriteLine($"Done. Generated {count} file(s) to {output}");
 return 0;
+
+static string Sanitize(string name) =>
+    string.Join("_", name.Split(System.IO.Path.GetInvalidFileNameChars()));
 
 static void InstallLsp()
 {
