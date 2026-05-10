@@ -1,0 +1,67 @@
+import "base_module.bp"
+
+context {
+    var global_difficulty: string = "normal"
+    var max_players: int = 4
+}
+
+enum GameMode {
+    Easy,
+    Normal,
+    Hard
+}
+
+state Menu {
+    var selected_option: int = 0
+
+    on key_press(key: string) -> Menu {
+        handle_navigation(key)
+    }
+
+    on option_selected(id: int) [id == 0] -> Game {
+        set_game_mode(GameMode.Normal)
+        load_level(1)
+    }
+
+    on option_selected(id: int) [id == 1] -> Settings
+
+    after 30s -> AttractMode
+
+    state Settings {
+        var volume: float = 1.0
+
+        on key_press(key: string) -> Settings {
+            adjust_setting(key)
+        }
+
+        on back_pressed -> Menu
+    }
+
+    enter { play_music("menu_theme") }
+    exit { save_settings() }
+}
+
+state Game {
+    var score: int = 0
+
+    on hit -> Game { score += 10 }
+
+    on die [score > 100] -> Victory
+    on die -> GameOver
+
+    enter { start_game() }
+}
+
+state GameOver {
+    on restart -> Menu
+}
+
+parallel RenderSystem {
+    state Renderer {
+        on frame_ready -> Renderer { render_scene() }
+    }
+
+    state Physics {
+        on physics_tick(dt: float) -> Physics { simulate_physics(dt) }
+    }
+}
