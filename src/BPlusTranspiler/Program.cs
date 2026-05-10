@@ -4,6 +4,7 @@ using BPlusTranspiler.Lsp;
 using BPlusTranspiler.Optimizer;
 using BPlusTranspiler.Parser;
 using BPlusTranspiler.Visualizer;
+using BPlusTranspiler.DocGen;
 
 if (args.Length > 0 && args[0] == "--lsp")
 {
@@ -95,6 +96,40 @@ if (args.Length > 0 && args[0] == "format")
     return 0;
 }
 
+if (args.Length > 0 && args[0] == "docs")
+{
+    var docsInput = args.Length > 1 ? args[1] : null;
+    if (docsInput == null || !File.Exists(docsInput))
+    {
+        Console.Error.WriteLine("Usage: bpc docs <input.bp> [--output ./dir]");
+        return 1;
+    }
+    var docsOutput = "./docs";
+    for (int i = 2; i < args.Length; i++)
+        if (args[i] == "--output" && i + 1 < args.Length) docsOutput = args[++i];
+
+    try
+    {
+        var docsSrc = File.ReadAllText(docsInput);
+        var docsProg = new BPlusParser().Parse(docsSrc);
+        Directory.CreateDirectory(docsOutput);
+        var title = Path.GetFileNameWithoutExtension(docsInput);
+        foreach (var (name, code) in BPlusDocGenerator.GenerateFiles(docsProg, title))
+        {
+            var path = Path.Combine(docsOutput, name);
+            File.WriteAllText(path, code);
+            Console.WriteLine($"  [docs] {path}");
+        }
+        Console.WriteLine($"Done. Generated documentation in {docsOutput}/");
+    }
+    catch (ParseException ex)
+    {
+        Console.Error.WriteLine($"Parse error: {ex.Message}");
+        return 1;
+    }
+    return 0;
+}
+
 if (args.Length > 0 && (args[0] == "--visualize" || args[0] == "--vis"))
 {
     var visInput = args.Length > 1 ? args[1] : null;
@@ -155,6 +190,7 @@ if (input == null)
     Console.Error.WriteLine("       bpc --install-lsp                  (install LSP for VS Code)");
     Console.Error.WriteLine("       bpc watch <dir> [--target ...]      (watch dir for changes and regenerate)");
     Console.Error.WriteLine("       bpc format <file.bp> [--check]      (format .bp file)");
+    Console.Error.WriteLine("       bpc docs <file.bp> [--output ./dir]  (generate documentation)");
     return 1;
 }
 
