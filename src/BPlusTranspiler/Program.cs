@@ -17,6 +17,55 @@ if (args.Length > 0 && args[0] == "--install-lsp")
     return 0;
 }
 
+if (args.Length > 0 && args[0] == "watch")
+{
+    var watchDir = args.Length > 1 ? args[1] : ".";
+    if (!Directory.Exists(watchDir))
+    {
+        Console.Error.WriteLine($"Directory not found: {watchDir}");
+        return 1;
+    }
+
+    var watchTarget = "all";
+    var watchOutput = "./gen";
+    var watchOptimize = false;
+    for (int i = 2; i < args.Length; i++)
+    {
+        if (args[i] == "--target" && i + 1 < args.Length) watchTarget = args[++i];
+        else if (args[i] == "--output" && i + 1 < args.Length) watchOutput = args[++i];
+        else if (args[i] == "--optimize") watchOptimize = true;
+    }
+
+    var watchGenArgs = new List<string>();
+    if (watchTarget != "all") { watchGenArgs.Add("--target"); watchGenArgs.Add(watchTarget); }
+    if (watchOutput != "./gen") { watchGenArgs.Add("--output"); watchGenArgs.Add(watchOutput); }
+    if (watchOptimize) watchGenArgs.Add("--optimize");
+
+    Console.WriteLine($"Watching {Path.GetFullPath(watchDir)} for .bp changes...");
+    Console.WriteLine($"  Target: {watchTarget}");
+    Console.WriteLine($"  Output: {Path.GetFullPath(watchOutput)}");
+    Console.WriteLine("  Press Ctrl+C to stop.");
+
+    using var watcher = new FileSystemWatcher(watchDir, "*.bp")
+    {
+        IncludeSubdirectories = true,
+        NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.CreationTime
+    };
+
+    watcher.Changed += (_, e) => OnFileChanged(e.FullPath, watchGenArgs);
+    watcher.Created += (_, e) => OnFileChanged(e.FullPath, watchGenArgs);
+    watcher.Renamed += (_, e) => { OnFileChanged(e.FullPath, watchGenArgs); if (e.OldFullPath != e.FullPath) OnFileChanged(e.OldFullPath, watchGenArgs); };
+    watcher.EnableRaisingEvents = true;
+
+    // Initial build
+    foreach (var bp in Directory.GetFiles(watchDir, "*.bp", SearchOption.AllDirectories))
+        OnFileChanged(bp, watchGenArgs);
+
+    Console.CancelKeyPress += (_, _) => Environment.Exit(0);
+    new ManualResetEventSlim().Wait();
+    return 0;
+}
+
 if (args.Length > 0 && (args[0] == "--visualize" || args[0] == "--vis"))
 {
     var visInput = args.Length > 1 ? args[1] : null;
@@ -75,6 +124,7 @@ if (input == null)
     Console.Error.WriteLine("Usage: bpc <input.bp> [--target python|cpp|csharp|c|all] [--optimize] [--output ./dir]");
     Console.Error.WriteLine("       bpc --lsp                         (start LSP server)");
     Console.Error.WriteLine("       bpc --install-lsp                  (install LSP for VS Code)");
+    Console.Error.WriteLine("       bpc watch <dir> [--target ...]      (watch dir for changes and regenerate)");
     return 1;
 }
 
@@ -146,6 +196,69 @@ return 0;
 
 static string Sanitize(string name) =>
     string.Join("_", name.Split(System.IO.Path.GetInvalidFileNameChars()));
+
+static void OnFileChanged(string file, List<string> genArgs)
+{
+    try
+    {
+        // Debounce: wait a bit for file to be fully written
+        Thread.Sleep(100);
+        var src = File.ReadAllText(file);
+        var parser = new BPlusParser();
+        var program = parser.Parse(src);
+
+        var target = "all";
+        var output = "./gen";
+        var optimize = false;
+
+        for (int i = 0; i < genArgs.Count; i++)
+        {
+            if (genArgs[i] == "--target" && i + 1 < genArgs.Count) target = genArgs[++i];
+            else if (genArgs[i] == "--output" && i + 1 < genArgs.Count) output = genArgs[++i];
+            else if (genArgs[i] == "--optimize") optimize = true;
+        }
+
+        var generators = new List<ICodeGenerator>
+        {
+            new PythonGenerator(), new CppGenerator(), new CSharpGenerator(), new CGenerator()
+        };
+
+        if (optimize)
+        {
+            program = BPlusOptimizer.Optimize(program);
+            generators.Add(new CppOptimizedGenerator());
+            target = "cpp_opt";
+        }
+
+        if (target != "all" && target != "cpp_opt")
+            generators = generators.Where(g =>
+                g.GetLanguageName().Equals(target, StringComparison.OrdinalIgnoreCase) ||
+                g.GetFileExtension().Equals("." + target, StringComparison.OrdinalIgnoreCase)
+            ).ToList();
+
+        Directory.CreateDirectory(output);
+        var count = 0;
+        foreach (var gen in generators)
+        {
+            foreach (var (name, code) in gen.GenerateFiles(program))
+            {
+                var path = Path.Combine(output, name);
+                File.WriteAllText(path, code);
+                count++;
+            }
+        }
+
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {Path.GetFileName(file)} → {count} file(s) regenerated");
+    }
+    catch (ParseException ex)
+    {
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {Path.GetFileName(file)} PARSE ERROR: {ex.Message}");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {Path.GetFileName(file)} ERROR: {ex.Message}");
+    }
+}
 
 static void InstallLsp()
 {
