@@ -7,14 +7,10 @@ namespace BPlusLanguage
     {
         public const string Name = "BPlus";
 
-        [Export(typeof(ContentTypeDefinition))]
-        [Name(Name)]
-        [BaseDefinition("text")]
+        [Export, Name(Name), BaseDefinition("text")]
         internal static ContentTypeDefinition BPlusContentTypeDef = null;
 
-        [Export(typeof(FileExtensionToContentTypeDefinition))]
-        [ContentType(Name)]
-        [FileExtension(".bp")]
+        [Export, ContentType(Name), FileExtension(".bp")]
         internal static FileExtensionToContentTypeDefinition BPlusFileExtension = null;
     }
 }

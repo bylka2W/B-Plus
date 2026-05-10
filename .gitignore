@@ -8,6 +8,11 @@
 build/
 dist/
 target/
+bin/
+obj/
+
+# VS build output
+*.vsix
 
 # IDE
 .vscode/
