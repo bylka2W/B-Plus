@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="BPlusLanguage.97f3b2a1-5c6d-4e8f-9a0b-1c2d3e4f5a6b" Version="1.0.5" Publisher="CapGames221" />
-    <DisplayName>B+ Language v1.0.5 KF BETA</DisplayName>
-    <Description>Language support for B+ — GPU/TSS programming language with typed effects, zero-copy compute, and DirectX 12 integration.</Description>
-    <Tags>b+;bplus;gpu;compute;shader;dx12</Tags>
+    <Identity Id="BPlusLanguage.97f3b2a1-5c6d-4e8f-9a0b-1c2d3e4f5a6b" Version="2.0.1" Publisher="CapGames221" />
+    <DisplayName>B+ Language v2.0.1VS</DisplayName>
+    <Description>B+ state machine language — transpiler, LSP server, visualizer, debugger, profiler, documentation generator, engine plugins (Unity/Unreal/Godot/Web), package manager, and test runner.</Description>
+    <Tags>b+;bplus;state-machine;fsm;transpiler</Tags>
   </Metadata>
   <Installation>
     <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 18.0)" />
