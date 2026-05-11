@@ -159,6 +159,12 @@ dx12 = "auto"
 
 ## Пример генерации
 
+```
+╔══════════════════════════════════════════╗
+║  B+ (вход) — твой код, не меняется      ║
+╚══════════════════════════════════════════╝
+```
+
 ```bp
 state Game {
     var score: int = 0
@@ -167,26 +173,162 @@ state Game {
 }
 ```
 
-**→ C++ (обычный):**
+<details>
+<summary>🔥 B+ — что парсер видит внутри (AST)</summary>
+
+```
+ProgramNode
+├── StateDefNode "Game"
+│   ├── VariableNode score: int = 0
+│   ├── TransitionNode "hit"  → Game  { score += 10 }
+│   └── TransitionNode "die"  → Victory [guard: score > 100]
+└── StateDefNode "Victory" (пустое)
+```
+</details>
+
+```
+╔══════════════════════════════════════════╗
+║  B+ → Python  (bpc game.bp --target python) ║
+╚══════════════════════════════════════════╝
+```
+
+```python
+from enum import auto, Enum
+
+class Game(State):
+    score: int = 0
+
+    def on_hit(self):
+        self.score += 10
+        return Game()
+
+    def on_die(self):
+        if self.score > 100:
+            return Victory()
+        return None
+
+class Victory(State):
+    pass
+```
+
+```
+╔══════════════════════════════════════════╗
+║  B+ → C#    (bpc game.bp --target csharp)  ║
+╚══════════════════════════════════════════╝
+```
+
+```csharp
+using System;
+
+namespace BPlusGenerated
+{
+    public class Game : State
+    {
+        public int score { get; set; } = 0;
+
+        public override State OnHit()
+        {
+            score += 10;
+            return new Game();
+        }
+
+        public override State OnDie()
+        {
+            if (score > 100)
+                return new Victory();
+            return null;
+        }
+    }
+
+    public class Victory : State
+    {
+    }
+}
+```
+
+```
+╔══════════════════════════════════════════╗
+║  B+ → C++ (обычный)  (bpc game.bp --target cpp) ║
+╚══════════════════════════════════════════╝
+```
+
 ```cpp
+#pragma once
+#include "State.h"
+
 class Game : public State {
 public:
     int score = 0;
     State* on_hit() override { score += 10; return new Game(); }
-    State* on_die() override { if (score > 100) return new Victory(); return nullptr; }
+    State* on_die() override {
+        if (score > 100) return new Victory();
+        return nullptr;
+    }
+};
+
+class Victory : public State {
 };
 ```
 
-**→ C++ (--turbo):**
+```
+╔═══════════════════════════════════════════╗
+║  B+ → C++ (--turbo)  (bpc game.bp --target cpp --turbo) ║
+╚═══════════════════════════════════════════╝
+```
+
 ```cpp
+// states_opt.h
+#pragma once
+#include <cstdint>
+
 enum StateId : uint8_t { ST_Game, ST_Victory, ST_COUNT };
 enum Event : uint8_t { EV_hit, EV_die, EV_COUNT };
 
+// Таблицы переходов (нет virtual, нет new)
+extern StateId transition_table[ST_COUNT][EV_COUNT];
+extern void (*enter_table[ST_COUNT])(void);
+extern void (*exit_table[ST_COUNT])(void);
+
+// Основной цикл: табличный lookup
+StateId run_transition(StateId current, Event ev);
+```
+
+```cpp
+// states_opt.cpp
+#include "states_opt.h"
+
+// enter/exit функции
+void game_enter(void) { }
+void victory_enter(void) { }
+
+// Таблица переходов: [текущее_состояние][событие] → следующее
 StateId transition_table[ST_COUNT][EV_COUNT] = {
-    { ST_Game, (StateId)-1 },  // Game
-    { (StateId)-1, (StateId)-1 },  // Victory
+    { ST_Game,   (StateId)-1 },  // Game:  hit→Game,  die→(guard)
+    { (StateId)-1, (StateId)-1 },// Victory: нет переходов
 };
 
+// Таблица enter-действий
+void (*enter_table[ST_COUNT])(void) = { game_enter, victory_enter };
+
+// Guard-функция для переходов с условиями
+StateId check_transition(StateId current, Event ev) {
+    switch (current) {
+        case ST_Game:
+            switch (ev) {
+                case EV_die:
+                    score += 10;           // body перехода
+                    if (score > 100)
+                        return ST_Victory;  // guard сработал
+                    return (StateId)-1;     // guard не сработал
+                default: break;
+            }
+            break;
+        default: break;
+    }
+    return (StateId)-1;
+}
+
+// Главная функция: exit → lookup → guard → enter
 StateId run_transition(StateId current, Event ev) {
     if (exit_table[current]) exit_table[current]();
     StateId next = transition_table[current][ev];
@@ -197,7 +339,46 @@ StateId run_transition(StateId current, Event ev) {
 }
 ```
 
-**→ Python, C#, C** — аналогично, без virtual-диспетчеризации при --optimize.
+```
+╔══════════════════════════════════════════╗
+║  B+ → C        (bpc game.bp --target c)    ║
+╚══════════════════════════════════════════╝
+```
+
+```c
+// states.h
+#pragma once
+
+typedef struct Game {
+    int score;
+    State* (*on_hit)(void);
+    State* (*on_die)(void);
+} Game;
+
+State* game_on_hit(void);
+State* game_on_die(void);
+
+// states.c
+#include "states.h"
+
+int game_score = 0;
+
+State* game_on_hit(void) {
+    game_score += 10;
+    return &game_state;
+}
+
+State* game_on_die(void) {
+    if (game_score > 100) return &victory_state;
+    return NULL;
+}
+
+State game_state = {
+    .score = 0,
+    .game_on_hit = game_on_hit,
+    .game_on_die = game_on_die,
+};
+```
 
 ## Структура проекта
 
