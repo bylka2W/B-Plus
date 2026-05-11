@@ -1,0 +1,15 @@
+[project]
+name = "my_fsr"
+version = "1.0.0"
+
+[build]
+mode = "turbo"
+target = "cpp"
+output = "./gen_build"
+incremental = true
+parallel = true
+cache = true
+flags = ["--pack", "--pool"]
+
+[deps]
+fmt = "11.0"

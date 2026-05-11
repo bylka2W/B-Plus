@@ -12,6 +12,36 @@ using BPlusTranspiler.Plugins;
 using BPlusTranspiler.PackageManager;
 using BPlusTranspiler.TestRunner;
 
+if (args.Length > 0 && args[0] == "health")
+{
+    var healthInput = args.Length > 1 && !args[1].StartsWith("-") ? args[1] : null;
+    var healthArgs = args.Skip(healthInput != null ? 2 : 1).ToArray();
+    var healthFlags = OptimizationFlags.Parse(healthArgs);
+    return BPlusHealth.Run(healthInput, healthFlags);
+}
+
+if (args.Length > 0 && args[0] == "diff")
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("Usage: bpc diff <file_a.bp> <file_b.bp>");
+        return 1;
+    }
+    return BPlusDiff.Run(args[1], args[2]);
+}
+
+if (args.Length > 0 && args[0] == "build")
+{
+    string? buildConfig = null;
+    var buildDryRun = false;
+    for (int i = 1; i < args.Length; i++)
+    {
+        if (args[i] == "--config" && i + 1 < args.Length) buildConfig = args[++i];
+        else if (args[i] == "--dry-run") buildDryRun = true;
+    }
+    return BPlusBuild.Run(buildConfig, buildDryRun);
+}
+
 if (args.Length > 0 && (args[0] == "test" || args[0] == "tests"))
 {
     var testFile = "";
@@ -292,6 +322,9 @@ if (input == null)
     Console.Error.WriteLine("       bpc <input> --plugin unity|unreal|godot|web  (engine-specific code generation)");
     Console.Error.WriteLine("       bpc bpm <init|install|list|search|publish>   (package manager)");
     Console.Error.WriteLine("       bpc test run <file.bp>                      (run auto-generated tests)");
+    Console.Error.WriteLine("       bpc health [dir] [flags]                    (project health analysis)");
+    Console.Error.WriteLine("       bpc diff <a.bp> <b.bp>                      (semantic diff)");
+    Console.Error.WriteLine("       bpc build [--config bp.toml] [--dry-run]    (build from config)");
     Console.Error.WriteLine();
     Console.Error.WriteLine("Optimization flags:");
     Console.Error.WriteLine("  --optimize                  Tables instead of virtual dispatch (+10-15%)");
