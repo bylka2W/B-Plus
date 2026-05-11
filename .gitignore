@@ -16,6 +16,9 @@ obj/
 
 # Generated code
 examples/gen/
+examples/gen_*/
+gen_*/
+gen/
 
 # IDE
 .vscode/
