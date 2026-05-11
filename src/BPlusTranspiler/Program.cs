@@ -386,10 +386,16 @@ var generators = new List<ICodeGenerator>
     new CGenerator()
 };
 
-// LLVM IR generator (native machine code path)
-if (target == "llvm" || target == "all")
+// LLVM IR generators (machine code paths)
+if (target is "llvm" or "all" or "wasm" or "arm64" or "ios" or "android")
 {
-    generators.Add(new LlvmGenerator());
+    generators.Add(new LlvmGenerator(target));
+}
+
+// Bridge-only targets also generate .ll
+if (target is "bridge" or "bridges")
+{
+    generators.Add(new LlvmGenerator("native"));
 }
 
 // Add kernel code generator if program has kernels/pipelines
@@ -437,7 +443,8 @@ if (plugin != null)
     generators.Add(pluginGen);
 }
 
-if (target != "all" && target != "cpp_opt")
+if (target != "all" && target != "cpp_opt" && target != "llvm" && target != "wasm"
+    && target != "arm64" && target != "ios" && target != "android" && target != "bridge" && target != "bridges")
 {
     generators = generators.Where(g =>
         g.GetLanguageName().Equals(target, StringComparison.OrdinalIgnoreCase) ||
@@ -446,7 +453,7 @@ if (target != "all" && target != "cpp_opt")
 
     if (generators.Count == 0)
     {
-        Console.Error.WriteLine($"Unknown target: {target}. Use: python, cpp, csharp, c, llvm, all");
+        Console.Error.WriteLine($"Unknown target: {target}. Use: python, cpp, csharp, c, llvm, wasm, arm64, ios, android, bridges, all");
         return 1;
     }
 }
@@ -498,6 +505,9 @@ static void OnFileChanged(string file, List<string> genArgs)
             new PythonGenerator(), new CppGenerator(), new CSharpGenerator(), new CGenerator()
         };
 
+        if (target is "llvm" or "wasm" or "arm64" or "ios" or "android")
+            generators.Add(new LlvmGenerator(target));
+
         if (watchOptFlags.HasAny)
         {
             if (watchOptFlags.Optimize || watchOptFlags.DeadElim || watchOptFlags.ConstFold || watchOptFlags.Dedup)
@@ -506,7 +516,8 @@ static void OnFileChanged(string file, List<string> genArgs)
             target = "cpp_opt";
         }
 
-        if (target != "all" && target != "cpp_opt")
+        if (target != "all" && target != "cpp_opt" && target != "llvm" && target != "wasm"
+            && target != "arm64" && target != "ios" && target != "android" && target != "bridge" && target != "bridges")
             generators = generators.Where(g =>
                 g.GetLanguageName().Equals(target, StringComparison.OrdinalIgnoreCase) ||
                 g.GetFileExtension().Equals("." + target, StringComparison.OrdinalIgnoreCase)
