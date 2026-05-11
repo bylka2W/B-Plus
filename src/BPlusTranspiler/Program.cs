@@ -386,6 +386,12 @@ var generators = new List<ICodeGenerator>
     new CGenerator()
 };
 
+// LLVM IR generator (native machine code path)
+if (target == "llvm" || target == "all")
+{
+    generators.Add(new LlvmGenerator());
+}
+
 // Add kernel code generator if program has kernels/pipelines
 if (program.Kernels.Count > 0 || program.Pipelines.Count > 0 || program.Entries.Count > 0
     || program.UseCxxDecls.Count > 0 || program.ExternCppFns.Count > 0)
@@ -440,7 +446,7 @@ if (target != "all" && target != "cpp_opt")
 
     if (generators.Count == 0)
     {
-        Console.Error.WriteLine($"Unknown target: {target}. Use: python, cpp, csharp, c, all");
+        Console.Error.WriteLine($"Unknown target: {target}. Use: python, cpp, csharp, c, llvm, all");
         return 1;
     }
 }
