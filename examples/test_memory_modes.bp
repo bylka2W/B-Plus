@@ -1,0 +1,25 @@
+-- Test: All three memory modes parse correctly
+#lang b+ v2.0
+#mode turbo
+#target auto
+
+-- Test #memory smart
+#memory smart
+#vram budget: 8gb
+#ram budget: 16gb
+#cache auto
+#defrag auto
+#streaming priority: camera
+
+data: Buffer[1024]
+
+-- Test #memory precise
+#memory precise
+data2: Buffer[1024]
+
+-- Test #memory ultra
+#memory ultra
+data3: Buffer[1024]
+
+entry main()
+    ExitCode::Ok

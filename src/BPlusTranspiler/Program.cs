@@ -1,4 +1,4 @@
-using BPlusTranspiler;
+﻿using BPlusTranspiler;
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Generators;
 using BPlusTranspiler.Lsp;
@@ -305,6 +305,14 @@ for (int i = 0; i < args.Length; i++)
         output = args[++i];
     else if (args[i] == "--plugin" && i + 1 < args.Length)
         plugin = args[++i];
+    // Skip flag values consumed by OptimizationFlags
+    else if (args[i] is "--thread-pool" or "--prefetch" or "--pool" or "--memory"
+             or "--eco" or "--target-arch" or "--target-os"
+             or "--pin-regs" or "--benchmark")
+    {
+        if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+            i++;
+    }
     else if (!args[i].StartsWith("-"))
         input = args[i];
 }
@@ -345,6 +353,9 @@ if (input == null)
     Console.Error.WriteLine("  --lock-free                  Безлоковые структуры               +5-10%");
     Console.Error.WriteLine("  --target-arch <arch>         native|zen4|raptor|m1|cortex");
     Console.Error.WriteLine("  --target-os <os>             linux|windows|baremetal");
+    Console.Error.WriteLine("  --memory=regions             Region allocator (zero-free transitions)");
+    Console.Error.WriteLine("  --pool=linear|ring           State pool allocator (linear: +20-40%, ring: ~0 alloc)");
+    Console.Error.WriteLine("  --pgo                        PGO counters + __builtin_expect instrumentation");
     return 1;
 }
 
@@ -374,6 +385,13 @@ var generators = new List<ICodeGenerator>
     new CSharpGenerator(),
     new CGenerator()
 };
+
+// Add kernel code generator if program has kernels/pipelines
+if (program.Kernels.Count > 0 || program.Pipelines.Count > 0 || program.Entries.Count > 0
+    || program.UseCxxDecls.Count > 0 || program.ExternCppFns.Count > 0)
+{
+    generators.Add(new CppKernelGenerator());
+}
 
 // Error analysis (7 categories)
 if (optFlags.Check || !optFlags.HasAny)
@@ -533,7 +551,7 @@ static void InstallLsp()
     var packageJson = new
     {
         name = "bplus-lsp",
-        version = "2.0.0",
+        version = "2.1.3VS",
         displayName = "B+ Language Support",
         description = "B+ state machine language — LSP integration",
         categories = new[] { "Programming Languages" },

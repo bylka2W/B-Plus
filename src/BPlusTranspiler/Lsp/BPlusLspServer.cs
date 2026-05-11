@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -94,7 +94,7 @@ public partial class BPlusLspServer
                             }
                         }
                     },
-                    serverInfo = new { name = "bpc-lsp", version = "2.0.0" }
+                    serverInfo = new { name = "bpc-lsp", version = "2.1.3VS" }
                 });
                 break;
 

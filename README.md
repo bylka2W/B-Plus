@@ -1,6 +1,8 @@
-# B+ v2.1.0VS — язык конечных автоматов
+﻿# B+ v2.1.3VS — язык конечных автоматов + система памяти
 
 B+ — язык описания конечных автоматов (state machine) с транспиляцией в **Python, C#, C++, C**, а также плагинами для **Unity, Unreal Engine, Godot и Web (TypeScript)**. Никакого рантайма — чистый код под твою платформу.
+
+**v2.1.3VS**: Система памяти — три режима (`smart` / `precise` / `ultra`), аннотации `@live`, `@quant`, `@align`, `@compress`, `@stream`, `@pool`, `@region`, регионы с автоматическим временем жизни. Парсинг generic-типов `TypeName[N]`, строковые значения в аргументах, standalone `@region`.
 
 ## Быстрый старт
 
@@ -125,6 +127,54 @@ dx12 = "auto"
 | Async | `async on load -> Done` |
 | Auto-переходы | `always -> Next` |
 
+## Система памяти (v2.1.3VS+)
+
+Три режима управления памятью — синтаксис кода не меняется.
+
+| Режим | Описание |
+|-------|----------|
+| `#memory smart` | Компилятор сам решает где что хранит |
+| `#memory precise` | Ты явно указываешь аннотации |
+| `#memory ultra` | Максимальное сжатие (int4, BC1) |
+
+```bp
+#memory smart
+#vram    budget: 8gb
+#ram     budget: 16gb
+#cache   auto
+#defrag  auto
+#streaming priority: camera
+
+@live(vram, always)               -- всегда в VRAM
+@quant(int8)                      -- сжать до int8
+@align(cacheline)                 -- по кеш-линии
+weights_precise: ConvWeights[3,3,3,64] = @load("w.bin")
+
+@live(ram, when_visible)          -- RAM, в VRAM только когда видно
+@compress(bc7)                    -- сжатие текстур BC7
+@stream(priority: high)           -- стриминг с высоким приоритетом
+textures_precise: TextureAtlas[1024] = @stream("textures/")
+
+@live(l2_cache, hot)              -- держать в L2 кеше
+@align(64)                        -- выровнять по кеш-линии
+hot_data: HotBuffer[256]
+
+@stream(
+    source:   "assets/textures/",
+    resident: 512mb,
+    evict:    lru,
+    prefetch: 2
+)
+world_textures: TextureAtlas[4096]
+
+@region(frame)                    -- живёт один кадр
+kernel upscale(src: Image[H,W]) -> Image[H*2, W*2]
+    body:
+        src |> convolve(weights) |> relu |> shuffle(2) |> clamp(0.0, 1.0)
+```
+
+Подробнее: `examples/memory_demo.bp`.
+
 ## Флаги оптимизации (синтаксис B+ не меняется)
 
 `--optimize` — таблица переходов вместо virtual dispatch (+10-30%)<br>
@@ -226,7 +276,44 @@ B+ v1.0/
 │   │   └── Program.cs              — CLI (bpc)
 │   └── vs-extension/               ← VS2022 extension (.vsix)
 ├── examples/                        ← .bp примеры
+│   ├── traffic_light.bp             — базовый пример
+│   ├── game.bp / game_full.bp       — игровой автомат
+│   ├── vending_machine.bp           — торговый автомат
+│   ├── dead_state_test.bp           — диагностика dead state
+│   ├── memory_demo.bp               — демо системы памяти
+│   ├── test_array_type.bp           — тест TypeName[N]
+│   ├── test_annotation_values.bp    — тест строковых аргументов
+│   ├── test_standalone_region.bp    — тест standalone @region
+│   ├── test_memory_modes.bp         — тест трёх режимов памяти
+│   ├── noise_gen.bp                 — генератор шума (в разработке)
+│   └── gen_bpm_test/                — тест BPM
+├── test_memory.bp                   — интеграционный тест памяти
+├── test_memory_full.bp              — полный тест памяти
 └── BPlusLanguage.vsix               ← VS extension
+```
+
+## Тестирование
+
+Все тесты проходят `--check` без ошибок:
+
+```bash
+# Проверка всех примеров
+for f in examples/*.bp; do dotnet run --project src/BPlusTranspiler -- $f --check; done
+
+# Полная транспиляция с генерацией
+dotnet run --project src/BPlusTranspiler -- examples/memory_demo.bp
+
+# Разные режимы памяти
+dotnet run --project src/BPlusTranspiler -- examples/test_memory_modes.bp --check
+
+# ArrayType — TypeName[N]
+dotnet run --project src/BPlusTranspiler -- examples/test_array_type.bp --check
+
+# Аннотации со строками
+dotnet run --project src/BPlusTranspiler -- examples/test_annotation_values.bp --check
+
+# Standalone @region
+dotnet run --project src/BPlusTranspiler -- examples/test_standalone_region.bp --check
 ```
 
 ## Бенчмарк: B+ vs C++

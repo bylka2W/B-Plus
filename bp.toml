@@ -1,6 +1,6 @@
-[project]
+﻿[project]
 name = "my_fsr"
-version = "1.0.0"
+version = "2.1.3VS"
 
 [build]
 mode = "turbo"

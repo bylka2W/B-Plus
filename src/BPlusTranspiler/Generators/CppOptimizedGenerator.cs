@@ -63,7 +63,75 @@ public class CppOptimizedGenerator : ICodeGenerator
         sb.AppendLine("#pragma once");
         sb.AppendLine("#include <cstdint>");
         sb.AppendLine("#include <cstddef>");
+        sb.AppendLine("#include <new>");
+        if (_flags.Pool != PoolMode.None || _flags.Memory == MemoryMode.Regions)
+            sb.AppendLine("#include <cstdlib>");
         sb.AppendLine();
+
+        // Pool allocator declarations
+        if (_flags.Pool != PoolMode.None)
+        {
+            if (_flags.Pool == PoolMode.Linear)
+            {
+                sb.AppendLine("template<size_t POOL_SIZE = 65536>");
+                sb.AppendLine("struct LinearPool {");
+                sb.AppendLine("    char buffer[POOL_SIZE];");
+                sb.AppendLine("    size_t offset = 0;");
+                sb.AppendLine("    void* alloc(size_t size) {");
+                sb.AppendLine("        if (offset + size > POOL_SIZE) return nullptr;");
+                sb.AppendLine("        void* ptr = buffer + offset;");
+                sb.AppendLine("        offset += size;");
+                sb.AppendLine("        return ptr;");
+                sb.AppendLine("    }");
+                sb.AppendLine("    void reset() { offset = 0; }");
+                sb.AppendLine("};");
+                sb.AppendLine("extern LinearPool<> state_pool;");
+            }
+            else if (_flags.Pool == PoolMode.Ring)
+            {
+                sb.AppendLine("template<size_t POOL_SIZE = 65536>");
+                sb.AppendLine("struct RingPool {");
+                sb.AppendLine("    char buffer[POOL_SIZE];");
+                sb.AppendLine("    size_t head = 0;");
+                sb.AppendLine("    void* alloc(size_t size) {");
+                sb.AppendLine("        if (head + size > POOL_SIZE) head = 0;");
+                sb.AppendLine("        if (head + size > POOL_SIZE) return nullptr;");
+                sb.AppendLine("        void* ptr = buffer + head;");
+                sb.AppendLine("        head += size;");
+                sb.AppendLine("        return ptr;");
+                sb.AppendLine("    }");
+                sb.AppendLine("};");
+                sb.AppendLine("extern RingPool<> state_pool;");
+            }
+            sb.AppendLine();
+        }
+
+        // Region allocator declarations
+        if (_flags.Memory == MemoryMode.Regions)
+        {
+            sb.AppendLine("struct Region {");
+            sb.AppendLine("    char* data;");
+            sb.AppendLine("    size_t size;");
+            sb.AppendLine("    size_t used;");
+            sb.AppendLine("};");
+            sb.AppendLine("struct RegionAllocator {");
+            sb.AppendLine("    static constexpr int MAX_REGIONS = 8;");
+            sb.AppendLine("    Region regions[MAX_REGIONS];");
+            sb.AppendLine("    int active = 0;");
+            sb.AppendLine("    void* alloc(size_t size);");
+            sb.AppendLine("    void reset();");
+            sb.AppendLine("};");
+            sb.AppendLine("extern RegionAllocator region_alloc;");
+            sb.AppendLine();
+        }
+
+        // PGO profile counters
+        if (_flags.Pgo)
+        {
+            sb.AppendLine("// PGO profile counters");
+            sb.AppendLine("extern uint64_t pgo_counts[ST_COUNT][EV_COUNT];");
+            sb.AppendLine();
+        }
 
         // State enum
         sb.AppendLine($"enum StateId : uint8_t {{");
@@ -167,6 +235,54 @@ public class CppOptimizedGenerator : ICodeGenerator
         {
             foreach (var v in program.Context.Variables)
                 sb.AppendLine($"{v.Type} {v.Name} = {v.DefaultValue ?? "0"};");
+            sb.AppendLine();
+        }
+
+        // Pool allocator definitions
+        if (_flags.Pool != PoolMode.None)
+        {
+            if (_flags.Pool == PoolMode.Linear)
+                sb.AppendLine("LinearPool<> state_pool;");
+            else if (_flags.Pool == PoolMode.Ring)
+                sb.AppendLine("RingPool<> state_pool;");
+            sb.AppendLine();
+        }
+
+        // Region allocator definition
+        if (_flags.Memory == MemoryMode.Regions)
+        {
+            sb.AppendLine("RegionAllocator region_alloc;");
+            sb.AppendLine("void* RegionAllocator::alloc(size_t size) {");
+            sb.AppendLine("    if (active >= MAX_REGIONS) return nullptr;");
+            sb.AppendLine("    auto& r = regions[active];");
+            sb.AppendLine("    if (r.used + size > r.size) {");
+            sb.AppendLine("        active++;");
+            sb.AppendLine("        if (active >= MAX_REGIONS) return nullptr;");
+            sb.AppendLine("        auto& nr = regions[active];");
+            sb.AppendLine("        nr.data = (char*)malloc(65536);");
+            sb.AppendLine("        nr.size = 65536;");
+            sb.AppendLine("        nr.used = 0;");
+            sb.AppendLine("        return alloc(size);");
+            sb.AppendLine("    }");
+            sb.AppendLine("    void* ptr = r.data + r.used;");
+            sb.AppendLine("    r.used += size;");
+            sb.AppendLine("    return ptr;");
+            sb.AppendLine("}");
+            sb.AppendLine("void RegionAllocator::reset() {");
+            sb.AppendLine("    for (int i = 0; i <= active; i++)");
+            sb.AppendLine("        free(regions[i].data);");
+            sb.AppendLine("    active = 0;");
+            sb.AppendLine("    regions[0].data = nullptr;");
+            sb.AppendLine("    regions[0].size = 0;");
+            sb.AppendLine("    regions[0].used = 0;");
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+
+        // PGO profile counters
+        if (_flags.Pgo)
+        {
+            sb.AppendLine("uint64_t pgo_counts[ST_COUNT][EV_COUNT] = {0};");
             sb.AppendLine();
         }
 
@@ -304,7 +420,15 @@ public class CppOptimizedGenerator : ICodeGenerator
             sb.AppendLine("    if (exit_table[current]) exit_table[current]();");
         sb.AppendLine();
         sb.AppendLine("    // Look up target");
-        sb.AppendLine("    StateId next = transition_table[current][ev];");
+        if (_flags.Pgo)
+        {
+            sb.AppendLine("    pgo_counts[current][ev]++;");
+            sb.AppendLine("    StateId next = (StateId)__builtin_expect((int)transition_table[current][ev], 1);");
+        }
+        else
+        {
+            sb.AppendLine("    StateId next = transition_table[current][ev];");
+        }
         if (hasGuard || allStates.SelectMany(s => s.Transitions).Any(t => t.Body != null))
         {
             sb.AppendLine("    // Check guarded transitions (override table)");

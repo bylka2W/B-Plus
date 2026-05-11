@@ -418,7 +418,7 @@ public class BPlusErrorReporter
         {
             // Count allocations in transitions (new State)
             var allocCount = state.Transitions.Count;
-            if (allocCount > 3 && !hasOptimize && !(_flags is { Pool: true } or { ZeroCopy: true } or { NoAlloc: true }))
+            if (allocCount > 3 && !hasOptimize && !(_flags is { Pool: not PoolMode.None } or { ZeroCopy: true } or { NoAlloc: true }))
             {
                 _errors.Add(new BPlusError
                 {

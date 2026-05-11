@@ -1,0 +1,19 @@
+-- Test: Standalone @region annotations without var/kernel
+#lang b+ v2.0
+#mode turbo
+#target auto
+
+@region(frame)
+@region(session)
+@region(level)
+@region(scene)
+
+data: Buffer[128]
+
+@region(frame)
+kernel process(src: Image[H,W]) -> Image[H,W]
+    body:
+        src |> relu |> clamp(0.0, 1.0)
+
+entry main()
+    ExitCode::Ok

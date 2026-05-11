@@ -58,7 +58,7 @@ public class OptimizationFlags
 
     // Smart optimizations
     public bool Auto { get; set; }
-    public bool Pool { get; set; }
+    public PoolMode Pool { get; set; } = PoolMode.None;
     public bool HotCold { get; set; }
     public bool Dedup { get; set; }
     public bool Predict { get; set; }
@@ -70,6 +70,7 @@ public class OptimizationFlags
     public bool MultiPath { get; set; }
     public bool PinRegs { get; set; }
     public int PinRegsCount { get; set; }
+    public MemoryMode Memory { get; set; } = MemoryMode.None;
 
     // Benchmark
     public bool Benchmark { get; set; }
@@ -87,7 +88,7 @@ public class OptimizationFlags
         || Arch != TargetArch.None || Os != TargetOs.None
         || Eco || LowLatency || HighThroughput || SmallCode || FastMath
         || NoExceptions || NoRtti || Lto || Pgo || Bolt
-        || Pool || HotCold || Dedup || Predict || Devirt || Lazy || DataOriented
+        || Pool != PoolMode.None || Memory != MemoryMode.None || HotCold || Dedup || Predict || Devirt || Lazy || DataOriented
         || SelfBench || Pack || MultiPath || PinRegs || Benchmark;
 
     public static OptimizationFlags Parse(string[] args)
@@ -201,6 +202,22 @@ public class OptimizationFlags
                 case "--lto": flags.Lto = true; break;
                 case "--pgo": flags.Pgo = true; break;
                 case "--bolt": flags.Bolt = true; break;
+                case "--memory":
+                {
+                    flags.Memory = MemoryMode.Regions;
+                    var memVal = (string?)null;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                        memVal = args[++i];
+                    if (memVal != null && memVal.ToLower() != "regions")
+                        flags.Memory = MemoryMode.None;
+                    break;
+                }
+                case var m when m.StartsWith("--memory="):
+                {
+                    var memVal = args[i].Substring(9);
+                    flags.Memory = memVal.ToLower() == "regions" ? MemoryMode.Regions : MemoryMode.None;
+                    break;
+                }
 
                 case "--turbo": flags.Turbo = true; break;
                 case "--turbo-eco": flags.TurboEco = true; break;
@@ -210,7 +227,32 @@ public class OptimizationFlags
                 case "--profile-use": flags.ProfileUse = true; break;
 
                 case "--auto": flags.Auto = true; break;
-                case "--pool": flags.Pool = true; break;
+                case "--pool":
+                {
+                    flags.Pool = PoolMode.Linear;
+                    var poolVal = (string?)null;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                        poolVal = args[++i];
+                    if (poolVal != null)
+                        flags.Pool = poolVal.ToLower() switch
+                        {
+                            "linear" => PoolMode.Linear,
+                            "ring" => PoolMode.Ring,
+                            _ => PoolMode.Linear
+                        };
+                    break;
+                }
+                case var p when p.StartsWith("--pool="):
+                {
+                    var poolVal = args[i].Substring(7);
+                    flags.Pool = poolVal.ToLower() switch
+                    {
+                        "linear" => PoolMode.Linear,
+                        "ring" => PoolMode.Ring,
+                        _ => PoolMode.Linear
+                    };
+                    break;
+                }
                 case "--hot-cold": flags.HotCold = true; break;
                 case "--dedup": flags.Dedup = true; break;
                 case "--predict": flags.Predict = true; break;
@@ -269,7 +311,7 @@ public class OptimizationFlags
         if (flags.TurboEmbed)
         {
             flags.Optimize = true;
-            flags.Pool = true;
+            flags.Pool = PoolMode.Linear;
             flags.Pack = true;
             flags.Dedup = true;
             flags.SmallCode = true;
@@ -317,3 +359,5 @@ public enum PrefetchMode { None, L1, L2, L3, Aggressive }
 public enum TargetArch { None, Native, Zen4, RaptorLake, AppleM1, CortexA78 }
 public enum TargetOs { None, Linux, Windows, BareMetal }
 public enum EcoMode { Auto, SSE, AVX2, NEON, Scalar }
+public enum PoolMode { None, Linear, Ring }
+public enum MemoryMode { None, Regions }

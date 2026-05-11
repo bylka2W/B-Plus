@@ -1,0 +1,41 @@
+﻿#lang b+ v2.0
+#mode turbo
+#target auto
+
+#memory smart
+#vram budget: 8gb
+#ram budget: 16gb
+#cache auto
+#defrag auto
+#streaming priority: camera
+
+weights: ConvWeights[3,3,3,64] = @load("weights.bin")
+textures: TextureAtlas[1024] = @stream("textures/")
+particles: ParticleBuffer[100000]
+
+@live(vram, always)
+@quant(int8)
+@align(cacheline)
+weights_precise: ConvWeights[3,3,3,64] = @load("w.bin")
+
+@live(ram, when_visible)
+@compress(bc7)
+@stream(priority: high)
+textures_precise: TextureAtlas[1024] = @stream("textures/")
+
+@live(ram, always)
+@pool(ring_buffer, 64mb)
+particles_precise: ParticleBuffer[100000]
+
+@live(l2_cache, hot)
+@align(64)
+hot_data: HotBuffer[256]
+
+@region(frame)
+kernel upscale(src: Image[H,W]) -> Image[H*2,W*2]
+    body:
+        src |> convolve(weights) |> relu |> shuffle(2) |> clamp(0.0, 1.0)
+
+entry main()
+    run my_pipeline
+    ExitCode::Ok

@@ -1,0 +1,16 @@
+state Entry {
+    on start -> Alive
+}
+
+state Alive {
+    on tick -> Alive { process() }
+    on stop -> Dead
+}
+
+state Dead {
+    on wake -> Alive
+}
+
+state Orphan {
+    on nop -> Orphan
+}
