@@ -9,12 +9,12 @@ B+ — язык описания конечных автоматов (state mach
 **Скопируй это в терминал (CMD / PowerShell):**
 
 ```bash
-git clone https://github.com/CapGames221/B-Plus.git
+git clone https://github.com/CapGames221/B-Plus.git "B+ v1.0"
 cd "B+ v1.0"
 dotnet run --project src/BPlusTranspiler -- examples/traffic_light.bp
 ```
 
-Первая команда скачает B+, вторая зайдёт в папку, третья соберёт и запустит пример. **Всё.**
+Первая команда скачает B+ в папку `B+ v1.0`, вторая зайдёт туда, третья соберёт и запустит пример. **Всё.**
 
 Нужен [.NET 8 SDK](https://dotnet.microsoft.com/download) — если не стоит, скачай за 1 минуту.
 
