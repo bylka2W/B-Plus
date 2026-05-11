@@ -2,7 +2,8 @@
 
 B+ — язык описания конечных автоматов (state machine) с транспиляцией в **Python, C#, C++, C**, а также плагинами для **Unity, Unreal Engine, Godot и Web (TypeScript)**. Никакого рантайма — чистый код под твою платформу.
 
-**v2.1.3VS**: Система памяти — три режима (`smart` / `precise` / `ultra`), аннотации `@live`, `@quant`, `@align`, `@compress`, `@stream`, `@pool`, `@region`, регионы с автоматическим временем жизни. Парсинг generic-типов `TypeName[N]`, строковые значения в аргументах, standalone `@region`.
+**v2.1.3VS**: Система памяти — три режима (`smart` / `precise` / `ultra`), аннотации `@live`, `@quant`, `@align`, `@compress`, `@stream`, `@pool`, `@region`, регионы с автоматическим временем жизни.
+**v2.1.3VS+**: LLVM backend — `kernel` → **LLVM IR** (`.ll`) → `.obj` напрямую, без C++ посередине. `--target llvm`.
 
 ## Установка
 
@@ -41,6 +42,7 @@ bpc input.bp                          # все цели сразу
 bpc input.bp --target python          # → generated.py
 bpc input.bp --target csharp          # → generated.cs
 bpc input.bp --target cpp             # → states.h + states.cpp
+bpc input.bp --target llvm            # → kernels.ll (LLVM IR, без C++)
 bpc input.bp --target c               # → states.h + states.c
 bpc input.bp --output ./out           # кастомный выход
 
@@ -142,6 +144,29 @@ dx12 = "auto"
 | Сигналы | `on signal "error" -> Handler` |
 | Async | `async on load -> Done` |
 | Auto-переходы | `always -> Next` |
+
+## LLVM Backend — машинный код без C++ (v2.1.3VS+)
+
+B+ теперь умеет генерировать **LLVM IR** (промежуточное представление LLVM) напрямую — минуя C++.
+
+```bash
+# Сгенерировать kernels.ll
+dotnet run --project src/BPlusTranspiler -- examples/memory_demo.bp --target llvm
+
+# Скомпилировать в .obj (нужен LLVM: https://llvm.org)
+llc -filetype=obj gen/kernels.ll -o gen/kernels.obj
+
+# Линковать в исполняемый файл
+clang gen/kernels.obj -o gen/kernels.exe
+```
+
+Что даёт LLVM backend:
+- **Без C++** — не нужен GCC/Clang для компиляции B+-кода
+- **Быстрее** — LLVM оптимизирует под конкретное железо (`target triple`)
+- **GPU** — LLVM умеет SPIR-V (Vulkan) и будет использован для шейдеров
+- **Мосты** — LLVM IR → WASM, AArch64, ARM, RISC-V
+
+Текущий статус: `kernel` → `llvm.memcpy` → `.ll`. Далее: pipeline операторы (convolve, relu, shuffle, clamp), GPU (SPIR-V/DXIL), мосты.
 
 ## Система памяти (v2.1.3VS+)
 
@@ -274,7 +299,8 @@ B+ v1.0/
 │   │   ├── Ast/                     — AST-ноды
 │   │   ├── Parser/                  — Парсер .bp
 │   │   ├── Optimizer/              — AST оптимизатор
-│   │   ├── Generators/             — Python, C#, C++, C
+│   │   ├── Generators/             — Python, C#, C++, C, LLVM
+│   │   │   ├── LlvmGenerator.cs    — AST → LLVM IR (без C++)
 │   │   │   └── CppOptimizedGenerator.cs  — оптимизированный C++
 │   │   ├── Lsp/                    — LSP сервер
 │   │   ├── Visualizer/             — Граф состояний (Mermaid)
@@ -301,6 +327,7 @@ B+ v1.0/
 │   ├── test_annotation_values.bp    — тест строковых аргументов
 │   ├── test_standalone_region.bp    — тест standalone @region
 │   ├── test_memory_modes.bp         — тест трёх режимов памяти
+│   ├── test_llvm.bp                 — тест LLVM backend (kernel → .ll)
 │   ├── noise_gen.bp                 — генератор шума (в разработке)
 │   └── gen_bpm_test/                — тест BPM
 ├── test_memory.bp                   — интеграционный тест памяти
