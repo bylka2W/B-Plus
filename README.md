@@ -6,18 +6,19 @@ B+ — язык описания конечных автоматов (state mach
 
 ## Установка
 
-**Нужен только .NET 8 SDK** (скачать: [dotnet.microsoft.com](https://dotnet.microsoft.com/download))
+**Скопируй это в терминал (CMD / PowerShell):**
 
 ```bash
 git clone https://github.com/CapGames221/B-Plus.git
 cd "B+ v1.0"
-dotnet build src/BPlusTranspiler
 dotnet run --project src/BPlusTranspiler -- examples/traffic_light.bp
 ```
 
-Всё. Больше ничего не нужно.
+Первая команда скачает B+, вторая зайдёт в папку, третья соберёт и запустит пример. **Всё.**
 
-Для VS2022: открыть `BPlusLanguage.vsix` → Install (подсветка .bp файлов).
+Нужен [.NET 8 SDK](https://dotnet.microsoft.com/download) — если не стоит, скачай за 1 минуту.
+
+**Для VS2022:** файл `BPlusLanguage.vsix` → клик → Install. Подсветка синтаксиса готова.
 
 ## Быстрый старт
 
