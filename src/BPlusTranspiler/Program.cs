@@ -1,3 +1,4 @@
+using BPlusTranspiler;
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Generators;
 using BPlusTranspiler.Lsp;
@@ -324,6 +325,7 @@ if (input == null)
     Console.Error.WriteLine("  --target-os <os>             linux|windows|baremetal");
     Console.Error.WriteLine("  --thread-pool <N>            Parallel dispatch with N threads");
     Console.Error.WriteLine("  --lock-free                  Lock-free concurrent states");
+    Console.Error.WriteLine("  --check / --analyze          7-category diagnostic analysis");
     return 1;
 }
 
@@ -354,31 +356,22 @@ var generators = new List<ICodeGenerator>
     new CGenerator()
 };
 
+// Error analysis (7 categories)
+if (optFlags.Check || !optFlags.HasAny)
+{
+    var reporter = new BPlusErrorReporter(program, input, optFlags.HasAny ? optFlags : null);
+    reporter.RunAll();
+    var code = reporter.Report(Console.Out);
+    if (optFlags.Check)
+        return code;
+}
+
 if (optFlags.HasAny)
 {
     if (optFlags.Optimize || optFlags.DeadElim || optFlags.ConstFold || optFlags.Dedup)
         program = BPlusOptimizer.Optimize(program);
 
-    if (target == "all" || target == "cpp" || target == "c" || target == "csharp" || target == "python")
-    {
-        // For non-opt targets, just use flags as hints
-        // C++ optimized generator handles all targets when flags are present
-        if (target == "all" || target == "cpp")
-        {
-            generators.Add(new CppOptimizedGenerator(optFlags));
-            target = "cpp_opt";
-        }
-    }
-    else
-    {
-        generators.Add(new CppOptimizedGenerator(optFlags));
-        target = "cpp_opt";
-    }
-}
-else if (optimize) // legacy --optimize without other flags
-{
-    program = BPlusOptimizer.Optimize(program);
-    generators.Add(new CppOptimizedGenerator(new OptimizationFlags { Optimize = true }));
+    generators.Add(new CppOptimizedGenerator(optFlags));
     target = "cpp_opt";
 }
 

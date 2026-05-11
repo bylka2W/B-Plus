@@ -5,8 +5,27 @@ namespace BPlusTranspiler.Generators;
 
 public class CppOptimizedGenerator : ICodeGenerator
 {
+    private readonly OptimizationFlags _flags;
+
+    public CppOptimizedGenerator(OptimizationFlags flags)
+    {
+        _flags = flags;
+    }
+
+    public CppOptimizedGenerator() : this(new OptimizationFlags { Optimize = true })
+    {
+    }
+
     public string GetFileExtension() => ".cpp";
-    public string GetLanguageName() => "C++ (opt)";
+    public string GetLanguageName()
+    {
+        if (_flags.Turbo) return "C++ (TURBO)";
+        if (_flags.TurboEco) return "C++ (TURBO-ECO)";
+        if (_flags.TurboEmbed) return "C++ (EMBED)";
+        if (_flags.Auto) return "C++ (AUTO)";
+        if (_flags.HasAny) return "C++ (opt)";
+        return "C++ (opt)";
+    }
 
     public Dictionary<string, string> GenerateFiles(ProgramNode program)
     {

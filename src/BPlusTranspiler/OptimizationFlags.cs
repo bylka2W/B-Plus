@@ -75,6 +75,9 @@ public class OptimizationFlags
     public bool Benchmark { get; set; }
     public int BenchmarkIterations { get; set; } = 1_000_000;
 
+    // Analysis
+    public bool Check { get; set; }
+
     public bool HasAny => Turbo || TurboEco || TurboEmbed || DebugOpt || ProfileGen || ProfileUse
         || Auto || Optimize || InlineStates || ConstFold || DeadElim
         || Vectorize != VectorizeMode.None || CacheFriendly || Prefetch != PrefetchMode.None
@@ -229,6 +232,11 @@ public class OptimizationFlags
                     if (i + 1 < args.Length && int.TryParse(args[i + 1], out var bi))
                     { flags.BenchmarkIterations = bi; i++; }
                     break;
+
+                case "--check":
+                case "--analyze":
+                    flags.Check = true;
+                    break;
             }
         }
 
@@ -290,7 +298,14 @@ public class OptimizationFlags
             if (System.Runtime.Intrinsics.X86.Avx512F.IsSupported) return VectorizeMode.AVX512;
             if (System.Runtime.Intrinsics.X86.Avx2.IsSupported) return VectorizeMode.AVX2;
             if (System.Runtime.Intrinsics.X86.Sse.IsSupported) return VectorizeMode.SSE;
-            if (System.Runtime.Intrinsics.Arm.Neon.IsSupported) return VectorizeMode.NEON;
+        }
+        catch { }
+        // Check NEON via reflection (avoids compile error on x86-only targets)
+        try
+        {
+            var neonType = Type.GetType("System.Runtime.Intrinsics.Arm.Neon, System.Runtime.Intrinsics");
+            var isSupported = neonType?.GetProperty("IsSupported")?.GetValue(null) as bool?;
+            if (isSupported == true) return VectorizeMode.NEON;
         }
         catch { }
         return VectorizeMode.None;
