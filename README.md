@@ -27,14 +27,15 @@ bpc input.bp --target c               # → states.h + states.c
 bpc input.bp --output ./out           # кастомный выход
 
 # Оптимизация (синтаксис B+ не меняется)
-bpc input.bp --optimize               # таблицы переходов вместо virtual (+10-15%)
-bpc input.bp --vectorize              # авто SIMD (AVX/SSE/NEON) (+30-40%)
-bpc input.bp --cache-friendly          # AoSoA layout (+20-30%)
-bpc input.bp --branchless             # cmov вместо if/else (+10-15%)
-bpc input.bp --zero-copy              # state pool, без аллокаций (+15-25%)
-bpc input.bp --eco                    # энергосбережение (SSE/NEON)
-bpc input.bp --auto                   # авто-детект CPU + лучшие флаги
-bpc input.bp --turbo                  # все оптимизации (+150%)
+bpc input.bp --optimize               # таблица переходов вместо virtual
+bpc input.bp --pool                   # пул состояний, без new/delete
+bpc input.bp --cache-friendly         # упорядоченный layout данных
+bpc input.bp --prefetch               # предзагрузка кэша
+bpc input.bp --branchless             # cmov вместо if/else
+bpc input.bp --predict                # предсказание след. состояния
+bpc input.bp --pack                   # упаковка структур
+bpc input.bp --turbo                  # --optimize + --pool + --pack
+bpc input.bp --eco                    # энергосбережение
 bpc input.bp --target cpp --pack --pool --benchmark
 
 # Диагностика (7 категорий ошибок)
