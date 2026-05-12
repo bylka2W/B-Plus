@@ -157,6 +157,8 @@ public class PipelineOp
 {
     public string Name { get; set; } = "";
     public List<string> Args { get; } = new();
+    public PipelineExpr? NestedBody { get; set; }
+    public PipelineExpr? ElseBody { get; set; }
 }
 
 public class PipelineExpr

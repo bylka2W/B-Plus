@@ -142,6 +142,13 @@ if (args.Length > 0 && args[0] == "--install-lsp")
     return 0;
 }
 
+// GPU/PGO/C-ABI flags — declared early for watch mode closure
+var gpuArch = "auto";
+var pgoCollect = false;
+string? pgoUse = null;
+string? ltoMode = null;
+var cAbi = false;
+
 if (args.Length > 0 && args[0] == "watch")
 {
     var watchDir = args.Length > 1 ? args[1] : ".";
@@ -177,14 +184,14 @@ if (args.Length > 0 && args[0] == "watch")
         NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.CreationTime
     };
 
-    watcher.Changed += (_, e) => OnFileChanged(e.FullPath, watchGenArgs);
-    watcher.Created += (_, e) => OnFileChanged(e.FullPath, watchGenArgs);
-    watcher.Renamed += (_, e) => { OnFileChanged(e.FullPath, watchGenArgs); if (e.OldFullPath != e.FullPath) OnFileChanged(e.OldFullPath, watchGenArgs); };
+            watcher.Changed += (_, e) => OnFileChanged(e.FullPath, watchGenArgs, cAbi);
+            watcher.Created += (_, e) => OnFileChanged(e.FullPath, watchGenArgs, cAbi);
+            watcher.Renamed += (_, e) => { OnFileChanged(e.FullPath, watchGenArgs, cAbi); if (e.OldFullPath != e.FullPath) OnFileChanged(e.OldFullPath, watchGenArgs, cAbi); };
     watcher.EnableRaisingEvents = true;
 
     // Initial build
-    foreach (var bp in Directory.GetFiles(watchDir, "*.bp", SearchOption.AllDirectories))
-        OnFileChanged(bp, watchGenArgs);
+        foreach (var bp in Directory.GetFiles(watchDir, "*.bp", SearchOption.AllDirectories))
+            OnFileChanged(bp, watchGenArgs, cAbi);
 
     Console.CancelKeyPress += (_, _) => Environment.Exit(0);
     new ManualResetEventSlim().Wait();
@@ -305,6 +312,16 @@ for (int i = 0; i < args.Length; i++)
         output = args[++i];
     else if (args[i] == "--plugin" && i + 1 < args.Length)
         plugin = args[++i];
+    else if (args[i] == "--gpu-arch" && i + 1 < args.Length)
+        gpuArch = args[++i];
+    else if (args[i] == "--pgo-collect")
+        pgoCollect = true;
+    else if (args[i] == "--pgo-use" && i + 1 < args.Length)
+        pgoUse = args[++i];
+    else if (args[i] == "--lto" && i + 1 < args.Length)
+        ltoMode = args[++i];
+    else if (args[i] == "--c-abi")
+        cAbi = true;
     // Skip flag values consumed by OptimizationFlags
     else if (args[i] is "--thread-pool" or "--prefetch" or "--pool" or "--memory"
              or "--eco" or "--target-arch" or "--target-os"
@@ -319,7 +336,7 @@ for (int i = 0; i < args.Length; i++)
 
 if (input == null)
 {
-    Console.Error.WriteLine("Usage: bpc <input.bp> [--target python|cpp|csharp|c|all] [flags] [--output ./dir] [--plugin unity|unreal|godot|web]");
+    Console.Error.WriteLine("Usage: bpc <input.bp> [--target llvm] [--pgo-collect] [--lto thin|full] [flags]");
     Console.Error.WriteLine("       bpc --lsp                         (start LSP server)");
     Console.Error.WriteLine("       bpc --install-lsp                  (install LSP for VS Code)");
     Console.Error.WriteLine("       bpc watch <dir> [--target ...]      (watch dir for changes and regenerate)");
@@ -348,14 +365,18 @@ if (input == null)
     Console.Error.WriteLine("  --vectorize                  Инлайн SIMD (только с числовыми данными)");
     Console.Error.WriteLine("  --benchmark [iterations]     Сгенерировать бенчмарк");
     Console.Error.WriteLine("  --check / --analyze          Диагностика 7 категорий");
-    Console.Error.WriteLine("  --lto                        Link-Time Optimization             +5-10%");
+    Console.Error.WriteLine("  --lto <mode>                 Link-Time Optimization thin|full     +10-20%");
     Console.Error.WriteLine("  --thread-pool <N>            Многопоточная диспетчеризация");
     Console.Error.WriteLine("  --lock-free                  Безлоковые структуры               +5-10%");
     Console.Error.WriteLine("  --target-arch <arch>         native|zen4|raptor|m1|cortex");
     Console.Error.WriteLine("  --target-os <os>             linux|windows|baremetal");
     Console.Error.WriteLine("  --memory=regions             Region allocator (zero-free transitions)");
     Console.Error.WriteLine("  --pool=linear|ring           State pool allocator (linear: +20-40%, ring: ~0 alloc)");
-    Console.Error.WriteLine("  --pgo                        PGO counters + __builtin_expect instrumentation");
+    Console.Error.WriteLine("  --pgo-collect                PGO instrumentation in LLVM IR       +15-25%");
+    Console.Error.WriteLine("  --pgo-use <file>             Apply PGO profile to LLVM IR");
+    Console.Error.WriteLine("  --c-abi                      Generate C ABI exports (.dll/.so/.dylib)");
+    Console.Error.WriteLine("  --target dxil|hlsl           Generate DirectX HLSL compute shaders (DXIL)");
+    Console.Error.WriteLine("  --target spirv|vulkan|glsl   Generate Vulkan GLSL compute shaders (SPIR-V)");
     return 1;
 }
 
@@ -389,13 +410,25 @@ var generators = new List<ICodeGenerator>
 // LLVM IR generators (machine code paths)
 if (target is "llvm" or "all" or "wasm" or "arm64" or "ios" or "android")
 {
-    generators.Add(new LlvmGenerator(target));
+    generators.Add(new LlvmGenerator(target, gpuArch, pgoCollect, pgoUse, ltoMode, cAbi));
 }
 
 // Bridge-only targets also generate .ll
 if (target is "bridge" or "bridges")
 {
-    generators.Add(new LlvmGenerator("native"));
+    generators.Add(new LlvmGenerator("native", gpuArch, pgoCollect, pgoUse, ltoMode, cAbi));
+}
+
+// DXIL / HLSL shader generator (DirectX 12 compute shaders)
+if (target is "dxil" or "hlsl" or "all")
+{
+    generators.Add(new HlslGenerator(gpuArch));
+}
+
+// SPIR-V / GLSL shader generator (Vulkan compute shaders)
+if (target is "spirv" or "vulkan" or "glsl" or "all")
+{
+    generators.Add(new GlslGenerator(gpuArch));
 }
 
 // Add kernel code generator if program has kernels/pipelines
@@ -444,7 +477,8 @@ if (plugin != null)
 }
 
 if (target != "all" && target != "cpp_opt" && target != "llvm" && target != "wasm"
-    && target != "arm64" && target != "ios" && target != "android" && target != "bridge" && target != "bridges")
+    && target != "arm64" && target != "ios" && target != "android" && target != "bridge" && target != "bridges"
+    && target != "dxil" && target != "hlsl" && target != "spirv" && target != "vulkan" && target != "glsl")
 {
     generators = generators.Where(g =>
         g.GetLanguageName().Equals(target, StringComparison.OrdinalIgnoreCase) ||
@@ -453,7 +487,7 @@ if (target != "all" && target != "cpp_opt" && target != "llvm" && target != "was
 
     if (generators.Count == 0)
     {
-        Console.Error.WriteLine($"Unknown target: {target}. Use: python, cpp, csharp, c, llvm, wasm, arm64, ios, android, bridges, all");
+        Console.Error.WriteLine($"Unknown target: {target}. Use: python, cpp, csharp, c, llvm, wasm, arm64, ios, android, dxil, hlsl, spirv, vulkan, glsl, bridges, all");
         return 1;
     }
 }
@@ -479,7 +513,7 @@ return 0;
 static string Sanitize(string name) =>
     string.Join("_", name.Split(System.IO.Path.GetInvalidFileNameChars()));
 
-static void OnFileChanged(string file, List<string> genArgs)
+static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
 {
     try
     {
@@ -506,7 +540,13 @@ static void OnFileChanged(string file, List<string> genArgs)
         };
 
         if (target is "llvm" or "wasm" or "arm64" or "ios" or "android")
-            generators.Add(new LlvmGenerator(target));
+            generators.Add(new LlvmGenerator(target, "auto", false, null, null, cAbi));
+
+        if (target is "dxil" or "hlsl" or "all")
+            generators.Add(new HlslGenerator("auto"));
+
+        if (target is "spirv" or "vulkan" or "glsl" or "all")
+            generators.Add(new GlslGenerator("auto"));
 
         if (watchOptFlags.HasAny)
         {
@@ -517,7 +557,8 @@ static void OnFileChanged(string file, List<string> genArgs)
         }
 
         if (target != "all" && target != "cpp_opt" && target != "llvm" && target != "wasm"
-            && target != "arm64" && target != "ios" && target != "android" && target != "bridge" && target != "bridges")
+            && target != "arm64" && target != "ios" && target != "android" && target != "bridge" && target != "bridges"
+            && target != "dxil" && target != "hlsl" && target != "spirv" && target != "vulkan" && target != "glsl")
             generators = generators.Where(g =>
                 g.GetLanguageName().Equals(target, StringComparison.OrdinalIgnoreCase) ||
                 g.GetFileExtension().Equals("." + target, StringComparison.OrdinalIgnoreCase)

@@ -766,18 +766,32 @@ public partial class BPlusParser
         return p;
     }
 
-    private PipelineExpr ParsePipelineExpr()
+    private PipelineExpr ParsePipelineExpr(bool sourceRequired = true)
     {
         var expr = new PipelineExpr();
-        expr.Source = ParseWord();
-        SkipWs();
-        while (_pos < _src.Length && _src[_pos] == '|' && _pos + 1 < _src.Length && _src[_pos + 1] == '>')
+        if (sourceRequired)
         {
-            _pos += 2; // skip |>
+            expr.Source = ParseWord();
             SkipWs();
+        }
+        bool firstInBlock = !sourceRequired;
+        while (true)
+        {
+            if (firstInBlock)
+            {
+                firstInBlock = false; // first op in inner block: no |> needed
+            }
+            else if (_pos < _src.Length && _src[_pos] == '|' && _pos + 1 < _src.Length && _src[_pos + 1] == '>')
+            {
+                _pos += 2; // skip |>
+                SkipWs();
+            }
+            else
+                break;
             var op = new PipelineOp();
             op.Name = ParseWord();
             SkipWs();
+            // Parse optional (args)
             if (_pos < _src.Length && _src[_pos] == '(')
             {
                 _pos++;
@@ -793,6 +807,30 @@ public partial class BPlusParser
                     if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
                 }
                 Expect(")");
+                SkipWs();
+            }
+            // Parse optional { body } block (for if/for/while)
+            if (_pos < _src.Length && _src[_pos] == '{')
+            {
+                _pos++; SkipWs();
+                op.NestedBody = ParsePipelineExpr(false); // no source — inherits from outer
+                SkipWs();
+                Expect("}");
+                SkipWs();
+                // Parse optional else { body } for if
+                if (op.Name == "if" && _pos + 3 < _src.Length &&
+                    _src[_pos..(_pos + 4)] == "else")
+                {
+                    _pos += 4; SkipWs();
+                    if (_pos < _src.Length && _src[_pos] == '{')
+                    {
+                        _pos++; SkipWs();
+                        op.ElseBody = ParsePipelineExpr(false);
+                        SkipWs();
+                        Expect("}");
+                        SkipWs();
+                    }
+                }
             }
             expr.Operations.Add(op);
             SkipWs();

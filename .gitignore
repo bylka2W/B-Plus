@@ -19,6 +19,11 @@ examples/gen/
 examples/gen_*/
 gen_*/
 gen/
+out_*/
+dxil_out/
+spirv_out/
+llvm_out/
+all_out/
 
 # IDE
 .vscode/
