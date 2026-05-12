@@ -221,6 +221,31 @@ public partial class BPlusParser
             {
                 state.Transitions.Add(ParseAlways());
             }
+            else if (_src[_pos] == '@')
+            {
+                // Parse transition-level annotations (@hot, @cold)
+                var transAnnots = ParseAnnotations();
+                SkipWs();
+                // Apply to next on/always transition
+                if (Peek("on ") || Peek("always"))
+                {
+                    TransitionNode? trans = null;
+                    if (Peek("on "))
+                        trans = ParseTransition();
+                    else
+                        trans = ParseAlways();
+                    if (trans != null)
+                    {
+                        foreach (var a in transAnnots)
+                            ApplyTransitionAnnotation(trans, a);
+                        state.Transitions.Add(trans);
+                    }
+                }
+                else
+                {
+                    throw Err($"Expected transition after annotation in state '{state.Name}'");
+                }
+            }
             else
             {
                 throw Err($"Unexpected in state '{state.Name}': '{PeekWord()}'");
@@ -230,6 +255,29 @@ public partial class BPlusParser
 
         Expect("}");
         return state;
+    }
+
+    private void ApplyTransitionAnnotation(TransitionNode trans, Annotation a)
+    {
+        switch (a.Name)
+        {
+            case "hot":
+                if (a.Args.TryGetValue("_val", out var hotVal) && double.TryParse(hotVal, out var hotW))
+                    trans.HotWeight = hotW;
+                else if (a.Args.TryGetValue("weight", out var hotW2) && double.TryParse(hotW2, out var hotW3))
+                    trans.HotWeight = hotW3;
+                else
+                    trans.HotWeight = 0.9; // default hot
+                break;
+            case "cold":
+                if (a.Args.TryGetValue("_val", out var coldVal) && double.TryParse(coldVal, out var coldW))
+                    trans.HotWeight = coldW;
+                else if (a.Args.TryGetValue("weight", out var coldW2) && double.TryParse(coldW2, out var coldW3))
+                    trans.HotWeight = coldW3;
+                else
+                    trans.HotWeight = 0.1; // default cold
+                break;
+        }
     }
 
     private VariableNode ParseVarDecl()
@@ -568,33 +616,42 @@ public partial class BPlusParser
                 SkipWs();
                 while (_pos < _src.Length && _src[_pos] != ')')
                 {
-                    var key = ParseWord();
-                    SkipWs();
-                    if (_pos < _src.Length && _src[_pos] == ':')
+                    if (char.IsDigit(_src[_pos]) || _src[_pos] == '-' || _src[_pos] == '.')
                     {
-                        _pos++;
-                        SkipWs();
-                        var val = ParseAnnotationValue();
-                        if (_pos < _src.Length && _src[_pos] == '(')
-                        {
-                            // Handle nested like `switch_policy: quality_feedback(ssim, 0.92)`
-                            _pos++;
-                            var nestStart = _pos;
-                            int depth = 1;
-                            while (_pos < _src.Length && depth > 0)
-                            {
-                                if (_src[_pos] == '(') depth++;
-                                else if (_src[_pos] == ')') depth--;
-                                if (depth > 0) _pos++;
-                            }
-                            val += "(" + _src[nestStart.._pos] + ")";
-                            _pos++;
-                        }
-                        a.Args[key] = val;
+                        // Positional numeric value: @hot(0.9)
+                        var numVal = ParseAnnotationValue();
+                        a.Args["_val"] = numVal;
                     }
                     else
                     {
-                        a.Args["_val"] = key;
+                        var key = ParseWord();
+                        SkipWs();
+                        if (_pos < _src.Length && _src[_pos] == ':')
+                        {
+                            _pos++;
+                            SkipWs();
+                            var val = ParseAnnotationValue();
+                            if (_pos < _src.Length && _src[_pos] == '(')
+                            {
+                                // Handle nested like `switch_policy: quality_feedback(ssim, 0.92)`
+                                _pos++;
+                                var nestStart = _pos;
+                                int depth = 1;
+                                while (_pos < _src.Length && depth > 0)
+                                {
+                                    if (_src[_pos] == '(') depth++;
+                                    else if (_src[_pos] == ')') depth--;
+                                    if (depth > 0) _pos++;
+                                }
+                                val += "(" + _src[nestStart.._pos] + ")";
+                                _pos++;
+                            }
+                            a.Args[key] = val;
+                        }
+                        else
+                        {
+                            a.Args["_val"] = key;
+                        }
                     }
                     SkipWs();
                     if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
@@ -697,6 +754,7 @@ public partial class BPlusParser
                     "smart" => BPlusMemoryMode.Smart,
                     "precise" => BPlusMemoryMode.Precise,
                     "ultra" => BPlusMemoryMode.Ultra,
+                    "comptime" => BPlusMemoryMode.Comptime,
                     _ => BPlusMemoryMode.Smart
                 };
                 break;
@@ -728,6 +786,24 @@ public partial class BPlusParser
         SkipWs();
         var k = new KernelDecl();
         k.Annotations.AddRange(annotations);
+        // Extract SIMD annotations
+        foreach (var a in annotations)
+        {
+            switch (a.Name)
+            {
+                case "simd_width":
+                    if (a.Args.TryGetValue("_val", out var sw) && int.TryParse(sw, out var swi))
+                        k.SimdWidth = swi;
+                    break;
+                case "simd_unroll":
+                    if (a.Args.TryGetValue("_val", out var su) && int.TryParse(su, out var sui))
+                        k.SimdUnroll = sui;
+                    break;
+                case "simd_gather":
+                    k.SimdGather = true;
+                    break;
+            }
+        }
         k.Name = ParseWord();
         SkipWs();
         Expect("(");
@@ -1225,10 +1301,12 @@ public partial class BPlusParser
             _pos++;
             return val;
         }
-        if (_pos < _src.Length && char.IsDigit(_src[_pos]))
+        if (_pos < _src.Length && (char.IsDigit(_src[_pos]) || (_src[_pos] == '-' && _pos + 1 < _src.Length && char.IsDigit(_src[_pos + 1]))))
         {
             int start = _pos;
-            while (_pos < _src.Length && (char.IsLetterOrDigit(_src[_pos]) || _src[_pos] == '_'))
+            // Handle negative numbers, floats, hex, etc.
+            if (_src[_pos] == '-') _pos++;
+            while (_pos < _src.Length && (char.IsLetterOrDigit(_src[_pos]) || _src[_pos] == '_' || _src[_pos] == '.'))
                 _pos++;
             return _src[start.._pos];
         }

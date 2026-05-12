@@ -1,0 +1,23 @@
+state Idle {
+    @hot(0.9)
+    on start -> Running
+    @cold(0.01)
+    on error -> Error
+}
+
+state Running {
+    @hot(0.85)
+    on jump -> Jumping
+    @cold(0.05)
+    on crash -> Error
+    on stop -> Idle
+}
+
+state Jumping {
+    @hot(0.95)
+    on land -> Idle
+}
+
+state Error {
+    on retry -> Idle
+}

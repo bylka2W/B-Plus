@@ -62,6 +62,8 @@ public class StateDefNode
     public List<ActionNode> Actions { get; } = new();
     public List<TimerNode> Timers { get; } = new();
     public List<StateDefNode> NestedStates { get; } = new();
+    // Semantic Inline chain ID (set by optimizer)
+    public string? ChainId { get; set; }
 }
 
 public class TransitionNode
@@ -76,6 +78,10 @@ public class TransitionNode
     public bool IsAsync { get; set; }
     public bool IsAlways { get; set; }
     public bool IsEnterAuto { get; set; }
+    // @hot / @cold PGO weight (0.0–1.0), null = no hint
+    public double? HotWeight { get; set; }
+    // Semantic Inline chain name (set by optimizer)
+    public string? ChainId { get; set; }
 }
 
 public class ParamNode
@@ -189,6 +195,12 @@ public class KernelDecl
     public List<string> Gives { get; } = new();
     public TouchesBlock? Touches { get; set; }
     public PipelineExpr? Body { get; set; }
+    // SIMD annotations
+    public int? SimdWidth { get; set; }
+    public int? SimdUnroll { get; set; }
+    public bool SimdGather { get; set; }
+    // Memory comptime safety
+    public bool MemoryComptime { get; set; }
 }
 
 public class PipelineStep
@@ -252,7 +264,7 @@ public class EntryDecl
 // v2.3: Memory System
 // ════════════════════════════════════════
 
-public enum BPlusMemoryMode { Smart, Precise, Ultra }
+public enum BPlusMemoryMode { Smart, Precise, Ultra, Comptime }
 
 public class MemoryConfig
 {

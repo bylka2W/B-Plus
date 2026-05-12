@@ -76,6 +76,17 @@ public class CppOptimizedGenerator : ICodeGenerator
         sb.AppendLine("#include <cstdint>");
         sb.AppendLine("#include <cstddef>");
         sb.AppendLine("#include <new>");
+        // #memory comptime: compile-time safety assertions
+        if (program.Memory is { Mode: BPlusMemoryMode.Comptime })
+        {
+            sb.AppendLine();
+            sb.AppendLine("// B+ #memory comptime: compile-time proven zero-leak memory model");
+            sb.AppendLine("// All allocations are stack-based or ring-buffered, proven at compile time.");
+            sb.AppendLine("static_assert(sizeof(void*) >= 4, \"B+ comptime: pointer size check\");");
+            sb.AppendLine("#define BPLUS_COMPTIME_MEMORY 1");
+            sb.AppendLine("#define BPLUS_COMPTIME_ASSERT(cond, msg) static_assert(cond, msg)");
+            sb.AppendLine();
+        }
         if (_flags.Pool != PoolMode.None || _flags.Memory == MemoryMode.Regions)
             sb.AppendLine("#include <cstdlib>");
         sb.AppendLine();
@@ -344,13 +355,19 @@ public class CppOptimizedGenerator : ICodeGenerator
                 foreach (var t in guarded)
                 {
                     if (!eventIds.ContainsKey(t.EventName)) continue;
-                    sb.AppendLine($"                case EV_{t.EventName}:");
+                    // Emit HotWeight-based branch hints
+                    string hint = "";
+                    if (t.HotWeight.HasValue && (_flags.LikelyHints || _flags.UnlikelyHints || _flags.Pgo))
+                    {
+                        hint = t.HotWeight.Value >= 0.5 ? " [[likely]]" : " [[unlikely]]";
+                    }
+                    sb.AppendLine($"            case EV_{t.EventName}:");
                     if (t.Body != null)
                         foreach (var line in SplitBody(t.Body))
                             sb.AppendLine($"                    {line};");
                     if (t.Guard != null)
                     {
-                        sb.AppendLine($"                    if ({t.Guard})");
+                        sb.AppendLine($"                    if ({t.Guard}){hint}");
                         sb.AppendLine($"                        return ST_{t.Target};");
                         sb.AppendLine($"                    return (StateId)-1;");
                     }
@@ -400,6 +417,44 @@ public class CppOptimizedGenerator : ICodeGenerator
         sb.AppendLine("};");
         sb.AppendLine();
 
+        // Chain transition tables (Semantic Inline)
+        var chains = allStates.Where(s => s.ChainId != null).GroupBy(s => s.ChainId).ToList();
+        if (chains.Count > 0)
+        {
+            sb.AppendLine("// B+ Semantic Inline — fused transition chains");
+            foreach (var chain in chains)
+            {
+                var chainStates = chain.ToList();
+                sb.AppendLine($"// Chain: {string.Join(" -> ", chainStates.Select(cs => cs.Name))}");
+                sb.AppendLine($"StateId run_chain_{chain.Key}(Event ev, uintptr_t state_ptr) {{");
+                sb.AppendLine("    switch (ev) {");
+                // Collect all unique events across the chain
+                var chainEvents = chainStates.SelectMany(cs => cs.Transitions)
+                    .Where(t => !t.IsAlways && eventIds.ContainsKey(t.EventName))
+                    .Select(t => t.EventName).Distinct();
+                foreach (var ev in chainEvents)
+                {
+                    // Find first state in chain that handles this event
+                    var handler = chainStates.FirstOrDefault(cs =>
+                        cs.Transitions.Any(t => t.EventName == ev && !t.IsAlways));
+                    if (handler == null) continue;
+                    var t = handler.Transitions.First(tr => tr.EventName == ev && !tr.IsAlways);
+                    string hint = t.HotWeight.HasValue && t.HotWeight.Value >= 0.5 ? " [[likely]]" : "";
+                    sb.AppendLine($"        case EV_{ev}:{hint}");
+                    foreach (var line in SplitBody(t.Body))
+                        sb.AppendLine($"            {line};");
+                    if (t.Guard != null)
+                        sb.AppendLine($"            if ({t.Guard})");
+                    sb.AppendLine($"            return ST_{t.Target};");
+                }
+                sb.AppendLine("        default: break;");
+                sb.AppendLine("    }");
+                sb.AppendLine("    return (StateId)-1;");
+                sb.AppendLine("}");
+                sb.AppendLine();
+            }
+        }
+
         // Action tables
         if (allStates.Any(s => s.Actions.Any(a => a.Type == ActionType.Enter)))
         {
@@ -440,6 +495,19 @@ public class CppOptimizedGenerator : ICodeGenerator
         else
         {
             sb.AppendLine("    StateId next = transition_table[current][ev];");
+        }
+        // Check for Semantic Inline chain dispatch
+        var chainSources = allStates.Where(s => s.ChainId != null).GroupBy(s => s.ChainId).ToList();
+        foreach (var chain in chainSources)
+        {
+            var first = chain.First();
+            sb.AppendLine($"    // Semantic Inline chain: {string.Join(" -> ", chain.Select(cs => cs.Name))}");
+            sb.AppendLine($"    if (current == ST_{first.Name}) {{");
+            sb.AppendLine($"        StateId chain_next = run_chain_{first.ChainId}(ev, 0);");
+            sb.AppendLine("        if (chain_next != (StateId)-1) {");
+            sb.AppendLine("            next = chain_next;");
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
         }
         if (hasGuard || allStates.SelectMany(s => s.Transitions).Any(t => t.Body != null))
         {

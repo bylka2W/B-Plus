@@ -9,7 +9,62 @@ public static class BPlusOptimizer
         var liveStates = ComputeLiveStates(program);
         RemoveDeadStates(program, liveStates);
         FoldGuards(program);
+        SemanticInline(program);
         return program;
+    }
+
+    /// <summary>
+    /// B+ Semantic Inline — detect common transition chains and mark them
+    /// so the code generator can emit a single fused function.
+    /// Only follows transitions with explicit @hot(weight >= 0.5) annotations.
+    /// Stops at branch points (multiple hot transitions from same state).
+    /// </summary>
+    public static void SemanticInline(ProgramNode program)
+    {
+        int chainId = 0;
+        foreach (var startState in program.States)
+            DetectChainFrom(program, startState, ref chainId);
+    }
+
+    private static void DetectChainFrom(ProgramNode program, StateDefNode start, ref int chainId)
+    {
+        if (start.ChainId != null) return; // already in a chain
+
+        // Find the single hot (weight >= 0.5) transition from this state
+        var hotTargets = start.Transitions
+            .Where(t => t.HotWeight.HasValue && t.HotWeight.Value >= 0.5
+                        && !string.IsNullOrEmpty(t.Target)
+                        && FindState(program, t.Target) != null)
+            .Select(t => t.Target)
+            .Distinct()
+            .ToList();
+
+        if (hotTargets.Count != 1) return; // no chain start
+
+        var cid = $"chain_{chainId++}";
+        start.ChainId = cid;
+
+        var nextName = hotTargets[0];
+        var next = FindState(program, nextName)!;
+        next.ChainId = cid;
+        ExtendChain(program, next, cid);
+    }
+
+    private static void ExtendChain(ProgramNode program, StateDefNode current, string cid)
+    {
+        var hotTargets = current.Transitions
+            .Where(t => t.HotWeight.HasValue && t.HotWeight.Value >= 0.5
+                        && !string.IsNullOrEmpty(t.Target)
+                        && FindState(program, t.Target) is { ChainId: null })
+            .Select(t => t.Target)
+            .Distinct()
+            .ToList();
+
+        if (hotTargets.Count != 1) return; // branch point or chain end
+
+        var next = FindState(program, hotTargets[0])!;
+        next.ChainId = cid;
+        ExtendChain(program, next, cid);
     }
 
     private static HashSet<string> ComputeLiveStates(ProgramNode program)

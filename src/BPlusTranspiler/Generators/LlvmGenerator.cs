@@ -13,6 +13,9 @@ public class LlvmGenerator : ICodeGenerator
     int _labelId;
     int? _ppw;           // pixels per work group
     int? _tileStride;    // tile stride = _ppw + 2
+    int? _simdWidth;     // @simd_width from kernel annotation
+    int? _simdUnroll;    // @simd_unroll from kernel annotation
+    bool _simdGather;    // @simd_gather from kernel annotation
 
     public LlvmGenerator(
         string platform = "native",
@@ -144,6 +147,11 @@ public class LlvmGenerator : ICodeGenerator
 
     void EmitKernel(LlvmIrBuilder ll, KernelDecl k)
     {
+        // Apply kernel SIMD annotations
+        _simdWidth = k.SimdWidth;
+        _simdUnroll = k.SimdUnroll;
+        _simdGather = k.SimdGather;
+
         int h = Dim(k.Parameters.FirstOrDefault()?.Type, "H", 1080);
         int w = Dim(k.Parameters.FirstOrDefault()?.Type, "W", 1920);
         int total = h * w * 4;
@@ -174,6 +182,18 @@ public class LlvmGenerator : ICodeGenerator
         ll.Line($"define {exportAttr}{cc}void @kernel_{k.Name}({string.Join(", ", pars)}){attr} {{");
         ll.Indent();
         ll.Line("entry:");
+
+        // SIMD metadata from annotations
+        if (k.SimdWidth.HasValue || k.SimdUnroll.HasValue || k.SimdGather)
+        {
+            ll.Line("  ; SIMD directives from annotations");
+            if (k.SimdWidth.HasValue)
+                ll.Line($"  ; simd_width: {k.SimdWidth.Value}");
+            if (k.SimdUnroll.HasValue)
+                ll.Line($"  ; simd_unroll: {k.SimdUnroll.Value}");
+            if (k.SimdGather)
+                ll.Line("  ; simd_gather: enabled");
+        }
 
         if (_pgoCollect)
         {
@@ -217,6 +237,25 @@ public class LlvmGenerator : ICodeGenerator
         ll.Line("  ret void");
         ll.Dedent();
         ll.Line("}");
+
+        // SIMD loop metadata (emitted after kernel function)
+        if (k.Body != null && (_simdWidth.HasValue || _simdUnroll.HasValue || _simdGather))
+        {
+            var mdLines = new List<string>();
+            mdLines.Add($"!0 = !{{!\"llvm.loop.vectorize.enable\", i1 true}}");
+            int mi = 1;
+            if (_simdWidth.HasValue)
+                mdLines.Add($"!{mi++} = !{{!\"llvm.loop.vectorize.width\", i32 {_simdWidth.Value}}}");
+            if (_simdUnroll.HasValue)
+                mdLines.Add($"!{mi++} = !{{!\"llvm.loop.unroll.count\", i32 {_simdUnroll.Value}}}");
+            if (_simdGather)
+                mdLines.Add($"!{mi++} = !{{!\"llvm.loop.mustprogress\", i1 true}}");
+            // Loop metadata itself: 0.llvm.loop = !{!0, !1, ...}
+            var refs = string.Join(", ", Enumerable.Range(0, mi).Select(i => $"!{i}"));
+            mdLines.Add($"!0.loop = !{{{refs}}}");
+            foreach (var md in mdLines)
+                ll.RawLine(md);
+        }
         ll.Line("");
     }
 
@@ -731,6 +770,11 @@ public class LlvmGenerator : ICodeGenerator
         ll.Line($"  %i{idx} = phi i64 [ 0, %{from} ], [ %j{idx}, %{B} ]");
         ll.Line($"  %c{idx} = icmp slt i64 %i{idx}, {total}");
         ll.Line($"  br i1 %c{idx}, label %{B}, label %{D}");
+        // SIMD loop metadata for first op (carries kernel annotations)
+        if (idx == 0 && (_simdWidth.HasValue || _simdUnroll.HasValue || _simdGather))
+        {
+            ll.RawLine($"  !{idx}.llvm.loop = !{{!{idx}.loop}}");
+        }
         ll.Line($"{B}:");
         ll.Line($"  %p{idx} = getelementptr float, ptr %{bi}, i64 %i{idx}");
         ll.Line($"  %v{idx} = load float, ptr %p{idx}");
