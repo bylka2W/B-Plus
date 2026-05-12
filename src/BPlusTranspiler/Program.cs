@@ -422,7 +422,7 @@ if (target is "bridge" or "bridges")
 // DXIL / HLSL shader generator (DirectX 12 compute shaders)
 if (target is "dxil" or "hlsl" or "all")
 {
-    generators.Add(new HlslGenerator(gpuArch));
+    generators.Add(new DxilGenerator(gpuArch));
 }
 
 // SPIR-V / GLSL shader generator (Vulkan compute shaders)
@@ -543,7 +543,7 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
             generators.Add(new LlvmGenerator(target, "auto", false, null, null, cAbi));
 
         if (target is "dxil" or "hlsl" or "all")
-            generators.Add(new HlslGenerator("auto"));
+            generators.Add(new DxilGenerator("auto"));
 
         if (target is "spirv" or "vulkan" or "glsl" or "all")
             generators.Add(new GlslGenerator("auto"));

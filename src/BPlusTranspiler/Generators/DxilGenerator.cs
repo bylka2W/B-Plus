@@ -3,19 +3,19 @@ using BPlusTranspiler.Ast;
 
 namespace BPlusTranspiler.Generators;
 
-public class GlslGenerator : ICodeGenerator
+public class DxilGenerator : ICodeGenerator
 {
     readonly string _arch;
     int _labelId;
 
-    public GlslGenerator(string arch = "auto")
+    public DxilGenerator(string arch = "auto")
     {
         _arch = arch;
     }
 
-    public string GetLanguageName() => "GLSL";
+    public string GetLanguageName() => "DXIL";
 
-    public string GetFileExtension() => ".comp";
+    public string GetFileExtension() => ".hlsl";
 
     (int x, int y) LocalSize => _arch switch
     {
@@ -31,26 +31,22 @@ public class GlslGenerator : ICodeGenerator
         var sb = new StringBuilder();
         if (_arch is "nvidia" or "auto")
         {
-            sb.AppendLine("#extension GL_NV_cooperative_matrix : enable");
-            sb.AppendLine("#extension GL_NV_integral_cooperative_matrix : enable");
-            sb.AppendLine("// NVIDIA Tensor Core WMMA (m16n16k16)");
-            sb.AppendLine("// coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> mat_a;");
-            sb.AppendLine("// coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mat_b;");
-            sb.AppendLine("// coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> mat_c;");
-            sb.AppendLine("// mat_c = coopMatrixMulAddNV(mat_a, mat_b, mat_c);");
+            sb.AppendLine("// NVIDIA Tensor Core WMMA (SM 6.6+)");
+            sb.AppendLine("// #pragma wave_matrix");
+            sb.AppendLine("// WaveMatrix<int4x4> mat_a, mat_b;");
+            sb.AppendLine("// WaveMatrix_Multiply(mat_c, mat_a, mat_b);");
+            sb.AppendLine("// WaveMatrix_Store(dst, mat_c, stride);");
             sb.AppendLine("#define BPLUS_TENSOR_NVIDIA 1");
         }
         if (_arch is "amd" or "auto")
         {
-            sb.AppendLine("// AMD CDNA MFMA — via SPIR-V extended instructions");
-            sb.AppendLine("// Requires: VK_KHR_shader_float_controls");
-            sb.AppendLine("// asm (\"v_mfma_f32_16x16x4f64 %0, %1, %2, %3\" : \"=v\"(c) : \"v\"(a), \"v\"(b), \"v\"(c));");
+            sb.AppendLine("// AMD CDNA MFMA — via inline ASM or AGS");
+            sb.AppendLine("// asm { ds_mfma_f32_16x16x4f64 acc[0:3], mat_a[0:3], mat_b[0:3], acc[0:3] };");
             sb.AppendLine("#define BPLUS_TENSOR_AMD 1");
         }
         if (_arch is "intel" or "auto")
         {
-            sb.AppendLine("// Intel XMX (Xe Matrix Extensions) — via VK_INTEL_*");
-            sb.AppendLine("// https://github.com/intel/vulkan-samples");
+            sb.AppendLine("// Intel XMX (Xe Matrix Extensions) — via DPC++ or AOT");
             sb.AppendLine("#define BPLUS_TENSOR_INTEL 1");
         }
         return sb.ToString();
@@ -61,54 +57,57 @@ public class GlslGenerator : ICodeGenerator
         var files = new Dictionary<string, string>();
         var sb = new StringBuilder();
 
-        sb.AppendLine("#version 460 core");
-        sb.AppendLine();
-        sb.AppendLine("// B+ v2.5.0GH — Auto-generated GLSL (SPIR-V) compute shaders");
+        sb.AppendLine("// B+ v2.5.0GH — Auto-generated HLSL (DXIL) compute shaders");
         sb.AppendLine($"// Arch: {_arch}, work group: {LocalSize.x}x{LocalSize.y}x1");
+        sb.AppendLine("// Compile: dxc -T cs_6_6 -E <entry> -Fo output.dxil shaders.hlsl");
+        sb.AppendLine();
+
+        // Common macros
+        sb.AppendLine("#ifndef BPLUS_DXIL");
+        sb.AppendLine("#define BPLUS_DXIL 1");
+        sb.AppendLine("#endif");
         sb.AppendLine();
 
         bool hasTensor = _arch is "nvidia" or "amd" or "intel" or "auto";
         if (hasTensor)
-        {
-            sb.Append(TensorDeclarations());
-            sb.AppendLine();
-        }
+            sb.AppendLine(TensorDeclarations());
 
-        int binding = 0;
+        int kernelIdx = 0;
         foreach (var k in program.Kernels)
         {
             bool gpu = k.Annotations.Any(a => a.Name == "region" &&
                          a.Args.GetValueOrDefault("_val") is "frame" or "scene");
             if (!gpu) continue;
 
-            var srcParam = k.Parameters.Count > 0 ? k.Parameters[0].Name : "src";
-            var dstParam = k.OutputParam?.Name ?? "out";
-
-            sb.AppendLine($"layout(local_size_x = {LocalSize.x}, local_size_y = {LocalSize.y}, local_size_z = 1) in;");
-            sb.AppendLine($"layout(std430, binding = {binding++}) buffer buf_src {{ float {srcParam}[]; }};");
-            sb.AppendLine($"layout(std430, binding = {binding++}) buffer buf_dst {{ float {dstParam}[]; }};");
-            sb.AppendLine();
-
-            EmitKernel(sb, k);
+            EmitKernel(sb, k, kernelIdx++);
             sb.AppendLine();
         }
 
-        files.Add("shaders.comp", sb.ToString());
+        files.Add("shaders.hlsl", sb.ToString());
 
-        // Compile script
+        // Compile batch script
         var bat = new StringBuilder();
         bat.AppendLine("@echo off");
-        bat.AppendLine("rem B+ v2.5.0GH — Compile GLSL to SPIR-V");
-        bat.AppendLine("rem Requires: glslangValidator.exe (from Vulkan SDK)");
+        bat.AppendLine("rem B+ v2.5.0GH — Compile HLSL to DXIL");
+        bat.AppendLine("rem Requires: dxc.exe (DirectX Shader Compiler) from Windows SDK");
+        bat.AppendLine("rem   https://github.com/microsoft/DirectXShaderCompiler");
         bat.AppendLine();
-        bat.AppendLine("glslangValidator -V shaders.comp -o shaders.spv");
-        bat.AppendLine("echo Done.");
-        files.Add("compile_spirv.bat", bat.ToString());
+        kernelIdx = 0;
+        foreach (var k in program.Kernels)
+        {
+            bool gpu = k.Annotations.Any(a => a.Name == "region" &&
+                         a.Args.GetValueOrDefault("_val") is "frame" or "scene");
+            if (!gpu) continue;
+            bat.AppendLine($"dxc -T cs_6_6 -E kernel_{k.Name} -Fo kernel_{k.Name}.dxil shaders.hlsl");
+            kernelIdx++;
+        }
+        bat.AppendLine("echo DXIL compilation complete.");
+        files.Add("compile_dxil.bat", bat.ToString());
 
         return files;
     }
 
-    void EmitKernel(StringBuilder sb, KernelDecl k)
+    void EmitKernel(StringBuilder sb, KernelDecl k, int idx)
     {
         int h = Dim(k.Parameters.FirstOrDefault()?.Type, "H", 1080);
         int w = Dim(k.Parameters.FirstOrDefault()?.Type, "W", 1920);
@@ -117,6 +116,8 @@ public class GlslGenerator : ICodeGenerator
         var srcParam = k.Parameters.Count > 0 ? k.Parameters[0].Name : "src";
         var dstParam = k.OutputParam?.Name ?? "out";
 
+        bool needsConvolve = k.Body != null && k.Body.Operations.Any(o => o.Name == "convolve");
+
         sb.AppendLine($"// Kernel: {k.Name}");
         sb.AppendLine($"// Image: {w}x{h}x4 = {total}px");
         sb.AppendLine($"// Pipeline: {Desc(k.Body)}");
@@ -124,9 +125,22 @@ public class GlslGenerator : ICodeGenerator
             sb.AppendLine($"// @{a.Name}({string.Join(" ", a.Args.Select(kv => $"{kv.Key}={kv.Value}"))})");
         sb.AppendLine();
 
-        sb.AppendLine("void main()");
+        // Buffer declarations — each kernel gets its own binding pair
+        int bind = idx * 2;
+        sb.AppendLine($"RWStructuredBuffer<float> {srcParam} : register(u{bind});");
+        sb.AppendLine($"RWStructuredBuffer<float> {dstParam} : register(u{bind + 1});");
+        if (needsConvolve)
+        {
+            var (ppw, tileStride, tileSize) = TileParams();
+            sb.AppendLine($"groupshared float tile_sm[{tileSize}];");
+        }
+        sb.AppendLine();
+
+        sb.AppendLine($"[numthreads({LocalSize.x}, {LocalSize.y}, 1)]");
+        sb.AppendLine($"void kernel_{k.Name}(uint3 id : SV_DispatchThreadID)");
         sb.AppendLine("{");
-        sb.AppendLine("    uint gid = gl_GlobalInvocationID.x;");
+
+        sb.AppendLine($"    uint gid = id.x + id.y * {w};");
         sb.AppendLine($"    if (gid >= {total}) return;");
         sb.AppendLine();
 
@@ -146,7 +160,7 @@ public class GlslGenerator : ICodeGenerator
         switch (op.Name)
         {
             case "relu":
-                sb.AppendLine("    v = max(v, 0.0);");
+                sb.AppendLine("    v = max(0.0, v);");
                 break;
 
             case "clamp":
@@ -177,31 +191,31 @@ public class GlslGenerator : ICodeGenerator
             {
                 string dx = op.Args.Count > 0 ? op.Args[0] : "0";
                 string dy = op.Args.Count > 1 ? op.Args[1] : "0";
-                sb.AppendLine($"    ivec2 pos = ivec2(int(gid % {w}), int(gid / {w})) + ivec2({dx}, {dy});");
-                sb.AppendLine($"    pos = clamp(pos, ivec2(0), ivec2({w - 1}, {h - 1}));");
-                sb.AppendLine($"    uint warp_gid = uint(pos.y) * {w} + uint(pos.x);");
+                sb.AppendLine($"    int2 pos = int2(gid % {w}, gid / {w}) + int2({dx}, {dy});");
+                sb.AppendLine($"    pos = clamp(pos, int2(0, 0), int2({w - 1}, {h - 1}));");
+                sb.AppendLine($"    uint warp_gid = pos.y * {w} + pos.x;");
                 sb.AppendLine($"    v = {src}[warp_gid];");
                 break;
             }
 
             case "atomic_add":
-                sb.AppendLine($"    atomicAdd({dst}[gid], v);");
+                sb.AppendLine($"    InterlockedAdd({dst}[gid], asuint(v));");
                 sb.AppendLine("    v = 0.0;");
                 break;
 
             case "atomic_sub":
-                sb.AppendLine($"    atomicAdd({dst}[gid], -v);");
+                sb.AppendLine($"    InterlockedAdd({dst}[gid], -asuint(v));");
                 sb.AppendLine("    v = 0.0;");
                 break;
 
             case "atomic_max":
-                sb.AppendLine($"    v = floatBitsToInt(v);");
-                sb.AppendLine($"    atomicMax({dst}[gid], v);");
+                sb.AppendLine($"    InterlockedMax({dst}[gid], asuint(v));");
+                sb.AppendLine("    v = 0.0;");
                 break;
 
             case "atomic_min":
-                sb.AppendLine($"    v = floatBitsToInt(v);");
-                sb.AppendLine($"    atomicMin({dst}[gid], v);");
+                sb.AppendLine($"    InterlockedMin({dst}[gid], asuint(v));");
+                sb.AppendLine("    v = 0.0;");
                 break;
 
             case "if":
@@ -224,18 +238,25 @@ public class GlslGenerator : ICodeGenerator
 
     void EmitConvolve(StringBuilder sb, int h, int w, string src)
     {
-        sb.AppendLine("    // 3x3 box blur");
-        sb.AppendLine($"    uint px = gid / 4, ch = gid % 4;");
-        sb.AppendLine($"    int x = int(px % {w}), y = int(px / {w});");
+        sb.AppendLine("    // 3x3 box blur (bilateral clamped)");
+        sb.AppendLine($"    uint px = gid / 4;");
+        sb.AppendLine($"    uint ch = gid % 4;");
+        sb.AppendLine($"    int x = px % {w};");
+        sb.AppendLine($"    int y = px / {w};");
         sb.AppendLine("    float acc = v * 4.0;");
-        sb.AppendLine($"    if (x > 0) acc += {src}[max(gid, 4) - 4] * 2.0; else acc += v * 2.0;");
-        sb.AppendLine($"    if (x < {w - 1}) acc += {src}[min(gid + 4, {h * w * 4 - 1})] * 2.0; else acc += v * 2.0;");
-        sb.AppendLine($"    if (y > 0) acc += {src}[max(gid, {w * 4}) - {w * 4}] * 2.0; else acc += v * 2.0;");
-        sb.AppendLine($"    if (y < {h - 1}) acc += {src}[min(gid + {w * 4}, {h * w * 4 - 1})] * 2.0; else acc += v * 2.0;");
-        sb.AppendLine($"    if (x > 0 && y > 0) acc += {src}[max(gid, {w * 4 + 4}) - {w * 4} - 4];");
-        sb.AppendLine($"    if (x < {w - 1} && y > 0) acc += {src}[max(gid, {w * 4 + 4}) - {w * 4} + 4];");
-        sb.AppendLine($"    if (x > 0 && y < {h - 1}) acc += {src}[min(gid + {w * 4} - 4, {h * w * 4 - 1})];");
-        sb.AppendLine($"    if (x < {w - 1} && y < {h - 1}) acc += {src}[min(gid + {w * 4} + 4, {h * w * 4 - 1})];");
+
+        // Cardinal neighbors (×2)
+        sb.AppendLine($"    if (x > 0)   {{ uint n = gid - 4;            acc += {src}[n] * 2.0; }} else acc += v * 2.0;");
+        sb.AppendLine($"    if (x < {w - 1}) {{ uint n = gid + 4;            acc += {src}[n] * 2.0; }} else acc += v * 2.0;");
+        sb.AppendLine($"    if (y > 0)   {{ uint n = gid - {w * 4};        acc += {src}[n] * 2.0; }} else acc += v * 2.0;");
+        sb.AppendLine($"    if (y < {h - 1}) {{ uint n = gid + {w * 4};        acc += {src}[n] * 2.0; }} else acc += v * 2.0;");
+
+        // Diagonal neighbors (×1)
+        sb.AppendLine($"    if (x > 0 && y > 0)     {{ uint n = gid - {w * 4} - 4; acc += {src}[n]; }}");
+        sb.AppendLine($"    if (x < {w - 1} && y > 0) {{ uint n = gid - {w * 4} + 4; acc += {src}[n]; }}");
+        sb.AppendLine($"    if (x > 0 && y < {h - 1})   {{ uint n = gid + {w * 4} - 4; acc += {src}[n]; }}");
+        sb.AppendLine($"    if (x < {w - 1} && y < {h - 1}) {{ uint n = gid + {w * 4} + 4; acc += {src}[n]; }}");
+
         sb.AppendLine("    v = acc / 16.0;");
     }
 
@@ -243,13 +264,16 @@ public class GlslGenerator : ICodeGenerator
     {
         int outW = w * 2;
         sb.AppendLine("    // ESPCN pixel shuffle 2x");
-        sb.AppendLine($"    uint px = gid / 4, ch = gid % 4;");
-        sb.AppendLine($"    int in_x = int(px % {w}), in_y = int(px / {w});");
-        sb.AppendLine("    int dy = int(ch / 2), dx = int(ch % 2);");
-        sb.AppendLine($"    int out_x = in_x * 2 + dx, out_y = in_y * 2 + dy;");
-        sb.AppendLine($"    uint out_gid = uint(out_y) * {outW} + uint(out_x);");
+        sb.AppendLine($"    uint px = gid / 4;");
+        sb.AppendLine($"    uint ch = gid % 4;");
+        sb.AppendLine($"    int in_x = px % {w};");
+        sb.AppendLine($"    int in_y = px / {w};");
+        sb.AppendLine("    int dy = ch / 2;");
+        sb.AppendLine("    int dx = ch % 2;");
+        sb.AppendLine($"    int out_x = in_x * 2 + dx;");
+        sb.AppendLine($"    int out_y = in_y * 2 + dy;");
+        sb.AppendLine($"    uint out_gid = out_y * {outW} + out_x;");
         sb.AppendLine($"    {dst}[out_gid] = v;");
-        sb.AppendLine("    v = v;");
     }
 
     void EmitIf(StringBuilder sb, PipelineOp op, int h, int w, int total, string src, string dst)
@@ -258,6 +282,7 @@ public class GlslGenerator : ICodeGenerator
         int tid = _labelId++;
         sb.AppendLine($"    // if (v > {threshold})");
         sb.AppendLine($"    float saved_{tid} = v;");
+        sb.AppendLine($"    [branch]");
         sb.AppendLine($"    if (v > {threshold})");
         sb.AppendLine("    {");
         if (op.NestedBody != null)
@@ -293,14 +318,22 @@ public class GlslGenerator : ICodeGenerator
     void EmitWhile(StringBuilder sb, PipelineOp op, int h, int w, int total, string src, string dst)
     {
         string threshold = op.Args.Count > 0 ? op.Args[0] : "0.0";
-        int tid = _labelId++;
         sb.AppendLine($"    // while (v > {threshold})");
+        sb.AppendLine($"    [loop]");
         sb.AppendLine($"    while (v > {threshold})");
         sb.AppendLine("    {");
         if (op.NestedBody != null)
             foreach (var sub in op.NestedBody.Operations)
                 EmitOp(sb, sub, h, w, total, src, dst);
         sb.AppendLine("    }");
+    }
+
+    (int ppw, int tileStride, int tileSize) TileParams()
+    {
+        int ppw = (LocalSize.x * LocalSize.y) / 4;
+        int tileStride = ppw + 2;
+        int tileSize = 3 * tileStride * 4;
+        return (ppw, tileStride, tileSize);
     }
 
     static string Desc(PipelineExpr? p)
