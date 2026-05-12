@@ -344,7 +344,7 @@ if (input == null)
     Console.Error.WriteLine("       bpc docs <file.bp> [--output ./dir]  (generate documentation)");
     Console.Error.WriteLine("       bpc debug <file.bp>                  (interactive state machine debugger)");
     Console.Error.WriteLine("       bpc profile <file.bp> [iterations]   (profile transition frequencies)");
-    Console.Error.WriteLine("       bpc <input> --plugin unity|unreal|godot|web  (engine-specific code generation)");
+    Console.Error.WriteLine("       bpc <input> --plugin unity|unreal|godot|web|unigine  (engine-specific code generation)");
     Console.Error.WriteLine("       bpc bpm <init|install|list|search|publish>   (package manager)");
     Console.Error.WriteLine("       bpc test run <file.bp>                      (run auto-generated tests)");
     Console.Error.WriteLine("       bpc health [dir] [flags]                    (project health analysis)");
@@ -465,11 +465,12 @@ if (plugin != null)
         "unreal" => new UnrealPlugin(),
         "godot" => new GodotPlugin(),
         "web" or "ts" or "typescript" => new WebPlugin(),
+        "unigine" => new UniginePlugin(),
         _ => null
     };
     if (pluginGen == null)
     {
-        Console.Error.WriteLine($"Unknown plugin: {plugin}. Use: unity, unreal, godot, web");
+        Console.Error.WriteLine($"Unknown plugin: {plugin}. Use: unity, unreal, godot, web, unigine");
         return 1;
     }
     generators.Clear();

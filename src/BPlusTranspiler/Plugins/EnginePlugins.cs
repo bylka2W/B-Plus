@@ -424,3 +424,124 @@ public class WebPlugin : ICodeGenerator
         _ => "undefined"
     };
 }
+
+public class UniginePlugin : ICodeGenerator
+{
+    public string GetFileExtension() => ".h";
+    public string GetLanguageName() => "Unigine (C++)";
+
+    public Dictionary<string, string> GenerateFiles(ProgramNode program)
+    {
+        var name = program.States.FirstOrDefault()?.Name ?? "StateMachine";
+
+        var allStates = new List<StateDefNode>();
+        void Collect(StateDefNode s) { allStates.Add(s); foreach (var ns in s.NestedStates) Collect(ns); }
+        foreach (var s in program.States) Collect(s);
+
+        // Header
+        var h = new StringBuilder();
+        h.AppendLine("#pragma once");
+        h.AppendLine("#include <Unigine.h>");
+        h.AppendLine("#include <UnigineComponentSystem.h>");
+        h.AppendLine();
+        h.AppendLine($"class {name}FSM : public Unigine::ComponentBase");
+        h.AppendLine("{");
+        h.AppendLine($"    COMPONENT({name}FSM, Unigine::ComponentBase);");
+        h.AppendLine();
+        h.AppendLine("public:");
+        h.AppendLine("    enum State : unsigned char");
+        h.AppendLine("    {");
+        foreach (var s in allStates)
+            h.AppendLine($"        STATE_{s.Name},");
+        h.AppendLine("    };");
+        h.AppendLine();
+        h.AppendLine("    PROP_NAME(state_str, \"CurrentState\");");
+        h.AppendLine($"    PROP_PARAM(State, current_state, STATE_{allStates.FirstOrDefault()?.Name ?? "Idle"});");
+        h.AppendLine();
+        h.AppendLine("    void OnEnter(State new_state);");
+        h.AppendLine("    void OnExit(State old_state);");
+        h.AppendLine("    void Fire(const char* event_name);");
+        h.AppendLine();
+        h.AppendLine("    void init() override;");
+        h.AppendLine("    void update() override;");
+        h.AppendLine("};");
+
+        // Implementation
+        var cpp = new StringBuilder();
+        cpp.AppendLine($"#include \"{name}FSM.h\"");
+        cpp.AppendLine();
+        cpp.AppendLine($"void {name}FSM::init()");
+        cpp.AppendLine("{");
+        cpp.AppendLine("    OnEnter(current_state);");
+        cpp.AppendLine("}");
+        cpp.AppendLine();
+        cpp.AppendLine($"void {name}FSM::update()");
+        cpp.AppendLine("{");
+        cpp.AppendLine("    // Tick — timer transitions handled per-frame");
+        cpp.AppendLine("    switch (current_state)");
+        cpp.AppendLine("    {");
+        foreach (var s in allStates.Where(s => s.Timers.Count > 0))
+        {
+            cpp.AppendLine($"        case STATE_{s.Name}:");
+            foreach (var t in s.Timers)
+                cpp.AppendLine($"            // after {t.Duration} -> STATE_{t.Target}");
+            cpp.AppendLine("            break;");
+        }
+        cpp.AppendLine("        default: break;");
+        cpp.AppendLine("    }");
+        cpp.AppendLine("}");
+        cpp.AppendLine();
+        cpp.AppendLine($"void {name}FSM::OnEnter(State new_state)");
+        cpp.AppendLine("{");
+        cpp.AppendLine("    switch (new_state)");
+        cpp.AppendLine("    {");
+        foreach (var s in allStates.Where(s => s.Actions.Any(a => a.Type == ActionType.Enter)))
+            cpp.AppendLine($"        case STATE_{s.Name}: {s.Actions.First(a => a.Type == ActionType.Enter).Body}; break;");
+        cpp.AppendLine("        default: break;");
+        cpp.AppendLine("    }");
+        cpp.AppendLine("}");
+        cpp.AppendLine();
+        cpp.AppendLine($"void {name}FSM::OnExit(State old_state)");
+        cpp.AppendLine("{");
+        cpp.AppendLine("    switch (old_state)");
+        cpp.AppendLine("    {");
+        foreach (var s in allStates.Where(s => s.Actions.Any(a => a.Type == ActionType.Exit)))
+            cpp.AppendLine($"        case STATE_{s.Name}: {s.Actions.First(a => a.Type == ActionType.Exit).Body}; break;");
+        cpp.AppendLine("        default: break;");
+        cpp.AppendLine("    }");
+        cpp.AppendLine("}");
+        cpp.AppendLine();
+        cpp.AppendLine($"void {name}FSM::Fire(const char* event_name)");
+        cpp.AppendLine("{");
+        cpp.AppendLine("    switch (current_state)");
+        cpp.AppendLine("    {");
+        foreach (var s in allStates)
+        {
+            if (s.Transitions.Count == 0) continue;
+            cpp.AppendLine($"        case STATE_{s.Name}:");
+            foreach (var t in s.Transitions)
+            {
+                string cond = t.Guard != null
+                    ? $"Unigine::String(event_name) == \"{t.EventName}\" && ({t.Guard})"
+                    : $"Unigine::String(event_name) == \"{t.EventName}\"";
+                cpp.AppendLine($"            if ({cond})");
+                cpp.AppendLine("            {");
+                cpp.AppendLine("                OnExit(current_state);");
+                cpp.AppendLine($"                current_state = STATE_{t.Target};");
+                cpp.AppendLine("                OnEnter(current_state);");
+                cpp.AppendLine("                return;");
+                cpp.AppendLine("            }");
+            }
+            cpp.AppendLine("            break;");
+        }
+        cpp.AppendLine("        default: break;");
+        cpp.AppendLine("    }");
+        cpp.AppendLine("}");
+
+        return new Dictionary<string, string>
+        {
+            { $"{name}FSM.h", h.ToString() },
+            { $"{name}FSM.cpp", cpp.ToString() }
+        };
+    }
+}
