@@ -1,5 +1,5 @@
 @echo off
-echo B+ Transpiler v2.1.3VS
+echo B+ Transpiler v2.5.0GH
 echo.
 if "%1"=="" (
     echo Usage: drag .bp file onto this batch file

@@ -94,7 +94,7 @@ public partial class BPlusLspServer
                             }
                         }
                     },
-                    serverInfo = new { name = "bpc-lsp", version = "2.1.3VS" }
+                    serverInfo = new { name = "bpc-lsp", version = "2.5.0GH" }
                 });
                 break;
 

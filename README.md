@@ -1,9 +1,8 @@
-﻿# B+ v2.1.3VS — язык конечных автоматов + система памяти
+﻿# B+ v2.5.0GH — язык конечных автоматов + система памяти + LLVM IR
 
 B+ — язык описания конечных автоматов (state machine) с транспиляцией в **Python, C#, C++, C**, а также плагинами для **Unity, Unreal Engine, Godot и Web (TypeScript)**. Никакого рантайма — чистый код под твою платформу.
 
-**v2.1.3VS**: Система памяти — три режима (`smart` / `precise` / `ultra`), аннотации `@live`, `@quant`, `@align`, `@compress`, `@stream`, `@pool`, `@region`, регионы с автоматическим временем жизни.
-**v2.1.3VS+**: LLVM backend — `kernel` → **LLVM IR** (`.ll`) → `.obj` напрямую, без C++ посередине. `--target llvm`.
+**v2.5.0GH**: LLVM backend — `kernel` → **LLVM IR** (`.ll`) → `.obj` напрямую, без C++ посередине. `--target llvm`. CPU: phi-loop кодогенерация с buf0/buf1 alternation. GPU: `spir_kernel` с `addrspace(1)`, SSA-корректные pipeline ops (`relu`, `clamp`, `convolve`, `shuffle`), target triple `spirv64-unknown-unknown`.
 
 ## Установка
 
@@ -145,9 +144,9 @@ dx12 = "auto"
 | Async | `async on load -> Done` |
 | Auto-переходы | `always -> Next` |
 
-## LLVM Backend — машинный код без C++ (v2.1.3VS+)
+## LLVM Backend — машинный код без C++ (v2.5.0GH)
 
-B+ теперь умеет генерировать **LLVM IR** (промежуточное представление LLVM) напрямую — минуя C++.
+B+ генерирует **LLVM IR** (промежуточное представление LLVM) напрямую — минуя C++.
 
 ```bash
 # Сгенерировать kernels.ll
@@ -163,12 +162,30 @@ clang gen/kernels.obj -o gen/kernels.exe
 Что даёт LLVM backend:
 - **Без C++** — не нужен GCC/Clang для компиляции B+-кода
 - **Быстрее** — LLVM оптимизирует под конкретное железо (`target triple`)
-- **GPU** — LLVM умеет SPIR-V (Vulkan) и будет использован для шейдеров
+- **GPU** — SPIR-V (Vulkan) через `spir_kernel` calling convention + `addrspace(1)`
 - **Мосты** — LLVM IR → WASM, AArch64, ARM, RISC-V
 
-Текущий статус: `kernel` → `llvm.memcpy` → `.ll`. Далее: pipeline операторы (convolve, relu, shuffle, clamp), GPU (SPIR-V/DXIL), мосты.
+### CPU path
+- Phi-loop кодогенерация с буферной alternation (buf0/buf1)
+- Pipeline ops: `relu`, `clamp(lo, hi)`, `convolve` (3-tap blur), `shuffle` (ESPCN 2×)
+- `@llvm.memcpy` для загрузки/выгрузки данных
 
-## Система памяти (v2.1.3VS+)
+### GPU path (spir_kernel)
+- Вход: `@region(frame)` или `@region(scene)` → автоматический SPIR-V режим
+- Per-pixel work items через `@__bpc_global_id()`
+- SSA-корректная цепочка операций (уникальные `%g0..%gN`)
+- Pipeline ops: `relu`, `clamp`, `convolve` (stub), `shuffle` (stub)
+- Target triple: `spirv64-unknown-unknown`
+
+### Мосты
+- **C#** — P/Invoke + `unsafe` + `fixed`
+- **Python** — `ctypes` + numpy + multi-platform DLL load
+- **C/C++** — `extern "C"` ABI + `#pragma once`
+- **Rust** — `extern "C"` + safe wrapper
+- **Swift** — `@_silgen_name` + `UnsafePointer`
+- **Kotlin** — `System.loadLibrary` + `external fun`
+
+## Система памяти (v2.5.0GH)
 
 Три режима управления памятью — синтаксис кода не меняется.
 
@@ -378,6 +395,10 @@ B+ --turbo                                ~4-8 нс/ит      ~4-6× быстр�
 ```
 
 B+ генерирует **тот же код**, что и оптимизированный C++ вручную. Прирост — не магия, а устранение virtual dispatch (×2-3) и new/delete (×2-3). В сумме на пустом цикле даёт ~3-5×. В реальном приложении, где состояния живут дольше одного перехода, разница будет **~10-30%**, потому что основное время — не диспетчеризация, а логика самих состояний.
+
+### Скорость транспиляции
+
+B+ → LLVM IR кодогенерация (~3500 ms запуск + JIT + кодогенерация на memory_demo.bp с pipeline из 4 ops). Чистое время кодогенерации (без dotnet JIT) составит ~100-300 ms на реальном проекте.
 
 ### Запустить самому
 

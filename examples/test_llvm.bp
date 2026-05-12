@@ -1,4 +1,4 @@
--- B+ v2.1.3VS — LLVM IR codegen test
+-- B+ v2.5.0GH — LLVM IR codegen test
 -- kernel → .ll (LLVM IR) → .obj via llc
 
 #lang b+ v2.0

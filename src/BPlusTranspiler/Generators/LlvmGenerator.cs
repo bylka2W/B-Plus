@@ -77,24 +77,29 @@ public class LlvmGenerator : ICodeGenerator
 
         if (gpu)
         {
+            ll.GpuMode = true;
             ll.Line($"  %gid = call i64 @__bpc_global_id(i32 0)");
             ll.Line($"  %ok = icmp ult i64 %gid, {total}");
             ll.Line($"  br i1 %ok, label %work, label %exit");
             ll.Line("work:");
-            ll.Line($"  %gp = getelementptr float, ptr addrspace(1) %{src}, i64 %gid");
-            ll.Line($"  %gv = load float, ptr addrspace(1) %gp");
-            // Apply pipeline to %gv
+            ll.Line($"  %g0 = getelementptr float, ptr addrspace(1) %{src}, i64 %gid");
+            ll.Line($"  %g1 = load float, ptr addrspace(1) %g0");
+            int gi = 2;
             if (k.Body != null)
                 foreach (var op in k.Body.Operations)
-                    ll.Line(GpuOp(op, "%gv"));
+                {
+                    var (code, next) = GpuOp(op, $"%g{gi - 1}", gi);
+                    if (code != null) ll.Line(code);
+                    gi = next;
+                }
             ll.Line($"  %go = getelementptr float, ptr addrspace(1) %{dst}, i64 %gid");
-            ll.Line($"  store float %gv, ptr addrspace(1) %go");
+            ll.Line($"  store float %g{gi - 1}, ptr addrspace(1) %go");
             ll.Line($"  br label %exit");
             ll.Line("exit:");
             ll.Line("  ret void");
             ll.Dedent();
             ll.Line("}");
-            ll.Line("declare i64 @__bpc_global_id(i32)");
+            ll.Line("declare i64 @__bpc_global_id(i32) nounwind");
             ll.Line("");
             return;
         }
@@ -207,13 +212,36 @@ public class LlvmGenerator : ICodeGenerator
         ll.Line("");
     }
 
-    static string GpuOp(PipelineOp op, string v) => op.Name switch
+    static (string? code, int next) GpuOp(PipelineOp op, string v, int gi) => op.Name switch
     {
-        "relu" => $"  {v} = select i1 (fcmp olt float {v}, 0.0), float 0.0, float {v}",
-        "clamp" when op.Args.Count > 1 =>
-            $"  {v} = select i1 (fcmp ogt float {v}, {op.Args[1]}), float {op.Args[1]}, float {v}\n" +
-            $"  {v} = select i1 (fcmp olt float {v}, {op.Args[0]}), float {op.Args[0]}, float {v}",
-        _ => $"  ; {op.Name} skipped"
+        "relu" => (
+            $"  %g{gi} = fcmp olt float {v}, 0.0\n" +
+            $"  %g{gi + 1} = select i1 %g{gi}, float 0.0, float {v}",
+            gi + 2),
+        "clamp" when op.Args.Count > 1 => (
+            $"  %g{gi} = fcmp ogt float {v}, {op.Args[1]}\n" +
+            $"  %g{gi + 1} = select i1 %g{gi}, float {op.Args[1]}, float {v}\n" +
+            $"  %g{gi + 2} = fcmp olt float %g{gi + 1}, {op.Args[0]}\n" +
+            $"  %g{gi + 3} = select i1 %g{gi + 2}, float {op.Args[0]}, float %g{gi + 1}",
+            gi + 4),
+        "clamp" => (
+            $"  %g{gi} = fcmp ogt float {v}, 1.0\n" +
+            $"  %g{gi + 1} = select i1 %g{gi}, float 1.0, float {v}\n" +
+            $"  %g{gi + 2} = fcmp olt float %g{gi + 1}, 0.0\n" +
+            $"  %g{gi + 3} = select i1 %g{gi + 2}, float 0.0, float %g{gi + 1}",
+            gi + 4),
+        "convolve" => (
+            $"  ; convolve on GPU needs shared memory (stub)\n" +
+            $"  %g{gi} = fadd float {v}, 0.0",
+            gi + 1),
+        "shuffle" => (
+            $"  ; shuffle on GPU needs sub-group ops (stub)\n" +
+            $"  %g{gi} = fadd float {v}, 0.0",
+            gi + 1),
+        _ => (
+            $"  ; {op.Name} skipped on GPU\n" +
+            $"  %g{gi} = fadd float {v}, 0.0",
+            gi + 1)
     };
 
     void EmitEntry(LlvmIrBuilder ll, EntryDecl e)
@@ -237,7 +265,7 @@ public class LlvmGenerator : ICodeGenerator
 
 static class Gen
 {
-    static string Hdr => "// B+ v2.1.3VS — Auto-generated bridge\n";
+    static string Hdr => "// B+ v2.5.0GH — Auto-generated bridge\n";
 
     public static string CSharp(List<string> kernels)
     {
@@ -361,6 +389,7 @@ internal class LlvmIrBuilder
     readonly string _platform;
     readonly List<string> _lines = new();
     int _indent;
+    public bool GpuMode;
 
     public LlvmIrBuilder(string platform = "native") { _platform = platform; }
 
@@ -370,22 +399,25 @@ internal class LlvmIrBuilder
 
     public override string ToString()
     {
-        var (triple, layout) = _platform switch
-        {
-            "wasm" => ("wasm32-unknown-unknown", "e-m:e-p:32:32-i64:64-n32:64-S128"),
-            "arm64" or "ios" => ("arm64-apple-ios", "e-m:o-i64:64-i128:128-n32:64-S128"),
-            "android" => ("aarch64-linux-android", "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"),
-            _ => ("x86_64-pc-windows-msvc", "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128")
-        };
+        var (triple, layout) = GpuMode
+            ? ("spirv64-unknown-unknown", "e-m:e-p:64:64-i64:64-n32:64-S128")
+            : _platform switch
+            {
+                "wasm" => ("wasm32-unknown-unknown", "e-m:e-p:32:32-i64:64-n32:64-S128"),
+                "arm64" or "ios" => ("arm64-apple-ios", "e-m:o-i64:64-i128:128-n32:64-S128"),
+                "android" => ("aarch64-linux-android", "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"),
+                _ => ("x86_64-pc-windows-msvc", "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128")
+            };
 
         var h = $@"; ModuleID = 'bplus_module'
 source_filename = ""bplus.bp""
 target datalayout = ""{layout}""
 target triple = ""{triple}""
 
-declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
-
 ";
+        if (!GpuMode)
+            h += "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\n";
+
         return h + string.Join("\n", _lines);
     }
 }

@@ -568,7 +568,7 @@ static void InstallLsp()
     var packageJson = new
     {
         name = "bplus-lsp",
-        version = "2.1.3VS",
+        version = "2.5.0GH",
         displayName = "B+ Language Support",
         description = "B+ state machine language — LSP integration",
         categories = new[] { "Programming Languages" },
