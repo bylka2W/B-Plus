@@ -325,7 +325,7 @@ for (int i = 0; i < args.Length; i++)
     // Skip flag values consumed by OptimizationFlags
     else if (args[i] is "--thread-pool" or "--prefetch" or "--pool" or "--memory"
              or "--eco" or "--target-arch" or "--target-os"
-             or "--pin-regs" or "--benchmark")
+             or "--pin-regs" or "--benchmark" or "--stream")
     {
         if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
             i++;

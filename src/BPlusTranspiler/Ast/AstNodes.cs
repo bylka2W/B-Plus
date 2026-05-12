@@ -10,6 +10,9 @@ public class ProgramNode
     public List<StateDefNode> States { get; } = new();
     public List<ParallelBlockNode> ParallelBlocks { get; } = new();
 
+    // Streaming mode (#parser directive or --stream flag)
+    public BPlusStreamMode StreamMode { get; set; }
+
     // v2.2+ new constructs
     public List<Directive> Directives { get; } = new();
     public List<UseCxxDecl> UseCxxDecls { get; } = new();
@@ -53,6 +56,7 @@ public class StateDefNode
     public string? BaseClass { get; set; }
     public string? GenericParam { get; set; }
     public bool IsBaseClass { get; set; }
+    public bool IsStream { get; set; }
     public List<VariableNode> Variables { get; } = new();
     public List<TransitionNode> Transitions { get; } = new();
     public List<ActionNode> Actions { get; } = new();
@@ -221,6 +225,8 @@ public class Directive
     public string Value { get; set; } = "";
     public string? SubValue { get; set; }
 }
+
+public enum BPlusStreamMode { None, Parser }
 
 public class UseCxxDecl
 {

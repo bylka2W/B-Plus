@@ -79,8 +79,11 @@ public class OptimizationFlags
     // Analysis
     public bool Check { get; set; }
 
+    // Streaming mode (#parser / --stream)
+    public bool Stream { get; set; }
+
     public bool HasAny => Turbo || TurboEco || TurboEmbed || DebugOpt || ProfileGen || ProfileUse
-        || Auto || Optimize || InlineStates || ConstFold || DeadElim
+        || Auto || Optimize || InlineStates || ConstFold || DeadElim || Stream
         || Vectorize != VectorizeMode.None || CacheFriendly || Prefetch != PrefetchMode.None
         || AlignBytes > 0 || HugePages || ZeroCopy || NoAlloc
         || Branchless || LikelyHints || UnlikelyHints || FlattenSwitch
@@ -273,6 +276,10 @@ public class OptimizationFlags
                     flags.Benchmark = true;
                     if (i + 1 < args.Length && int.TryParse(args[i + 1], out var bi))
                     { flags.BenchmarkIterations = bi; i++; }
+                    break;
+
+                case "--stream":
+                    flags.Stream = true;
                     break;
 
                 case "--check":

@@ -45,6 +45,13 @@ public partial class BPlusParser
                     program.Pipelines.Add(ParsePipeline(annotations));
                 else if (Peek("entry"))
                     program.Entries.Add(ParseEntry());
+                else if (Peek("state ") || Peek("base "))
+                {
+                    var state = ParseStateDef();
+                    if (annotations.Any(a => a.Name == "stream"))
+                        state.IsStream = true;
+                    program.States.Add(state);
+                }
                 else
                 {
                     if (_pos < _src.Length && _src[_pos] == '@')
@@ -674,6 +681,13 @@ public partial class BPlusParser
 
     private void HandleMemoryDirective(ProgramNode program, Directive dir)
     {
+        switch (dir.Name)
+        {
+            case "parser":
+                program.StreamMode = BPlusStreamMode.Parser;
+                return;
+        }
+
         program.Memory ??= new MemoryConfig();
         switch (dir.Name)
         {

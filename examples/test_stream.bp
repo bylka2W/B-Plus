@@ -1,0 +1,36 @@
+-- B+ v2.5.0GH — Streaming parser test
+-- Tests: #parser, @stream, and --stream flag
+
+#lang b+ v2.0
+#mode turbo
+#target auto
+#parser
+
+@stream
+state Start {
+    on timer -> FoundH
+}
+
+state FoundH {
+    on timer -> FoundHe
+}
+
+state FoundHe {
+    on timer -> FoundHel
+}
+
+state FoundHel {
+    on timer -> FoundHell
+}
+
+state FoundHell {
+    on timer -> Done
+}
+
+state Done {
+    on timer -> Start
+}
+
+entry main()
+    run my_pipeline
+    ExitCode::Ok
