@@ -7,11 +7,25 @@ public partial class BPlusParser
 {
     private string _src = "";
     private int _pos;
+    private int _line;
+    private const int MaxNestingDepth = 100;
+    private static readonly char[] RtlChars = {
+        '\u200E', '\u200F', '\u202A', '\u202B', '\u202C',
+        '\u202D', '\u202E', '\u2066', '\u2067', '\u2068', '\u2069'
+    };
 
     public ProgramNode Parse(string source)
     {
         _src = StripComments(source);
         _pos = 0;
+        _line = 1;
+
+        // RTL override filter (CWE-451)
+        foreach (var c in RtlChars)
+        {
+            if (_src.Contains(c))
+                throw new ParseException($"RTL override character U+{(int)c:X4} detected — possible code injection (CWE-451)");
+        }
         var program = new ProgramNode();
 
         SkipWs();
@@ -158,9 +172,17 @@ public partial class BPlusParser
         return en;
     }
 
-    private StateDefNode ParseStateDef()
+    private static int _stateIdCounter;
+    private readonly Dictionary<string, StateDefNode> _allStates = new();
+
+    private StateDefNode ParseStateDef(int depth = 0)
     {
+        if (depth > MaxNestingDepth)
+            throw Err($"Maximum nesting depth {MaxNestingDepth} exceeded — possible stack overflow");
+
         var state = new StateDefNode();
+        state.ParseLine = _line;
+        state.Depth = depth;
 
         if (Peek("base "))
         {
@@ -171,6 +193,10 @@ public partial class BPlusParser
 
         Expect("state ");
         state.Name = ParseWord();
+
+        // Detach if state already defined
+        if (_allStates.ContainsKey(state.Name))
+            throw Err($"Duplicate state '{state.Name}'");
 
         // Generic <T>
         SkipWs();
@@ -189,7 +215,13 @@ public partial class BPlusParser
             _pos++;
             SkipWs();
             state.BaseClass = ParseWord();
+            // Self-inheritance
+            if (state.BaseClass == state.Name)
+                throw Err($"Cyclic inheritance: state '{state.Name}' cannot inherit from itself");
         }
+
+        _allStates[state.Name] = state;
+        _stateIdCounter++;
 
         SkipWs();
         Expect("{");
@@ -1326,12 +1358,6 @@ public partial class BPlusParser
         return body;
     }
 
-    private void SkipWs()
-    {
-        while (_pos < _src.Length && char.IsWhiteSpace(_src[_pos]))
-            _pos++;
-    }
-
     private string ParseAnnotationValue()
     {
         if (_pos < _src.Length && _src[_pos] == '"')
@@ -1435,6 +1461,89 @@ public partial class BPlusParser
         src = Regex.Replace(src, @"//.*", "");
         src = Regex.Replace(src, @"--.*", "");
         return src;
+    }
+
+    private void SkipWs()
+    {
+        while (_pos < _src.Length && char.IsWhiteSpace(_src[_pos]))
+        {
+            if (_src[_pos] == '\n') _line++;
+            _pos++;
+        }
+    }
+
+    // Post-parse validation
+    public static List<string> Validate(ProgramNode program)
+    {
+        var errors = new List<string>();
+        var stateNames = new HashSet<string>();
+        foreach (var s in program.States) stateNames.Add(s.Name);
+
+        // Check cyclic inheritance (DFS)
+        foreach (var s in program.States)
+        {
+            if (s.BaseClass == null) continue;
+            if (!stateNames.Contains(s.BaseClass))
+            {
+                errors.Add($"Undefined base class '{s.BaseClass}' for state '{s.Name}'");
+                continue;
+            }
+            // Detect cycles: A → B → C → A
+            var visited = new HashSet<string>();
+            var cur = s.BaseClass;
+            while (cur != null)
+            {
+                if (!visited.Add(cur))
+                {
+                    errors.Add($"Cyclic inheritance detected: state '{s.Name}' chain contains '{cur}'");
+                    break;
+                }
+                var parent = program.States.Find(st => st.Name == cur);
+                if (parent == null || parent.BaseClass == null) break;
+                cur = parent.BaseClass;
+            }
+        }
+
+        // Check void type
+        foreach (var s in program.States)
+            foreach (var v in s.Variables)
+                if (v.Type == "void")
+                    errors.Add($"Variable '{v.Name}' in state '{s.Name}' has type 'void' — not allowed");
+
+        // Check variable initialization type compatibility
+        foreach (var s in program.States)
+            foreach (var v in s.Variables)
+                if (v.DefaultValue != null && !IsTypeCompatible(v.Type, v.DefaultValue))
+                    errors.Add($"Type mismatch: '{v.Name}: {v.Type}' cannot be initialized with '{v.DefaultValue}'");
+
+        // Check parallel independent states
+        foreach (var p in program.ParallelBlocks)
+        {
+            var shared = new HashSet<string>();
+            for (int i = 0; i < p.States.Count; i++)
+            {
+                foreach (var v in p.States[i].Variables)
+                {
+                    if (!shared.Add(v.Name))
+                        errors.Add($"State '{p.States[i].Name}' in parallel block '{p.Name}' shares variable '{v.Name}' — data race risk");
+                }
+            }
+        }
+
+        return errors;
+    }
+
+    private static bool IsTypeCompatible(string type, string value)
+    {
+        if (type is "int" or "i32" or "i64" or "u32" or "u64")
+            return int.TryParse(value, out _) || long.TryParse(value, out _);
+        if (type is "float" or "f32" or "double" or "f64")
+            return double.TryParse(value, out _);
+        if (type is "bool" or "boolean")
+            return value is "true" or "false" or "0" or "1";
+        if (type is "string")
+            return value.StartsWith('"') && value.EndsWith('"');
+        return true; // custom types pass through
     }
 }
 

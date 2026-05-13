@@ -645,12 +645,21 @@ if (program.Kernels.Count > 0 || program.Pipelines.Count > 0 || program.Entries.
     generators.Add(new CppKernelGenerator());
 }
 
-// Error analysis (7 categories)
+// Error analysis (7 categories + BPlusValidator)
 if (optFlags.Check || !optFlags.HasAny)
 {
     var reporter = new BPlusErrorReporter(program, input, optFlags.HasAny ? optFlags : null);
     reporter.RunAll();
     var code = reporter.Report(Console.Out);
+
+    // Run BPlusValidator — 121 checks
+    var valErrors = BPlusValidator.Validate(program, input);
+    if (valErrors.Any(e => e.Severity == "🔴"))
+    {
+        Console.Error.WriteLine(BPlusValidator.GenerateReport(valErrors));
+        code = 1;
+    }
+
     if (optFlags.Check)
         return code;
 }

@@ -39,6 +39,9 @@ public class VariableNode
     public string? DefaultValue { get; set; }
     // @fast_path — keep in CPU registers
     public bool IsFastPath { get; set; }
+    public bool IsMutable { get; set; } = true;
+    public bool IsAtomic { get; set; }
+    public bool IsNullable { get; set; }
 }
 
 public class ContextNode
@@ -66,6 +69,8 @@ public class StateDefNode
     public List<StateDefNode> NestedStates { get; } = new();
     // Semantic Inline chain ID (set by optimizer)
     public string? ChainId { get; set; }
+    public int Depth { get; set; }
+    public int ParseLine { get; set; }
 }
 
 public class TransitionNode
@@ -109,6 +114,8 @@ public class ParallelBlockNode
 {
     public string Name { get; set; } = "";
     public List<StateDefNode> States { get; } = new();
+    public List<string> SharedVariables { get; } = new();
+    public Dictionary<string, HashSet<string>> DepGraph { get; set; } = new();
 }
 
 // ════════════════════════════════════════

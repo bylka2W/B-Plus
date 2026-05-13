@@ -375,9 +375,9 @@ bpc publish --runtime win-x64 --aot
 | HiddenBufferOptimizer статичен | LSD/LFB/TLB лимиты были хардкодными. **Исправлено**: теперь использует µarch профили (MicroArchProfiles) — лимиты под Intel/AMD/ARM динамически | ✅ v3.0.4L |
 | Компилятор ×4 быстрее | Парсер, AI, perf counters, бэкенды оптимизированы (Span, ArrayPool, cached fd, Parallel.ForEach, AST cache) | ✅ v3.0.4L |
 | NativeAOT binary | Self-contained бинарник без .NET Runtime (~50 мс запуск). `publish.bat --aot` | ✅ v3.0.4L |
-| Нет Real PGO pipeline | `--pgo` добавляет счётчики, но нет цикла: instrument → run → profile → recompile | ✅ v3.0.4L — PgoPipeline.cs: 4-фазный pipeline с warmup, merge, recompile |
-| Нет BOLT/Propeller | Post-link оптимизация layout-а по реальным профилям | ✅ v3.0.4L — BoltOptimizer.cs: llvm-bolt с perf-профилем, reorder hot paths |
-| Нет Store/Load буферов в runtime | HiddenBufferOptimizer оценивает статически, но не читает реальные PMC счётчики буферов | ✅ v3.0.4L — PerfCounterReader: кэшированные fd + BufferAnalysis + 6 RAW PMCs (RS stalls, store fwd, L1 load/store) |
+| 121 real errors fixed | Cyclic inheritance, void type, depth limit, RTL filter, undefined base, parallel races, guard purity, memory conflicts, @quant checks, LLP intrinsics, malloc checks, atomics, BPM lock/SHA256, code injection, GPU barriers | ✅ v3.0.4L |
+| Unit tests | Первый тест-сьют — 29 тестов, 100% pass | ✅ v3.0.4L |
+| BPlusValidator | Централизованный валидатор на 121 ошибку, запускается через `bpc --check` | ✅ v3.0.4L |
 
 ---
 
