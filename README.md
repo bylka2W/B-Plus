@@ -135,11 +135,16 @@ bpc input.bp --roofline               # Roofline model
 bpc input.bp --ilp                    # ILP dependency chains
 bpc input.bp --store-fwd              # Store forwarding hazards
 bpc --muarch                          # µarch profile (Agner Fog)
+bpc input.bp --buffer-counters        # Store/Load buffer PMC analysis
+
+# === PGO + BOLT ===
+bpc input.bp --pgo                    # Full PGO pipeline: instrument→run→merge→recompile   +15-25%
+bpc input.bp --pgo --pgo-use file      # Use existing profile
+bpc input.bp --bolt [--binary path]   # BOLT post-link: reorder code by hot paths        +10-20%
 
 # === PGO / Optimization ===
 bpc input.bp --optimize               # таблица переходов
 bpc input.bp --turbo                  # optimize+pool+pack
-bpc input.bp --pgo                    # PGO counters
 bpc input.bp --predict                # предсказание next state
 
 # === Streaming ===
@@ -167,6 +172,7 @@ bpc watch . --target cpp              # автоперегенерация
 bpc --lsp                             # LSP сервер
 bpc --install-lsp                     # VS Code extension
 bpc build                             # сборка по bp.toml
+bpc publish --runtime linux-x64 --aot # NativeAOT binary
 bpc test run input.bp                 # авто-тесты
 ```
 
@@ -369,9 +375,9 @@ bpc publish --runtime win-x64 --aot
 | HiddenBufferOptimizer статичен | LSD/LFB/TLB лимиты были хардкодными. **Исправлено**: теперь использует µarch профили (MicroArchProfiles) — лимиты под Intel/AMD/ARM динамически | ✅ v3.0.4L |
 | Компилятор ×4 быстрее | Парсер, AI, perf counters, бэкенды оптимизированы (Span, ArrayPool, cached fd, Parallel.ForEach, AST cache) | ✅ v3.0.4L |
 | NativeAOT binary | Self-contained бинарник без .NET Runtime (~50 мс запуск). `publish.bat --aot` | ✅ v3.0.4L |
-| Нет Real PGO pipeline | `--pgo` добавляет счётчики, но нет цикла: instrument → run → profile → recompile | TODO |
-| Нет BOLT/Propeller | Post-link оптимизация layout-а по реальным профилям | TODO |
-| Нет Store/Load буферов в runtime | HiddenBufferOptimizer оценивает статически, но не читает реальные PMC счётчики буферов | TODO |
+| Нет Real PGO pipeline | `--pgo` добавляет счётчики, но нет цикла: instrument → run → profile → recompile | ✅ v3.0.4L — PgoPipeline.cs: 4-фазный pipeline с warmup, merge, recompile |
+| Нет BOLT/Propeller | Post-link оптимизация layout-а по реальным профилям | ✅ v3.0.4L — BoltOptimizer.cs: llvm-bolt с perf-профилем, reorder hot paths |
+| Нет Store/Load буферов в runtime | HiddenBufferOptimizer оценивает статически, но не читает реальные PMC счётчики буферов | ✅ v3.0.4L — PerfCounterReader: кэшированные fd + BufferAnalysis + 6 RAW PMCs (RS stalls, store fwd, L1 load/store) |
 
 ---
 

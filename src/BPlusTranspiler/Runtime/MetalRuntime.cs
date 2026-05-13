@@ -11,6 +11,12 @@ public struct PerfCounters
     public long L3Misses;
     public long BranchMispredicts;
     public long StoreForwardStalls;
+    public long ResourceStalls;
+    public long LoadStalls;
+    public long StoreStalls;
+    public long RsFullCycles;
+    public long LdResConflict;
+    public long MachineClearCycles;
 }
 
 public static class PerfCounterReader
@@ -28,11 +34,18 @@ public static class PerfCounterReader
     }
 
     private const int PERF_TYPE_HARDWARE = 0;
+    private const int PERF_TYPE_HARDWARE_CACHE = 3;
+    private const int PERF_TYPE_RAW = 4;
+    private const int PERF_TYPE_SOFTWARE = 1;
+
     private const ulong PERF_COUNT_HW_CPU_CYCLES = 0;
     private const ulong PERF_COUNT_HW_INSTRUCTIONS = 1;
     private const ulong PERF_COUNT_HW_CACHE_MISSES = 3;
     private const ulong PERF_COUNT_HW_BRANCH_MISSES = 5;
     private const ulong PERF_COUNT_HW_STALLED_CYCLES_FRONTEND = 7;
+
+    private const int PERF_COUNT_HW_CACHE_RESULT_L1D_LOAD = 0;
+    private const int PERF_COUNT_HW_CACHE_RESULT_L1D_STORE = 1;
 
     private static readonly Lazy<int[]> _cachedFds = new(OpenAllCounters);
 
@@ -58,6 +71,31 @@ public static class PerfCounterReader
         return fds;
     }
 
+    private static readonly Lazy<int[]> _bufferFds = new(OpenBufferCounters);
+
+    private static int[] OpenBufferCounters()
+    {
+        var fds = new int[6];
+        var attrs = new PerfEventAttr[6];
+
+        // Intel: Topdown slots (RS fullness proxy — cycles with uops not issued from RS)
+        // PMC 0x02: RESOURCE_STALLS.SB (store buffer full)
+        attrs[0] = new PerfEventAttr { Type = PERF_TYPE_RAW, Size = (uint)Marshal.SizeOf<PerfEventAttr>(), Config = 0xA2 }; // RS stalls (all)
+        attrs[1] = new PerfEventAttr { Type = PERF_TYPE_RAW, Size = (uint)Marshal.SizeOf<PerfEventAttr>(), Config = 0xA1 }; // RS stalls (partial)
+        // PMC 0x08: LOAD_HIT_STORE_FORWARD (store forwarding conflict)
+        attrs[2] = new PerfEventAttr { Type = PERF_TYPE_RAW, Size = (uint)Marshal.SizeOf<PerfEventAttr>(), Config = 0x08 };
+        // PMC 0x20C5: MACHINE_CLEAR resource stalls
+        attrs[3] = new PerfEventAttr { Type = PERF_TYPE_RAW, Size = (uint)Marshal.SizeOf<PerfEventAttr>(), Config = 0x20C5 };
+        // Load buffer stall cycles (Intel)
+        attrs[4] = new PerfEventAttr { Type = PERF_TYPE_RAW, Size = (uint)Marshal.SizeOf<PerfEventAttr>(), Config = 0xA2 };
+        // Store buffer full cycles
+        attrs[5] = new PerfEventAttr { Type = PERF_TYPE_RAW, Size = (uint)Marshal.SizeOf<PerfEventAttr>(), Config = 0xA2 };
+
+        for (int i = 0; i < 6; i++)
+            fds[i] = perf_event_open(ref attrs[i], 0, -1, -1, 0);
+        return fds;
+    }
+
     public static PerfCounters ReadCounters()
     {
         var c = new PerfCounters();
@@ -75,6 +113,9 @@ public static class PerfCounterReader
             catch { /* fallback */ }
         }
 
+        // Read store/load buffer counters
+        ReadBufferCounters(ref c);
+
         if (c.Cycles == 0)
         {
             c.Cycles = (long)System.Diagnostics.Stopwatch.GetTimestamp();
@@ -83,7 +124,146 @@ public static class PerfCounterReader
         return c;
     }
 
+    private static void ReadBufferCounters(ref PerfCounters c)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return;
+        if (_bufferFds.Value[0] < 0) return;
+
+        try
+        {
+            var fds = _bufferFds.Value;
+            long raw0 = 0, raw1 = 0, raw2 = 0, raw3 = 0, raw4 = 0, raw5 = 0;
+            if (fds[0] >= 0) read(fds[0], ref raw0, sizeof(long));
+            if (fds[1] >= 0) read(fds[1], ref raw1, sizeof(long));
+            if (fds[2] >= 0) read(fds[2], ref raw2, sizeof(long));
+            if (fds[3] >= 0) read(fds[3], ref raw3, sizeof(long));
+            if (fds[4] >= 0) read(fds[4], ref raw4, sizeof(long));
+            if (fds[5] >= 0) read(fds[5], ref raw5, sizeof(long));
+
+            c.ResourceStalls = raw0;
+            c.LoadStalls = raw1;
+            c.StoreForwardStalls = raw2;
+            c.MachineClearCycles = raw3;
+            c.RsFullCycles = raw4;
+            c.LdResConflict = raw5;
+
+            // Read L1 cache events
+            TryReadCacheEvent(PERF_TYPE_HARDWARE_CACHE, 0xFF, 0x1, PERF_COUNT_HW_CACHE_RESULT_L1D_LOAD, ref c.L1DMisses);
+            TryReadCacheEvent(PERF_TYPE_HARDWARE_CACHE, 0xFF, 0x1, PERF_COUNT_HW_CACHE_RESULT_L1D_STORE, ref c.StoreStalls);
+        }
+        catch { /* buffer counters not available */ }
+    }
+
+    private static void TryReadCacheEvent(int type, ulong op, int result, int eventId, ref long target)
+    {
+        try
+        {
+            var attr = new PerfEventAttr
+            {
+                Type = (uint)type,
+                Size = (uint)Marshal.SizeOf<PerfEventAttr>(),
+                Config = ((ulong)eventId << 0) | (op << 8) | ((ulong)result << 16)
+            };
+            int fd = perf_event_open(ref attr, 0, -1, -1, 0);
+            if (fd >= 0)
+            {
+                long val = 0;
+                read(fd, ref val, sizeof(long));
+                close(fd);
+                if (target == 0 || val < target) target = val;
+            }
+        }
+        catch { }
+    }
+
+    public static BufferAnalysis AnalyzeBuffers(string bpFile)
+    {
+        var c = ReadCounters();
+        double ipc = c.Cycles > 0 ? (double)c.Instructions / c.Cycles : 0;
+        double stallRate = c.ResourceStalls > 0 && c.Cycles > 0
+            ? (double)c.ResourceStalls / c.Cycles : 0;
+        double sfStallRate = c.StoreForwardStalls > 0 && c.Instructions > 0
+            ? (double)c.StoreForwardStalls / c.Instructions : 0;
+
+        var analysis = new BufferAnalysis
+        {
+            StoreBufferFullRate = stallRate,
+            StoreForwardStallRate = sfStallRate,
+            LoadStallRate = c.LoadStalls > 0 && c.Cycles > 0
+                ? (double)c.LoadStalls / c.Cycles : 0,
+            RsFullRate = c.RsFullCycles > 0 && c.Cycles > 0
+                ? (double)c.RsFullCycles / c.Cycles : 0,
+            LdResConflictRate = c.LdResConflict > 0 && c.Instructions > 0
+                ? (double)c.LdResConflict / c.Instructions : 0,
+            Ipc = ipc,
+            ResourceStalls = c.ResourceStalls,
+            StoreForwardStalls = c.StoreForwardStalls,
+            LoadStalls = c.LoadStalls,
+            RawCounters = c
+        };
+
+        // Recommendations
+        var recs = new List<string>();
+        if (stallRate > 0.1)
+            recs.Add("Store buffer >10% stall — consider batching stores");
+        if (sfStallRate > 0.01)
+            recs.Add("Store-forward stalls >1% — add nop or restructure memory pattern");
+        if (c.LoadStalls > c.Cycles * 0.05)
+            recs.Add("Load stalls >5% cycles — check TLB, add prefetch");
+        if (c.RsFullCycles > c.Cycles * 0.03)
+            recs.Add("Reservation station >3% full — reduce ILP chain length");
+        if (c.LdResConflict > c.Instructions * 0.005)
+            recs.Add("Load-store conflict detected — reorder memory operations");
+
+        analysis.Recommendations = recs;
+        return analysis;
+    }
+
+    public static string GenerateBufferReport(BufferAnalysis a)
+    {
+        var lines = new List<string>
+        {
+            "╔═══════════════════════════════════════════╗",
+            "║      STORE/LOAD BUFFER PMC ANALYSIS      ║",
+            "╚═══════════════════════════════════════════╝",
+            $"  IPC:              {a.Ipc:F3}",
+            $"  RS stall rate:    {a.StoreBufferFullRate:P1}",
+            $"  Store fwd rate:   {a.StoreForwardStallRate:P2}",
+            $"  Load stall rate: {a.LoadStallRate:P2}",
+            $"  RS full rate:    {a.RsFullRate:P2}",
+            $"  Ld/Res conflict: {a.LdResConflictRate:P3}",
+            ""
+        };
+        if (a.Recommendations.Count > 0)
+        {
+            lines.Add("  Recommendations:");
+            foreach (var r in a.Recommendations)
+                lines.Add($"    • {r}");
+        }
+        else
+        {
+            lines.Add("  ✓ All buffer metrics nominal");
+        }
+        return string.Join("\n", lines);
+    }
+
     [DllImport("libc")] private static extern long read(int fd, ref long buf, int count);
+    [DllImport("libc")] private static extern int close(int fd);
+}
+
+public class BufferAnalysis
+{
+    public double StoreBufferFullRate { get; set; }
+    public double StoreForwardStallRate { get; set; }
+    public double LoadStallRate { get; set; }
+    public double RsFullRate { get; set; }
+    public double LdResConflictRate { get; set; }
+    public double Ipc { get; set; }
+    public long ResourceStalls { get; set; }
+    public long StoreForwardStalls { get; set; }
+    public long LoadStalls { get; set; }
+    public List<string> Recommendations { get; set; } = new();
+    public PerfCounters RawCounters { get; set; } = new();
 }
 
 public static class MetalRuntime

@@ -445,6 +445,56 @@ if (args.Contains("--roofline"))
     return 0;
 }
 
+if (args.Contains("--pgo"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --pgo [--pgo-use merged.profdata]");
+        return 1;
+    }
+    string? pgoProfile = null;
+    for (int i = 0; i < args.Length; i++)
+        if (args[i] == "--pgo-use" && i + 1 < args.Length) pgoProfile = args[++i];
+
+    Console.WriteLine("B+ PGO Pipeline v3.0.4L BETA");
+    Console.WriteLine($"  Input: {input}");
+    Console.WriteLine($"  Mode: {(pgoProfile != null ? "use existing profile" : "collect + recompile")}");
+    var pipeline = new PgoPipeline(input, collect: pgoProfile == null, pgoUsePath: pgoProfile);
+    var result = pipeline.Run();
+    Console.WriteLine($"  Profile files: {result.ProfileFilesCollected}");
+    if (!string.IsNullOrEmpty(result.OptimizedBinaryPath))
+        Console.WriteLine($"  Optimized binary: {result.OptimizedBinaryPath}");
+    if (result.Speedup > 0)
+        Console.WriteLine($"  Speedup: {result.Speedup:F2}x");
+    return 0;
+}
+
+if (args.Contains("--bolt"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --bolt [--binary path]");
+        return 1;
+    }
+    string? binaryPath = input;
+    for (int i = 0; i < args.Length; i++)
+        if (args[i] == "--binary" && i + 1 < args.Length) binaryPath = args[++i];
+
+    Console.WriteLine("B+ BOLT Post-Link Optimizer v3.0.4L BETA");
+    var bolt = new BoltOptimizer();
+    var result = bolt.Optimize(binaryPath);
+    Console.WriteLine(BoltOptimizer.GenerateReport(result));
+    return 0;
+}
+
+if (args.Contains("--buffer-counters"))
+{
+    Console.WriteLine("B+ Buffer PMC Counters v3.0.4L BETA");
+    var analysis = BPlusTranspiler.Runtime.PerfCounterReader.AnalyzeBuffers(input ?? "");
+    Console.WriteLine(BPlusTranspiler.Runtime.PerfCounterReader.GenerateBufferReport(analysis));
+    return 0;
+}
+
 if (args.Contains("--train-unpack"))
 {
     Console.WriteLine("B+ AI UnpackPredictor Trainer v3.0.4L BETA");
@@ -500,11 +550,13 @@ if (input == null)
     Console.Error.WriteLine("       bpc test run <file.bp>                      (run auto-generated tests)");
     Console.Error.WriteLine("       bpc health [dir] [flags]                    (project health analysis)");
     Console.Error.WriteLine("       bpc diff <a.bp> <b.bp>                      (semantic diff)");
-Console.Error.WriteLine("       bpc build [--config bp.toml] [--dry-run]    (build from config)");
+    Console.Error.WriteLine("       bpc build [--config bp.toml] [--dry-run]    (build from config)");
     Console.Error.WriteLine("       bpc publish [--runtime linux-x64] [--aot]   (NativeAOT publish)");
-    Console.Error.WriteLine("       bpc diff <a.bp> <b.bp>                      (semantic diff)");
     Console.Error.WriteLine();
     Console.Error.WriteLine("Optimization flags (реалистичные ускорения на state machine):");
+    Console.Error.WriteLine("  --pgo [--pgo-use file]       PGO pipeline: instrument→run→merge→recompile   +15-25%");
+    Console.Error.WriteLine("  --bolt [--binary path]       BOLT post-link: reorder code by hot paths    +10-20%");
+    Console.Error.WriteLine("  --buffer-counters            Store/Load buffer PMC analysis               (PMC)");
     Console.Error.WriteLine("  --self-contained             Self-contained binary (no .NET runtime)");
     Console.Error.WriteLine("  --aot                        NativeAOT compilation");
     Console.Error.WriteLine("  --optimize                  Таблица переходов вместо virtual   +10-30%");
