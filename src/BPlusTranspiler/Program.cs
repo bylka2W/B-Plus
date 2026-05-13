@@ -13,6 +13,7 @@ using BPlusTranspiler.Profiler;
 using BPlusTranspiler.Plugins;
 using BPlusTranspiler.PackageManager;
 using BPlusTranspiler.TestRunner;
+using BPlusTranspiler.Runtime;
 
 if (args.Length > 0 && args[0] == "health")
 {
@@ -492,6 +493,84 @@ if (args.Contains("--buffer-counters"))
     Console.WriteLine("B+ Buffer PMC Counters v3.0.4L BETA");
     var analysis = BPlusTranspiler.Runtime.PerfCounterReader.AnalyzeBuffers(input ?? "");
     Console.WriteLine(BPlusTranspiler.Runtime.PerfCounterReader.GenerateBufferReport(analysis));
+    return 0;
+}
+
+if (args.Contains("--l3-heap"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --l3-heap [--heap-size 2MB] [--numa 0]");
+        return 1;
+    }
+
+    ulong heapSize = 2 * 1024 * 1024;
+    int numaNode = -1;
+    for (int i = 0; i < args.Length; i++)
+    {
+        if (args[i] == "--heap-size" && i + 1 < args.Length)
+        {
+            var hs = args[++i];
+            if (hs.EndsWith("MB") && ulong.TryParse(hs[..^2], out var mb))
+                heapSize = mb * 1024 * 1024;
+            else if (hs.EndsWith("KB") && ulong.TryParse(hs[..^2], out var kb))
+                heapSize = kb * 1024;
+            else if (ulong.TryParse(hs, out var raw))
+                heapSize = raw;
+        }
+        if (args[i] == "--numa" && i + 1 < args.Length && int.TryParse(args[++i], out var nn))
+            numaNode = nn;
+    }
+
+    Console.WriteLine("B+ L3-Heap Allocator v3.0.4L BETA");
+    Console.WriteLine($"  Heap size: {heapSize / (1024*1024)} MB");
+    Console.WriteLine($"  NUMA node: {(numaNode >= 0 ? numaNode.ToString() : "auto")}");
+
+    var srcL3 = File.ReadAllText(input);
+    var l3Parser = new BPlusParser();
+    var l3Program = l3Parser.Parse(srcL3);
+
+    var l3Allocator = new L3HeapAllocator();
+    var l3Analysis = l3Allocator.Analyze(l3Program);
+    Console.WriteLine(L3HeapAllocator.GenerateReport(l3Analysis));
+
+    var outputDir = "gen_metal";
+    Directory.CreateDirectory(outputDir);
+
+    // Generate runtime header
+    var config = new L3HeapConfig { HeapSize = heapSize, NumaNode = numaNode };
+    var l3Alloc = new L3HeapAllocator(outputDir, config);
+    File.WriteAllText(Path.Combine(outputDir, "l3_heap.h"), l3Alloc.GenerateRuntimeHeader());
+    Console.WriteLine($"  Generated: {outputDir}/l3_heap.h");
+
+    string llvmPath = Path.Combine(outputDir, "l3_heap_intrinsics.ll");
+    File.WriteAllText(llvmPath, l3Alloc.GenerateLlvmIntrinsics());
+    Console.WriteLine($"  Generated: {llvmPath}");
+
+    string asmPath = Path.Combine(outputDir, "l3_heap_stubs.s");
+    File.WriteAllText(asmPath, l3Alloc.GenerateAsmStubs());
+    Console.WriteLine($"  Generated: {asmPath}");
+
+    string ldPath = Path.Combine(outputDir, "l3_heap_layout.ld");
+    File.WriteAllText(ldPath, l3Alloc.GenerateLinkerScript());
+    Console.WriteLine($"  Generated: {ldPath}");
+
+    // Try to init runtime heap
+    try
+    {
+        var runtime = new L3HeapRuntime(numaNode, heapSize);
+        Console.WriteLine();
+        Console.WriteLine(runtime.GenerateStatsReport());
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  Runtime init (managed): {ex.Message}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Done. Compile with:");
+    Console.WriteLine($"  gcc -c l3_heap_stubs.s");
+    Console.WriteLine($"  gcc -include l3_heap.h -o output.elf ... -lnuma");
     return 0;
 }
 

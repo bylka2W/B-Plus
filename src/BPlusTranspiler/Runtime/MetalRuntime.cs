@@ -251,6 +251,237 @@ public static class PerfCounterReader
     [DllImport("libc")] private static extern int close(int fd);
 }
 
+// ─── L3 Heap Runtime ───
+
+public class L3HeapRuntime
+{
+    private IntPtr _base;
+    private ulong _capacity;
+    private ulong _offset;
+    private ulong _peak;
+    private ulong _allocCount;
+    private ulong _freeCount;
+    private int _numaNode;
+    private readonly object _lock = new();
+
+    private const ulong DefaultHeapSize = 2 * 1024 * 1024; // 2 MB
+    private const ulong HugePageSize = 2 * 1024 * 1024;
+    private const ulong Alignment = 64;
+    private const ulong GuardSize = 4096;
+
+    public L3HeapRuntime(int numaNode = -1, ulong? heapSize = null)
+    {
+        _numaNode = numaNode;
+        _capacity = heapSize ?? DefaultHeapSize;
+        Init();
+    }
+
+    private void Init()
+    {
+        ulong alignedSize = (_capacity + HugePageSize - 1) & ~(HugePageSize - 1);
+        ulong totalSize = alignedSize + (GuardSize > 0 ? GuardSize : 0);
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            try
+            {
+                // Try 2MB huge pages
+                _base = MMap(IntPtr.Zero, (IntPtr)totalSize,
+                    MmapProt.ReadWrite, MmapFlags.Private | MmapFlags.Anonymous | MmapFlags.HugeTlb,
+                    -1, 0);
+
+                if (_base == IntPtr.Zero || _base == new IntPtr(-1))
+                {
+                    // Fallback: transparent huge pages
+                    _base = MMap(IntPtr.Zero, (IntPtr)totalSize,
+                        MmapProt.ReadWrite, MmapFlags.Private | MmapFlags.Anonymous,
+                        -1, 0);
+                    if (_base != IntPtr.Zero && _base != new IntPtr(-1))
+                        Madvise(_base, (ulong)totalSize, MadviseFlags.HugePage);
+                }
+
+                if (_base == IntPtr.Zero || _base == new IntPtr(-1))
+                    throw new Exception("mmap failed");
+            }
+            catch
+            {
+                _base = Marshal.AllocHGlobal((IntPtr)totalSize);
+            }
+
+            // NUMA bind
+            if (_numaNode >= 0 && _base != IntPtr.Zero && _base != new IntPtr(-1))
+            {
+                try
+                {
+                    ulong mask = 1UL << _numaNode;
+                    Mbind(_base, alignedSize, 2, new IntPtr((long)mask), (ulong)(_numaNode + 1), 0);
+                }
+                catch { /* NUMA not available */ }
+            }
+        }
+        else
+        {
+            _base = Marshal.AllocHGlobal((IntPtr)totalSize);
+        }
+
+        // Guard page at end (detect overflow)
+        if (GuardSize > 0 && _base != IntPtr.Zero && _base != new IntPtr(-1))
+        {
+            IntPtr guard = new IntPtr((long)_base + (long)alignedSize);
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                MMap(guard, (IntPtr)GuardSize, MmapProt.None,
+                    MmapFlags.Private | MmapFlags.Anonymous | MmapFlags.Fixed,
+                    -1, 0);
+            }
+        }
+
+        Console.WriteLine($"[L3Heap] Initialized: {(alignedSize + GuardSize) / (1024*1024)} MB @ NUMA node {_numaNode}");
+    }
+
+    public IntPtr Alloc(ulong size)
+    {
+        if (_base == IntPtr.Zero || _base == new IntPtr(-1) || size == 0)
+            return IntPtr.Zero;
+
+        ulong aligned = (size + Alignment - 1) & ~(Alignment - 1);
+
+        lock (_lock)
+        {
+            ulong next = _offset + aligned;
+            if (next > _capacity)
+            {
+                Console.Error.WriteLine($"[L3Heap] OOM: requested {aligned} bytes, capacity {_capacity}, used {_offset}");
+                return IntPtr.Zero;
+            }
+
+            IntPtr ptr = new IntPtr((long)_base + (long)_offset);
+            _offset = next;
+            if (_offset > _peak) _peak = _offset;
+            _allocCount++;
+            return ptr;
+        }
+    }
+
+    public void Free(IntPtr ptr)
+    {
+        _freeCount++;
+    }
+
+    public void Reset()
+    {
+        lock (_lock)
+        {
+            _offset = 0;
+        }
+    }
+
+    public void Destroy()
+    {
+        if (_base != IntPtr.Zero && _base != new IntPtr(-1))
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                try { MUnmap(_base, (IntPtr)((_capacity + HugePageSize - 1) & ~(HugePageSize - 1) + GuardSize)); }
+                catch { Marshal.FreeHGlobal(_base); }
+            }
+            else
+            {
+                Marshal.FreeHGlobal(_base);
+            }
+        }
+        _base = IntPtr.Zero;
+        _offset = 0;
+        _peak = 0;
+    }
+
+    public L3HeapStats GetStats()
+    {
+        lock (_lock)
+        {
+            return new L3HeapStats
+            {
+                Capacity = _capacity,
+                Used = _offset,
+                Peak = _peak,
+                Allocations = _allocCount,
+                Frees = _freeCount,
+                NumaNode = _numaNode,
+                Utilization = _capacity > 0 ? (double)_offset / _capacity * 100 : 0
+            };
+        }
+    }
+
+    public string GenerateStatsReport()
+    {
+        var s = GetStats();
+        return $@"╔══════════════════════════════════════╗
+║        L3-HEAP RUNTIME STATS        ║
+╚══════════════════════════════════════╝
+  Capacity:   {s.Capacity / (1024*1024)} MB ({s.Capacity} bytes)
+  Used:       {s.Used / 1024} KB ({s.Used} bytes)
+  Peak:       {s.Peak / 1024} KB ({s.Peak} bytes)
+  Allocs:     {s.Allocations}
+  Frees:      {s.Frees}
+  NUMA node:  {s.NumaNode}
+  Utilization: {s.Utilization:F1}%";
+    }
+
+    // P/Invoke declarations
+    [DllImport("libc", SetLastError = true)]
+    private static extern IntPtr mmap(IntPtr addr, IntPtr length, int prot, int flags, int fd, IntPtr offset);
+    [DllImport("libc", SetLastError = true)]
+    private static extern int munmap(IntPtr addr, IntPtr length);
+    [DllImport("libc", SetLastError = true)]
+    private static extern int madvise(IntPtr addr, IntPtr length, int advice);
+    [DllImport("libc", SetLastError = true)]
+    private static extern int mbind(IntPtr addr, ulong len, int mode, IntPtr nodemask, ulong maxnode, ulong flags);
+
+    private static class MmapProt
+    {
+        public const int Read = 1;
+        public const int Write = 2;
+        public const int ReadWrite = Read | Write;
+        public const int None = 0;
+    }
+
+    private static class MmapFlags
+    {
+        public const int Private = 0x02;
+        public const int Anonymous = 0x20;
+        public const int HugeTlb = 0x40000;
+        public const int Fixed = 0x10;
+    }
+
+    private static class MadviseFlags
+    {
+        public const int Normal = 0;
+        public const int Random = 1;
+        public const int Sequential = 2;
+        public const int WillNeed = 3;
+        public const int HugePage = 14;
+    }
+
+    private static IntPtr MMap(IntPtr addr, IntPtr length, int prot, int flags, int fd, long offset)
+        => mmap(addr, length, prot, flags, fd, new IntPtr(offset));
+
+    private static void MUnmap(IntPtr addr, IntPtr length) => munmap(addr, length);
+    private static void Madvise(IntPtr addr, ulong length, int advice) => madvise(addr, new IntPtr((long)length), advice);
+    private static void Mbind(IntPtr addr, ulong len, int mode, IntPtr nodemask, ulong maxnode, ulong flags)
+        => mbind(addr, len, mode, nodemask, maxnode, flags);
+}
+
+public class L3HeapStats
+{
+    public ulong Capacity { get; set; }
+    public ulong Used { get; set; }
+    public ulong Peak { get; set; }
+    public ulong Allocations { get; set; }
+    public ulong Frees { get; set; }
+    public int NumaNode { get; set; }
+    public double Utilization { get; set; }
+}
+
 public class BufferAnalysis
 {
     public double StoreBufferFullRate { get; set; }
