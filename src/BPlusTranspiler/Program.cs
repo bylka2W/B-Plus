@@ -346,9 +346,24 @@ if (args.Contains("--ai"))
     return RunAI(input);
 }
 
+if (args.Contains("--roofline"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --roofline");
+        return 1;
+    }
+    var srcR = File.ReadAllText(input);
+    var parserR = new BPlusParser();
+    var programR = parserR.Parse(srcR);
+    var roofResult = RooflineAnalyzer.Analyze(programR);
+    Console.WriteLine(RooflineAnalyzer.GenerateReport(roofResult));
+    return 0;
+}
+
 if (args.Contains("--train-unpack"))
 {
-    Console.WriteLine("B+ AI UnpackPredictor Trainer v3.0.2L1");
+    Console.WriteLine("B+ AI UnpackPredictor Trainer v3.0.3L1");
     Console.WriteLine();
     Console.WriteLine("Generating training data and training model...");
     AI.UnpackPredictorTrainer.GenerateTrainingData();
@@ -391,6 +406,7 @@ if (input == null)
     Console.Error.WriteLine("       bpc <input.bp> --ai                             (AI optimizer for metal config)");
     Console.Error.WriteLine("       bpc <input.bp> --metal --unpack                 (AI register unpack predictor)");
     Console.Error.WriteLine("       bpc <input.bp> --metal --hidden-buffers          (LSD/LFB/TLB/BTB/RSB analysis)");
+    Console.Error.WriteLine("       bpc <input.bp> --roofline                       (roofline model: compute vs memory bound)");
     Console.Error.WriteLine("       bpc <input> --plugin unity|unreal|godot|web|unigine  (engine-specific code generation)");
     Console.Error.WriteLine("       bpc bpm <init|install|list|search|publish>   (package manager)");
     Console.Error.WriteLine("       bpc test run <file.bp>                      (run auto-generated tests)");
@@ -638,7 +654,7 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
 
 static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool hiddenBuffers, string? tierStr)
 {
-    Console.WriteLine("B+ v3.0.2L1 Metal — hidden buffer + cache-aware code generator");
+    Console.WriteLine("B+ v3.0.3L1 Metal — hidden buffer + cache-aware code generator");
     Console.WriteLine();
 
     var srcRaw = File.ReadAllText(bpFile);
@@ -801,6 +817,29 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     }
     Console.WriteLine();
 
+    // Phase 3b: Working set analysis (auto-tiling detection)
+    Console.WriteLine("[Phase 3b] Working set analysis...");
+    var ws = TierClassifier.AnalyzeWorkingSet(program);
+    Console.WriteLine($"  Working set: ~{ws.WorkingSetBytes / 1024}KB");
+    Console.WriteLine($"  Fits L1: {ws.FitsL1}, Fits L2: {ws.FitsL2}, Fits L3: {ws.FitsL3}");
+    Console.WriteLine($"  Recommended tier: {ws.RecommendedTier}");
+    if (ws.NeedsTiling)
+        Console.WriteLine($"  ⚠ {ws.Warning}");
+    Console.WriteLine();
+
+    // Phase 3c: Perf counters snapshot
+    Console.WriteLine("[Phase 3c] Hardware perf counters...");
+    var perf = BPlusTranspiler.Runtime.PerfCounterReader.ReadCounters();
+    double ipc = perf.Instructions > 0 ? (double)perf.Cycles / perf.Instructions : 0;
+    Console.WriteLine($"  Cycles: {perf.Cycles:N0}");
+    Console.WriteLine($"  Instructions: {perf.Instructions:N0}");
+    Console.WriteLine($"  L1-D misses: {perf.L1DMisses:N0}");
+    Console.WriteLine($"  L2 misses: {perf.L2Misses:N0}");
+    Console.WriteLine($"  L3 misses: {perf.L3Misses:N0}");
+    Console.WriteLine($"  Branch mispredicts: {perf.BranchMispredicts:N0}");
+    Console.WriteLine($"  Store forward stalls: {perf.StoreForwardStalls:N0}");
+    Console.WriteLine();
+
     // Phase 4: Metal runtime header
     Console.WriteLine("[Phase 4] Generating metal runtime...");
     string runtimeCs = @"
@@ -835,7 +874,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
 
 static int RunAI(string bpFile)
 {
-    Console.WriteLine("B+ AI Optimizer v3.0.2L1");
+    Console.WriteLine("B+ AI Optimizer v3.0.3L1");
     Console.WriteLine();
 
     string modelDir = "ai_models";
@@ -904,7 +943,7 @@ static int RunAI(string bpFile)
 
     using (var writer = new StreamWriter(outputBp))
     {
-        writer.WriteLine("// B+ v3.0.2L1 Metal — AI-optimized + hidden buffer aware");
+        writer.WriteLine("// B+ v3.0.3L1 Metal — AI-optimized + hidden buffer + perf counters");
         writer.WriteLine($"// Predicted IPC: {predictedIPC:F3}");
         writer.WriteLine();
         writer.WriteLine("@metal {");

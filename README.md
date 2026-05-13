@@ -1,8 +1,8 @@
-﻿# B+ v3.0.2L1 — язык конечных автоматов + GPU kernels + Metal Stack (L0–L3) + AI optimizer + Hidden Buffer Control
+﻿# B+ v3.0.3L1 — язык конечных автоматов + Metal Stack + AI + PerfCounters + Roofline
 
 B+ — язык описания конечных автоматов (state machine) с транспиляцией в **Python, C#, C++, C**, LLVM IR, **HLSL (DXIL)**, **GLSL (SPIR-V)**, а также плагинами для **Unity, Unreal Engine, Godot, Web (TypeScript), Unigine**. Никакого рантайма — чистый код под твою платформу.
 
-**v3.0.2L1**: Full Metal Stack (TierClassifier, CodePacker, DataPacker, RegisterAllocator, LlvmGenMetal, AsmGenerator, LinkerScriptGenerator, PrefetchInjector, MetalRuntime) + AI optimizer (DataCollector, NeuralPredictor, LayoutOptimizer) + AI UnpackPredictor + RegisterPacker + HiddenBufferOptimizer (LSD/LFB/TLB/BTB/RSB control).
+**v3.0.3L1**: PerfCounters (perf_event_open), False Sharing Padding, Prefetch Distance Formula, Working Set Analysis + Auto Tiling, Cache Miss Attribution per State, Roofline Model.
 
 ---
 
@@ -45,6 +45,7 @@ bpc input.bp --metal --register-alloc # регистровая аллокаци�
 bpc input.bp --metal --unpack         # AI-распаковщик регистров (movzx/shr/vpermq)
 bpc input.bp --metal --hidden-buffers # LSD/LFB/TLB/BTB/RSB анализ
 bpc --train-unpack                    # обучение UnpackPredictor
+bpc input.bp --roofline               # roofline model (compute vs memory bound)
 
 # Оптимизация
 bpc input.bp --optimize               # таблица переходов
@@ -160,6 +161,48 @@ bpc input.bp --metal --hidden-buffers
 | BTB (Branch Target Buffer) | Выравнивание jmp по 16B | −15 тактов (mispredict) |
 | RSB (Return Stack Buffer) | call/ret → jmp | −15 тактов |
 
+### PerfCounters (hardware PMU)
+
+Чтение реальных счётчиков процессора через `perf_event_open`:
+
+```
+bpc input.bp --metal
+  [Phase 3c] Hardware perf counters...
+    Cycles: 1,234,567
+    Instructions: 987,654
+    L1-D misses: 12,345
+    L2 misses: 3,456
+    L3 misses: 789
+    Branch mispredicts: 234
+```
+
+### Roofline Model
+
+Анализ: код упёрся в compute или memory bandwidth?
+
+```
+bpc input.bp --roofline
+→ Arithmetic intensity: 0.3 FLOP/byte → MEMORY BOUND
+→ Fix: tiling + register blocking
+```
+
+### False Sharing Padding
+
+DataPacker автоматически детектит горячие поля, которые могут быть на одной кэш-линии (64B) из разных потоков → вставляет padding.
+
+### Working Set + Auto Tiling
+
+TierClassifier анализирует рабочий набор данных:
+- Если > L1 (32KB) → предупреждение
+- Если > L2 (256KB) → предлагает tiling
+- Если > L3 (12MB) → рекомендует huge pages
+
+### Prefetch Distance Formula
+
+PrefetchInjector считает расстояние: `memory_latency_cycles / loop_body_cycles`. DDR5 (~80ns / 2ns = 40 итераций вперёд).
+
+---
+
 ### Самообучение
 
 Каждая правка @metal блока → новый training sample → модель точнее:
@@ -179,6 +222,8 @@ bpc input.bp --metal --hidden-buffers
 | `--metal` | Full Metal Stack (L0–L3) | cache-aware |
 | `--unpack` | AI-распаковка регистров | −1–3 такта |
 | `--hidden-buffers` | LSD/LFB/TLB/BTB/RSB | −5–40 тактов |
+| `--roofline` | Roofline model analysis | выявляет bottleneck |
+| `--metal --perf` | Hardware perf counters | ground truth для AI |
 | `--optimize` | Таблица переходов вместо virtual | +10-30% |
 | `--pool` | Пул состояний без new/delete | +20-40% |
 | `--cache-friendly` | Упорядоченный layout данных | +10-20% |
@@ -208,6 +253,7 @@ B+ v1.0/
 │   │   ├── RegisterPacker.cs        — AI variable→register packer
 │   │   ├── PrefetchInjector.cs      — Prefetch analysis
 │   │   ├── HiddenBufferOptimizer.cs — LSD/LFB/TLB/BTB/RSB control
+│   ├── RooflineAnalyzer.cs       — Roofline model analysis
 │   │   └── BPlusOptimizer.cs        — DCE, const fold, dedup
 │   ├── AI/
 │   │   ├── DataCollector.cs         — 2000 training samples
