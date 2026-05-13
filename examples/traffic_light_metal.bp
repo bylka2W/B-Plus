@@ -1,0 +1,31 @@
+// B+ v3.0.0 Metal — AI-optimized
+// Predicted IPC: 4,884
+
+@metal {
+    @tier(0)  // L0
+    @register(r8)
+    @zmm(7)
+    @mask(k5)
+    @fusion(dec+jnz)
+    @gateway(L3)
+    @prefetch(t0)
+    @align(128)
+    @packed
+    @data_tier(2)
+    @critical_size(8192)
+}
+
+state Red {
+    on timer -> Green
+    enter { stop_traffic() }
+}
+
+state Green {
+    on timer -> Yellow
+    enter { allow_traffic() }
+}
+
+state Yellow {
+    on timer -> Red
+    enter { warn_traffic() }
+}

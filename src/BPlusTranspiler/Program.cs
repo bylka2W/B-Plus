@@ -1,4 +1,5 @@
 ﻿using BPlusTranspiler;
+using BPlusTranspiler.AI;
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Generators;
 using BPlusTranspiler.Lsp;
@@ -334,6 +335,16 @@ for (int i = 0; i < args.Length; i++)
         input = args[i];
 }
 
+if (args.Contains("--ai"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --ai");
+        return 1;
+    }
+    return RunAI(input);
+}
+
 if (input == null)
 {
     Console.Error.WriteLine("Usage: bpc <input.bp> [--target llvm] [--pgo-collect] [--lto thin|full] [flags]");
@@ -587,6 +598,120 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
     {
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {Path.GetFileName(file)} ERROR: {ex.Message}");
     }
+}
+
+static int RunAI(string bpFile)
+{
+    Console.WriteLine("B+ AI Optimizer v3.0.0");
+    Console.WriteLine();
+
+    string modelDir = "ai_models";
+    string modelPath = Path.Combine(modelDir, "latest.nn");
+    Directory.CreateDirectory(modelDir);
+
+    DataCollector collector = new();
+    NeuralPredictor? model = null;
+
+    if (File.Exists(modelPath))
+    {
+        Console.WriteLine("Loading existing model...");
+        model = NeuralPredictor.Load(modelPath);
+    }
+    else
+    {
+        Console.WriteLine("Collecting training data...");
+        var data = collector.Collect(bpFile, count: 2000);
+        Console.WriteLine($"  {data.Count} samples collected.");
+
+        CodeFeatures features = collector.ExtractCodeFeatures(bpFile);
+        int inputSize = 5 + new MetalConfig().ToFeatures().Length; // code features + metal config features
+
+        Console.WriteLine("Training neural network...");
+        model = new NeuralPredictor(inputSize, hiddenSize: 16);
+        model.Train(data, epochs: 2000);
+        model.Save(modelPath);
+        Console.WriteLine("  Model saved to " + modelPath);
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Searching optimal configuration...");
+
+    var optimizer = new LayoutOptimizer(model, bpFile);
+    MetalConfig best = optimizer.Optimize(candidates: 10000);
+    double predictedIPC = optimizer.Predict(best);
+
+    Console.WriteLine($"  Predicted IPC: {predictedIPC:F3}");
+    Console.WriteLine($"  Tier: {best.Tier}");
+    Console.WriteLine($"  Register pin: {best.Register ?? "(none)"}");
+    Console.WriteLine($"  ZMM: {best.Zmm?.ToString() ?? "(none)"}");
+    Console.WriteLine($"  Mask: {best.Mask ?? "(none)"}");
+    Console.WriteLine($"  Fusion: {string.Join(", ", best.FusionPairs)}");
+    Console.WriteLine($"  Section: {best.Section ?? "(default)"}");
+    Console.WriteLine($"  Gateway: {best.Gateway?.ToString() ?? "(none)"}");
+    Console.WriteLine($"  Prefetch: {best.PrefetchHint ?? "(none)"}");
+    Console.WriteLine($"  Alignment: {best.Alignment?.ToString() ?? "(default)"}");
+    Console.WriteLine($"  Packed: {best.Packed}");
+    Console.WriteLine($"  Data tier: {best.DataTier?.ToString() ?? "(default)"}");
+    Console.WriteLine($"  Hot path: {best.HotPath}");
+    Console.WriteLine($"  Critical size: {best.CriticalSize?.ToString() ?? "(default)"}");
+
+    Console.WriteLine();
+    Console.WriteLine("Generating metal-annotated output...");
+
+    // Parse metal blocks from source
+    string src = File.ReadAllText(bpFile);
+    var metalParser = new MetalParser();
+    var blocks = metalParser.ParseMetalBlocks(src);
+    Console.WriteLine($"  Found {blocks.Count} existing metal block(s).");
+
+    // Write optimized config as annotation block
+    string outputBp = Path.Combine(
+        Path.GetDirectoryName(bpFile) ?? ".",
+        Path.GetFileNameWithoutExtension(bpFile) + "_metal.bp");
+
+    using (var writer = new StreamWriter(outputBp))
+    {
+        writer.WriteLine("// B+ v3.0.0 Metal — AI-optimized");
+        writer.WriteLine($"// Predicted IPC: {predictedIPC:F3}");
+        writer.WriteLine();
+        writer.WriteLine("@metal {");
+        if (best.Tier.HasValue)
+            writer.WriteLine($"    @tier({(int)best.Tier.Value})  // {best.Tier}");
+        if (best.Register != null)
+            writer.WriteLine($"    @register({best.Register})");
+        if (best.Zmm.HasValue)
+            writer.WriteLine($"    @zmm({best.Zmm.Value})");
+        if (best.Mask != null)
+            writer.WriteLine($"    @mask({best.Mask})");
+        foreach (var fp in best.FusionPairs)
+            writer.WriteLine($"    @fusion({fp})");
+        if (best.Section != null)
+            writer.WriteLine($"    @section(\"{best.Section}\")");
+        if (best.Gateway.HasValue)
+            writer.WriteLine($"    @gateway({best.Gateway.Value})");
+        if (best.PrefetchHint != null)
+            writer.WriteLine($"    @prefetch({best.PrefetchHint})");
+        if (best.Alignment.HasValue)
+            writer.WriteLine($"    @align({best.Alignment.Value})");
+        if (best.Packed)
+            writer.WriteLine($"    @packed");
+        if (best.DataTier.HasValue)
+            writer.WriteLine($"    @data_tier({(int)best.DataTier.Value})");
+        if (best.HotPath)
+            writer.WriteLine($"    @hot_path(true)");
+        if (best.CriticalSize.HasValue)
+            writer.WriteLine($"    @critical_size({best.CriticalSize.Value})");
+        writer.WriteLine("}");
+        writer.WriteLine();
+
+        // Write original source
+        writer.Write(src);
+    }
+
+    Console.WriteLine($"  Output: {outputBp}");
+    Console.WriteLine();
+    Console.WriteLine("Done. Compile with: bpc " + outputBp);
+    return 0;
 }
 
 static void InstallLsp()
