@@ -263,7 +263,7 @@ public class MetalParser
     {
         SkipWs();
         int start = _pos;
-        while (_pos < _src.Length && (char.IsLetterOrDigit(_src[_pos]) || _src[_pos] == '_' || _src[_pos] == '.'))
+        while (_pos < _src.Length && (char.IsLetterOrDigit(_src[_pos]) || _src[_pos] == '_' || _src[_pos] == '.' || _src[_pos] == '+'))
             _pos++;
         if (_pos == start) throw new ParseException($"Expected identifier at position {_pos}");
         return _src[start.._pos];
@@ -284,7 +284,7 @@ public class MetalParser
 
         int s = _pos;
         if (_pos < _src.Length && _src[_pos] == '-') _pos++;
-        while (_pos < _src.Length && (char.IsLetterOrDigit(_src[_pos]) || _src[_pos] == '_' || _src[_pos] == '.' || _src[_pos] == 'x'))
+        while (_pos < _src.Length && (char.IsLetterOrDigit(_src[_pos]) || _src[_pos] == '_' || _src[_pos] == '.' || _src[_pos] == 'x' || _src[_pos] == '+'))
             _pos++;
         return _src[s.._pos];
     }

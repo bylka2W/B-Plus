@@ -1,4 +1,5 @@
-﻿using BPlusTranspiler;
+﻿using System.Text.RegularExpressions;
+using BPlusTranspiler;
 using BPlusTranspiler.AI;
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Generators;
@@ -345,6 +346,24 @@ if (args.Contains("--ai"))
     return RunAI(input);
 }
 
+if (args.Contains("--metal"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --metal [--tier=L0] [--fusion] [--register-alloc]");
+        return 1;
+    }
+
+    bool fusion = args.Contains("--fusion");
+    bool regAlloc = args.Contains("--register-alloc");
+    string? tierStr = null;
+    for (int i = 0; i < args.Length; i++)
+        if (args[i].StartsWith("--tier="))
+            tierStr = args[i].Substring("--tier=".Length);
+
+    return RunMetal(input, fusion, regAlloc, tierStr);
+}
+
 if (input == null)
 {
     Console.Error.WriteLine("Usage: bpc <input.bp> [--target llvm] [--pgo-collect] [--lto thin|full] [flags]");
@@ -598,6 +617,174 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
     {
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {Path.GetFileName(file)} ERROR: {ex.Message}");
     }
+}
+
+static int RunMetal(string bpFile, bool fusion, bool regAlloc, string? tierStr)
+{
+    Console.WriteLine("B+ v3.0.0HG Metal — cache-aware code generator");
+    Console.WriteLine();
+
+    var srcRaw = File.ReadAllText(bpFile);
+    var src = StripComments(srcRaw);
+
+    // Strip @metal { ... } blocks before passing to BPlusParser
+    var metalParser = new MetalParser();
+    var metalBlocks = metalParser.ParseMetalBlocks(src);
+    string srcClean = StripMetalBlocks(src);
+
+    var parser = new BPlusParser();
+    var program = parser.Parse(srcClean);
+
+    // Apply CLI overrides
+    if (tierStr != null && Enum.TryParse<MemoryTier>(tierStr, ignoreCase: true, out var tier))
+    {
+        if (metalBlocks.Count == 0)
+            metalBlocks.Add(new MetalBlock { Config = new MetalConfig { Enabled = true, Tier = tier } });
+        else
+            metalBlocks[0].Config.Tier = tier;
+    }
+
+    Console.WriteLine($"Found {program.States.Count} states, {metalBlocks.Count} metal block(s).");
+
+    // Apply generic metal blocks (no target state) as defaults for ALL states
+    var genericBlock = metalBlocks.Find(b => b.TargetState == null && b.TargetKernel == null);
+    if (genericBlock != null)
+    {
+        foreach (var state in program.States)
+        {
+            if (!metalBlocks.Any(b => b.TargetState == state.Name))
+            {
+                metalBlocks.Add(new MetalBlock
+                {
+                    Config = new MetalConfig
+                    {
+                        Enabled = true,
+                        Tier = genericBlock.Config.Tier,
+                        Register = genericBlock.Config.Register,
+                        Zmm = genericBlock.Config.Zmm,
+                        Mask = genericBlock.Config.Mask,
+                        FusionPairs = { },
+                        Section = genericBlock.Config.Section,
+                        Gateway = genericBlock.Config.Gateway,
+                        PrefetchHint = genericBlock.Config.PrefetchHint,
+                        Alignment = genericBlock.Config.Alignment,
+                        Packed = genericBlock.Config.Packed,
+                        DataTier = genericBlock.Config.DataTier,
+                        HotPath = genericBlock.Config.HotPath,
+                        CriticalSize = genericBlock.Config.CriticalSize
+                    },
+                    TargetState = state.Name
+                });
+            }
+        }
+    }
+
+    Console.WriteLine();
+
+    // Phase 1: Classify tiers
+    Console.WriteLine("[Phase 1] Classifying tiers...");
+    var tiers = TierClassifier.Classify(program, metalBlocks);
+    foreach (var t in tiers)
+        Console.WriteLine($"  {t.StateName,-20} → {t.Section,-20} align {t.Alignment}");
+    Console.WriteLine();
+
+    // Phase 1: Pack code
+    Console.WriteLine("[Phase 1] Packing code...");
+    var packer = new CodePacker();
+    var hotStates = tiers.Where(t => t.IsHot).Select(t => t.StateName).ToList();
+    Console.WriteLine($"  L1 hot states: {string.Join(", ", hotStates)}");
+    Console.WriteLine();
+
+    // Phase 1: Pack data
+    Console.WriteLine("[Phase 1] Packing data...");
+    var dataSections = DataPacker.Pack(program, metalBlocks);
+    foreach (var ds in dataSections)
+        Console.WriteLine($"  {ds.Section,-20} {ds.Fields.Count} fields, {ds.TotalSize} bytes");
+    Console.WriteLine();
+
+    // Phase 2: Register allocation
+    Console.WriteLine("[Phase 2] Register allocation...");
+    var registers = RegisterAllocator.Allocate(program, metalBlocks);
+    if (regAlloc)
+    {
+        foreach (var r in registers)
+            Console.WriteLine($"  {r.Variable,-30} → {r.Register,-6} ({r.Class})");
+        Console.WriteLine();
+    }
+
+    // Phase 2: LLVM IR with intrinsics
+    Console.WriteLine("[Phase 2] Generating LLVM IR with intrinsics...");
+    var llvmGen = new LlvmGenMetal();
+    string llvmIr = llvmGen.Generate(program, metalBlocks, tiers, registers);
+
+    string outputDir = "gen_metal";
+    Directory.CreateDirectory(outputDir);
+    string llvmPath = Path.Combine(outputDir, "kernels_metal.ll");
+    File.WriteAllText(llvmPath, llvmIr);
+    Console.WriteLine($"  LLVM IR: {llvmPath}");
+    Console.WriteLine();
+
+    // Phase 3: Assembly generator
+    Console.WriteLine("[Phase 3] Generating assembly...");
+    var asmGen = new AsmGenerator();
+    string asmCode = asmGen.GenerateAssembly(program, tiers, registers);
+    string asmPath = Path.Combine(outputDir, "states_metal.asm");
+    File.WriteAllText(asmPath, asmCode);
+    Console.WriteLine($"  Assembly: {asmPath}");
+    Console.WriteLine();
+
+    // Phase 3: Linker script
+    Console.WriteLine("[Phase 3] Generating linker script...");
+    string ldScript = LinkerScriptGenerator.Generate(program, tiers, dataSections);
+    string ldPath = Path.Combine(outputDir, "metal_layout.ld");
+    File.WriteAllText(ldPath, ldScript);
+    Console.WriteLine($"  Linker script: {ldPath}");
+    Console.WriteLine();
+
+    // Phase 4: Prefetch injection
+    Console.WriteLine("[Phase 4] Analyzing prefetch opportunities...");
+    var prefetchSites = PrefetchInjector.Analyze(program, tiers);
+    foreach (var ps in prefetchSites)
+        Console.WriteLine($"  {ps.PrefetchType,-14} {ps.Location}");
+    var prefetchAsm = PrefetchInjector.GenerateAsm(prefetchSites);
+    if (prefetchAsm.Count > 0)
+    {
+        string prefetchPath = Path.Combine(outputDir, "prefetch_hints.s");
+        File.WriteAllLines(prefetchPath, prefetchAsm);
+        Console.WriteLine($"  Prefetch asm: {prefetchPath}");
+    }
+    Console.WriteLine();
+
+    // Phase 4: Metal runtime header
+    Console.WriteLine("[Phase 4] Generating metal runtime...");
+    string runtimeCs = @"
+// Auto-generated metal runtime calls for: " + Path.GetFileName(bpFile) + @"
+// To use, include in your C++ project:
+//   #include ""metal_runtime.h""
+//   MetalRuntime_LockHotSection(addr, size);
+//   MetalRuntime_AllocateL3HugePage(size);
+";
+    string runtimePath = Path.Combine(outputDir, "metal_runtime.h");
+    File.WriteAllText(runtimePath, runtimeCs);
+    Console.WriteLine($"  Runtime header: {runtimePath}");
+    Console.WriteLine();
+
+    // Summary
+    Console.WriteLine("═══════════════════════════════════════");
+    Console.WriteLine("METAL OPTIMIZATION SUMMARY");
+    Console.WriteLine("═══════════════════════════════════════");
+    foreach (var t in tiers)
+    {
+        Console.WriteLine($"  {t.StateName,-16} {t.Section,-24} align {t.Alignment,-4} hot={t.IsHot,-5} gateway={t.NeedsGateway}");
+    }
+    Console.WriteLine($"  Total registers assigned: {registers.Count}");
+    Console.WriteLine($"  Prefetch sites: {prefetchSites.Count}");
+    Console.WriteLine();
+    Console.WriteLine($"All files in {outputDir}/");
+    Console.WriteLine("Done. Compile with:");
+    Console.WriteLine($"  llc -filetype=obj {llvmPath}");
+    Console.WriteLine($"  ld -T {ldPath} -o output.elf *.o");
+    return 0;
 }
 
 static int RunAI(string bpFile)
@@ -950,4 +1137,46 @@ exports.deactivate = deactivate;
     Console.WriteLine("    • LSP: errors, completions, hover info, formatting");
     Console.WriteLine("    • Code snippets: state, kernel, hot, cold, simd, comptime");
     Console.WriteLine("    • Auto-closing pairs, bracket matching");
+}
+
+static string StripComments(string src)
+{
+    src = Regex.Replace(src, @"//.*", "");
+    src = Regex.Replace(src, @"--.*", "");
+    return src;
+}
+
+static string StripMetalBlocks(string src)
+{
+    int i = 0;
+    while (true)
+    {
+        int idx = src.IndexOf("@metal", i, StringComparison.Ordinal);
+        if (idx < 0) break;
+
+        // Find opening {
+        int brace = src.IndexOf('{', idx);
+        if (brace < 0) { i = idx + 6; continue; }
+
+        // Find matching closing }
+        int depth = 1;
+        int end = brace + 1;
+        while (end < src.Length && depth > 0)
+        {
+            if (src[end] == '{') depth++;
+            else if (src[end] == '}') depth--;
+            if (depth > 0) end++;
+        }
+        if (depth == 0) end++; // include closing }
+
+        // Also strip any @ annotations that precede a state/kernel declaration
+        // (inline metal annotations like @tier(0) state Foo)
+        int start = idx;
+        while (start > 0 && (src[start - 1] == ' ' || src[start - 1] == '\t' || src[start - 1] == '\n'))
+            start--;
+
+        src = src.Remove(start, end - start);
+        i = start;
+    }
+    return src;
 }
