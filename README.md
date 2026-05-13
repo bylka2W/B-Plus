@@ -334,6 +334,19 @@ GPU kernels: B+ **300-600%** vs C++.
 
 ---
 
+## Known Limitations (roadmap)
+
+| Проблема | Описание | Статус |
+|---|---|---|
+| AI на синтетике | `NeuralPredictor` учится на 2000 сгенерированных сэмплах, не на реальном железе. Auto-Tuner решает частично (perf counters → retrain), но по умолчанию — синтетика | `--auto-tune` исправляет |
+| RegisterPacker без dep graph | AI пакует переменные в RAX по порядку доступа, но не строит граф зависимостей. Если B зависит от A — serialization stall | TODO |
+| HiddenBufferOptimizer статичен | Анализ LSD/LFB/TLB делается один раз при компиляции. Реальные буферы захватываются динамически и зависят от µarch | µarch профили добавлены |
+| Нет Real PGO pipeline | `--pgo` добавляет счётчики, но нет цикла: instrument → run → profile → recompile | TODO |
+| Нет BOLT/Propeller | Post-link оптимизация layout-а по реальным профилям | TODO |
+| Нет Store/Load буферов в runtime | HiddenBufferOptimizer оценивает статически, но не читает реальные PMC счётчики буферов | TODO |
+
+---
+
 ## Лицензия
 
 MIT
