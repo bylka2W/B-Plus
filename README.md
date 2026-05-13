@@ -178,111 +178,215 @@ bpc test run input.bp                 # авто-тесты
 
 ---
 
-## 6 языков — пример кода
+## 13 языков — пример кода
+
+Один и тот же конечный автомат (светофор) на B+ и 12 популярных языках.
+
+### 0. B+ (наш компилятор)
+```bp
+state Red {
+    on timer -> Green
+    enter { stop_traffic() }
+}
+state Green {
+    on timer -> Yellow
+    enter { allow_traffic() }
+}
+state Yellow {
+    on timer -> Red
+    enter { warn_traffic() }
+}
+```
 
 ### 1. Python
-```bp
-state TrafficLight {
-    on timer -> Red
-}
-```
 ```python
-class TrafficLight(State):
-    def on_timer(self):
-        return StateRed
+class Red(State):
+    def on_timer(self): return Green()
+    def enter(self): stop_traffic()
+
+class Green(State):
+    def on_timer(self): return Yellow()
+    def enter(self): allow_traffic()
+
+class Yellow(State):
+    def on_timer(self): return Red()
+    def enter(self): warn_traffic()
 ```
 
-### 2. C#
-```bp
-state Player {
-    on hit -> Damaged
-}
-```
+### 2. C# (.NET 8)
 ```csharp
-class Player : State {
-    public State OnHit() => new Damaged();
+class Red : State {
+    override State OnTimer() => new Green();
+    override void OnEnter() => StopTraffic();
+}
+class Green : State {
+    override State OnTimer() => new Yellow();
+    override void OnEnter() => AllowTraffic();
+}
+class Yellow : State {
+    override State OnTimer() => new Red();
+    override void OnEnter() => WarnTraffic();
 }
 ```
 
 ### 3. C++ (table-driven, optimized)
-```bp
-state Idle { @hot(0.9) on walk -> Walking }
-state Walking { on stop -> Idle }
-```
 ```cpp
-StateId dispatch(Event ev) {
-    switch (current) {
-        case ST_Idle:
-            if (ev == EV_walk) [[likely]] return ST_Walking;
+enum StateId { ST_Red, ST_Green, ST_Yellow };
+
+StateId dispatch(StateId cur, Event ev) {
+    switch (cur) {
+        case ST_Red:
+            if (ev == EV_timer) [[likely]] return ST_Green;
             break;
-        case ST_Walking:
-            if (ev == EV_stop) return ST_Idle;
+        case ST_Green:
+            if (ev == EV_timer) return ST_Yellow;
+            break;
+        case ST_Yellow:
+            if (ev == EV_timer) return ST_Red;
             break;
     }
-    return current;
+    return cur;
 }
 ```
 
 ### 4. C (minimal embedded)
-```bp
-state Boot { on ready -> Run }
-```
 ```c
-typedef enum { ST_Boot, ST_Run } StateId;
-StateId run(StateId current, Event ev) {
-    switch (current) {
-        case ST_Boot: if (ev == EV_ready) return ST_Run;
+typedef enum { ST_Red, ST_Green, ST_Yellow } StateId;
+
+StateId run(StateId cur, Event ev) {
+    switch (cur) {
+        case ST_Red:    if (ev == EV_timer) return ST_Green;  break;
+        case ST_Green:  if (ev == EV_timer) return ST_Yellow; break;
+        case ST_Yellow: if (ev == EV_timer) return ST_Red;    break;
     }
-    return current;
+    return cur;
 }
 ```
 
 ### 5. LLVM IR
-```bp
-kernel relu(src: Image[512, 512]) -> Image[512, 512]
-    body: src |> relu >> output
-```
 ```llvm
-define void @relu_kernel(ptr %src, ptr %dst) {
+define i32 @dispatch(i32 %cur, i32 %ev) {
 entry:
-    %w = alloca i32
-    store i32 512, ptr %w
-    %h = alloca i32
-    store i32 512, ptr %h
-    %total = mul i32 512, 512
-    br label %loop
-loop:
-    %i = phi i32 [ 0, %entry ], [ %next, %loop ]
-    %src_ptr = getelementptr float, ptr %src, i32 %i
-    %val = load float, ptr %src_ptr
-    %cmp = fcmp ogt float %val, 0.0
-    %relu = select i1 %cmp, float %val, float 0.0
-    %dst_ptr = getelementptr float, ptr %dst, i32 %i
-    store float %relu, ptr %dst_ptr
-    %next = add i32 %i, 1
-    %done = icmp eq i32 %next, %total
-    br i1 %done, label %exit, label %loop
-exit:
-    ret void
+    switch i32 %cur, label %default [
+        i32 0, label %st_red
+        i32 1, label %st_green
+        i32 2, label %st_yellow
+    ]
+st_red:    %c1 = icmp eq i32 %ev, 0
+           br i1 %c1, label %green, label %default
+st_green:  %c2 = icmp eq i32 %ev, 0
+           br i1 %c2, label %yellow, label %default
+st_yellow: %c3 = icmp eq i32 %ev, 0
+           br i1 %c3, label %red, label %default
+green:     ret i32 1
+yellow:    ret i32 2
+red:       ret i32 0
+default:   ret i32 %cur
 }
 ```
 
-### 6. HLSL (DirectX 12 compute shader)
-```bp
-kernel blur(src: Image[1080, 1920]) -> Image[1080, 1920]
-    body: src |> convolve(weights) >> output
-```
+### 6. HLSL (DirectX 12)
 ```hlsl
-[numthreads(16, 16, 1)]
-void CSMain(uint3 id : SV_DispatchThreadID) {
-    if (id.x >= 1920 || id.y >= 1080) return;
-    float4 result = float4(0,0,0,0);
-    for (int dy = -1; dy <= 1; dy++)
-        for (int dx = -1; dx <= 1; dx++) {
-            uint2 px = uint2(clamp((int)id.x + dx, 0, 1919), clamp((int)id.y + dy, 0, 1079));
-            result += Input[px * 4] * kernel[dy + 1][dx + 1];
-        }
-    Output[id * 4] = result;
+uint Dispatch(uint cur, uint ev) {
+    switch (cur) {
+        case 0: if (ev == 0) return 1; break;
+        case 1: if (ev == 0) return 2; break;
+        case 2: if (ev == 0) return 0; break;
+    }
+    return cur;
+}
+```
+
+### 7. Rust (enum match)
+```rust
+enum State { Red, Green, Yellow }
+
+fn dispatch(cur: State, ev: Event) -> State {
+    match (cur, ev) {
+        (State::Red,    Event::Timer) => State::Green,
+        (State::Green,  Event::Timer) => State::Yellow,
+        (State::Yellow, Event::Timer) => State::Red,
+        _ => cur,
+    }
+}
+```
+
+### 8. Go (struct + switch)
+```go
+type State int
+const (
+    Red State = iota
+    Green
+    Yellow
+)
+
+func dispatch(cur State, ev Event) State {
+    switch cur {
+    case Red:    if ev == Timer { return Green }
+    case Green:  if ev == Timer { return Yellow }
+    case Yellow: if ev == Timer { return Red }
+    }
+    return cur
+}
+```
+
+### 9. Java (enum)
+```java
+enum State {
+    Red {
+        State onTimer() { return Green; }
+        void enter() { stopTraffic(); }
+    },
+    Green {
+        State onTimer() { return Yellow; }
+        void enter() { allowTraffic(); }
+    },
+    Yellow {
+        State onTimer() { return Red; }
+        void enter() { warnTraffic(); }
+    };
+    abstract State onTimer();
+    abstract void enter();
+}
+```
+
+### 10. TypeScript (union + switch)
+```typescript
+type State = 'Red' | 'Green' | 'Yellow';
+
+function dispatch(cur: State, ev: Event): State {
+    switch (cur) {
+        case 'Red':    if (ev === Event.Timer) return 'Green';  break;
+        case 'Green':  if (ev === Event.Timer) return 'Yellow'; break;
+        case 'Yellow': if (ev === Event.Timer) return 'Red';    break;
+    }
+    return cur;
+}
+```
+
+### 11. JavaScript (object map)
+```javascript
+const table = {
+    Red:    { timer: 'Green' },
+    Green:  { timer: 'Yellow' },
+    Yellow: { timer: 'Red' },
+};
+
+function dispatch(cur, ev) {
+    return table[cur]?.[ev] ?? cur;
+}
+```
+
+### 12. Zig (inline switch)
+```zig
+const State = enum { Red, Green, Yellow };
+
+fn dispatch(cur: State, ev: Event) State {
+    return switch (cur) {
+        .Red    => if (ev == .Timer) .Green else cur,
+        .Green  => if (ev == .Timer) .Yellow else cur,
+        .Yellow => if (ev == .Timer) .Red else cur,
+    };
 }
 ```
 
