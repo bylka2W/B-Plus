@@ -607,12 +607,19 @@ static void InstallLsp()
             AppContext.BaseDirectory, "..", "..", "..", "..",
             "BPlusTranspiler", "bin", "Debug", "net8.0", "bpc.dll"));
 
+    // Also try .exe self-contained
+    var bpcExePath = Path.ChangeExtension(bpcPath, ".exe");
+    if (!File.Exists(bpcPath) && File.Exists(bpcExePath))
+        bpcPath = bpcExePath;
+
+    bool isSelfContained = bpcPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
+
     var packageJson = new
     {
         name = "bplus-lsp",
         version = "2.5.0GH",
         displayName = "B+ Language Support",
-        description = "B+ state machine language — LSP integration",
+        description = "B+ state machine language — LSP + syntax highlighting + Snippets",
         categories = new[] { "Programming Languages" },
         engines = new { vscode = "^1.75.0" },
         activationEvents = new[] { "onLanguage:bp" },
@@ -637,9 +644,17 @@ static void InstallLsp()
                     scopeName = "source.bp",
                     path = "./syntaxes/bp.tmLanguage.json"
                 }
+            },
+            snippets = new[]
+            {
+                new { language = "bp", path = "./snippets/bp.json" }
             }
         }
     };
+
+    var esc = bpcPath.Replace("\\", "\\\\");
+    var runCmd = isSelfContained ? esc : "dotnet";
+    var runArgsStr = isSelfContained ? "['--lsp']" : "['" + esc + "', '--lsp']";
 
     var extensionJs = @"
 const vscode = require('vscode');
@@ -647,10 +662,10 @@ const { spawn } = require('child_process');
 const path = require('path');
 
 function activate(context) {
-    const serverPath = " + "\"" + bpcPath.Replace("\\", "\\\\") + "\"" + @";
+    const serverPath = """ + esc + @""";
     const serverOptions = {
-        run: { command: 'dotnet', args: [serverPath, '--lsp'] },
-        debug: { command: 'dotnet', args: [serverPath, '--lsp'] }
+        run: { command: '" + runCmd + @"', args: " + runArgsStr + @" },
+        debug: { command: '" + runCmd + @"', args: " + runArgsStr + @" }
     };
     const clientOptions = {
         documentSelector: [{ scheme: 'file', language: 'bp' }],
@@ -674,12 +689,16 @@ exports.deactivate = deactivate;
         patterns = new object[]
         {
             new { name = "comment.line.double-slash.bp", match = "//.*" },
-            new { name = "keyword.control.bp", match = "\\b(state|base|var|on|after|enter|exit|always|async|import|context|enum|parallel)\\b" },
-            new { name = "storage.type.bp", match = "\\b(int|float|string|bool|void|double|long)\\b" },
+            new { name = "comment.line.dash.bp", match = "--.*" },
+            new { name = "keyword.control.bp", match = "\\b(state|base|var|on|after|enter|exit|always|async|import|context|enum|parallel|kernel|pipeline|entry)\\b" },
+            new { name = "storage.type.bp", match = "\\b(int|float|string|bool|void|double|long|Image|ConvWeights|MotionVec|stream|TextureAtlas|ParticleBuffer)\\b" },
             new { name = "constant.language.bp", match = "\\b(true|false)\\b" },
             new { name = "entity.name.type.bp", match = "\\b[A-Z]\\w*\\b" },
+            new { name = "annotation.bp", match = "@\\w+" },
+            new { name = "directive.bp", match = "#\\w+" },
             new { name = "string.quoted.double.bp", match = "\"[^\"]*\"" },
-            new { name = "constant.numeric.bp", match = "\\b\\d+\\b" }
+            new { name = "constant.numeric.bp", match = "\\b\\d+(\\.\\d+)?\\b" },
+            new { name = "keyword.operator.bp", match = "->|\\|>|>>" }
         },
         uuid = "bplus-grammar"
     };
@@ -694,6 +713,59 @@ exports.deactivate = deactivate;
             new { open = "(", close = ")" },
             new { open = "[", close = "]" },
             new { open = "\"", close = "\"" }
+        }
+    };
+
+    var snippets = new Dictionary<string, object>
+    {
+        ["State Machine"] = new
+        {
+            scope = "bp",
+            prefix = "state",
+            body = new[] { "state ${1:Name} {", "\ton ${2:event} -> ${3:Target}", "}" },
+            description = "Create a state with a transition"
+        },
+        ["Kernel"] = new
+        {
+            scope = "bp",
+            prefix = "kernel",
+            body = new[] { "kernel ${1:name}(${2:src}: Image) -> ${3:dst}: Image", "\tbody: ${4:src} |> ${5:relu} >> ${6:output}" },
+            description = "Create a GPU kernel"
+        },
+        ["Hot Transition"] = new
+        {
+            scope = "bp",
+            prefix = "hot",
+            body = new[] { "@hot(${1:0.9})", "\ton ${2:event} -> ${3:Target}" },
+            description = "Hot transition with PGO weight"
+        },
+        ["Cold Transition"] = new
+        {
+            scope = "bp",
+            prefix = "cold",
+            body = new[] { "@cold(${1:0.01})", "\ton ${2:event} -> ${3:Target}" },
+            description = "Cold transition with PGO weight"
+        },
+        ["Fast Path Variable"] = new
+        {
+            scope = "bp",
+            prefix = "fast",
+            body = new[] { "@fast_path", "var ${1:name}: ${2:int}" },
+            description = "Register-hinted fast-path variable"
+        },
+        ["Memory Comptime"] = new
+        {
+            scope = "bp",
+            prefix = "comptime",
+            body = new[] { "#memory comptime" },
+            description = "Enable compile-time memory safety proofs"
+        },
+        ["SIMD Kernel"] = new
+        {
+            scope = "bp",
+            prefix = "simd",
+            body = new[] { "@simd_width(${1:512})", "@simd_unroll(${2:8})", "kernel ${3:name}(${4:src}: Image) -> Image", "\tbody: ${5:src} |> ${6:relu} >> ${7:output}" },
+            description = "Kernel with SIMD annotations"
         }
     };
 
@@ -714,10 +786,43 @@ exports.deactivate = deactivate;
     File.WriteAllText(Path.Combine(vscodeDir, "language-configuration.json"),
         System.Text.Json.JsonSerializer.Serialize(langConfig, jsonOpts));
 
-    Console.WriteLine($"LSP extension installed to: {vscodeDir}");
-    Console.WriteLine("Restart VS Code and open a .bp file to activate B+ support.");
+    var snippetsDir = Path.Combine(vscodeDir, "snippets");
+    Directory.CreateDirectory(snippetsDir);
+    File.WriteAllText(Path.Combine(snippetsDir, "bp.json"),
+        System.Text.Json.JsonSerializer.Serialize(snippets, jsonOpts));
+
+    // Auto-install npm dependency
+    try
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("npm", $"install --prefix \"{vscodeDir}\" vscode-languageclient")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        using var proc = System.Diagnostics.Process.Start(psi);
+        if (proc != null)
+        {
+            proc.WaitForExit(60000);
+            if (proc.ExitCode == 0)
+                Console.WriteLine("  ✓ npm dependency installed.");
+            else
+                Console.WriteLine("  ⚠ npm install failed (run manually: cd \"{0}\" && npm install vscode-languageclient)", vscodeDir);
+        }
+    }
+    catch
+    {
+        Console.WriteLine("  ⚠ npm not found. Install manually: cd \"{0}\" && npm install vscode-languageclient", vscodeDir);
+    }
+
     Console.WriteLine();
-    Console.WriteLine("NOTE: Requires the 'vscode-languageclient' npm package.");
-    Console.WriteLine("Install it in the extension directory:");
-    Console.WriteLine($"  cd \"{vscodeDir}\" && npm install vscode-languageclient");
+    Console.WriteLine($"✓ B+ extension installed to: {vscodeDir}");
+    Console.WriteLine("  Restart VS Code and open a .bp file to activate B+ support.");
+    Console.WriteLine();
+    Console.WriteLine("  Features:");
+    Console.WriteLine("    • Syntax highlighting (.bp files)");
+    Console.WriteLine("    • LSP: errors, completions, hover info, formatting");
+    Console.WriteLine("    • Code snippets: state, kernel, hot, cold, simd, comptime");
+    Console.WriteLine("    • Auto-closing pairs, bracket matching");
 }

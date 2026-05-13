@@ -37,6 +37,8 @@ public class VariableNode
     public string Name { get; set; } = "";
     public string Type { get; set; } = "";
     public string? DefaultValue { get; set; }
+    // @fast_path — keep in CPU registers
+    public bool IsFastPath { get; set; }
 }
 
 public class ContextNode

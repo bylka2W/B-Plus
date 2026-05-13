@@ -223,10 +223,10 @@ public partial class BPlusParser
             }
             else if (_src[_pos] == '@')
             {
-                // Parse transition-level annotations (@hot, @cold)
-                var transAnnots = ParseAnnotations();
+                // Parse annotations for next element (@hot, @cold, @fast_path)
+                var annots = ParseAnnotations();
                 SkipWs();
-                // Apply to next on/always transition
+                // Apply to next transition or var
                 if (Peek("on ") || Peek("always"))
                 {
                     TransitionNode? trans = null;
@@ -236,14 +236,21 @@ public partial class BPlusParser
                         trans = ParseAlways();
                     if (trans != null)
                     {
-                        foreach (var a in transAnnots)
+                        foreach (var a in annots)
                             ApplyTransitionAnnotation(trans, a);
                         state.Transitions.Add(trans);
                     }
                 }
+                else if (Peek("var "))
+                {
+                    var vd = ParseVarDecl();
+                    if (vd != null && annots.Any(a => a.Name == "fast_path"))
+                        vd.IsFastPath = true;
+                    if (vd != null) state.Variables.Add(vd);
+                }
                 else
                 {
-                    throw Err($"Expected transition after annotation in state '{state.Name}'");
+                    throw Err($"Expected transition or var after annotation in state '{state.Name}'");
                 }
             }
             else
@@ -361,7 +368,42 @@ public partial class BPlusParser
             }
         }
 
-        var eventName = isSignal ? signalName! : ParseWord();
+        string eventName;
+        // Handle quoted char event names: on 'x' -> Target, on '\n' -> Target
+        if (_pos < _src.Length && _src[_pos] == '\'')
+        {
+            _pos++; // skip opening '
+            if (_pos < _src.Length && _src[_pos] != '\'')
+            {
+                if (_src[_pos] == '\\' && _pos + 1 < _src.Length)
+                {
+                    // Escape sequence: \n, \r, \t, \\, \', etc.
+                    _pos++;
+                    eventName = _src[_pos] switch
+                    {
+                        'n' => "\n",
+                        'r' => "\r",
+                        't' => "\t",
+                        '\\' => "\\",
+                        '\'' => "'",
+                        _ => "\\" + _src[_pos]
+                    };
+                    _pos++;
+                }
+                else
+                {
+                    eventName = _src[_pos].ToString();
+                    _pos++;
+                }
+            }
+            else
+                eventName = "";
+            if (_pos < _src.Length && _src[_pos] == '\'') _pos++; // skip closing '
+        }
+        else
+        {
+            eventName = isSignal ? signalName! : ParseWord();
+        }
         SkipWs();
 
         // Parameters ( ... )
@@ -521,7 +563,8 @@ public partial class BPlusParser
     {
         Expect("#");
         var name = ParseWord();
-        SkipWs();
+        // Only skip spaces/tabs, NOT newlines (to avoid consuming next line)
+        while (_pos < _src.Length && (_src[_pos] == ' ' || _src[_pos] == '\t')) _pos++;
         var value = "";
         if (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '\r')
         {

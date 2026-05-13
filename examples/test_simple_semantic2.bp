@@ -1,0 +1,15 @@
+#parser
+
+state HttpParser {
+    on h -> ExpectHeader
+    on g -> ExpectGet
+}
+
+state ExpectHeader {
+    on colon -> ReadingValue
+    on newline -> HttpParser
+}
+
+state ReadingValue {
+    on newline -> HttpParser
+}
