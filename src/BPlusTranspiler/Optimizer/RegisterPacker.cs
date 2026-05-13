@@ -22,9 +22,19 @@ namespace BPlusTranspiler.Optimizer
             public int Bits { get; set; }
             public string ExtractionPattern { get; set; }
             public int AccessCycle { get; set; }
+            public List<string> DependsOn { get; set; } = new List<string>();
+        }
+
+        /// <summary>Dependency edge: src variable must be computed before dst.</summary>
+        public class DepEdge
+        {
+            public string Src { get; set; }
+            public string Dst { get; set; }
+            public int Cycle { get; set; }
         }
 
         private Dictionary<string, List<AccessInfo>> accessPatterns = new Dictionary<string, List<AccessInfo>>();
+        private List<DepEdge> depGraph = new List<DepEdge>();
         private UnpackPredictor predictor;
 
         public class AccessInfo
@@ -37,19 +47,65 @@ namespace BPlusTranspiler.Optimizer
         public void AnalyzeAccessPatterns(List<StateDefNode> states)
         {
             accessPatterns.Clear();
+            depGraph.Clear();
+
             foreach (var state in states)
             {
                 var list = new List<AccessInfo>();
                 int cycle = 0;
+                string? lastWritten = null;
+
                 foreach (var action in state.Actions)
                 {
-                    if (action.Body.Contains("=") || action.Body.Contains("set"))
+                    string body = action.Body;
+
+                    // Detect variable writes: "var = expr" or "set var"
+                    string? written = null;
+                    if (body.Contains("="))
                     {
-                        list.Add(new AccessInfo { VarName = $"var_{cycle}", Cycle = cycle++, BitWidth = 64 });
+                        written = body.Split('=')[0].Trim();
+                        var parts = body.Split('=');
+                        if (parts.Length > 1)
+                        {
+                            // Read vars = everything after '=' that's a variable name
+                            var readVars = ExtractVarNames(parts[1]);
+                            foreach (var rv in readVars)
+                            {
+                                if (rv != written)
+                                    depGraph.Add(new DepEdge { Src = rv, Dst = written, Cycle = cycle });
+                            }
+                        }
+                    }
+
+                    if (written != null)
+                    {
+                        list.Add(new AccessInfo { VarName = written, Cycle = cycle++, BitWidth = 64 });
+                        lastWritten = written;
                     }
                 }
                 accessPatterns[state.Name] = list;
             }
+        }
+
+        /// <summary>Extract variable names from an expression body.</summary>
+        private static List<string> ExtractVarNames(string expr)
+        {
+            var vars = new List<string>();
+            var words = expr.Split(new[] { ' ', '+', '-', '*', '/', '(', ')', ',', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var w in words)
+                if (w.Length > 0 && char.IsLetter(w[0]) && !char.IsUpper(w[0]))
+                    vars.Add(w);
+            return vars;
+        }
+
+        /// <summary>Check if two variables have a dependency conflict.</summary>
+        private bool HasDepConflict(string a, string b)
+        {
+            return depGraph.Any(d =>
+                (d.Src == a && d.Dst == b) ||  // a must be before b
+                (d.Src == b && d.Dst == a) ||  // b must be before a
+                (d.Src == a && d.Src == b)     // both depend on same src
+            );
         }
 
         public List<PackedRegister> PackRegisters(List<StateDefNode> states, string targetReg = "rax")
@@ -58,29 +114,68 @@ namespace BPlusTranspiler.Optimizer
             var pr = new PackedRegister { Register = targetReg };
 
             int currentOffset = 0;
+            var allAccesses = new List<(AccessInfo acc, string stateName)>();
+
             foreach (var state in states)
             {
                 if (!accessPatterns.ContainsKey(state.Name)) continue;
                 var accesses = accessPatterns[state.Name]
                     .OrderBy(a => a.Cycle).ToList();
 
+                // Check dependencies BEFORE packing
+                var safeAccesses = new List<AccessInfo>();
                 foreach (var acc in accesses)
                 {
+                    bool hasConflict = safeAccesses.Any(existing =>
+                        HasDepConflict(existing.VarName, acc.VarName));
+
+                    if (!hasConflict)
+                    {
+                        safeAccesses.Add(acc);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"  [dep] {acc.VarName} depends on {safeAccesses.Last().VarName} → separate register");
+                    }
+                }
+
+                foreach (var acc in safeAccesses)
+                {
                     int bits = Math.Min(acc.BitWidth, 64 - currentOffset);
+                    if (bits <= 0) break;
+
+                    var deps = depGraph
+                        .Where(d => d.Dst == acc.VarName)
+                        .Select(d => d.Src)
+                        .ToList();
+
                     var field = new PackedField
                     {
                         Name = acc.VarName,
                         Offset = currentOffset,
                         Bits = bits,
                         AccessCycle = acc.Cycle,
-                        ExtractionPattern = PredictExtraction(acc.Cycle, bits, currentOffset)
+                        ExtractionPattern = PredictExtraction(acc.Cycle, bits, currentOffset),
+                        DependsOn = deps
                     };
                     pr.Fields.Add(field);
                     currentOffset += bits;
-                    if (currentOffset >= 64) break;
                 }
-                if (currentOffset >= 64) break;
             }
+
+            // Check for serialization stalls in the packed register
+            for (int i = 0; i < pr.Fields.Count; i++)
+            {
+                for (int j = i + 1; j < pr.Fields.Count; j++)
+                {
+                    if (pr.Fields[j].DependsOn.Contains(pr.Fields[i].Name))
+                    {
+                        Console.WriteLine($"  ⚠ serialization stall: {pr.Fields[j].Name} depends on {pr.Fields[i].Name} in same {targetReg}");
+                        Console.WriteLine($"    → insert 2+ independent instructions between them or split to separate register");
+                    }
+                }
+            }
+
             packed.Add(pr);
             return packed;
         }
