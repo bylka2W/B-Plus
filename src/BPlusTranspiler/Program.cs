@@ -346,22 +346,35 @@ if (args.Contains("--ai"))
     return RunAI(input);
 }
 
+if (args.Contains("--train-unpack"))
+{
+    Console.WriteLine("B+ AI UnpackPredictor Trainer v3.0.2L1");
+    Console.WriteLine();
+    Console.WriteLine("Generating training data and training model...");
+    AI.UnpackPredictorTrainer.GenerateTrainingData();
+    Console.WriteLine();
+    Console.WriteLine("Done. Use: bpc <input.bp> --metal --unpack");
+    return 0;
+}
+
 if (args.Contains("--metal"))
 {
     if (input == null || !File.Exists(input))
     {
-        Console.Error.WriteLine("Usage: bpc <input.bp> --metal [--tier=L0] [--fusion] [--register-alloc]");
+        Console.Error.WriteLine("Usage: bpc <input.bp> --metal [--tier=L0] [--fusion] [--register-alloc] [--unpack] [--hidden-buffers]");
         return 1;
     }
 
     bool fusion = args.Contains("--fusion");
     bool regAlloc = args.Contains("--register-alloc");
+    bool unpack = args.Contains("--unpack");
+    bool hiddenBuffers = args.Contains("--hidden-buffers");
     string? tierStr = null;
     for (int i = 0; i < args.Length; i++)
         if (args[i].StartsWith("--tier="))
             tierStr = args[i].Substring("--tier=".Length);
 
-    return RunMetal(input, fusion, regAlloc, tierStr);
+    return RunMetal(input, fusion, regAlloc, unpack, hiddenBuffers, tierStr);
 }
 
 if (input == null)
@@ -374,6 +387,10 @@ if (input == null)
     Console.Error.WriteLine("       bpc docs <file.bp> [--output ./dir]  (generate documentation)");
     Console.Error.WriteLine("       bpc debug <file.bp>                  (interactive state machine debugger)");
     Console.Error.WriteLine("       bpc profile <file.bp> [iterations]   (profile transition frequencies)");
+    Console.Error.WriteLine("       bpc <input.bp> --metal [--tier=L0] [--fusion] [--register-alloc]  (full metal stack)");
+    Console.Error.WriteLine("       bpc <input.bp> --ai                             (AI optimizer for metal config)");
+    Console.Error.WriteLine("       bpc <input.bp> --metal --unpack                 (AI register unpack predictor)");
+    Console.Error.WriteLine("       bpc <input.bp> --metal --hidden-buffers          (LSD/LFB/TLB/BTB/RSB analysis)");
     Console.Error.WriteLine("       bpc <input> --plugin unity|unreal|godot|web|unigine  (engine-specific code generation)");
     Console.Error.WriteLine("       bpc bpm <init|install|list|search|publish>   (package manager)");
     Console.Error.WriteLine("       bpc test run <file.bp>                      (run auto-generated tests)");
@@ -619,9 +636,9 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
     }
 }
 
-static int RunMetal(string bpFile, bool fusion, bool regAlloc, string? tierStr)
+static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool hiddenBuffers, string? tierStr)
 {
-    Console.WriteLine("B+ v3.0.0HG Metal — cache-aware code generator");
+    Console.WriteLine("B+ v3.0.2L1 Metal — hidden buffer + cache-aware code generator");
     Console.WriteLine();
 
     var srcRaw = File.ReadAllText(bpFile);
@@ -712,6 +729,35 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, string? tierStr)
         Console.WriteLine();
     }
 
+    // Phase 2b: AI Unpacker (RegisterPacker + UnpackPredictor)
+    if (unpack)
+    {
+        Console.WriteLine("[Phase 2b] AI Register Packer (unpack prediction)...");
+        var packer = new RegisterPacker();
+        packer.AnalyzeAccessPatterns(program.States);
+        var packedRegs = packer.PackRegisters(program.States);
+        foreach (var pr in packedRegs)
+        {
+            Console.WriteLine($"  {pr.Register}: {pr.TotalBits} bits, {pr.Fields.Count} fields");
+            foreach (var f in pr.Fields)
+                Console.WriteLine($"    {f.Name}: offset={f.Offset} bits={f.Bits} extract={f.ExtractionPattern} cycle={f.AccessCycle}");
+        }
+        Console.WriteLine();
+        Console.WriteLine("  Unpack code:");
+        foreach (var pr in packedRegs)
+            Console.WriteLine(packer.GenerateUnpackCode(pr));
+        Console.WriteLine();
+    }
+
+    // Phase 2c: Hidden Buffer Optimization (LSD, Store/Load Buffer, LFB, TLB, BTB, RSB)
+    if (hiddenBuffers)
+    {
+        Console.WriteLine("[Phase 2c] Hidden buffer analysis (LSD / LFB / TLB / BTB / RSB)...");
+        var hbAnalysis = HiddenBufferOptimizer.Analyze(program.States, tiers);
+        Console.WriteLine(HiddenBufferOptimizer.GenerateReport(hbAnalysis));
+        Console.WriteLine();
+    }
+
     // Phase 2: LLVM IR with intrinsics
     Console.WriteLine("[Phase 2] Generating LLVM IR with intrinsics...");
     var llvmGen = new LlvmGenMetal();
@@ -789,7 +835,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, string? tierStr)
 
 static int RunAI(string bpFile)
 {
-    Console.WriteLine("B+ AI Optimizer v3.0.0");
+    Console.WriteLine("B+ AI Optimizer v3.0.2L1");
     Console.WriteLine();
 
     string modelDir = "ai_models";
@@ -858,7 +904,7 @@ static int RunAI(string bpFile)
 
     using (var writer = new StreamWriter(outputBp))
     {
-        writer.WriteLine("// B+ v3.0.0 Metal — AI-optimized");
+        writer.WriteLine("// B+ v3.0.2L1 Metal — AI-optimized + hidden buffer aware");
         writer.WriteLine($"// Predicted IPC: {predictedIPC:F3}");
         writer.WriteLine();
         writer.WriteLine("@metal {");
