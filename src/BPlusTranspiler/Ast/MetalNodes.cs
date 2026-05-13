@@ -58,6 +58,20 @@ public class MetalConfig
     // Field ordering index
     public int? FieldIndex { get; set; }
 
+    // NUMA node (default: any)
+    public int? NumaNode { get; set; }
+    // NUMA policy: local|bind|interleave
+    public string? NumaPolicy { get; set; }
+
+    // Store forwarding guard (auto-pad to prevent misalign)
+    public bool StoreForwardSafe { get; set; }
+
+    // Microarchitecture profile: intel_adl|amd_zen4|arm_neoverse|...
+    public string? MuarchProfile { get; set; }
+
+    // ILP dependency chain max length
+    public int? IlpMax { get; set; }
+
     // Random config generation for AI
     public static MetalConfig Random()
     {
@@ -78,7 +92,12 @@ public class MetalConfig
             DataTier = rng.Next(2) == 0 ? null : (MemoryTier)rng.Next(1, 4),
             HotPath = rng.Next(2) == 0,
             CriticalSize = rng.Next(2) == 0 ? null : (int?)new[] { 4096, 8192, 16384, 32768 }[rng.Next(4)],
-            FieldIndex = rng.Next(2) == 0 ? null : (int?)rng.Next(16)
+            FieldIndex = rng.Next(2) == 0 ? null : (int?)rng.Next(16),
+            NumaNode = rng.Next(2) == 0 ? null : (int?)rng.Next(0, 4),
+            NumaPolicy = rng.Next(3) switch { 0 => null, 1 => "local", _ => "bind" },
+            StoreForwardSafe = rng.Next(2) == 0,
+            MuarchProfile = rng.Next(2) == 0 ? null : new[] { "intel_icx", "amd_zen4", "arm_neoverse" }[rng.Next(3)],
+            IlpMax = rng.Next(2) == 0 ? null : (int?)rng.Next(2, 8)
         };
     }
 
@@ -102,7 +121,11 @@ public class MetalConfig
             HotPath ? 1.0 : 0.0,
             CriticalSize ?? 0,
             FieldIndex ?? 0,
-            BytePack.Count > 0 ? 1.0 : 0.0
+            BytePack.Count > 0 ? 1.0 : 0.0,
+            NumaNode ?? -1,
+            StoreForwardSafe ? 1.0 : 0.0,
+            MuarchProfile != null ? 1.0 : 0.0,
+            IlpMax ?? 0
         };
     }
 }

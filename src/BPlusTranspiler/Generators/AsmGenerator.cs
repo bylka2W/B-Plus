@@ -9,7 +9,7 @@ public class AsmGenerator
     public string GenerateAssembly(ProgramNode program, List<TierResult> tiers, List<RegisterAssignment> regs)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("; B+ v3.0.3L1 Metal — x86-64 assembly");
+        sb.AppendLine("; B+ v3.0.4L BETA Metal — x86-64 assembly");
         sb.AppendLine("section .text");
         sb.AppendLine();
 

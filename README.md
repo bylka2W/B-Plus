@@ -1,8 +1,8 @@
-﻿# B+ v3.0.3L1 — язык конечных автоматов + Metal Stack + AI + PerfCounters + Roofline
+﻿# B+ v3.0.4L BETA — state machine + Metal Stack + AI + µarch + NUMA + ILP + AutoTune
 
-B+ — язык описания конечных автоматов (state machine) с транспиляцией в **Python, C#, C++, C**, LLVM IR, **HLSL (DXIL)**, **GLSL (SPIR-V)**, а также плагинами для **Unity, Unreal Engine, Godot, Web (TypeScript), Unigine**. Никакого рантайма — чистый код под твою платформу.
+B+ — язык описания конечных автоматов (state machine) с транспиляцией в **Python, C#, C++, C, LLVM IR, HLSL (DXIL), GLSL (SPIR-V)**. Плагины для **Unity, Unreal Engine, Godot, Web (TypeScript), Unigine**. Никакого рантайма.
 
-**v3.0.3L1**: PerfCounters (perf_event_open), False Sharing Padding, Prefetch Distance Formula, Working Set Analysis + Auto Tiling, Cache Miss Attribution per State, Roofline Model.
+**v3.0.4L BETA**: NUMA placement (`@numa`), Store forwarding guard (`@store_forward_safe`), µarch profiles (Agner Fog tables for Intel/AMD/ARM), ILP dependency analyzer, Auto-Tune (hardware perf counters → AI retrain).
 
 ---
 
@@ -16,279 +16,321 @@ dotnet run --project src/BPlusTranspiler -- examples/traffic_light.bp
 
 Нужен [.NET 8 SDK](https://dotnet.microsoft.com/download).
 
-**VS Code:** `setup-vscode.bat` — установка расширения в один клик.
-
-```bp
-// traffic_light.bp
-state Red    { on timer -> Green  enter { stop_traffic() } }
-state Green  { on timer -> Yellow enter { allow_traffic() } }
-state Yellow { on timer -> Red    enter { warn_traffic() } }
-```
-
 ---
 
-## CLI Reference (bpc)
+## B+ Syntax Reference
 
-```bash
-bpc input.bp                          # все цели сразу
-bpc input.bp --target llvm            # → kernels.ll (LLVM IR)
-bpc input.bp --target dxil            # → HLSL compute shader (DirectX 12)
-bpc input.bp --target spirv           # → GLSL compute shader (Vulkan)
-bpc input.bp --output ./out           # кастомный выход
-
-# Metal Stack (L0–L3 cache-aware)
-bpc input.bp --ai                     # AI Optimizer (NeuralPredictor + LayoutOptimizer)
-bpc input.bp --metal                  # Full Metal Stack (tier classify, pack, asm, ld)
-bpc input.bp --metal --tier=L0        # принудительный Tier
-bpc input.bp --metal --fusion         # fusion-aware codegen
-bpc input.bp --metal --register-alloc # регистровая аллокация
-bpc input.bp --metal --unpack         # AI-распаковщик регистров (movzx/shr/vpermq)
-bpc input.bp --metal --hidden-buffers # LSD/LFB/TLB/BTB/RSB анализ
-bpc --train-unpack                    # обучение UnpackPredictor
-bpc input.bp --roofline               # roofline model (compute vs memory bound)
-
-# Оптимизация
-bpc input.bp --optimize               # таблица переходов
-bpc input.bp --turbo                  # --optimize + --pool + --pack
-bpc input.bp --pgo                    # PGO profile counters
-bpc input.bp --predict                # предсказание след. состояния
-
-# Streaming / парсеры
-bpc input.bp --stream                 # goto-driven, zero-copy
-
-# Диагностика
-bpc input.bp --check                  # 7 категорий ошибок
-bpc health                            # мёртвые состояния, память
-bpc diff old.bp new.bp                # семантическое сравнение
-
-# Плагины движков
-bpc input.bp --plugin unity           # → MonoBehaviour
-bpc input.bp --plugin unreal          # → UCLASS Actor
-bpc input.bp --plugin godot           # → Godot Node
-bpc input.bp --plugin web             # → TypeScript класс
-bpc input.bp --plugin unigine         # → Unigine Component
-
-# Инструменты
-bpc --visualize input.bp              # → интерактивный граф (Mermaid)
-bpc format input.bp                   # → автоформатирование
-bpc docs input.bp                     # → документация
-bpc debug input.bp                    # → интерактивный дебаггер
-bpc profile input.bp 10000            # → профайлинг переходов
-bpc watch . --target cpp              # → автоперегенерация
-bpc --lsp                             # → LSP сервер
-bpc --install-lsp                     # → установка VS Code extension
-bpc build                             # → сборка по bp.toml
-bpc test run input.bp                 # → авто-тесты
-```
-
----
-
-## 🏗 Metal Stack (L0–L3 cache-aware code generation)
-
-Генерирует LLVM IR + x86-64 asm + linker script с placement по кэшу:
-
+### State machine
 ```bp
-@metal {
-    @tier(0)          // L0 — µop cache (hot)
-    @register(r8)     // GPR pin
-    @zmm(7)           // ZMM register
-    @mask(k5)         // mask register
-    @fusion(dec+jnz)  // fusion pair
-    @gateway(L3)      // cold gateway
-    @prefetch(t0)     // prefetch hint
-    @align(128)       // alignment
-    @packed           // bitfield packing
-    @data_tier(2)     // data placement (L2)
-    @critical_size(8192)
-    @hot_path(true)
+state Red {
+    on timer -> Green   enter { stop_traffic() }
+}
+state Green {
+    on timer -> Yellow  enter { allow_traffic() }
 }
 ```
 
-### Фазы Metal Stack:
-| Фаза | Компонент | Описание |
-|------|-----------|----------|
-| 1 | TierClassifier | L0/L1/L2/L3 по @tier или hot weights |
-| 1 | CodePacker | L0 µop bundles (4 instr/16B), L1 splice, L2/L3 gateways |
-| 1 | DataPacker | Struct field reordering, L1-D/L2/L3 placement |
-| 2 | RegisterAllocator | GPR (rax-r15), ZMM (zmm0-31), Mask (k0-7) |
-| 2 | LlvmGenMetal | LLVM IR + intrinsics + inline asm |
-| 3 | AsmGenerator | x86-64 fusion-aware, K-mask predication |
-| 3 | LinkerScriptGenerator | .ld sections for L0-L3 |
-| 4 | PrefetchInjector | Prefetch analysis + asm generation |
-| 4 | MetalRuntime | mlock/madvise/mmap wrappers |
-
----
-
-## 🧠 AI Optimizer
-
-Чистый C# нейросетевой оптимизатор без внешних зависимостей:
-
-```
-bpc examples/traffic_light.bp --ai
+### Variables + types
+```bp
+state HttpParser {
+    var buffer_pos: int
+    var buffer: string
+    var flags: byte
+    @fast_path
+    var hot_counter: int
+}
 ```
 
-- **DataCollector**: 2000 samples, feature extraction (16 metal config features + 5 code features)
-- **NeuralPredictor**: 3-layer NN (21→16→1), ReLU, SGD + L2 decay, gradient clip 0.5
-- **LayoutOptimizer**: 10k config search → predicted IPC: 4.884
-- Генерирует `traffic_light_metal.bp` с @metal блоком
-
-### AI UnpackPredictor + RegisterPacker
-
-AI распаковывает данные из регистров оптимальным способом:
-
-```
-bpc input.bp --metal --unpack
+### GPU kernels
+```bp
+kernel upscale(src: Image[1080, 1920]) -> Image[2160, 3840]
+    body: src |> relu |> shuffle >> output
 ```
 
-- Анализирует порядок доступа к переменным по тактам
-- Выбирает: `movzx` (малые поля), `shr` (сдвиг), `vpermq` (ZMM), `vextractf64x4`
-- Пакует 3+ переменные в один RAX, достаёт за 1–3 такта
-
-### HiddenBufferOptimizer
-
-Анализ скрытых буферов CPU (LSD, LFB, TLB, BTB, RSB):
-
-```
-bpc input.bp --metal --hidden-buffers
+### Pipeline operations
+```bp
+pipeline process(tex: Image[512, 512]) -> Image[512, 512]
+    step blur: gaussian_blur(tex, sigma=1.5)
+    step edge: sobel(blur)
+    step final: relu(edge)
 ```
 
-| Буфер | Что контролирует | Выигрыш |
-|---|---|---|
-| LSD (Loop Stream Detector) | Цикл < 64B без call | −1 такт/iter |
-| Store/Load Buffer | 42–56 / 72–128 записей | −2–3 такта |
-| Line Fill Buffer (L1↔L2) | 12–16 pending misses | −5–10 тактов |
-| TLB (L1-D) | 64 entries × 4KB = 256KB | −20 тактов (huge pages) |
-| BTB (Branch Target Buffer) | Выравнивание jmp по 16B | −15 тактов (mispredict) |
-| RSB (Return Stack Buffer) | call/ret → jmp | −15 тактов |
-
-### PerfCounters (hardware PMU)
-
-Чтение реальных счётчиков процессора через `perf_event_open`:
-
-```
-bpc input.bp --metal
-  [Phase 3c] Hardware perf counters...
-    Cycles: 1,234,567
-    Instructions: 987,654
-    L1-D misses: 12,345
-    L2 misses: 3,456
-    L3 misses: 789
-    Branch mispredicts: 234
+### Streaming parser (Ragel-style)
+```bp
+#parser
+state HttpParser {
+    on 'G' -> ExpectGet
+    on 'H' -> ExpectHeader
+}
 ```
 
-### Roofline Model
-
-Анализ: код упёрся в compute или memory bandwidth?
-
-```
-bpc input.bp --roofline
-→ Arithmetic intensity: 0.3 FLOP/byte → MEMORY BOUND
-→ Fix: tiling + register blocking
+### Memory comptime
+```bp
+#memory comptime
+kernel safe(src: Image[1080, 1920]) -> Image[1080, 1920]
+    touches: reads[src], writes[output]
+    body: src |> relu >> output
 ```
 
-### False Sharing Padding
-
-DataPacker автоматически детектит горячие поля, которые могут быть на одной кэш-линии (64B) из разных потоков → вставляет padding.
-
-### Working Set + Auto Tiling
-
-TierClassifier анализирует рабочий набор данных:
-- Если > L1 (32KB) → предупреждение
-- Если > L2 (256KB) → предлагает tiling
-- Если > L3 (12MB) → рекомендует huge pages
-
-### Prefetch Distance Formula
-
-PrefetchInjector считает расстояние: `memory_latency_cycles / loop_body_cycles`. DDR5 (~80ns / 2ns = 40 итераций вперёд).
-
----
-
-### Самообучение
-
-Каждая правка @metal блока → новый training sample → модель точнее:
+### GPU annotations
+```bp
+@simd_width(512)
+@simd_unroll(8)
+@simd_gather
+kernel process(src: Image[1080, 1920]) -> Image[1080, 1920]
+    body: src |> relu >> output
 ```
-Прогон 1: IPC 3.5
-Прогон 2: IPC 4.2 (перестроил упаковку)
-Прогон 3: IPC 4.88 (найдена оптимальная раскладка)
+
+### Metal annotations
+```bp
+@metal {
+    @tier(0)                    // L0 — µop cache
+    @register(r8)               // GPR pin
+    @zmm(7)                     // ZMM register
+    @mask(k5)                   // mask register
+    @fusion(dec+jnz)            // macro-fusion pair
+    @section("my_hot_code")     // custom linker section
+    @gateway(L3)                // cold gateway
+    @prefetch(t0)               // prefetch hint
+    @align(128)                 // alignment
+    @packed                     // bitfield packing
+    @data_tier(2)               // data in L2
+    @critical_size(8192)        // hot size hint
+    @hot_path(true)             // hot path annotation
+    @numa(0)                    // NUMA node bind
+    @store_forward_safe          // guard store forwarding
+    @muarch(amd_zen4)           // target µarch
+    @ilp_max(4)                 // max dependency chain
+}
 ```
 
 ---
 
-## 📊 Флаги оптимизации
+## CLI Reference — полный список флагов
 
-| Флаг | Эффект | Прирост |
-|------|--------|---------|
-| `--ai` | AI-оптимизатор Metal конфига | IPC prediction |
-| `--metal` | Full Metal Stack (L0–L3) | cache-aware |
-| `--unpack` | AI-распаковка регистров | −1–3 такта |
-| `--hidden-buffers` | LSD/LFB/TLB/BTB/RSB | −5–40 тактов |
-| `--roofline` | Roofline model analysis | выявляет bottleneck |
-| `--metal --perf` | Hardware perf counters | ground truth для AI |
-| `--optimize` | Таблица переходов вместо virtual | +10-30% |
-| `--pool` | Пул состояний без new/delete | +20-40% |
-| `--cache-friendly` | Упорядоченный layout данных | +10-20% |
-| `--prefetch` | Программная предзагрузка кэша | +10-20% |
-| `--branchless` | cmov вместо if/else | +5-15% |
-| `--predict` | Предсказание след. состояния | +5-15% |
-| `--pack` | Битфилды, упаковка структур | -40% памяти |
-| `--pgo` | PGO profile counters в LLVM IR | +15-25% |
-| `--lto` | Link-Time Optimization | +10-20% |
-| `--turbo` | `--optimize + --pool + --pack` | +40-80% |
+```bash
+# === Compilation ===
+bpc input.bp                          # все цели
+bpc input.bp --target llvm            # LLVM IR
+bpc input.bp --target cpp             # C++ only
+bpc input.bp --target dxil            # HLSL (DX12)
+bpc input.bp --target spirv           # GLSL (Vulkan)
+bpc input.bp --output ./dir           # кастомный выход
+
+# === Metal Stack (L0–L3, cache-aware code gen) ===
+bpc input.bp --metal                  # полный стек
+bpc input.bp --metal --tier=L0        # принудительный tier
+bpc input.bp --metal --fusion         # fusion-aware
+bpc input.bp --metal --register-alloc # аллокация регистров
+bpc input.bp --metal --unpack         # AI-распаковщик
+bpc input.bp --metal --hidden-buffers # LSD/LFB/TLB/BTB/RSB
+
+# === AI Optimizer ===
+bpc input.bp --ai                     # AI-оптимизация metal
+bpc input.bp --auto-tune [N]          # Auto-Tune: AI + perf counters
+bpc --train-unpack                    # обучить UnpackPredictor
+
+# === Analysis ===
+bpc input.bp --roofline               # Roofline model
+bpc input.bp --ilp                    # ILP dependency chains
+bpc input.bp --store-fwd              # Store forwarding hazards
+bpc --muarch                          # µarch profile (Agner Fog)
+
+# === PGO / Optimization ===
+bpc input.bp --optimize               # таблица переходов
+bpc input.bp --turbo                  # optimize+pool+pack
+bpc input.bp --pgo                    # PGO counters
+bpc input.bp --predict                # предсказание next state
+
+# === Streaming ===
+bpc input.bp --stream                 # goto-driven parser
+
+# === Diagnostics ===
+bpc input.bp --check                  # 7 категорий ошибок
+bpc health                            # мёртвые состояния
+bpc diff old.bp new.bp                # семантическое сравнение
+
+# === Engine Plugins ===
+bpc input.bp --plugin unity           # MonoBehaviour
+bpc input.bp --plugin unreal          # UCLASS Actor
+bpc input.bp --plugin godot           # Godot Node
+bpc input.bp --plugin web             # TypeScript
+bpc input.bp --plugin unigine         # Unigine Component
+
+# === Tools ===
+bpc --visualize input.bp              # граф (Mermaid)
+bpc format input.bp                   # автоформатирование
+bpc docs input.bp                     # документация
+bpc debug input.bp                    # дебаггер
+bpc profile input.bp 100000           # профайлинг
+bpc watch . --target cpp              # автоперегенерация
+bpc --lsp                             # LSP сервер
+bpc --install-lsp                     # VS Code extension
+bpc build                             # сборка по bp.toml
+bpc test run input.bp                 # авто-тесты
+```
 
 ---
 
-## 📁 Структура проекта
+## 6 языков — пример кода
+
+### 1. Python
+```bp
+state TrafficLight {
+    on timer -> Red
+}
+```
+```python
+class TrafficLight(State):
+    def on_timer(self):
+        return StateRed
+```
+
+### 2. C#
+```bp
+state Player {
+    on hit -> Damaged
+}
+```
+```csharp
+class Player : State {
+    public State OnHit() => new Damaged();
+}
+```
+
+### 3. C++ (table-driven, optimized)
+```bp
+state Idle { @hot(0.9) on walk -> Walking }
+state Walking { on stop -> Idle }
+```
+```cpp
+StateId dispatch(Event ev) {
+    switch (current) {
+        case ST_Idle:
+            if (ev == EV_walk) [[likely]] return ST_Walking;
+            break;
+        case ST_Walking:
+            if (ev == EV_stop) return ST_Idle;
+            break;
+    }
+    return current;
+}
+```
+
+### 4. C (minimal embedded)
+```bp
+state Boot { on ready -> Run }
+```
+```c
+typedef enum { ST_Boot, ST_Run } StateId;
+StateId run(StateId current, Event ev) {
+    switch (current) {
+        case ST_Boot: if (ev == EV_ready) return ST_Run;
+    }
+    return current;
+}
+```
+
+### 5. LLVM IR
+```bp
+kernel relu(src: Image[512, 512]) -> Image[512, 512]
+    body: src |> relu >> output
+```
+```llvm
+define void @relu_kernel(ptr %src, ptr %dst) {
+entry:
+    %w = alloca i32
+    store i32 512, ptr %w
+    %h = alloca i32
+    store i32 512, ptr %h
+    %total = mul i32 512, 512
+    br label %loop
+loop:
+    %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+    %src_ptr = getelementptr float, ptr %src, i32 %i
+    %val = load float, ptr %src_ptr
+    %cmp = fcmp ogt float %val, 0.0
+    %relu = select i1 %cmp, float %val, float 0.0
+    %dst_ptr = getelementptr float, ptr %dst, i32 %i
+    store float %relu, ptr %dst_ptr
+    %next = add i32 %i, 1
+    %done = icmp eq i32 %next, %total
+    br i1 %done, label %exit, label %loop
+exit:
+    ret void
+}
+```
+
+### 6. HLSL (DirectX 12 compute shader)
+```bp
+kernel blur(src: Image[1080, 1920]) -> Image[1080, 1920]
+    body: src |> convolve(weights) >> output
+```
+```hlsl
+[numthreads(16, 16, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= 1920 || id.y >= 1080) return;
+    float4 result = float4(0,0,0,0);
+    for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++) {
+            uint2 px = uint2(clamp((int)id.x + dx, 0, 1919), clamp((int)id.y + dy, 0, 1079));
+            result += Input[px * 4] * kernel[dy + 1][dx + 1];
+        }
+    Output[id * 4] = result;
+}
+```
+
+---
+
+## Структура проекта
 
 ```
 B+ v1.0/
-├── bp.toml                          ← конфиг сборки
 ├── src/BPlusTranspiler/
-│   ├── Ast/                         — AST nodes + MetalNodes
-│   ├── Parser/                      — B+ parser + MetalParser
+│   ├── Ast/                     — AST nodes + MetalNodes
+│   ├── Parser/                  — B+ parser + MetalParser
 │   ├── Optimizer/
-│   │   ├── TierClassifier.cs        — L0/L1/L2/L3 классификация
-│   │   ├── CodePacker.cs            — µop bundles, splicing
-│   │   ├── DataPacker.cs            — Struct field reordering
-│   │   ├── RegisterAllocator.cs     — GPR/ZMM/Mask allocation
-│   │   ├── RegisterPacker.cs        — AI variable→register packer
-│   │   ├── PrefetchInjector.cs      — Prefetch analysis
-│   │   ├── HiddenBufferOptimizer.cs — LSD/LFB/TLB/BTB/RSB control
-│   ├── RooflineAnalyzer.cs       — Roofline model analysis
-│   │   └── BPlusOptimizer.cs        — DCE, const fold, dedup
+│   │   ├── TierClassifier.cs    — L0/L1/L2/L3 + working set
+│   │   ├── CodePacker.cs        — µop bundles, splicing
+│   │   ├── DataPacker.cs        — fields + false-sharing padding
+│   │   ├── RegisterAllocator.cs — GPR/ZMM/Mask allocation
+│   │   ├── RegisterPacker.cs    — AI variable→register packer
+│   │   ├── PrefetchInjector.cs  — latency-aware prefetch
+│   │   ├── HiddenBufferOptimizer — LSD/LFB/TLB/BTB/RSB
+│   │   ├── MicroArchProfile.cs  — Agner Fog µarch tables
+│   │   ├── IlpAnalyzer.cs       — ILP dependency chains
+│   │   ├── StoreForwardGuard.cs — store-forwarding hazards
+│   │   ├── AutoTuner.cs         — AI + real perf counters
+│   │   └── RooflineAnalyzer.cs  — Roofline model
 │   ├── AI/
-│   │   ├── DataCollector.cs         — 2000 training samples
-│   │   ├── NeuralPredictor.cs       — 21→16→1 NN
-│   │   ├── LayoutOptimizer.cs       — 10k config search
-│   │   └── UnpackPredictor.cs       — 12→8→4 unpack NN
+│   │   ├── DataCollector.cs     — samples + per-state misses
+│   │   ├── NeuralPredictor.cs   — 21+→16→1 NN
+│   │   ├── LayoutOptimizer.cs   — 10k config search
+│   │   └── UnpackPredictor.cs   — 12→8→4 unpack NN
 │   ├── Generators/
-│   │   ├── LlvmGenMetal.cs          — LLVM IR + intrinsics
-│   │   ├── AsmGenerator.cs          — x86-64 fusion-aware asm
-│   │   ├── LinkerScriptGenerator.cs — .ld sections
-│   │   └── ...                      — C++, C#, Python, C, GPU shaders
-│   ├── Runtime/
-│   │   └── MetalRuntime.cs          — mlock/madvise/mmap
-│   └── Program.cs                   — CLI entry point
+│   │   ├── LlvmGenMetal.cs      — LLVM IR + intrinsics
+│   │   ├── AsmGenerator.cs      — x86-64 asm
+│   │   └── LinkerScriptGenerator — .ld sections
+│   └── Program.cs               — CLI entry point
 ├── examples/
-│   ├── traffic_light.bp             — минимальный пример
-│   ├── traffic_light_metal.bp       — AI-optimized metal output
-│   └── ...
-└── gen_metal/                       — Generated LLVM IR, asm, ld script
+│   ├── traffic_light.bp         — minimal example
+│   └── traffic_light_metal.bp   — AI-optimized output
+└── gen_metal/                   — generated LLVM IR, asm, ld
 ```
 
 ---
 
-## Бенчмарк: B+ vs C++
+## Бенчмарк
 
 | Версия | нс/ит | Относительно C++ |
 |--------|-------|------------------|
-| C++ наивный (virtual + new/delete) | ~30-50 нс | 1× |
-| C++ таблица + пул | ~5-10 нс | ~3-5× быстрее |
-| B+ `--optimize` | ~5-10 нс | ~3-5× быстрее |
-| B+ `--turbo` | ~4-8 нс | ~4-6× быстрее |
-| B+ `--metal` + AI | ~2-4 нс | ~8-12× быстрее |
-| B+ `--metal --hidden-buffers` | ~1-3 нс | ~10-15× быстрее |
+| C++ naive (virtual) | ~30-50 нс | 1× |
+| C++ table + pool | ~5-10 нс | 3-5× |
+| B+ `--turbo` | ~4-8 нс | 4-6× |
+| B+ `--metal` | ~2-4 нс | 8-12× |
+| B+ `--metal --auto-tune` | ~1-3 нс | 10-15× |
 
-GPU kernels (1920×1080, upscale 2× с shuffle): B+ **300-600%** vs C++.
+GPU kernels: B+ **300-600%** vs C++.
 
 ---
 

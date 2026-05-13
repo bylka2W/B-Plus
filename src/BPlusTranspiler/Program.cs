@@ -346,6 +346,61 @@ if (args.Contains("--ai"))
     return RunAI(input);
 }
 
+if (args.Contains("--muarch"))
+{
+    var profile = MicroArchProfiles.Detect();
+    Console.WriteLine(MicroArchProfiles.GenerateReport(profile));
+    return 0;
+}
+
+if (args.Contains("--ilp"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --ilp");
+        return 1;
+    }
+    var srcIlp = File.ReadAllText(input);
+    var parserIlp = new BPlusParser();
+    var progIlp = parserIlp.Parse(srcIlp);
+    var ilpScores = IlpAnalyzer.Analyze(progIlp);
+    Console.WriteLine(IlpAnalyzer.GenerateReport(ilpScores));
+    return 0;
+}
+
+if (args.Contains("--store-fwd"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --store-fwd");
+        return 1;
+    }
+    var srcSf = File.ReadAllText(input);
+    var parserSf = new BPlusParser();
+    var progSf = parserSf.Parse(srcSf);
+    var sfIssues = StoreForwardGuard.Analyze(progSf);
+    Console.WriteLine(StoreForwardGuard.GenerateReport(sfIssues));
+    return 0;
+}
+
+if (args.Contains("--auto-tune"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --auto-tune [iterations]");
+        return 1;
+    }
+    int tuneIter = 5;
+    for (int i = 0; i < args.Length; i++)
+        if (args[i] == "--auto-tune" && i + 1 < args.Length && int.TryParse(args[i + 1], out var ti))
+            tuneIter = ti;
+    Console.WriteLine("B+ Auto-Tuner v3.0.4L BETA");
+    var tuner = new AutoTuner(input);
+    var tuneResult = tuner.Tune(iterations: tuneIter);
+    Console.WriteLine(AutoTuner.GenerateReport(tuneResult));
+    return 0;
+}
+
 if (args.Contains("--roofline"))
 {
     if (input == null || !File.Exists(input))
@@ -363,7 +418,7 @@ if (args.Contains("--roofline"))
 
 if (args.Contains("--train-unpack"))
 {
-    Console.WriteLine("B+ AI UnpackPredictor Trainer v3.0.3L1");
+    Console.WriteLine("B+ AI UnpackPredictor Trainer v3.0.4L BETA");
     Console.WriteLine();
     Console.WriteLine("Generating training data and training model...");
     AI.UnpackPredictorTrainer.GenerateTrainingData();
@@ -407,6 +462,10 @@ if (input == null)
     Console.Error.WriteLine("       bpc <input.bp> --metal --unpack                 (AI register unpack predictor)");
     Console.Error.WriteLine("       bpc <input.bp> --metal --hidden-buffers          (LSD/LFB/TLB/BTB/RSB analysis)");
     Console.Error.WriteLine("       bpc <input.bp> --roofline                       (roofline model: compute vs memory bound)");
+    Console.Error.WriteLine("       bpc --muarch                                 (µarch profile: Agner Fog tables)");
+    Console.Error.WriteLine("       bpc <input.bp> --ilp                            (ILP dependency chain analysis)");
+    Console.Error.WriteLine("       bpc <input.bp> --store-fwd                      (store forwarding hazard detection)");
+    Console.Error.WriteLine("       bpc <input.bp> --auto-tune [N]                  (auto-tune: AI + real perf counters)");
     Console.Error.WriteLine("       bpc <input> --plugin unity|unreal|godot|web|unigine  (engine-specific code generation)");
     Console.Error.WriteLine("       bpc bpm <init|install|list|search|publish>   (package manager)");
     Console.Error.WriteLine("       bpc test run <file.bp>                      (run auto-generated tests)");
@@ -654,7 +713,7 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
 
 static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool hiddenBuffers, string? tierStr)
 {
-    Console.WriteLine("B+ v3.0.3L1 Metal — hidden buffer + cache-aware code generator");
+    Console.WriteLine("B+ v3.0.4L BETA Metal — NUMA + µarch + ILP + StoreFwd + AutoTune");
     Console.WriteLine();
 
     var srcRaw = File.ReadAllText(bpFile);
@@ -774,6 +833,30 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
         Console.WriteLine();
     }
 
+    // Phase 2d: µarch profile verification for fusion pairs
+    Console.WriteLine("[Phase 2d] µarch fusion verification...");
+    string cpuHint = PrefetchInjector.DetectCpu();
+    foreach (var mb in metalBlocks)
+        foreach (var fp in mb.Config.FusionPairs)
+        {
+            var targetMuarch = mb.Config.MuarchProfile ?? cpuHint;
+            bool valid = MicroArchProfiles.IsFusionValid(fp, targetMuarch);
+            Console.WriteLine(valid
+                ? $"  ✓ '{fp}' valid on {targetMuarch}"
+                : $"  ⚠ '{fp}' NOT valid on {targetMuarch} — remove or change @muarch");
+        }
+    Console.WriteLine();
+
+    // Phase 2e: ILP dependency analysis
+    Console.WriteLine("[Phase 2e] ILP dependency analysis...");
+    var ilpScores = IlpAnalyzer.Analyze(program, tiers);
+    foreach (var ilp in ilpScores)
+        if (ilp.MaxDependencyChain > 4)
+            Console.WriteLine($"  ⚠ {ilp.StateName}: chain={ilp.MaxDependencyChain} ILP={ilp.IlpScore:F2} — {ilp.Suggestion}");
+        else
+            Console.WriteLine($"  ✓ {ilp.StateName}: chain={ilp.MaxDependencyChain} ILP={ilp.IlpScore:F2}");
+    Console.WriteLine();
+
     // Phase 2: LLVM IR with intrinsics
     Console.WriteLine("[Phase 2] Generating LLVM IR with intrinsics...");
     var llvmGen = new LlvmGenMetal();
@@ -874,7 +957,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
 
 static int RunAI(string bpFile)
 {
-    Console.WriteLine("B+ AI Optimizer v3.0.3L1");
+    Console.WriteLine("B+ AI Optimizer v3.0.4L BETA");
     Console.WriteLine();
 
     string modelDir = "ai_models";
@@ -943,7 +1026,7 @@ static int RunAI(string bpFile)
 
     using (var writer = new StreamWriter(outputBp))
     {
-        writer.WriteLine("// B+ v3.0.3L1 Metal — AI-optimized + hidden buffer + perf counters");
+        writer.WriteLine("// B+ v3.0.4L BETA Metal — AI-optimized + NUMA + µarch + ILP + AutoTune");
         writer.WriteLine($"// Predicted IPC: {predictedIPC:F3}");
         writer.WriteLine();
         writer.WriteLine("@metal {");

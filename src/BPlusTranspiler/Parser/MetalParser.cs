@@ -242,6 +242,26 @@ public class MetalParser
             case "metal":
                 config.Enabled = true;
                 break;
+            case "numa":
+                if (annot.Args.TryGetValue("_val", out var numaVal))
+                {
+                    if (int.TryParse(numaVal, out var numaNode))
+                        config.NumaNode = numaNode;
+                    else
+                        config.NumaPolicy = numaVal;
+                }
+                break;
+            case "store_forward_safe":
+                config.StoreForwardSafe = true;
+                break;
+            case "muarch":
+                if (annot.Args.TryGetValue("_val", out var muVal))
+                    config.MuarchProfile = muVal;
+                break;
+            case "ilp_max":
+                if (annot.Args.TryGetValue("_val", out var ilpVal) && int.TryParse(ilpVal, out var ilpI))
+                    config.IlpMax = ilpI;
+                break;
         }
     }
 
