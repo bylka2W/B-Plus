@@ -404,28 +404,35 @@ B+ v1.0/
 │   │   ├── CodePacker.cs        — µop bundles, splicing
 │   │   ├── DataPacker.cs        — fields + false-sharing padding
 │   │   ├── RegisterAllocator.cs — GPR/ZMM/Mask allocation
-│   │   ├── RegisterPacker.cs    — AI variable→register packer
+│   │   ├── RegisterPacker.cs    — AI variable→register packer (dep graph)
 │   │   ├── PrefetchInjector.cs  — latency-aware prefetch
 │   │   ├── HiddenBufferOptimizer — LSD/LFB/TLB/BTB/RSB
 │   │   ├── MicroArchProfile.cs  — Agner Fog µarch tables
 │   │   ├── IlpAnalyzer.cs       — ILP dependency chains
 │   │   ├── StoreForwardGuard.cs — store-forwarding hazards
-│   │   ├── AutoTuner.cs         — AI + real perf counters
+│   │   ├── AutoTuner.cs         — AI + real perf counters → retrain
+│   │   ├── PgoPipeline.cs       — 4-phase PGO: instrument→run→merge→recompile
+│   │   ├── BoltOptimizer.cs     — BOLT post-link: perf→fdata→reorder hot paths
+│   │   ├── L3HeapAllocator.cs   — L3-cache heap: mmap+MAP_HUGETLB+NUMA
 │   │   └── RooflineAnalyzer.cs  — Roofline model
-│   ├── AI/
-│   │   ├── DataCollector.cs     — samples + per-state misses
-│   │   ├── NeuralPredictor.cs   — 21+→16→1 NN
+│   ├── AI/                      — Нейросетевой конвейер оптимизации
+│   │   ├── DataCollector.cs     — 2000 samples, real perf + synthetic
+│   │   ├── NeuralPredictor.cs   — 21→16→1 NN (IPC prediction)
 │   │   ├── LayoutOptimizer.cs   — 10k config search
 │   │   └── UnpackPredictor.cs   — 12→8→4 unpack NN
 │   ├── Generators/
 │   │   ├── LlvmGenMetal.cs      — LLVM IR + intrinsics
 │   │   ├── AsmGenerator.cs      — x86-64 asm
 │   │   └── LinkerScriptGenerator — .ld sections
-│   └── Program.cs               — CLI entry point
+│   ├── Runtime/
+│   │   └── MetalRuntime.cs      — perf_event_open, mlock, mbind, mmap, L3HeapRuntime
+│   ├── Program.cs               — CLI entry point (50+ флагов)
+│   └── BPlusValidator.cs        — 121 check центральный валидатор (--check)
+├── BPlusTranspiler.Tests/       — 29 тестов, 100% pass
 ├── examples/
 │   ├── traffic_light.bp         — minimal example
 │   └── traffic_light_metal.bp   — AI-optimized output
-└── gen_metal/                   — generated LLVM IR, asm, ld
+└── gen_metal/                   — generated LLVM IR, asm, ld, l3_heap.h
 ```
 
 ---
@@ -470,6 +477,51 @@ bpc publish --runtime win-x64 --aot
 
 ---
 
+## AI Optimizer — нейросетевой конвейер оптимизации
+
+B+ использует 3-слойную нейросеть для автоматического поиска оптимальной конфигурации Metal Stack под конкретный state machine.
+
+```
+┌──────────────┐    ┌────────────────┐    ┌────────────────┐    ┌──────────────┐
+│ DataCollector │───→│ NeuralPredictor│───→│ LayoutOptimizer│───→│  AutoTuner   │
+│ 2000 samples  │    │ 21→16→1 NN     │    │ 10k candidates │    │ perf→retrain │
+└──────────────┘    └────────────────┘    └────────────────┘    └──────────────┘
+       │                     │                      │                     │
+       │ real/synthetic IPC  │ predict IPC          │ search best config  │ measure + retrain
+       ▼                     ▼                      ▼                     ▼
+  PerfCounterReader     MetalConfig.ToFeatures()   candidate gen        20 epochs
+  (perf_event_open)     20 features capped 1.0    random search         model saved
+```
+
+### Компоненты AI-конвейера
+
+| Модуль | Файл | Что делает |
+|---|---|---|
+| **DataCollector** | `AI/DataCollector.cs` | Собирает 2000 сэмплов: real perf counters + synthetic вариации. Per-state miss rates через `AnalyzePerStateMisses()` |
+| **NeuralPredictor** | `AI/NeuralPredictor.cs` | 3-слойная NN: 21 вход (5 code features + 16 metal features) → 16 hidden → 1 выход (IPC). Обучение: 2000 эпох, L2-регуляризация, gradient clipping |
+| **LayoutOptimizer** | `AI/LayoutOptimizer.cs` | Генерирует 10k кандидатов `MetalConfig`, предсказывает IPC для каждого, возвращает лучший. Поддерживает `@tier`, `@register`, `@zmm`, `@mask`, `@fusion`, `@prefetch`, `@align`, `@packed`, `@numa`, `@muarch` |
+| **UnpackPredictor** | `AI/UnpackPredictor.cs` | 12→8→4 NN для предсказания оптимального extraction pattern при распаковке битфилдов (movzx/shr/vpermq) |
+| **AutoTuner** | `Optimizer/AutoTuner.cs` | Замкнутый цикл: AI → perf counters → retrain → repeat. Измеряет реальный IPC, обновляет веса, сохраняет `ai_models/latest.nn` |
+| **RegisterPacker** | `Optimizer/RegisterPacker.cs` | AI-упаковщик переменных в регистры. Строит dependency graph (DepEdge), детектит serialization stalls, A→B конфликты разделяет в разные регистры |
+
+### Использование
+
+```bash
+# AI-оптимизация Metal Stack
+bpc input.bp --ai
+
+# Auto-Tune с реальными perf counters
+bpc input.bp --auto-tune 5
+
+# Обучение UnpackPredictor
+bpc --train-unpack
+
+# Metal Stack с AI-упаковщиком
+bpc input.bp --metal --unpack
+```
+
+---
+
 ## Known Limitations (roadmap)
 
 | Проблема | Описание | Статус |
@@ -482,6 +534,12 @@ bpc publish --runtime win-x64 --aot
 | 121 real errors fixed | Cyclic inheritance, void type, depth limit, RTL filter, undefined base, parallel races, guard purity, memory conflicts, @quant checks, LLP intrinsics, malloc checks, atomics, BPM lock/SHA256, code injection, GPU barriers | ✅ v3.0.4L |
 | Unit tests | Первый тест-сьют — 29 тестов, 100% pass | ✅ v3.0.4L |
 | BPlusValidator | Централизованный валидатор на 121 ошибку, запускается через `bpc --check` | ✅ v3.0.4L |
+| PGO pipeline | `--pgo` — instrument→run→merge→recompile, 4 фазы | ✅ v3.0.4L |
+| BOLT post-link | `--bolt` — perf→fdata→llvm-bolt→reorder hot paths | ✅ v3.0.4L |
+| Store/Load buffer PMC | `--buffer-counters` — 6 RAW PMCs (RS stalls, store fwd, L1 load/store) | ✅ v3.0.4L |
+| L3-heap allocator | `--l3-heap` — mmap+MAP_HUGETLB+mbind bump allocator в L3 кэше | ✅ v3.0.4L |
+| AI конвейер | DataCollector + NeuralPredictor + LayoutOptimizer + AutoTuner: полный цикл синтетика→real perf→retrain | ✅ v3.0.4L |
+| AI-упаковщик регистров | RegisterPacker: dep graph, serialization stall detection, A→B conflict → separate registers | ✅ v3.0.4L |
 
 ---
 
