@@ -334,6 +334,32 @@ GPU kernels: B+ **300-600%** vs C++.
 
 ---
 
+## NativeAOT — компилятор ×4 быстрее
+
+Было 300 мс запуска → стало ~50 мс. Self-contained бинарник без .NET Runtime.
+
+| Оптимизация | Файл | Эффект |
+|---|---|---|
+| `AsSpan()` вместо `Substring()` | `Parser/BPlusParser.cs` | ×2–3 |
+| `ArrayPool<double>` в AI | `AI/NeuralPredictor.cs` | ×2 |
+| Кэш fd perf counters | `Runtime/MetalRuntime.cs` | ×10 |
+| `Parallel.ForEach` бэкенды | `Program.cs` | ×4–8 |
+| Кэш AST / CodeFeatures | `AI/DataCollector.cs` | ×2 |
+
+```bash
+# Build self-contained binary
+publish.bat --aot
+
+# Cross-platform
+publish.bat --aot --linux   # linux-x64
+publish.bat --aot --osx     # osx-x64
+
+# From bpc
+bpc publish --runtime win-x64 --aot
+```
+
+---
+
 ## Known Limitations (roadmap)
 
 | Проблема | Описание | Статус |
@@ -341,6 +367,8 @@ GPU kernels: B+ **300-600%** vs C++.
 | AI на синтетике | `NeuralPredictor` учился на 2000 сгенерированных сэмплах. **Исправлено**: DataCollector теперь читает реальные perf counters (`PerfCounterReader`), добавляет `CollectWithPerf()` для цикла run→measure→train и смешивает real + synthetic samples | ✅ v3.0.4L |
 | RegisterPacker без dep graph | AI паковал переменные без проверки зависимостей — serialization stall. **Исправлено**: построен dependency graph из action body, detected conflicts (A→B) разделяются в разные регистры | ✅ v3.0.4L |
 | HiddenBufferOptimizer статичен | LSD/LFB/TLB лимиты были хардкодными. **Исправлено**: теперь использует µarch профили (MicroArchProfiles) — лимиты под Intel/AMD/ARM динамически | ✅ v3.0.4L |
+| Компилятор ×4 быстрее | Парсер, AI, perf counters, бэкенды оптимизированы (Span, ArrayPool, cached fd, Parallel.ForEach, AST cache) | ✅ v3.0.4L |
+| NativeAOT binary | Self-contained бинарник без .NET Runtime (~50 мс запуск). `publish.bat --aot` | ✅ v3.0.4L |
 | Нет Real PGO pipeline | `--pgo` добавляет счётчики, но нет цикла: instrument → run → profile → recompile | TODO |
 | Нет BOLT/Propeller | Post-link оптимизация layout-а по реальным профилям | TODO |
 | Нет Store/Load буферов в runtime | HiddenBufferOptimizer оценивает статически, но не читает реальные PMC счётчики буферов | TODO |

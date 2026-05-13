@@ -44,6 +44,35 @@ if (args.Length > 0 && args[0] == "build")
     return BPlusBuild.Run(buildConfig, buildDryRun);
 }
 
+if (args.Length > 0 && args[0] == "publish")
+{
+    var runtime = "linux-x64";
+    var publishAot = false;
+    for (int i = 1; i < args.Length; i++)
+    {
+        if (args[i] == "--runtime" && i + 1 < args.Length) runtime = args[++i];
+        else if (args[i] == "--aot") publishAot = true;
+    }
+    Console.WriteLine($"Publishing bpc for {runtime} (AOT={publishAot})...");
+    var psi = new System.Diagnostics.ProcessStartInfo("dotnet", $"publish -c Release -r {runtime} --self-contained{(publishAot ? " -p:PublishAot=true" : "")} --no-build")
+    {
+        WorkingDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "BPlusTranspiler")),
+        UseShellExecute = false,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true
+    };
+    using var proc = System.Diagnostics.Process.Start(psi);
+    if (proc == null) { Console.Error.WriteLine("Failed to start dotnet"); return 1; }
+    Console.WriteLine(proc.StandardOutput.ReadToEnd());
+    Console.WriteLine(proc.StandardError.ReadToEnd());
+    proc.WaitForExit(300000);
+    if (proc.ExitCode == 0)
+        Console.WriteLine($"Published: release/{runtime}/bpc");
+    else
+        Console.Error.WriteLine($"Publish failed: exit {proc.ExitCode}");
+    return proc.ExitCode;
+}
+
 if (args.Length > 0 && (args[0] == "test" || args[0] == "tests"))
 {
     var testFile = "";
@@ -421,7 +450,7 @@ if (args.Contains("--train-unpack"))
     Console.WriteLine("B+ AI UnpackPredictor Trainer v3.0.4L BETA");
     Console.WriteLine();
     Console.WriteLine("Generating training data and training model...");
-    AI.UnpackPredictorTrainer.GenerateTrainingData();
+    UnpackPredictorTrainer.GenerateTrainingData();
     Console.WriteLine();
     Console.WriteLine("Done. Use: bpc <input.bp> --metal --unpack");
     return 0;
@@ -471,9 +500,13 @@ if (input == null)
     Console.Error.WriteLine("       bpc test run <file.bp>                      (run auto-generated tests)");
     Console.Error.WriteLine("       bpc health [dir] [flags]                    (project health analysis)");
     Console.Error.WriteLine("       bpc diff <a.bp> <b.bp>                      (semantic diff)");
-    Console.Error.WriteLine("       bpc build [--config bp.toml] [--dry-run]    (build from config)");
+Console.Error.WriteLine("       bpc build [--config bp.toml] [--dry-run]    (build from config)");
+    Console.Error.WriteLine("       bpc publish [--runtime linux-x64] [--aot]   (NativeAOT publish)");
+    Console.Error.WriteLine("       bpc diff <a.bp> <b.bp>                      (semantic diff)");
     Console.Error.WriteLine();
     Console.Error.WriteLine("Optimization flags (реалистичные ускорения на state machine):");
+    Console.Error.WriteLine("  --self-contained             Self-contained binary (no .NET runtime)");
+    Console.Error.WriteLine("  --aot                        NativeAOT compilation");
     Console.Error.WriteLine("  --optimize                  Таблица переходов вместо virtual   +10-30%");
     Console.Error.WriteLine("  --pool                       Пул состояний без new/delete       +20-40%");
     Console.Error.WriteLine("  --cache-friendly             Упорядоченный layout данных        +10-20%");
@@ -617,18 +650,22 @@ if (target != "all" && target != "cpp_opt" && target != "llvm" && target != "was
 
 Directory.CreateDirectory(output);
 int count = 0;
+var lockObj = new object();
 
-foreach (var gen in generators)
+Parallel.ForEach(generators, gen =>
 {
     var files = gen.GenerateFiles(program);
+    int localCount = 0;
     foreach (var (name, code) in files)
     {
         var outputFile = Path.Combine(output, name);
         File.WriteAllText(outputFile, code);
         Console.WriteLine($"  [{gen.GetLanguageName(),-10}] {outputFile}");
-        count++;
+        localCount++;
     }
-}
+    if (localCount > 0)
+        Interlocked.Add(ref count, localCount);
+});
 
 Console.WriteLine($"Done. Generated {count} file(s) to {output}");
 return 0;
@@ -689,15 +726,18 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
 
         Directory.CreateDirectory(output);
         var count = 0;
-        foreach (var gen in generators)
+        Parallel.ForEach(generators, gen =>
         {
+            int localCount = 0;
             foreach (var (name, code) in gen.GenerateFiles(program))
             {
                 var path = Path.Combine(output, name);
                 File.WriteAllText(path, code);
-                count++;
+                localCount++;
             }
-        }
+            if (localCount > 0)
+                Interlocked.Add(ref count, localCount);
+        });
 
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {Path.GetFileName(file)} → {count} file(s) regenerated");
     }
@@ -808,9 +848,9 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     if (unpack)
     {
         Console.WriteLine("[Phase 2b] AI Register Packer (unpack prediction)...");
-        var packer = new RegisterPacker();
-        packer.AnalyzeAccessPatterns(program.States);
-        var packedRegs = packer.PackRegisters(program.States);
+        var regPacker = new RegisterPacker();
+        regPacker.AnalyzeAccessPatterns(program.States);
+        var packedRegs = regPacker.PackRegisters(program.States);
         foreach (var pr in packedRegs)
         {
             Console.WriteLine($"  {pr.Register}: {pr.TotalBits} bits, {pr.Fields.Count} fields");
@@ -820,7 +860,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
         Console.WriteLine();
         Console.WriteLine("  Unpack code:");
         foreach (var pr in packedRegs)
-            Console.WriteLine(packer.GenerateUnpackCode(pr));
+            Console.WriteLine(regPacker.GenerateUnpackCode(pr));
         Console.WriteLine();
     }
 
@@ -852,9 +892,9 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     var ilpScores = IlpAnalyzer.Analyze(program, tiers);
     foreach (var ilp in ilpScores)
         if (ilp.MaxDependencyChain > 4)
-            Console.WriteLine($"  ⚠ {ilp.StateName}: chain={ilp.MaxDependencyChain} ILP={ilp.IlpScore:F2} — {ilp.Suggestion}");
+            Console.WriteLine($"  ⚠ {ilp.StateName}: chain={ilp.MaxDependencyChain} ILP={ilp.Score:F2} — {ilp.Suggestion}");
         else
-            Console.WriteLine($"  ✓ {ilp.StateName}: chain={ilp.MaxDependencyChain} ILP={ilp.IlpScore:F2}");
+            Console.WriteLine($"  ✓ {ilp.StateName}: chain={ilp.MaxDependencyChain} ILP={ilp.Score:F2}");
     Console.WriteLine();
 
     // Phase 2: LLVM IR with intrinsics

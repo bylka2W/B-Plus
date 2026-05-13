@@ -11,5 +11,12 @@ parallel = true
 cache = true
 flags = ["--pack", "--pool"]
 
+[aot]
+enabled = true
+runtimes = ["linux-x64", "win-x64", "osx-x64"]
+trim = false
+ready_to_run = true
+single_file = true
+
 [deps]
 fmt = "11.0"

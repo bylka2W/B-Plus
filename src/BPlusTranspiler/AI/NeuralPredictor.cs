@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace BPlusTranspiler.AI;
 
 public class NeuralPredictor
@@ -11,11 +13,13 @@ public class NeuralPredictor
     private double _b2;
 
     private double _learningRate = 0.001;
+    private double[] _hiddenPool;
 
     public NeuralPredictor(int inputSize, int hiddenSize = 16)
     {
         _inputSize = inputSize;
         _hiddenSize = hiddenSize;
+        _hiddenPool = ArrayPool<double>.Shared.Rent(hiddenSize);
 
         var rand = new Random(42);
 
@@ -38,7 +42,7 @@ public class NeuralPredictor
 
     public double Predict(double[] input)
     {
-        double[] hidden = new double[_hiddenSize];
+        double[] hidden = _hiddenPool;
         for (int j = 0; j < _hiddenSize; j++)
         {
             double sum = _b1[j];
@@ -158,7 +162,7 @@ public class NeuralPredictor
 
     private double[] GetHidden(double[] input)
     {
-        double[] hidden = new double[_hiddenSize];
+        double[] hidden = _hiddenPool;
         for (int j = 0; j < _hiddenSize; j++)
         {
             double sum = _b1[j];

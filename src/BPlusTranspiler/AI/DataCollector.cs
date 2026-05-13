@@ -34,6 +34,21 @@ public class PerStateMissRate
 
 public class DataCollector
 {
+    private string? _lastFile;
+    private ProgramNode? _cachedProgram;
+    private CodeFeatures? _cachedFeatures;
+
+    private ProgramNode ParseCached(string bpFile)
+    {
+        if (_cachedProgram == null || _lastFile != bpFile)
+        {
+            var src = File.ReadAllText(bpFile);
+            _cachedProgram = new BPlusParser().Parse(src);
+            _lastFile = bpFile;
+        }
+        return _cachedProgram;
+    }
+
     public List<DataPoint> Collect(string bpFile, int count = 2000)
     {
         var data = new List<DataPoint>();
@@ -150,11 +165,11 @@ public class DataCollector
 
     public CodeFeatures ExtractCodeFeatures(string bpFile)
     {
-        var src = File.ReadAllText(bpFile);
-        var parser = new BPlusParser();
-        var program = parser.Parse(src);
+        if (_cachedFeatures != null && _lastFile == bpFile)
+            return _cachedFeatures;
 
-        return new CodeFeatures
+        var program = ParseCached(bpFile);
+        _cachedFeatures = new CodeFeatures
         {
             StateCount = program.States.Count,
             TotalCodeSize = EstimateCodeSize(program),
@@ -162,14 +177,13 @@ public class DataCollector
             BranchCount = CountBranches(program),
             DataSize = EstimateDataSize(program)
         };
+        return _cachedFeatures;
     }
 
     public List<PerStateMissRate> AnalyzePerStateMisses(string bpFile)
     {
         var rates = new List<PerStateMissRate>();
-        var src = File.ReadAllText(bpFile);
-        var parser = new BPlusParser();
-        var program = parser.Parse(src);
+        var program = ParseCached(bpFile);
 
         // Use real perf counters if available
         var perf = PerfCounterReader.ReadCounters();

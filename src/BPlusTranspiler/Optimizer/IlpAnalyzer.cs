@@ -6,7 +6,7 @@ public class IlpScore
 {
     public string StateName { get; set; } = "";
     public int MaxDependencyChain { get; set; }
-    public double IlpScore { get; set; }
+    public double Score { get; set; }
     public int IndependentPaths { get; set; }
     public string? Suggestion { get; set; }
 }
@@ -57,7 +57,7 @@ public class IlpAnalyzer
             {
                 StateName = state.Name,
                 MaxDependencyChain = maxChain,
-                IlpScore = score,
+                Score = score,
                 IndependentPaths = independentPaths,
                 Suggestion = suggestion
             });
@@ -77,7 +77,7 @@ public class IlpAnalyzer
 
         foreach (var s in scores)
         {
-            lines.Add($"  {s.StateName}: chain={s.MaxDependencyChain} paths={s.IndependentPaths} ILP={s.IlpScore:F2}");
+            lines.Add($"  {s.StateName}: chain={s.MaxDependencyChain} paths={s.IndependentPaths} ILP={s.Score:F2}");
             if (s.Suggestion != null)
                 lines.Add($"    → {s.Suggestion}");
         }

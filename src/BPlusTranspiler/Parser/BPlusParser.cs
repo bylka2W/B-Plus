@@ -524,7 +524,7 @@ public partial class BPlusParser
 
     private ActionNode ParseAction()
     {
-        var prefix = _pos + 4 <= _src.Length && _src.Substring(_pos, 4) == "exit" ? "exit" : "enter";
+        var prefix = _pos + 4 <= _src.Length && _src.AsSpan(_pos, 4).SequenceEqual("exit") ? "exit" : "enter";
         _pos += prefix.Length;
         SkipWs();
         var body = ExtractBracedBlock();
@@ -1385,8 +1385,11 @@ public partial class BPlusParser
     private void Expect(string s)
     {
         SkipWs();
-        if (_pos + s.Length > _src.Length || _src[_pos..(_pos + s.Length)] != s)
-            throw Err($"Expected '{s}' at position {_pos}, got '{_src.Substring(_pos, Math.Min(10, _src.Length - _pos))}'");
+        if (_pos + s.Length > _src.Length || !_src.AsSpan(_pos, s.Length).SequenceEqual(s))
+        {
+            int len = Math.Min(10, _src.Length - _pos);
+            throw Err($"Expected '{s}' at position {_pos}, got '{(_pos + len <= _src.Length ? _src.AsSpan(_pos, len).ToString() : _src[_pos..])}'");
+        }
         _pos += s.Length;
     }
 

@@ -34,18 +34,43 @@ public static class PerfCounterReader
     private const ulong PERF_COUNT_HW_BRANCH_MISSES = 5;
     private const ulong PERF_COUNT_HW_STALLED_CYCLES_FRONTEND = 7;
 
+    private static readonly Lazy<int[]> _cachedFds = new(OpenAllCounters);
+
+    private static int[] OpenAllCounters()
+    {
+        var configs = new ulong[] {
+            PERF_COUNT_HW_CPU_CYCLES,
+            PERF_COUNT_HW_INSTRUCTIONS,
+            PERF_COUNT_HW_CACHE_MISSES,
+            PERF_COUNT_HW_BRANCH_MISSES
+        };
+        var fds = new int[configs.Length];
+        for (int i = 0; i < configs.Length; i++)
+        {
+            var attr = new PerfEventAttr
+            {
+                Type = PERF_TYPE_HARDWARE,
+                Size = (uint)Marshal.SizeOf<PerfEventAttr>(),
+                Config = configs[i]
+            };
+            fds[i] = perf_event_open(ref attr, 0, -1, -1, 0);
+        }
+        return fds;
+    }
+
     public static PerfCounters ReadCounters()
     {
         var c = new PerfCounters();
 
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) && _cachedFds.Value[0] >= 0)
         {
             try
             {
-                c.Cycles = ReadPerf(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES);
-                c.Instructions = ReadPerf(PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS);
-                c.L1DMisses = ReadPerf(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CACHE_MISSES);
-                c.BranchMispredicts = ReadPerf(PERF_TYPE_HARDWARE, PERF_COUNT_HW_BRANCH_MISSES);
+                var fds = _cachedFds.Value;
+                if (fds[0] >= 0) read(fds[0], ref c.Cycles, sizeof(long));
+                if (fds[1] >= 0) read(fds[1], ref c.Instructions, sizeof(long));
+                if (fds[2] >= 0) read(fds[2], ref c.L1DMisses, sizeof(long));
+                if (fds[3] >= 0) read(fds[3], ref c.BranchMispredicts, sizeof(long));
             }
             catch { /* fallback */ }
         }
@@ -58,19 +83,7 @@ public static class PerfCounterReader
         return c;
     }
 
-    private static long ReadPerf(uint type, ulong config)
-    {
-        var attr = new PerfEventAttr { Type = type, Size = (uint)Marshal.SizeOf<PerfEventAttr>(), Config = config };
-        int fd = perf_event_open(ref attr, 0, -1, -1, 0);
-        if (fd < 0) return 0;
-        long val = 0;
-        if (Read(fd, ref val, sizeof(long)) != sizeof(long)) { val = 0; }
-        close(fd);
-        return val;
-    }
-
     [DllImport("libc")] private static extern long read(int fd, ref long buf, int count);
-    [DllImport("libc")] private static extern int close(int fd);
 }
 
 public static class MetalRuntime
