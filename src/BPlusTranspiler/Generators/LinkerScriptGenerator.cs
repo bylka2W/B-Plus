@@ -9,7 +9,7 @@ public static class LinkerScriptGenerator
     public static string Generate(ProgramNode program, List<TierResult> tiers, List<DataSection> dataSections)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("/* B+ v3.0.0HG Metal — Linker Script */");
+        sb.AppendLine("/* B+ v3.0.2L1 Metal — Linker Script */");
         sb.AppendLine();
         sb.AppendLine("ENTRY(_start)");
         sb.AppendLine();
