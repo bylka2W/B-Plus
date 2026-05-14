@@ -2,6 +2,36 @@ using BPlusTranspiler.Ast;
 
 namespace BPlusTranspiler.Parser;
 
+// Extension: apply result builder cache reordering to enter{} blocks
+public static class MetalParserHooks
+{
+    public static void ApplyResultBuilder(ProgramNode program)
+    {
+        foreach (var state in program.States)
+            ApplyResultBuilderToState(state);
+    }
+
+    private static void ApplyResultBuilderToState(StateDefNode state)
+    {
+        for (int i = 0; i < state.Actions.Count; i++)
+        {
+            var action = state.Actions[i];
+            if (action.Type == ActionType.Enter && !string.IsNullOrWhiteSpace(action.Body))
+            {
+                var reordered = action.Body.ReorderWithResultBuilder();
+                state.Actions[i] = new ActionNode
+                {
+                    Type = ActionType.Enter,
+                    Body = reordered
+                };
+            }
+        }
+
+        foreach (var nested in state.NestedStates)
+            ApplyResultBuilderToState(nested);
+    }
+}
+
 public class MetalParser
 {
     private string _src = "";

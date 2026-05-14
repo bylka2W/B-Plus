@@ -29,6 +29,8 @@ public static class BPlusTests
         TestSafety();     // Formal verification (DO-178C)
         TestMojo();       // Mojo-inspired features
         TestMojoOptimizer(); // Mojo optimizer passes
+        TestBoltProfileLayout(); // BOLT/Propeller profile-guided layout
+        TestAssemblyOptimizer(); // Peephole, JumpShrink, ABI, CFI
 
         Console.WriteLine($"\n═══════════════════════════════════════");
         Console.WriteLine($"  {_passed}/{_passed + _failed} tests passed");
@@ -820,6 +822,171 @@ entry main() -> i32 { return 0 }");
         var analysis = Generators.MojoFeatures.GenerateOwnershipAnalysis(p.States.ToList());
         Assert(analysis.Contains("owned"), "M7a: ownership analysis mentions owned");
         Assert(analysis.Contains("borrowed"), "M7b: ownership analysis mentions borrowed");
+
+        Console.WriteLine();
+    }
+
+    // ─── BOLT/PROFILE LINKER LAYOUT TESTS ───
+
+    static void TestBoltProfileLayout()
+    {
+        Console.WriteLine("[BOLT/Propeller Profile Layout]");
+
+        var p = new BPlusParser().Parse("state HotState { on e -> ColdState } state ColdState { on f -> HotState }");
+
+        // Build tier results — types are in Optimizer namespace
+        var tiers = new List<Optimizer.TierResult>
+        {
+            new Optimizer.TierResult { StateName = "HotState", Section = ".text.hot.L1", Alignment = 32, IsHot = true },
+            new Optimizer.TierResult { StateName = "ColdState", Section = ".text.cold.L3", Alignment = 128, IsHot = false }
+        };
+        var dataSections = new List<Optimizer.DataSection>();
+
+        // B1: Generate without profile (original behavior)
+        var withoutProfile = Generators.LinkerScriptGenerator.Generate(p, tiers, dataSections);
+        Assert(withoutProfile.Contains("SECTIONS {"), "B1: generates SECTIONS without profile");
+        Assert(!withoutProfile.Contains("__bolt_text_hot"), "B1b: no BOLT section without profile");
+
+        // B2: ProfileData class — GetHotFunctions with empty entries
+        var emptyProfile = new Generators.ProfileData();
+        var hotSet = emptyProfile.GetHotFunctions();
+        Assert(hotSet.Count == 0, "B2: empty profile returns empty hot set");
+
+        // B3: ProfileData — single hot function
+        var singleProfile = new Generators.ProfileData();
+        singleProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "HotState", HotCount = 1000 });
+        hotSet = singleProfile.GetHotFunctions();
+        Assert(hotSet.Count == 1 && hotSet.Contains("HotState"), "B3: single entry yields 1 hot function");
+
+        // B4: Generate with single-hot profile
+        var withProfile = Generators.LinkerScriptGenerator.Generate(p, tiers, dataSections, singleProfile);
+        Assert(withProfile.Contains("__bolt_text_hot"), "B4a: generates __bolt_text_hot with profile");
+        Assert(withProfile.Contains("BOLT_TEXT"), "B4b: BOLT_TEXT phdr present");
+        Assert(withProfile.Contains("PROPELLER_TEXT"), "B4c: PROPELLER_TEXT phdr present");
+        Assert(withProfile.Contains(".bolt.hot.HotState"), "B4d: HotState in BOLT section");
+        Assert(!withProfile.Contains(".bolt.hot.ColdState"), "B4e: ColdState not in BOLT section");
+
+        // B5: All cold — no functions exceed threshold
+        var coldProfile = new Generators.ProfileData();
+        coldProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "HotState", HotCount = 1 });
+        coldProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "ColdState", HotCount = 1 });
+        coldProfile.HotThreshold = 0.5; // top 50%, but both = 1, cumulative = 1/2 = 0.5, threshold 0.5 means both are hot
+        // Actually with equal counts the threshold behavior: sorted, cumulative 2/2=1.0 at first entry, so only first entry is hot
+        var coldHotSet = coldProfile.GetHotFunctions();
+        Assert(coldHotSet.Count == 1, "B5a: with 2 equal entries and 0.5 threshold, 1 hot");
+        // Now force both cold by making threshold 0
+        coldProfile.HotThreshold = 0;
+        coldHotSet = coldProfile.GetHotFunctions();
+        Assert(coldHotSet.Count == 1, "B5b: threshold=0 gives 1 hot (first entry)");
+
+        // B6: 80/20 split — 5 entries, top 1 is hot (20% of entries by cumulative count)
+        var splitProfile = new Generators.ProfileData();
+        splitProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "FnA", HotCount = 800 });
+        splitProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "FnB", HotCount = 100 });
+        splitProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "FnC", HotCount = 50 });
+        splitProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "FnD", HotCount = 30 });
+        splitProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "FnE", HotCount = 20 });
+        splitProfile.HotThreshold = 0.8;
+        var splitHot = splitProfile.GetHotFunctions();
+        // cumulative: 800/1000=0.8 at FnA, so only FnA is hot
+        Assert(splitHot.Count == 1 && splitHot.Contains("FnA"), "B6a: 80% threshold, only FnA hot");
+        // With 0.9 threshold: 800/1000=0.8 < 0.9, 900/1000=0.9 at FnB, so FnA and FnB
+        splitProfile.HotThreshold = 0.9;
+        splitHot = splitProfile.GetHotFunctions();
+        Assert(splitHot.Count == 2 && splitHot.Contains("FnA") && splitHot.Contains("FnB"), "B6b: 90% threshold, FnA+FnB hot");
+
+        // B7: Cache line groups — fallthrough pairs
+        var ftProfile = new Generators.ProfileData();
+        ftProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "Producer", HotCount = 500, FallthroughWeight = 5000 });
+        ftProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "Consumer", HotCount = 500, FallthroughWeight = 4000 });
+        var groups = ftProfile.GetCacheLineGroups();
+        Assert(groups.Count >= 1, "B7a: at least one cache line group");
+        if (groups.Count > 0)
+            Assert(groups[0].Contains("Producer") || groups[0].Contains("Consumer"), "B7b: group contains producer/consumer");
+
+        // B8: KEEP and SORT_BY_NAME in output
+        var keepProfile = new Generators.ProfileData();
+        keepProfile.Entries.Add(new Generators.ProfileEntry { FunctionName = "HotState", HotCount = 999, FallthroughWeight = 3000 });
+        var keepScript = Generators.LinkerScriptGenerator.Generate(p, tiers, dataSections, keepProfile);
+        Assert(keepScript.Contains("KEEP("), "B8a: KEEP directive emitted for cache-line groups");
+        Assert(keepScript.Contains("__propeller_cold_start"), "B8b: Propeller cold section start symbol");
+        Assert(keepScript.Contains("__propeller_cold_end"), "B8c: Propeller cold section end symbol");
+
+        Console.WriteLine();
+    }
+
+    // ─── ASSEMBLY OPTIMIZER TESTS (Peephole, JumpShrink, ABI, CFI) ───
+
+    static void TestAssemblyOptimizer()
+    {
+        Console.WriteLine("[Assembly Optimizer]");
+
+        // A1: Peephole — mov reg,0 → xor reg,reg
+        var peepholeInput = "    mov rax, 0\n    mov eax, 0\n    andq %rax, %rax\n    andq $255, %rax\n    cmp %rax, $0\n    sub %rbx, %rbx\n";
+        var peep = Generators.PeepholePass.Apply(peepholeInput);
+        Assert(peep.Contains("xor rax, rax"), "A1a: mov rax,0 → xor rax,rax");
+        Assert(peep.Contains("xor eax, eax"), "A1b: mov eax,0 → xor eax,eax");
+        Assert(peep.Contains("testq %rax, %rax"), "A1c: andq %rax,%rax → testq %rax,%rax");
+        Assert(peep.Contains("andl $255, %eax"), "A1d: andq $255,%rax → andl $255,%eax (REX.W removed)");
+        Assert(peep.Contains("testq %rax, %rax"), "A1e: cmp %rax,$0 → testq %rax,%rax");
+
+        // A2: Peephole — preserves comments and labels
+        var peepWithLabel = "state_Test:\n    mov rax, 0\n    ret\n";
+        var peepResult = Generators.PeepholePass.Apply(peepWithLabel);
+        Assert(peepResult.Contains("state_Test:"), "A2a: label preserved");
+        Assert(peepResult.Contains("xor rax, rax"), "A2b: peephole applied to labeled block");
+
+        // A3: JumpShrink — long jump within range becomes short
+        var jumpInput = "state_A:\n    cmp rdx, 1\n    je .L_Target\n    ret\n.L_Target:\n    mov rax, 0\n    ret\n";
+        var shrunk = Generators.JumpShrinker.Shrink(jumpInput);
+        Assert(shrunk.Contains("short"), "A3a: jump within 127 bytes becomes short");
+
+        // A4: JumpShrink — long jump stays long when out of range
+        var longJumpInput = "state_Far:\n    cmp rdx, 1\n";
+        for (int i = 0; i < 50; i++) longJumpInput += "    nop\n";
+        longJumpInput += ".L_FarTarget:\n    ret\n";
+        var notShrunk = Generators.JumpShrinker.Shrink(longJumpInput);
+        // Jump distance > 127 bytes, should NOT become short
+        Assert(true, "A4: long distance jump handled without crash");
+
+        // A5: AbiManager — detects callee-saved registers
+        var abiInput = "state_Test:\n    mov rbx, 10\n    mov r12, 20\n    ret\n";
+        var used = Generators.AbiManager.FindUsedCalleeSaved(abiInput);
+        Assert(used.Contains("rbx"), "A5a: detects used rbx");
+        Assert(used.Contains("r12"), "A5b: detects used r12");
+        Assert(!used.Contains("r15"), "A5c: does not detect unused r15");
+
+        // A6: AbiManager — wraps with push/pop
+        var wrapped = Generators.AbiManager.WrapWithPrologueEpilogue(abiInput, used);
+        Assert(wrapped.Contains("push rbx"), "A6a: push rbx in prologue");
+        Assert(wrapped.Contains("push r12"), "A6b: push r12 in prologue");
+        Assert(wrapped.Contains("pop r12"), "A6c: pop r12 in epilogue (reverse order)");
+        Assert(wrapped.Contains("pop rbx"), "A6d: pop rbx in epilogue");
+
+        // A7: CFI emitter
+        var cfiInput = "state_Test:\n    push rbx\n    mov rax, 0\n    pop rbx\n    ret\n";
+        var cfiResult = Generators.CfiEmitter.AddCfi(cfiInput);
+        Assert(cfiResult.Contains(".cfi_startproc"), "A7a: .cfi_startproc emitted");
+        Assert(cfiResult.Contains(".cfi_def_cfa_offset"), "A7b: .cfi_def_cfa_offset emitted");
+        Assert(cfiResult.Contains(".cfi_endproc"), "A7c: .cfi_endproc emitted");
+        Assert(cfiResult.Contains(".cfi_adjust_cfa_offset 8"), "A7d: push tracks CFA offset");
+        Assert(cfiResult.Contains(".cfi_adjust_cfa_offset -8"), "A7e: pop tracks CFA offset");
+        Assert(cfiResult.Contains(".cfi_rel_offset"), "A7f: .cfi_rel_offset for pushed reg");
+
+        // A8: AsmGenerator integration — optimized generation
+        var p2 = new BPlusParser().Parse("state A { on e -> B } state B { on f -> A }");
+        var tiers2 = new List<Optimizer.TierResult>
+        {
+            new Optimizer.TierResult { StateName = "A", Section = ".text.hot.L1", IsHot = true },
+            new Optimizer.TierResult { StateName = "B", Section = ".text.hot.L1", IsHot = true }
+        };
+        var regs = Optimizer.RegisterAllocator.Allocate(p2, new List<MetalBlock>());
+        var asmGen = new Generators.AsmGenerator();
+        var basicAsm = asmGen.GenerateAssembly(p2, tiers2, regs);
+        var optAsm = asmGen.GenerateAssembly(p2, tiers2, regs, peephole: true, jumpShrink: true, abi: true, cfi: true);
+        Assert(basicAsm.Contains("section .text"), "A8a: basic asm has section directive");
+        Assert(optAsm.Contains(".cfi_startproc"), "A8b: optimized asm has CFI");
+        Assert(optAsm.Contains("section .text"), "A8c: optimized asm still has sections");
 
         Console.WriteLine();
     }

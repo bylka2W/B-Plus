@@ -2,7 +2,18 @@
 
 B+ — язык описания конечных автоматов (state machine) с транспиляцией в **Python, C#, C++, C, LLVM IR, HLSL (DXIL), GLSL (SPIR-V)**. Плагины для **Unity, Unreal Engine, Godot, Web (TypeScript), Unigine**. Никакого рантайма.
 
-**v3.0.4L BETA**: Mojo-inspired optimizer (InlineHotStates, OwnershipPass, MoveOnLastUse, Pre/Post elaboration, Dual-path compilation), Adaptive Runtime (`--adaptive` — CPUID + dispatch table at startup), Pro Debugger v3.0 (`bpc debug` — register tracking + variable watch), Extended Math (`--math` — AVX-512 sin/cos/tan/exp/log + mat4x4 + quaternion), Formal Verification (`--verify` — DO-178C complete report), AI 1M-sample training (`--train-model`), NUMA placement (`@numa`), µarch profiles (Agner Fog tables for Intel/AMD/ARM), Auto-Tune (hardware perf counters → AI retrain). **159 unit tests, 100% pass.**
+**v3.0.4L BETA**: Mojo-inspired optimizer (InlineHotStates, OwnershipPass, MoveOnLastUse, Pre/Post elaboration, Dual-path compilation), Adaptive Runtime (`--adaptive` — CPUID + dispatch table at startup), Pro Debugger v3.0 (`bpc debug` — register tracking + variable watch), Extended Math (`--math` — AVX-512 sin/cos/tan/exp/log + mat4x4 + quaternion), Formal Verification (`--verify` — DO-178C complete report), AI 1M-sample training (`--train-model`), NUMA placement (`@numa`), µarch profiles (Agner Fog tables for Intel/AMD/ARM), Auto-Tune (hardware perf counters → AI retrain).
+
+**New in this release:**
+- **Swift @resultBuilder** — cache-aware reordering of `enter{}` blocks via `--result-builder`. Loads move before stores where independent; allocs bubble to top.
+- **MLIR Dialect** — pure C# intermediate representation (`BplusDialectModule`) between AST and codegen. Supports canonicalization, CSE, DCE passes. Round-trip `ProgramNode → Dialect → ProgramNode` validated.
+- **Peephole (GAS -O2)** — `--peephole`: `mov reg,0`→`xor`, `andq %r,%r`→`testq`, `andq $imm31`→`andl` (removes REX.W).
+- **Multipass Jump Shrink (FASM)** — `--jump-shrink`: rel32→rel8 when target in ±127 bytes. Iterates until stable.
+- **ABI Manager (PeachPy)** — `--abi-manager`: automatic push/pop of callee-saved regs (rbx, rbp, r12–r15) in prologue/epilogue.
+- **CFI Directives (DWARF)** — `--cfi`: `.cfi_startproc`/`.cfi_endproc`/`.cfi_def_cfa_offset` for gdb, perf, and C++ exception compatibility.
+- **BOLT/Propeller Layout** — `LinkerScriptGenerator` accepts `ProfileData` with perf counts and fallthrough weights. Emits `__bolt_text_hot` with `KEEP()`, `__propeller_text_cold` with SORT_BY_NAME, and filters tier sections by hot/cold partition.
+
+**202 unit tests, 100% pass.**
 
 ---
 
@@ -124,6 +135,11 @@ bpc input.bp --metal --fusion         # fusion-aware
 bpc input.bp --metal --register-alloc # аллокация регистров
 bpc input.bp --metal --unpack         # AI-распаковщик
 bpc input.bp --metal --hidden-buffers # LSD/LFB/TLB/BTB/RSB
+bpc input.bp --metal --peephole       # GAS -O2 peephole (mov→xor, and→test)
+bpc input.bp --metal --jump-shrink    # FASM multipass jump shrink
+bpc input.bp --metal --abi-manager    # PeachPy ABI (push/pop callee-saved)
+bpc input.bp --metal --cfi            # DWARF CFI directives
+bpc input.bp --metal --result-builder # cache-aware enter{} reordering
 
 # === AI Optimizer ===
 bpc input.bp --ai                     # AI-оптимизация metal
@@ -142,6 +158,18 @@ bpc input.bp --buffer-counters        # Store/Load buffer PMC analysis
 bpc input.bp --pgo                    # Full PGO pipeline: instrument→run→merge→recompile   +15-25%
 bpc input.bp --pgo --pgo-use file      # Use existing profile
 bpc input.bp --bolt [--binary path]   # BOLT post-link: reorder code by hot paths        +10-20%
+
+# === Assembly Optimizers (new) ===
+bpc input.bp --peephole                # GAS -O2: mov→xor, and→test, REX.W removal   -5-10% code size
+bpc input.bp --jump-shrink             # FASM multipass: rel32→rel8 short jumps        -15-25% hot path
+bpc input.bp --abi-manager             # PeachPy-style: auto push/pop callee-saved regs
+bpc input.bp --cfi                     # DWARF .cfi_startproc/.cfi_endproc for gdb/perf
+
+# === Result Builder (Swift-style) ===
+bpc input.bp --result-builder          # cache-aware reordering of enter{} blocks
+
+# === MLIR Dialect ===
+bpc input.bp --mlir                    # emit MLIR-like IR as intermediate step
 
 # === PGO / Optimization ===
 bpc input.bp --optimize               # таблица переходов
@@ -429,7 +457,10 @@ B+ v1.0/
 │   ├── Generators/
 │   │   ├── LlvmGenMetal.cs      — LLVM IR + intrinsics
 │   │   ├── AsmGenerator.cs      — x86-64 asm
-│   │   └── LinkerScriptGenerator — .ld sections
+│   │   ├── AssemblyOptimizer.cs — Peephole, JumpShrink, ABI, CFI passes
+│   │   └── LinkerScriptGenerator — .ld sections (BOLT/Propeller-aware)
+│   ├── MlirDialect/
+│   │   └── BplusDialect.cs      — MLIR-like IR: state/transition/enter/exit ops
 │   ├── Runtime/
 │   │   └── MetalRuntime.cs      — perf_event_open, mlock, mbind, mmap, L3HeapRuntime
 │   ├── Program.cs               — CLI entry point (50+ флагов)
@@ -578,7 +609,7 @@ state Processor {
 | Компилятор ×4 быстрее | Парсер, AI, perf counters, бэкенды оптимизированы (Span, ArrayPool, cached fd, Parallel.ForEach, AST cache) | ✅ v3.0.4L |
 | NativeAOT binary | Self-contained бинарник без .NET Runtime (~50 мс запуск). `publish.bat --aot` | ✅ v3.0.4L |
 | 121 real errors fixed | Cyclic inheritance, void type, depth limit, RTL filter, undefined base, parallel races, guard purity, memory conflicts, @quant checks, LLP intrinsics, malloc checks, atomics, BPM lock/SHA256, code injection, GPU barriers | ✅ v3.0.4L |
-| Unit tests | 159 тестов (65 stress + 28 new features + 12 Mojo + 12 optimizer + 42 core), 100% pass | ✅ v3.0.4L |
+| Unit tests | 202 теста (65 stress + 28 new features + 12 Mojo + 12 optimizer + 18 BOLT + 25 assembly + 42 core), 100% pass | ✅ v3.0.4L |
 | BPlusValidator | Централизованный валидатор на 121 ошибку, запускается через `bpc --check` | ✅ v3.0.4L |
 | PGO pipeline | `--pgo` — instrument→run→merge→recompile, 4 фазы | ✅ v3.0.4L |
 | BOLT post-link | `--bolt` — perf→fdata→llvm-bolt→reorder hot paths | ✅ v3.0.4L |

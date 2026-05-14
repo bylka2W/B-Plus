@@ -82,8 +82,18 @@ public class OptimizationFlags
     // Streaming mode (#parser / --stream)
     public bool Stream { get; set; }
 
+    // Result builder: cache-aware reordering of enter{} blocks
+    public bool ResultBuilder { get; set; }
+
+    // Assembly optimization passes (GAS -O2, FASM multipass, PeachPy ABI, DWARF CFI)
+    public bool Peephole { get; set; }
+    public bool JumpShrink { get; set; }
+    public bool AbiManager { get; set; }
+    public bool Cfi { get; set; }
+
     public bool HasAny => Turbo || TurboEco || TurboEmbed || DebugOpt || ProfileGen || ProfileUse
-        || Auto || Optimize || InlineStates || ConstFold || DeadElim || Stream
+        || Auto || Optimize || InlineStates || ConstFold || DeadElim || Stream || ResultBuilder
+        || Peephole || JumpShrink || AbiManager || Cfi
         || Vectorize != VectorizeMode.None || CacheFriendly || Prefetch != PrefetchMode.None
         || AlignBytes > 0 || HugePages || ZeroCopy || NoAlloc
         || Branchless || LikelyHints || UnlikelyHints || FlattenSwitch
@@ -280,6 +290,26 @@ public class OptimizationFlags
 
                 case "--stream":
                     flags.Stream = true;
+                    break;
+
+                case "--result-builder":
+                    flags.ResultBuilder = true;
+                    break;
+
+                case "--peephole":
+                    flags.Peephole = true;
+                    break;
+
+                case "--jump-shrink":
+                    flags.JumpShrink = true;
+                    break;
+
+                case "--abi-manager":
+                    flags.AbiManager = true;
+                    break;
+
+                case "--cfi":
+                    flags.Cfi = true;
                     break;
 
                 case "--check":

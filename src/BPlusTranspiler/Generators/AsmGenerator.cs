@@ -8,6 +8,12 @@ public class AsmGenerator
 {
     public string GenerateAssembly(ProgramNode program, List<TierResult> tiers, List<RegisterAssignment> regs)
     {
+        return GenerateAssembly(program, tiers, regs, peephole: false, jumpShrink: false, abi: false, cfi: false);
+    }
+
+    public string GenerateAssembly(ProgramNode program, List<TierResult> tiers, List<RegisterAssignment> regs,
+        bool peephole, bool jumpShrink, bool abi, bool cfi)
+    {
         var sb = new StringBuilder();
         sb.AppendLine("; B+ v3.0.4L BETA Metal — x86-64 assembly");
         sb.AppendLine("section .text");
@@ -18,7 +24,25 @@ public class AsmGenerator
             EmitState(sb, state, tiers, regs);
         }
 
-        return sb.ToString();
+        var asm = sb.ToString();
+
+        // Apply optional optimization passes in order
+        if (peephole)
+            asm = PeepholePass.Apply(asm);
+
+        if (jumpShrink)
+            asm = JumpShrinker.Shrink(asm);
+
+        if (abi)
+        {
+            var used = AbiManager.FindUsedCalleeSaved(asm);
+            asm = AbiManager.WrapWithPrologueEpilogue(asm, used);
+        }
+
+        if (cfi)
+            asm = CfiEmitter.AddCfi(asm);
+
+        return asm;
     }
 
     private void EmitState(StringBuilder sb, StateDefNode state, List<TierResult> tiers, List<RegisterAssignment> regs)
