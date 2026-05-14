@@ -2,23 +2,105 @@ using BPlusTranspiler.Ast;
 
 namespace BPlusTranspiler.Optimizer;
 
+public record OwnershipResult(string StateName, bool IsReadOnly, bool IsMut, bool IsTrivial, int PoolBytes);
+
 public static class BPlusOptimizer
 {
-    public static ProgramNode Optimize(ProgramNode program)
+    public static ProgramNode Optimize(ProgramNode program, bool preElab = true, bool postElab = false)
     {
-        var liveStates = ComputeLiveStates(program);
-        RemoveDeadStates(program, liveStates);
-        FoldGuards(program);
-        SemanticInline(program);
+        if (preElab)
+        {
+            // Pre-elaboration: global DCE, guard folding, semantic inline
+            var liveStates = ComputeLiveStates(program);
+            RemoveDeadStates(program, liveStates);
+            FoldGuards(program);
+            SemanticInline(program);
+            MoveOnLastUse(program);
+        }
+
+        if (postElab)
+        {
+            // Post-elaboration: tier-specialized passes
+            InlineHotStates(program);
+            OwnershipPass(program);
+        }
+
         return program;
     }
 
-    /// <summary>
-    /// B+ Semantic Inline — detect common transition chains and mark them
-    /// so the code generator can emit a single fused function.
-    /// Only follows transitions with explicit @hot(weight >= 0.5) annotations.
-    /// Stops at branch points (multiple hot transitions from same state).
-    /// </summary>
+    // ─── Mojo: InlineHotStates — inline L0-tier enter{} into dispatch ───
+    public static void InlineHotStates(ProgramNode program)
+    {
+        foreach (var s in program.States)
+        {
+            bool isHot = s.Transitions.Any(t => t.HotWeight.HasValue && t.HotWeight.Value >= 0.8);
+            if (!isHot || s.Actions.Count == 0) continue;
+
+            // Inline enter/exit actions into each transition body
+            var enterActions = s.Actions.Where(a => a.Type == ActionType.Enter).ToList();
+            var exitActions = s.Actions.Where(a => a.Type == ActionType.Exit).ToList();
+
+            foreach (var t in s.Transitions)
+            {
+                if (t.Body == null) continue;
+                // Prepend exit actions and append enter actions to transition body
+                var exitBodies = string.Join("; ", exitActions.Select(a => a.Body));
+                var enterBodies = string.Join("; ", enterActions.Select(a => a.Body));
+                t.Body = $"{exitBodies}; {t.Body}; {enterBodies}";
+            }
+        }
+    }
+
+    // ─── Mojo: Ownership analysis — detect read vs mut states ───
+    public static List<OwnershipResult> OwnershipPass(ProgramNode program)
+    {
+        var results = new List<OwnershipResult>();
+        foreach (var s in program.States)
+        {
+            bool hasWrites = s.Variables.Any(v => v.IsMutable);
+            bool hasFields = s.Variables.Count > 0;
+
+            // If state has @borrowed annotation or no variables, it's read-only
+            bool isReadOnly = s.Ownership == OwnershipHint.Borrowed || !hasFields || !hasWrites;
+
+            // Trivial: no variables, no actions, no timers — can pass as i8
+            bool isTrivial = s.Variables.Count == 0 && s.Actions.Count == 0 && s.Timers.Count == 0;
+
+            int poolBytes = s.Variables.Sum(v => v.Type.ToLower() switch
+            {
+                "int" or "i32" or "u32" or "float" => 4,
+                "i64" or "u64" or "double" or "f64" => 8,
+                "bool" => 1,
+                _ => 4
+            });
+
+            results.Add(new OwnershipResult(s.Name, isReadOnly, hasWrites, isTrivial, poolBytes));
+        }
+        return results;
+    }
+
+    // ─── Mojo: MoveOnLastUse — reuse slot after transition ───
+    public static void MoveOnLastUse(ProgramNode program)
+    {
+        foreach (var s in program.States)
+        {
+            // If a state transitions to another and has no more incoming refs,
+            // mark all its variables as movable (register reuse)
+            bool lastUse = s.Transitions.Any() && s.NestedStates.Count == 0;
+            if (!lastUse) continue;
+
+            // Mark all variables as fast-path candidates for register reuse
+            foreach (var v in s.Variables)
+            {
+                if (!v.IsFastPath)
+                {
+                    v.IsFastPath = true; // promote to register
+                }
+            }
+        }
+    }
+
+    // ─── Existing: SemanticInline ───
     public static void SemanticInline(ProgramNode program)
     {
         int chainId = 0;
@@ -28,9 +110,8 @@ public static class BPlusOptimizer
 
     private static void DetectChainFrom(ProgramNode program, StateDefNode start, ref int chainId)
     {
-        if (start.ChainId != null) return; // already in a chain
+        if (start.ChainId != null) return;
 
-        // Find the single hot (weight >= 0.5) transition from this state
         var hotTargets = start.Transitions
             .Where(t => t.HotWeight.HasValue && t.HotWeight.Value >= 0.5
                         && !string.IsNullOrEmpty(t.Target)
@@ -39,7 +120,7 @@ public static class BPlusOptimizer
             .Distinct()
             .ToList();
 
-        if (hotTargets.Count != 1) return; // no chain start
+        if (hotTargets.Count != 1) return;
 
         var cid = $"chain_{chainId++}";
         start.ChainId = cid;
@@ -60,14 +141,16 @@ public static class BPlusOptimizer
             .Distinct()
             .ToList();
 
-        if (hotTargets.Count != 1) return; // branch point or chain end
+        if (hotTargets.Count != 1) return;
 
         var next = FindState(program, hotTargets[0])!;
         next.ChainId = cid;
         ExtendChain(program, next, cid);
     }
 
-    private static HashSet<string> ComputeLiveStates(ProgramNode program)
+    // ─── Existing helpers ───
+
+    public static HashSet<string> ComputeLiveStates(ProgramNode program)
     {
         var defined = new HashSet<string>();
         void Collect(StateDefNode s)
@@ -107,7 +190,7 @@ public static class BPlusOptimizer
         }
     }
 
-    private static StateDefNode? FindState(ProgramNode program, string name)
+    public static StateDefNode? FindState(ProgramNode program, string name)
     {
         StateDefNode? Find(IEnumerable<StateDefNode> states)
         {

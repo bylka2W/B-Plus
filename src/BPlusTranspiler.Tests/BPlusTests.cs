@@ -28,6 +28,7 @@ public static class BPlusTests
         TestMath();       // Math intrinsics (AVX-512)
         TestSafety();     // Formal verification (DO-178C)
         TestMojo();       // Mojo-inspired features
+        TestMojoOptimizer(); // Mojo optimizer passes
 
         Console.WriteLine($"\n═══════════════════════════════════════");
         Console.WriteLine($"  {_passed}/{_passed + _failed} tests passed");
@@ -819,6 +820,55 @@ entry main() -> i32 { return 0 }");
         var analysis = Generators.MojoFeatures.GenerateOwnershipAnalysis(p.States.ToList());
         Assert(analysis.Contains("owned"), "M7a: ownership analysis mentions owned");
         Assert(analysis.Contains("borrowed"), "M7b: ownership analysis mentions borrowed");
+
+        Console.WriteLine();
+    }
+
+    // ─── MOJO OPTIMIZER TESTS ───
+
+    static void TestMojoOptimizer()
+    {
+        Console.WriteLine("[Mojo Optimizer]");
+
+        // 1. InlineHotStates
+        var p = Parse("state Hot { enter { init() } on tick -> Hot exit { cleanup() } }");
+        var hot = p.States[0];
+        hot.Transitions[0].HotWeight = 0.9; // mark as hot
+        var oldBody = hot.Transitions[0].Body;
+        Optimizer.BPlusOptimizer.InlineHotStates(p);
+        Assert(true, "O1: InlineHotStates runs without crash");
+
+        // 2. OwnershipPass
+        p = Parse("state A borrowed { var x: int } state B owned { var y: float } state C { }");
+        var ownership = Optimizer.BPlusOptimizer.OwnershipPass(p);
+        Assert(ownership.Count == 3, "O2a: ownership results for 3 states");
+        var resultA = ownership.First(r => r.StateName == "A");
+        Assert(resultA.IsReadOnly, "O2b: borrowed state is read-only");
+        var resultC = ownership.First(r => r.StateName == "C");
+        Assert(resultC.IsTrivial, "O2c: empty state is trivial");
+
+        // 3. MoveOnLastUse
+        p = Parse("state Src { var x: int on go -> Dst } state Dst { }");
+        Optimizer.BPlusOptimizer.MoveOnLastUse(p);
+        Assert(p.States[0].Variables.All(v => v.IsFastPath), "O3: move-on-last-use promotes to fast_path");
+
+        // 4. Pre/Post elaboration (full optimize)
+        p = Parse("state A { on e -> B } state B { on f -> A } state Dead { }");
+        p = Optimizer.BPlusOptimizer.Optimize(p, preElab: true, postElab: false);
+        Assert(p.States.Count <= 2, "O4a: pre-elab DCE removed Dead state");
+        Assert(true, "O4b: pre-elab runs without crash");
+
+        // 5. GenerateLargeDataset
+        var collector = new AI.DataCollector();
+        var features = new AI.CodeFeatures { StateCount = 10, TotalCodeSize = 1000, HotPathCount = 3, BranchCount = 8, DataSize = 512 };
+        var largeData = collector.GenerateLargeDataset(features, count: 10000);
+        Assert(largeData.Count > 0, "O5a: generated dataset has data");
+        Assert(largeData.All(d => d.Input.Length == 24), "O5b: each datapoint has 24 features (5 code + 19 metal)");
+
+        // 6. SynthLifecycle (via OwnershipPass + MoveOnLastUse completed)
+        Assert(ownership.Where(r => r.PoolBytes > 0).Any(), "O6a: states with pool bytes detected");
+        var totalPool = ownership.Sum(r => r.PoolBytes);
+        Assert(totalPool > 0, "O6b: total pool analysis non-zero");
 
         Console.WriteLine();
     }

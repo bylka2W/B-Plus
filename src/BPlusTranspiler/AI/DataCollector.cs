@@ -195,6 +195,35 @@ public class DataCollector
         return FilterOutliers(data);
     }
 
+    /// <summary>Generate a large synthetic dataset for training (Mojo: 1M samples).</summary>
+    public List<DataPoint> GenerateLargeDataset(CodeFeatures features, int count = 1_000_000)
+    {
+        var data = new List<DataPoint>(count);
+        var rng = new Random(42);
+        var lockObj = new object();
+
+        Parallel.For(0, count, i =>
+        {
+            var config = MetalConfig.Random();
+            config.Enabled = true;
+            double ipc = SimulateIPC(features, config, rng);
+            double[] input = Merge(features, config);
+            lock (lockObj)
+            {
+                data.Add(new DataPoint
+                {
+                    Input = input,
+                    TargetIPC = ipc / 6.0,
+                    Config = config,
+                    IsReal = false,
+                    TimestampMs = Environment.TickCount64
+                });
+            }
+        });
+
+        return FilterOutliers(data);
+    }
+
     /// <summary>
     /// Detects thermal throttling by measuring timing variance.
     /// Populates _thermalThrottleCount with severity (0 = none, 1+ = throttling).

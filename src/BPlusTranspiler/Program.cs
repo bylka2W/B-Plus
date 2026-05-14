@@ -15,6 +15,7 @@ using BPlusTranspiler.PackageManager;
 using BPlusTranspiler.TestRunner;
 using BPlusTranspiler.Runtime;
 using BPlusTranspiler.Verification;
+using BPlusTranspiler.AI;
  
 if (args.Length > 0 && args[0] == "health")
 {
@@ -588,6 +589,45 @@ if (args.Contains("--l3-heap"))
     Console.WriteLine("Done. Compile with:");
     Console.WriteLine($"  gcc -c l3_heap_stubs.s");
     Console.WriteLine($"  gcc -include l3_heap.h -o output.elf ... -lnuma");
+    return 0;
+}
+
+if (args.Contains("--train-model"))
+{
+    int samples = 1_000_000;
+    for (int i = 0; i < args.Length; i++)
+        if (args[i] == "--samples" && i + 1 < args.Length && int.TryParse(args[i + 1], out var s))
+            samples = Math.Clamp(s, 1000, 10_000_000);
+
+    Console.WriteLine("B+ AI Model Trainer — Mojo-style 1M samples");
+    Console.WriteLine($"  Samples: {samples:N0}");
+    Console.WriteLine();
+
+    var trainInput = input ?? "examples/traffic_light.bp";
+    if (!File.Exists(trainInput))
+    {
+        Console.Error.WriteLine($"Error: input file '{trainInput}' not found");
+        return 1;
+    }
+
+    var swTrain = System.Diagnostics.Stopwatch.StartNew();
+    var collector = new DataCollector();
+    var features = collector.ExtractCodeFeatures(trainInput);
+    var data = collector.GenerateLargeDataset(features, samples);
+    Console.WriteLine($"  Generated {data.Count:N0} samples in {swTrain.Elapsed.TotalSeconds:F1}s");
+
+    int inputSize = 5 + new MetalConfig().ToFeatures().Length;
+    var model = new NeuralPredictor(inputSize: inputSize, hiddenSize: 16);
+    model.Train(data, epochs: 2000);
+    swTrain.Stop();
+
+    Console.WriteLine();
+    Console.WriteLine(model.GenerateReport());
+    Console.WriteLine($"  Total training time: {swTrain.Elapsed.TotalMinutes:F1} min");
+
+    Directory.CreateDirectory("ai_models");
+    model.Save("ai_models/model_1M.nn");
+    Console.WriteLine("  Saved: ai_models/model_1M.nn");
     return 0;
 }
 
