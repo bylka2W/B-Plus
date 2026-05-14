@@ -752,31 +752,27 @@ if (args.Contains("--train-model"))
             samples = Math.Clamp(s2, 1000, 10_000_000);
     }
 
-    Console.WriteLine("B+ AI Model Trainer — Mojo-style 1M samples");
+    Console.WriteLine("╔══════════════════════════════════════════╗");
+    Console.WriteLine("║     B+ AI MODEL TRAINER v1.0             ║");
+    Console.WriteLine("╚══════════════════════════════════════════╝");
     Console.WriteLine($"  Samples: {samples:N0}");
-    Console.WriteLine();
 
-    var trainInput = input ?? "examples/traffic_light.bp";
-    if (!File.Exists(trainInput))
-    {
-        Console.Error.WriteLine($"Error: input file '{trainInput}' not found");
-        return 1;
-    }
-
-    var swTrain = System.Diagnostics.Stopwatch.StartNew();
+    var sw = System.Diagnostics.Stopwatch.StartNew();
     var collector = new DataCollector();
-    var features = collector.ExtractCodeFeatures(trainInput);
+
+    var features = File.Exists(input)
+        ? collector.ExtractCodeFeatures(input)
+        : new CodeFeatures { StateCount = 10, TotalCodeSize = 1000, HotPathCount = 3, BranchCount = 8, DataSize = 512 };
+
     var data = collector.GenerateLargeDataset(features, samples);
-    Console.WriteLine($"  Generated {data.Count:N0} samples in {swTrain.Elapsed.TotalSeconds:F1}s");
+    Console.WriteLine($"  Generated {data.Count:N0} samples in {sw.Elapsed.TotalSeconds:F1}s");
 
-    int inputSize = 5 + new MetalConfig().ToFeatures().Length;
-    var model = new NeuralPredictor(inputSize: inputSize, hiddenSize: 16);
+    var model = new NeuralPredictor(inputSize: 24, hiddenSize: 16);
     model.Train(data, epochs: 2000);
-    swTrain.Stop();
+    sw.Stop();
 
-    Console.WriteLine();
     Console.WriteLine(model.GenerateReport());
-    Console.WriteLine($"  Total training time: {swTrain.Elapsed.TotalMinutes:F1} min");
+    Console.WriteLine($"  Total training time: {sw.Elapsed.TotalMinutes:F1} min");
 
     Directory.CreateDirectory("ai_models");
     model.Save("ai_models/model_1M.nn");
