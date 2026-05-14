@@ -367,7 +367,10 @@ for (int i = 0; i < args.Length; i++)
             i++;
     }
     else if (!args[i].StartsWith("-"))
-        input = args[i];
+    {
+        if (input == null && !long.TryParse(args[i], out _))
+            input = args[i];
+    }
 }
 
 if (args.Contains("--ai"))
