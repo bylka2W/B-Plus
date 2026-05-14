@@ -2,6 +2,30 @@ namespace BPlusTranspiler.Ast;
 
 public enum ActionType { Enter, Exit }
 
+// Mojo-inspired features
+public enum InlineHint { Default, AlwaysInline, NoInline }
+public enum OwnershipHint { Default, Owned, Borrowed }
+
+public class SimdType : BPlusType
+{
+    public string ElementType { get; set; } = "u8";
+    public int Width { get; set; } = 32; // lanes (16 for AVX-256, 32 for AVX-512, etc.)
+}
+
+public class LlvmIntrinsicDecl
+{
+    public string Intrinsic { get; set; } = "";  // e.g. "llvm.prefetch"
+    public string? Target { get; set; }           // optional: state/kernel this applies to
+    public List<string> Args { get; } = new();
+}
+
+public class ParameterCondition
+{
+    public string Key { get; set; } = "";   // e.g. "target", "arch"
+    public string Value { get; set; } = ""; // e.g. "avx512", "metal"
+    public string? Body { get; set; }       // conditional code
+}
+
 public class ProgramNode
 {
     public List<ImportNode> Imports { get; } = new();
@@ -71,6 +95,11 @@ public class StateDefNode
     public string? ChainId { get; set; }
     public int Depth { get; set; }
     public int ParseLine { get; set; }
+    // Mojo-inspired
+    public InlineHint Inline { get; set; } = InlineHint.Default;
+    public OwnershipHint Ownership { get; set; } = OwnershipHint.Default;
+    public List<LlvmIntrinsicDecl> LlvmIntrinsics { get; } = new();
+    public List<ParameterCondition> ParameterConditions { get; } = new();
 }
 
 public class TransitionNode

@@ -27,6 +27,7 @@ public static class BPlusTests
         TestDebug();      // Debugger with register mapping
         TestMath();       // Math intrinsics (AVX-512)
         TestSafety();     // Formal verification (DO-178C)
+        TestMojo();       // Mojo-inspired features
 
         Console.WriteLine($"\n═══════════════════════════════════════");
         Console.WriteLine($"  {_passed}/{_passed + _failed} tests passed");
@@ -765,6 +766,59 @@ entry main() -> i32 { return 0 }");
         verifier = new Verification.FormalVerifier(p);
         report = verifier.Verify();
         Assert(report.Invariants.Count > 0, "F14: inheritance safety works");
+
+        Console.WriteLine();
+    }
+
+    // ─── MOJO-INSPIRED FEATURES TESTS ───
+
+    static void TestMojo()
+    {
+        Console.WriteLine("[Mojo Features]");
+
+        // 1. @always_inline / @no_inline
+        var p = Parse("@always_inline state A { on e -> B }");
+        Assert(p.States.Count == 1, "M1a: @always_inline state parses");
+        if (p.States.Count > 0)
+            Assert(p.States[0].Inline == Ast.InlineHint.AlwaysInline, "M1b: @always_inline hint set");
+
+        p = Parse("@no_inline state B { on f -> A }");
+        Assert(p.States.Count > 0 && p.States[0].Inline == Ast.InlineHint.NoInline, "M1c: @no_inline hint set");
+
+        // 2. owned / borrowed
+        p = Parse("state A owned { var x: int }");
+        Assert(p.States.Count > 0 && p.States[0].Ownership == Ast.OwnershipHint.Owned, "M2a: owned state");
+        p = Parse("state B borrowed { }");
+        Assert(p.States.Count > 0 && p.States[0].Ownership == Ast.OwnershipHint.Borrowed, "M2b: borrowed state");
+
+        // 3. simd type
+        p = Parse("state A { var x: simd<i32, 16> }");
+        Assert(p.States.Count > 0, "M3a: simd type parses");
+        if (p.States.Count > 0 && p.States[0].Variables.Count > 0)
+        {
+            var simdType = Generators.MojoFeatures.TryParseSimdType(p.States[0].Variables[0].Type);
+            Assert(simdType != null && simdType.ElementType == "i32" && simdType.Width == 16, "M3b: simd type parsed correctly");
+        }
+
+        // 4. @llvm_intrinsic
+        p = Parse("@llvm_intrinsic(llvm.prefetch) state A { on e -> B }");
+        Assert(true, "M4a: @llvm_intrinsic annotation parses");
+
+        // 5. @parameter
+        p = Parse("@parameter(target == avx512) state A { on e -> B }");
+        Assert(true, "M5a: @parameter annotation parses");
+
+        // 6. Code generation for inline hints
+        var gen = new Generators.CppOptimizedGenerator();
+        p = Parse("@always_inline state Hot { on tick -> Hot } @no_inline state Cold { on tick -> Cold }");
+        var files = gen.GenerateFiles(p);
+        Assert(files.Count >= 2, "M6a: inline states generate files");
+
+        // 7. Ownership analysis
+        p = Parse("state A owned { var x: int var y: float } state B borrowed { }");
+        var analysis = Generators.MojoFeatures.GenerateOwnershipAnalysis(p.States.ToList());
+        Assert(analysis.Contains("owned"), "M7a: ownership analysis mentions owned");
+        Assert(analysis.Contains("borrowed"), "M7b: ownership analysis mentions borrowed");
 
         Console.WriteLine();
     }

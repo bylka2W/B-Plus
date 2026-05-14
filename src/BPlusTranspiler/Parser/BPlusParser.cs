@@ -62,8 +62,28 @@ public partial class BPlusParser
                 else if (Peek("state ") || Peek("base "))
                 {
                     var state = ParseStateDef();
+                    // Mojo-inspired annotations
                     if (annotations.Any(a => a.Name == "stream"))
                         state.IsStream = true;
+                    if (annotations.Any(a => a.Name == "always_inline"))
+                        state.Inline = InlineHint.AlwaysInline;
+                    if (annotations.Any(a => a.Name == "no_inline"))
+                        state.Inline = InlineHint.NoInline;
+                    foreach (var a in annotations)
+                    {
+                        if (a.Name.StartsWith("parameter"))
+                            state.ParameterConditions.Add(new ParameterCondition
+                            {
+                                Key = a.Args.GetValueOrDefault("_val", "target"),
+                                Value = a.Args.GetValueOrDefault("_val", "")
+                            });
+                        if (a.Name.StartsWith("llvm_intrinsic"))
+                            state.LlvmIntrinsics.Add(new LlvmIntrinsicDecl
+                            {
+                                Intrinsic = a.Args.GetValueOrDefault("_val", ""),
+                                Target = state.Name
+                            });
+                    }
                     program.States.Add(state);
                 }
                 else
@@ -194,6 +214,19 @@ public partial class BPlusParser
         Expect("state ");
         state.Name = ParseWord();
 
+        // Mojo: owned / borrowed after state name
+        SkipWs();
+        if (Peek("owned "))
+        {
+            Expect("owned");
+            state.Ownership = OwnershipHint.Owned;
+        }
+        else if (Peek("borrowed "))
+        {
+            Expect("borrowed");
+            state.Ownership = OwnershipHint.Borrowed;
+        }
+
         // Detach if state already defined
         if (_allStates.ContainsKey(state.Name))
             throw Err($"Duplicate state '{state.Name}'");
@@ -258,6 +291,29 @@ public partial class BPlusParser
                 // Parse annotations for next element (@hot, @cold, @fast_path)
                 var annots = ParseAnnotations();
                 SkipWs();
+
+                // Mojo: @llvm_intrinsic and @parameter inside state body
+                if (annots.Any(a => a.Name.StartsWith("llvm_intrinsic")))
+                {
+                    foreach (var a in annots.Where(an => an.Name.StartsWith("llvm_intrinsic")))
+                        state.LlvmIntrinsics.Add(new LlvmIntrinsicDecl
+                        {
+                            Intrinsic = a.Args.GetValueOrDefault("_val", "llvm.prefetch"),
+                            Args = { "ptr", "0", "3", "1" }
+                        });
+                    continue;
+                }
+                if (annots.Any(a => a.Name == "parameter"))
+                {
+                    foreach (var a in annots.Where(an => an.Name == "parameter"))
+                        state.ParameterConditions.Add(new ParameterCondition
+                        {
+                            Key = a.Args.GetValueOrDefault("key", "target"),
+                            Value = a.Args.GetValueOrDefault("_val", "avx512")
+                        });
+                    continue;
+                }
+
                 // Apply to next transition or var
                 if (Peek("on ") || Peek("always"))
                 {
@@ -1324,7 +1380,21 @@ public partial class BPlusParser
     {
         var name = ParseWord();
         SkipWs();
-        if (_pos < _src.Length && _src[_pos] == '[')
+
+        // Mojo-style: simd<T, N>
+        if (name.Equals("simd", StringComparison.OrdinalIgnoreCase) && _pos < _src.Length && _src[_pos] == '<')
+        {
+            _pos++;
+            var elemType = ParseWord();
+            SkipWs();
+            if (_pos < _src.Length && _src[_pos] == ',') _pos++;
+            SkipWs();
+            var lanes = ParseWord();
+            SkipWs();
+            if (_pos < _src.Length && _src[_pos] == '>') _pos++;
+            name = $"simd<{elemType},{lanes}>";
+        }
+        else if (_pos < _src.Length && _src[_pos] == '[')
         {
             _pos++;
             Expect("]");
