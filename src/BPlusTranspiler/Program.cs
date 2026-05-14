@@ -14,7 +14,8 @@ using BPlusTranspiler.Plugins;
 using BPlusTranspiler.PackageManager;
 using BPlusTranspiler.TestRunner;
 using BPlusTranspiler.Runtime;
-
+using BPlusTranspiler.Verification;
+ 
 if (args.Length > 0 && args[0] == "health")
 {
     var healthInput = args.Length > 1 && !args[1].StartsWith("-") ? args[1] : null;
@@ -574,9 +575,119 @@ if (args.Contains("--l3-heap"))
     return 0;
 }
 
+if (args.Contains("--adaptive"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --adaptive [--target all]");
+        return 1;
+    }
+    Console.WriteLine("B+ Adaptive Runtime — generating CPU-dispatch code");
+    Console.WriteLine();
+
+    var srcAdapt = File.ReadAllText(input);
+    var parserAdapt = new BPlusParser();
+    var programAdapt = parserAdapt.Parse(srcAdapt);
+
+    var allStates = new List<StateDefNode>();
+    void Collect(StateDefNode s) { allStates.Add(s); foreach (var ns in s.NestedStates) Collect(ns); }
+    foreach (var st in programAdapt.States) Collect(st);
+
+    var allEvents = allStates
+        .SelectMany(s => s.Transitions)
+        .Where(t => !t.IsAlways)
+        .Select(t => t.EventName)
+        .Distinct()
+        .ToList();
+    var stateIds = allStates.Select((s, i) => (s.Name, Id: i)).ToDictionary(x => x.Name, x => x.Id);
+    var eventIds = allEvents.Select((e, i) => (e, Id: i)).ToDictionary(x => x.e, x => x.Id);
+
+    var outDir = Path.Combine(output, "adaptive");
+    Directory.CreateDirectory(outDir);
+
+    File.WriteAllText(Path.Combine(outDir, "bplus_adaptive.h"), AdaptiveRuntime.GenerateAdaptiveHeader(programAdapt));
+    File.WriteAllText(Path.Combine(outDir, "bplus_adaptive.cpp"), AdaptiveRuntime.GenerateAdaptiveImpl(programAdapt, allStates, allEvents, stateIds, eventIds));
+    File.WriteAllText(Path.Combine(outDir, "benchmark_report.txt"), AdaptiveRuntime.GenerateBenchmarkReport(allStates));
+
+    Console.WriteLine($"  Generated in {outDir}/");
+    Console.WriteLine("  • bplus_adaptive.h — CPU detection (CPUID) + dispatch table");
+    Console.WriteLine("  • bplus_adaptive.cpp — per-state dispatch + benchmark harness");
+    Console.WriteLine("  • benchmark_report.txt — CPU capability report");
+    Console.WriteLine();
+    Console.WriteLine("Compile with: g++ -O3 -march=native -o benchmark bplus_adaptive.cpp");
+    return 0;
+}
+
+if (args.Contains("--verify") || args.Contains("--verify-dal-a"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --verify [--dal-c|--dal-b|--dal-a]");
+        return 1;
+    }
+
+    var level = SafetyLevel.DAL_C;
+    if (args.Contains("--dal-a") || args.Contains("--verify-dal-a")) level = SafetyLevel.DAL_A;
+    else if (args.Contains("--dal-b")) level = SafetyLevel.DAL_B;
+    else if (args.Contains("--dal-d")) level = SafetyLevel.DAL_D;
+
+    Console.WriteLine("B+ Formal Verification — DO-178C compliance");
+    Console.WriteLine($"Target Safety Level: {level}");
+    Console.WriteLine();
+
+    var srcVer = File.ReadAllText(input);
+    var parserVer = new BPlusParser();
+    var programVer = parserVer.Parse(srcVer);
+    var verifier = new FormalVerifier(programVer);
+    var report = verifier.GenerateReport(level);
+
+    Console.WriteLine(report);
+
+    var outDirVer = Path.Combine(output, "verification");
+    Directory.CreateDirectory(outDirVer);
+    File.WriteAllText(Path.Combine(outDirVer, "do178c_report.txt"), report);
+    Console.WriteLine($"Full report saved to {outDirVer}/do178c_report.txt");
+
+    return report.Contains("FAIL") ? 1 : 0;
+}
+
+if (args.Contains("--math") || args.Contains("--math-intrinsics"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --math");
+        return 1;
+    }
+
+    Console.WriteLine("B+ Math Intrinsics — AVX-512 matrix/quaternion/trig generation");
+    Console.WriteLine();
+
+    var srcMath = File.ReadAllText(input);
+    var parserMath = new BPlusParser();
+    var programMath = parserMath.Parse(srcMath);
+
+    var allStatesMath = new List<StateDefNode>();
+    void CollectMath(StateDefNode s) { allStatesMath.Add(s); foreach (var ns in s.NestedStates) CollectMath(ns); }
+    foreach (var st in programMath.States) CollectMath(st);
+
+    var outDirMath = Path.Combine(output, "math");
+    Directory.CreateDirectory(outDirMath);
+
+    File.WriteAllText(Path.Combine(outDirMath, "bplus_math.h"), MathIntrinsics.GenerateAvx512MathHeader());
+    File.WriteAllText(Path.Combine(outDirMath, "bplus_math_ops.cpp"), MathIntrinsics.GenerateMathOpsSource(allStatesMath));
+
+    Console.WriteLine($"  Generated in {outDirMath}/");
+    Console.WriteLine("  • bplus_math.h — AVX-512 sin/cos/tan/exp/log, mat4x4, quaternion");
+    Console.WriteLine("  • bplus_math_ops.cpp — per-state math dispatch table");
+    Console.WriteLine();
+    Console.WriteLine("Compile with: g++ -O3 -mavx512f -mfma -o math_test bplus_math_ops.cpp");
+    return 0;
+}
+
 if (args.Contains("--train-unpack"))
 {
     Console.WriteLine("B+ AI UnpackPredictor Trainer v3.0.4L BETA");
+
     Console.WriteLine();
     Console.WriteLine("Generating training data and training model...");
     UnpackPredictorTrainer.GenerateTrainingData();
@@ -624,6 +735,9 @@ if (input == null)
     Console.Error.WriteLine("       bpc <input.bp> --ilp                            (ILP dependency chain analysis)");
     Console.Error.WriteLine("       bpc <input.bp> --store-fwd                      (store forwarding hazard detection)");
     Console.Error.WriteLine("       bpc <input.bp> --auto-tune [N]                  (auto-tune: AI + real perf counters)");
+    Console.Error.WriteLine("       bpc <input.bp> --adaptive                       (runtime CPU dispatch: CPUID + benchmark)");
+    Console.Error.WriteLine("       bpc <input.bp> --verify [--dal-a]               (DO-178C formal verification report)");
+    Console.Error.WriteLine("       bpc <input.bp> --math                           (AVX-512 math intrinsics: mat4/quat/trig)");
     Console.Error.WriteLine("       bpc <input> --plugin unity|unreal|godot|web|unigine  (engine-specific code generation)");
     Console.Error.WriteLine("       bpc bpm <init|install|list|search|publish>   (package manager)");
     Console.Error.WriteLine("       bpc test run <file.bp>                      (run auto-generated tests)");

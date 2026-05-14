@@ -28,6 +28,10 @@ public static class BPlusValidator
         ValidateBpm(program, errors);
         ValidateLsp(program, errors);
         ValidateGenerators(errors);
+        ValidateAdaptive(program, errors);
+        ValidateDebug(program, errors);
+        ValidateMath(program, errors);
+        ValidateSafety(program, errors);
 
         return errors;
     }
@@ -401,6 +405,135 @@ public static class BPlusValidator
         errors.Add(new ValidationError { Number = 90, Message = "TypeScript: strict:true not enforced", Severity = "🟠" });
         errors.Add(new ValidationError { Number = 91, Message = "TypeScript: 'any' type leaks into generated code", Severity = "🟠" });
         errors.Add(new ValidationError { Number = 92, Message = "TypeScript: async transitions don't generate Promise<void>", Severity = "🟠" });
+    }
+
+    // ─── ADAPTIVE RUNTIME (#2010-2011) ───
+
+    private static void ValidateAdaptive(ProgramNode program, List<ValidationError> errors)
+    {
+        foreach (var s in program.States)
+        {
+            bool hasTransition = s.Transitions.Count > 0;
+            if (hasTransition)
+            {
+                // #2010: Every state with transitions should have scalar fallback
+                errors.Add(new ValidationError
+                {
+                    Number = 2010,
+                    Message = $"Adaptive: No SIMD dispatch table for state '{s.Name}' — add --adaptive flag to generate CPU-detected dispatch",
+                    Severity = "🟠"
+                });
+            }
+        }
+    }
+
+    // ─── DEBUG (#2020) ───
+
+    private static void ValidateDebug(ProgramNode program, List<ValidationError> errors)
+    {
+        foreach (var s in program.States)
+        {
+            foreach (var v in s.Variables)
+            {
+                if (v.IsFastPath)
+                {
+                    // #2020: @fast_path variable should have register mapping in debug mode
+                    errors.Add(new ValidationError
+                    {
+                        Number = 2020,
+                        Message = $"Debug: @fast_path variable '{v.Name}' in state '{s.Name}' — register mapping available in debug mode",
+                        Severity = "🟠"
+                    });
+                }
+            }
+        }
+    }
+
+    // ─── MATH (#2030-2032) ───
+
+    private static void ValidateMath(ProgramNode program, List<ValidationError> errors)
+    {
+        foreach (var s in program.States)
+        {
+            foreach (var v in s.Variables)
+            {
+                if (v.Type is "mat4" or "mat4x4" or "quat" or "quaternion")
+                {
+                    // #2030: Math type detected — generator may not support
+                    errors.Add(new ValidationError
+                    {
+                        Number = 2030,
+                        Message = $"Math: Variable '{v.Name}' in state '{s.Name}' uses '{v.Type}' — use --math flag to generate AVX-512 intrinsics",
+                        Severity = "🟠"
+                    });
+                }
+            }
+        }
+        foreach (var k in program.Kernels)
+        {
+            if (k.Body != null && k.Body.Operations.Any(o => o.Name is "sin" or "cos" or "tan" or "matmul" or "quat_mul"))
+            {
+                // #2031: Math operations in kernel — need SIMD
+                errors.Add(new ValidationError
+                {
+                    Number = 2031,
+                    Message = $"Kernel '{k.Name}' uses math operations — use --math for AVX-512 intrinsics",
+                    Severity = "🟠"
+                });
+            }
+        }
+    }
+
+    // ─── SAFETY (#2040-2042) ───
+
+    private static void ValidateSafety(ProgramNode program, List<ValidationError> errors)
+    {
+        // #2040: State reachability safety
+        var reachable = new HashSet<string>();
+        var queue = new Queue<string>();
+        if (program.States.Count > 0)
+        {
+            reachable.Add(program.States[0].Name);
+            queue.Enqueue(program.States[0].Name);
+        }
+        while (queue.Count > 0)
+        {
+            var cur = queue.Dequeue();
+            var state = program.States.FirstOrDefault(s => s.Name == cur);
+            if (state == null) continue;
+            foreach (var t in state.Transitions)
+                if (reachable.Add(t.Target))
+                    queue.Enqueue(t.Target);
+        }
+        foreach (var s in program.States)
+        {
+            if (!reachable.Contains(s.Name))
+            {
+                errors.Add(new ValidationError
+                {
+                    Number = 2040,
+                    Message = $"Safety: State '{s.Name}' is unreachable from initial state — possible dead code (DO-178C violation)",
+                    Severity = "🔴"
+                });
+            }
+        }
+
+        // #2041: Timer safety — ensure timers have duration
+        foreach (var s in program.States)
+        {
+            foreach (var tm in s.Timers)
+            {
+                if (string.IsNullOrWhiteSpace(tm.Duration))
+                {
+                    errors.Add(new ValidationError
+                    {
+                        Number = 2041,
+                        Message = $"Safety: Timer in state '{s.Name}' has no duration — undefined behavior (DO-178C violation)",
+                        Severity = "🔴"
+                    });
+                }
+            }
+        }
     }
 
     // ─── HELPERS ───
