@@ -1030,7 +1030,7 @@ entry main() -> i32 { return 0 }");
         var features = new AI.CodeFeatures { StateCount = 10, TotalCodeSize = 1000, HotPathCount = 3, BranchCount = 8, DataSize = 512 };
         var largeData = collector.GenerateLargeDataset(features, count: 10000);
         Assert(largeData.Count > 0, "O5a: generated dataset has data");
-        Assert(largeData.All(d => d.Input.Length == 24), "O5b: each datapoint has 24 features (5 code + 19 metal)");
+        Assert(largeData.All(d => d.Input.Length == 32), "O5b: each datapoint has 32 features (5 code + 27 metal)");
 
         // 6. SynthLifecycle (via OwnershipPass + MoveOnLastUse completed)
         Assert(ownership.Where(r => r.PoolBytes > 0).Any(), "O6a: states with pool bytes detected");

@@ -112,6 +112,23 @@ public class StateDefNode
     public Dictionary<string, EscapeKind> EscapeResults { get; } = new();
     // Haskell: demand analysis result
     public DemandSignature? Demand { get; set; }
+
+    // Cache control
+    public string? CachePolicy { get; set; }
+    public bool CachePin { get; set; }
+    public int? CacheAlign { get; set; }
+    public bool NonTemporal { get; set; }
+
+    // Branch prediction
+    public string? Predict { get; set; }
+    public double? PredictProbability { get; set; }
+
+    // Deadline
+    public long? DeadlineUs { get; set; }
+    public bool DeadlineHard { get; set; } = true;
+
+    // Inline asm
+    public string? AsmBlock { get; set; }
 }
 
 public class TransitionNode
@@ -130,6 +147,10 @@ public class TransitionNode
     public double? HotWeight { get; set; }
     // Semantic Inline chain name (set by optimizer)
     public string? ChainId { get; set; }
+    // Branch prediction
+    public string? Predict { get; set; }
+    public double? PredictProbability { get; set; }
+
     // Zig: ErrorTransition — transition can fail with error payload
     public bool IsFallible { get; set; }
     public string? ErrorType { get; set; }    // e.g. "TimeoutError", "string"

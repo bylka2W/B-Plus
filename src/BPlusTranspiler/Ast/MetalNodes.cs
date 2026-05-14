@@ -58,6 +58,23 @@ public class MetalConfig
     public string? MuarchProfile { get; set; }
     public int? IlpMax { get; set; }
 
+    // Cache control
+    public string? CachePolicy { get; set; } // write_back, write_through, write_combining, uncacheable
+    public bool CachePin { get; set; }
+    public int? CacheAlign { get; set; }
+    public bool NonTemporal { get; set; }
+
+    // Branch prediction
+    public string? Predict { get; set; } // taken, not_taken, dynamic, btfnt
+    public double? PredictProbability { get; set; }
+
+    // Deadline
+    public long? DeadlineUs { get; set; }
+    public bool DeadlineHard { get; set; } = true;
+
+    // Inline asm
+    public string? AsmBlock { get; set; }
+
     // L3-heap / L1-heap allocation
     public HeapType? Heap { get; set; }
 
@@ -80,6 +97,15 @@ public class MetalConfig
             MuarchProfile = MuarchProfile, IlpMax = IlpMax,
             Heap = Heap
         };
+        c.CachePolicy = CachePolicy;
+        c.CachePin = CachePin;
+        c.CacheAlign = CacheAlign;
+        c.NonTemporal = NonTemporal;
+        c.Predict = Predict;
+        c.PredictProbability = PredictProbability;
+        c.DeadlineUs = DeadlineUs;
+        c.DeadlineHard = DeadlineHard;
+        c.AsmBlock = AsmBlock;
         c.FusionPairs.AddRange(FusionPairs);
         return c;
     }
@@ -106,6 +132,14 @@ public class MetalConfig
             StoreForwardSafe ? 1 : 0,
             MuarchProfile != null ? 1 : 0,
             IlpMax ?? 0,
+            CachePolicy != null ? 1 : 0,
+            CachePin ? 1 : 0,
+            CacheAlign ?? 0,
+            NonTemporal ? 1 : 0,
+            Predict != null ? 1 : 0,
+            PredictProbability ?? 0,
+            DeadlineUs ?? 0,
+            DeadlineHard ? 1 : 0,
             Heap.HasValue ? (int)Heap.Value : 0,
         };
         return feat.ToArray();
@@ -128,6 +162,14 @@ public class MetalConfig
             HotPath = rng.Next(2) == 0,
             NumaNode = rng.Next(2) == 0 ? null : rng.Next(4),
             MuarchProfile = rng.Next(2) == 0 ? null : "intel_adl",
+            CachePolicy = rng.Next(4) switch { 0 => null, 1 => "write_back", 2 => "write_through", _ => "uncacheable" },
+            CachePin = rng.Next(2) == 0,
+            CacheAlign = rng.Next(3) switch { 0 => null, 1 => 64, _ => 128 },
+            NonTemporal = rng.Next(2) == 0,
+            Predict = rng.Next(4) switch { 0 => null, 1 => "taken", 2 => "not_taken", _ => "dynamic" },
+            PredictProbability = rng.NextDouble(),
+            DeadlineUs = rng.Next(3) == 0 ? null : (long)(100 + rng.NextDouble() * 10000),
+            DeadlineHard = rng.Next(2) == 0,
             Heap = rng.Next(3) == 0 ? (HeapType?)(rng.Next(2) == 0 ? HeapType.L1 : HeapType.L3) : null
         };
     }

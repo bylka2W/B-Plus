@@ -12,6 +12,16 @@ B+ — язык описания конечных автоматов (state mach
 - **ABI Manager (PeachPy)** — `--abi-manager`: automatic push/pop of callee-saved regs (rbx, rbp, r12–r15) in prologue/epilogue.
 - **CFI Directives (DWARF)** — `--cfi`: `.cfi_startproc`/`.cfi_endproc`/`.cfi_def_cfa_offset` for gdb, perf, and C++ exception compatibility.
 - **BOLT/Propeller Layout** — `LinkerScriptGenerator` accepts `ProfileData` with perf counts and fallthrough weights. Emits `__bolt_text_hot` with `KEEP()`, `__propeller_text_cold` with SORT_BY_NAME, and filters tier sections by hot/cold partition.
+- **AI NeuroScheduler** — `--neuro-schedule`: LSTM + Q‑learning RL that selects target cores, frequency, and power profile based on live sensor data.
+- **Adaptive Closed Loop** — `--adaptive-loop`: sensor→NeuroScheduler→actuator cycle with reward feedback and online training.
+- **Hardware Probe** — `--hardware-probe`: reads CPUID topology, frequencies, temperature, power, estimated IPC, RAM bandwidth via WMI.
+- **Hardware Control** — thread/core affinity (`PinToCore`), power policy (`--powercfg`), frequency scaling, power budget.
+- **Inline Assembly Parser** — `--asm-parse`: parses `asm{}` blocks, supports Intel/AT&T syntax detection, register validation.
+- **Branch Prediction Hints** — `--branch-hints`: extracts `@predict(taken|not_taken|dynamic)` from transitions, emits DS/CS segment override prefixes.
+- **Micro‑op Decode Engine** — `--micro-op`: decodes x86 instructions into μops with port usage, latency, throughput bottleneck analysis.
+- **Memory Controller Hints** — `--memory-hints`: RAM channel layout, interleave strategy per access pattern, prefetch/NT store emission.
+- **Intel AMX Intrinsics** — `--amx`: detects tile register support, generates `tdpbf16ps` kernels, emits `bplus_amx.h` header with `tile_loadd`/`tile_stored` intrinsics.
+- **Timing Engine** — `--timing`: hard/soft deadline registration, WCET analysis, frequency suggestion for deadline feasibility.
 
 **202 unit tests, 100% pass.**
 
@@ -158,6 +168,24 @@ bpc input.bp --buffer-counters        # Store/Load buffer PMC analysis
 bpc input.bp --pgo                    # Full PGO pipeline: instrument→run→merge→recompile   +15-25%
 bpc input.bp --pgo --pgo-use file      # Use existing profile
 bpc input.bp --bolt [--binary path]   # BOLT post-link: reorder code by hot paths        +10-20%
+
+# === Hardware Runtime & AI (new) ===
+bpc --hardware-probe                 # CPUID + sensor report: freq/temp/power/IPC
+bpc --neuro-schedule                 # AI NeuroScheduler LSTM+Q decision
+bpc --adaptive-loop                  # closed-loop: sensor→scheduler→actuator
+bpc input.bp --branch-hints          # @predict branch hint report
+bpc input.bp --asm-parse             # parse inline asm{} blocks
+bpc input.bp --micro-op              # μop decode + bottleneck analysis
+bpc input.bp --memory-hints          # RAM channel layout + interleave strategy
+bpc --amx                            # Intel AMX tile register detection
+bpc input.bp --timing [--deadline-us N] # hard/soft deadline WCET analysis
+
+# === Metal Annotations (extended) ===
+@cache(write_back|write_through|uncacheable)  # cache policy
+@cache_pin                                     # pin to L1/L2
+@cache_align(64)                               # align to cache line
+@predict(taken, p=0.95)                        # branch prediction hint
+@deadline(1000)                                # hard deadline in μs
 
 # === Assembly Optimizers (new) ===
 bpc input.bp --peephole                # GAS -O2: mov→xor, and→test, REX.W removal   -5-10% code size
@@ -453,16 +481,26 @@ B+ v1.0/
 │   │   ├── DataCollector.cs     — 2000 samples, real perf + synthetic
 │   │   ├── NeuralPredictor.cs   — 21→16→1 NN (IPC prediction)
 │   │   ├── LayoutOptimizer.cs   — 10k config search
-│   │   └── UnpackPredictor.cs   — 12→8→4 unpack NN
+│   │   ├── UnpackPredictor.cs   — 12→8→4 unpack NN
+│   │   ├── NeuroScheduler.cs    — LSTM + Q‑learning RL scheduler
+│   │   └── TimingOptimizer.cs   — deadline-based WCET + frequency suggest
 │   ├── Generators/
 │   │   ├── LlvmGenMetal.cs      — LLVM IR + intrinsics
 │   │   ├── AsmGenerator.cs      — x86-64 asm
 │   │   ├── AssemblyOptimizer.cs — Peephole, JumpShrink, ABI, CFI passes
+│   │   ├── BranchHintGenerator.cs — @predict annotation → DS/CS prefix emission
 │   │   └── LinkerScriptGenerator — .ld sections (BOLT/Propeller-aware)
 │   ├── MlirDialect/
 │   │   └── BplusDialect.cs      — MLIR-like IR: state/transition/enter/exit ops
 │   ├── Runtime/
-│   │   └── MetalRuntime.cs      — perf_event_open, mlock, mbind, mmap, L3HeapRuntime
+│   │   ├── MetalRuntime.cs      — perf_event_open, mlock, mbind, mmap, L3HeapRuntime
+│   │   ├── HardwareProbe.cs     — CPUID, freq, temp, power, IPC sensors
+│   │   ├── HardwareControl.cs   — thread affinity, DVFS, power policy, pinning
+│   │   ├── AdaptiveLoop.cs      — closed loop: sensor→AI→actuator→reward
+│   │   ├── MicroOpEngine.cs     — x86 μop decode, port usage, bottleneck analysis
+│   │   ├── MemoryControllerHints.cs — RAM channel layout, interleave, prefetch
+│   │   ├── NeuralIntrinsics.cs  — Intel AMX tile registers + tdpbf16ps kernel
+│   │   └── TimingEngine.cs      — hard/soft deadline registration + monitoring
 │   ├── Program.cs               — CLI entry point (50+ флагов)
 │   └── BPlusValidator.cs        — 121 check центральный валидатор (--check)
 ├── BPlusTranspiler.Tests/       — 29 тестов, 100% pass

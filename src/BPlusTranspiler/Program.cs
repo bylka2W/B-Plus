@@ -15,7 +15,6 @@ using BPlusTranspiler.PackageManager;
 using BPlusTranspiler.TestRunner;
 using BPlusTranspiler.Runtime;
 using BPlusTranspiler.Verification;
-using BPlusTranspiler.AI;
  
 if (args.Length > 0 && args[0] == "health")
 {
@@ -940,6 +939,155 @@ if (args.Contains("--metal"))
     return RunMetal(input, fusion, regAlloc, unpack, hiddenBuffers, tierStr);
 }
 
+if (args.Contains("--hardware-probe"))
+{
+    Console.WriteLine(HardwareProbe.GenerateProbeReport(HardwareProbe.ReadSensors()));
+    return 0;
+}
+
+if (args.Contains("--neuro-schedule"))
+{
+    var scheduler = new NeuroScheduler();
+    var state = HardwareProbe.ReadSensors().ToSchedulerState();
+    var action = scheduler.SelectAction(state, training: false);
+    Console.WriteLine(scheduler.GenerateReport());
+    Console.WriteLine($"Selected: cores={action.TargetCores} freq={action.TargetFreqMHz} profile={action.Profile}");
+    return 0;
+}
+
+if (args.Contains("--adaptive-loop"))
+{
+    var loop = new AdaptiveLoop();
+    loop.Start();
+    for (int i = 0; i < 5; i++)
+        loop.Tick();
+    Console.WriteLine(loop.GenerateReport());
+    return 0;
+}
+
+if (args.Contains("--branch-hints"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --branch-hints");
+        return 1;
+    }
+    var bhSrc = File.ReadAllText(input);
+    var bhParser = new BPlusParser();
+    var bhProg = bhParser.Parse(bhSrc);
+    foreach (var state in bhProg.States)
+    {
+        var hints = BranchHintGenerator.ExtractHints(state);
+        if (hints.Count > 0)
+            Console.WriteLine(BranchHintGenerator.Report(hints));
+    }
+    return 0;
+}
+
+if (args.Contains("--asm-parse"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --asm-parse");
+        return 1;
+    }
+    var apSrc = File.ReadAllText(input);
+    var apParser = new BPlusParser();
+    var apProg = apParser.Parse(apSrc);
+    foreach (var state in apProg.States)
+    {
+        foreach (var t in state.Transitions)
+        {
+            if (t.Body != null && t.Body.Contains("asm"))
+            {
+                var asmBlock = AsmParser.Parse(t.Body);
+                Console.WriteLine($"State '{state.Name}' asm block ({asmBlock.Instructions.Count} instrs):");
+                Console.WriteLine(AsmParser.Generate(asmBlock));
+            }
+        }
+    }
+    return 0;
+}
+
+if (args.Contains("--micro-op"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --micro-op");
+        return 1;
+    }
+    var moSrc = File.ReadAllText(input);
+    var moParser = new BPlusParser();
+    var moProg = moParser.Parse(moSrc);
+    foreach (var state in moProg.States)
+    {
+        foreach (var t in state.Transitions)
+        {
+            if (t.Body != null)
+            {
+                var seq = MicroOpEngine.DecodeSequence(t.Body.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+                Console.WriteLine($"State '{state.Name}', transition '{t.EventName}':");
+                Console.WriteLine(MicroOpEngine.Analyze(seq));
+            }
+        }
+    }
+    return 0;
+}
+
+if (args.Contains("--memory-hints"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --memory-hints");
+        return 1;
+    }
+    var regions = new List<MemoryRegionHint>
+    {
+        new() { Name = "main_data", Size = 1024*1024, Pattern = MemoryPattern.Sequential, Prefetch = true },
+    };
+    Console.WriteLine(MemoryControllerHints.GenerateReport(regions));
+    Console.WriteLine(MemoryControllerHints.SuggestChannelLayout(4 * 1024 * 1024));
+    return 0;
+}
+
+if (args.Contains("--amx"))
+{
+    var tiles = NeuralIntrinsics.DetectAmxSupport();
+    Console.WriteLine(NeuralIntrinsics.Report(tiles));
+    if (tiles.TileCount > 0)
+    {
+        Console.WriteLine("AMX header:");
+        Console.WriteLine(NeuralIntrinsics.GenerateAmxHeader());
+    }
+    return 0;
+}
+
+if (args.Contains("--timing"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --timing [--deadline-us N]");
+        return 1;
+    }
+    var deadlineUs = 1000L;
+    for (int i = 0; i < args.Length; i++)
+        if (args[i] == "--deadline-us" && i + 1 < args.Length && long.TryParse(args[++i], out var dl))
+            deadlineUs = dl;
+
+    var tmSrc = File.ReadAllText(input);
+    var tmParser = new BPlusParser();
+    var tmProg = tmParser.Parse(tmSrc);
+    var engine = new TimingEngine();
+    foreach (var state in tmProg.States)
+    {
+        engine.RegisterDeadline(state.Name, deadlineUs * 1000, isHard: true);
+        var deadline = new DeadlineAttribute { DeadlineUs = deadlineUs, IsHard = true };
+        var plan = TimingOptimizer.AnalyzeTiming(state, deadline);
+        Console.WriteLine(TimingOptimizer.GenerateReport(plan));
+    }
+    return 0;
+}
+
 if (input == null)
 {
     Console.Error.WriteLine("Usage: bpc <input.bp> [--target llvm] [--pgo-collect] [--lto thin|full] [flags]");
@@ -959,6 +1107,15 @@ if (input == null)
     Console.Error.WriteLine("       bpc <input.bp> --ilp                            (ILP dependency chain analysis)");
     Console.Error.WriteLine("       bpc <input.bp> --store-fwd                      (store forwarding hazard detection)");
     Console.Error.WriteLine("       bpc <input.bp> --auto-tune [N]                  (auto-tune: AI + real perf counters)");
+    Console.Error.WriteLine("       bpc --hardware-probe                        (CPUID + sensor report: freq/temp/power/IPC)");
+    Console.Error.WriteLine("       bpc --neuro-schedule                        (AI NeuroScheduler decision)");
+    Console.Error.WriteLine("       bpc --adaptive-loop                         (closed-loop sensor→AI→actuator)");
+    Console.Error.WriteLine("       bpc <input.bp> --branch-hints               (branch prediction report)");
+    Console.Error.WriteLine("       bpc <input.bp> --asm-parse                   (parse inline asm{} blocks)");
+    Console.Error.WriteLine("       bpc <input.bp> --micro-op                    (micro-op decode/analysis)");
+    Console.Error.WriteLine("       bpc <input.bp> --memory-hints                (RAM channel layout)");
+    Console.Error.WriteLine("       bpc --amx                                   (AMX tile detection + header)");
+    Console.Error.WriteLine("       bpc <input.bp> --timing [--deadline-us N]   (hard/soft deadline analysis)");
     Console.Error.WriteLine("       bpc <input.bp> --adaptive                       (runtime CPU dispatch: CPUID + benchmark)");
     Console.Error.WriteLine("       bpc <input.bp> --verify [--dal-a]               (DO-178C formal verification report)");
     Console.Error.WriteLine("       bpc <input.bp> --math                           (AVX-512 math intrinsics: mat4/quat/trig)");

@@ -83,6 +83,25 @@ public partial class BPlusParser
                                 Intrinsic = a.Args.GetValueOrDefault("_val", ""),
                                 Target = state.Name
                             });
+                        if (a.Name == "deadline" && a.Args.TryGetValue("_val", out var dlVal)
+                            && long.TryParse(dlVal, out var dlUs))
+                        {
+                            state.DeadlineUs = dlUs;
+                            state.DeadlineHard = a.Args.GetValueOrDefault("hard", "true") != "false";
+                        }
+                        if (a.Name == "cache" && a.Args.TryGetValue("_val", out var cacheVal))
+                            state.CachePolicy = cacheVal;
+                        if (a.Name == "cache_pin")
+                            state.CachePin = true;
+                        if (a.Name == "cache_align" && a.Args.TryGetValue("_val", out var caVal)
+                            && int.TryParse(caVal, out var caInt))
+                            state.CacheAlign = caInt;
+                        if (a.Name == "predict" && a.Args.TryGetValue("_val", out var predVal))
+                        {
+                            state.Predict = predVal;
+                            if (a.Args.TryGetValue("p", out var pStr) && double.TryParse(pStr, out var pVal))
+                                state.PredictProbability = pVal;
+                        }
                     }
                     program.States.Add(state);
                 }
@@ -371,6 +390,12 @@ public partial class BPlusParser
                     trans.HotWeight = coldW3;
                 else
                     trans.HotWeight = 0.1; // default cold
+                break;
+            case "predict":
+                if (a.Args.TryGetValue("_val", out var predV))
+                    trans.Predict = predV;
+                if (a.Args.TryGetValue("p", out var probS) && double.TryParse(probS, out var prob))
+                    trans.PredictProbability = prob;
                 break;
         }
     }

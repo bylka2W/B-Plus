@@ -96,6 +96,12 @@ public static class TierClassifier
                 r.NeedsGateway = true;
                 r.GatewayTier = cfg.Gateway.Value.ToString();
             }
+            if (cfg.CacheAlign.HasValue)
+                r.Alignment = cfg.CacheAlign.Value;
+            if (cfg.CachePolicy == "write_through")
+                r.Section = r.Section + ".wt";
+            if (cfg.NonTemporal)
+                r.Section = r.Section + ".nt";
         }
         else
         {
