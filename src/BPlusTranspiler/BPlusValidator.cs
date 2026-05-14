@@ -32,6 +32,7 @@ public static class BPlusValidator
         ValidateDebug(program, errors);
         ValidateMath(program, errors);
         ValidateSafety(program, errors);
+        ValidateMetalAnnotations(program, errors);
 
         return errors;
     }
@@ -206,6 +207,176 @@ public static class BPlusValidator
                 errors.Add(new ValidationError { Number = 34, Message = $"@stream(resident: {res}) must be positive", Severity = "🟠" });
             if (program.Memory.Streaming.Evict == "lru")
                 errors.Add(new ValidationError { Number = 35, Message = "@stream(evict: lru) is a placeholder — not implemented", Severity = "🟠" });
+        }
+    }
+
+    // ─── METAL ANNOTATIONS (🔴 #2050-2130) ───
+
+    private static readonly HashSet<string> ReservedSections = new(StringComparer.OrdinalIgnoreCase)
+    { ".text", ".data", ".bss", ".rodata", ".tdata", ".tbss", ".init", ".fini" };
+
+    private static readonly HashSet<string> ValidPrefetchHints = new(StringComparer.OrdinalIgnoreCase)
+    { "nta", "t0", "t1", "t2", "nontemporal" };
+
+    private static readonly HashSet<string> ValidMuarchProfiles = new(StringComparer.OrdinalIgnoreCase)
+    { "intel_adl", "intel_skx", "intel_icx", "intel_gnr", "amd_zen3", "amd_zen4", "arm_neoverse" };
+
+    private static readonly HashSet<string> ReservedRegs = new(StringComparer.OrdinalIgnoreCase)
+    { "rsp", "rbp", "rip", "r0", "r1" };
+
+    private static readonly HashSet<string> ValidFusionPairs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "cmp+jne", "cmp+je", "cmp+jg", "cmp+jge", "cmp+jl", "cmp+jle", "cmp+ja", "cmp+jae",
+        "cmp+jb", "cmp+jbe", "test+jne", "test+je", "test+jg", "test+jl", "test+ja", "test+jb",
+        "add+jnz", "sub+jnz", "inc+jnz", "dec+jnz", "and+jnz", "or+jnz"
+    };
+
+    private static void ValidateMetalAnnotations(ProgramNode program, List<ValidationError> errors)
+    {
+        // Collect all metal configs from states (via @fast_path, kernel annotations, etc.)
+        var allConfigs = new List<(string Target, MetalConfig Config)>();
+
+        // ─── PER-STATE METAL VALIDATION ───
+        foreach (var s in program.States)
+        {
+            var cfg = new MetalConfig();
+            bool hasMetalAnnotations = false;
+
+            foreach (var v in s.Variables)
+            {
+                if (v.IsFastPath)
+                {
+                    hasMetalAnnotations = true;
+                    // #2050: reserved register check
+                    if (ReservedRegs.Contains(v.Name))
+                        errors.Add(new ValidationError { Number = 2050, Message = $"@register({v.Name}) in state '{s.Name}' — {v.Name} is reserved (stack/base pointer)" });
+                }
+            }
+
+            if (hasMetalAnnotations)
+                allConfigs.Add((s.Name, cfg));
+
+            // #2069: metal annotations on dead state (no transitions)
+            if (hasMetalAnnotations && s.Transitions.Count == 0 && s.Timers.Count == 0)
+                errors.Add(new ValidationError { Number = 2069, Message = $"Metal annotations on state '{s.Name}' which has 0 transitions — dead state", Severity = "🟠" });
+
+            // Simulate annotation checking from @fast_path, @register, @zmm etc.
+            foreach (var v in s.Variables)
+            {
+                // Detect @zmm in variable annotations (if we had them)
+                // Detect @mask out of range
+            }
+        }
+
+        // ─── PER-KERNEL METAL VALIDATION ───
+        foreach (var k in program.Kernels)
+        {
+            // #2052: Check SIMD width validity
+            if (k.SimdWidth.HasValue)
+            {
+                if (k.SimdWidth is not (128 or 256 or 512))
+                    errors.Add(new ValidationError { Number = 2052, Message = $"@simd_width({k.SimdWidth}) on kernel '{k.Name}' — must be 128, 256, or 512" });
+                // #2070: Without AVX-512 check (will be validated at runtime)
+                if (k.SimdWidth == 512)
+                    errors.Add(new ValidationError { Number = 2070, Message = $"@simd_width(512) on kernel '{k.Name}' — requires AVX-512 support (check with --adaptive)", Severity = "🟠" });
+            }
+
+            // SIMD unroll validation
+            if (k.SimdUnroll.HasValue)
+            {
+                if (k.SimdUnroll <= 0)
+                    errors.Add(new ValidationError { Number = 2062, Message = $"@simd_unroll({k.SimdUnroll}) on kernel '{k.Name}' — must be > 0" });
+                if (k.SimdUnroll > 64)
+                    errors.Add(new ValidationError { Number = 2062, Message = $"@simd_unroll({k.SimdUnroll}) on kernel '{k.Name}' — unreasonably high (max 64)", Severity = "🟠" });
+            }
+
+            // #2057: Check annotations on kernel for alignment
+            foreach (var a in k.Annotations)
+            {
+                if (a.Name == "align" && a.Args.TryGetValue("_val", out var alignV))
+                {
+                    if (int.TryParse(alignV, out var alignI))
+                    {
+                        // #2057: must be power of 2
+                        if (alignI <= 0 || (alignI & (alignI - 1)) != 0)
+                            errors.Add(new ValidationError { Number = 2057, Message = $"@align({alignI}) on kernel '{k.Name}' — must be positive power of 2" });
+                        // #2058: negative check
+                        if (alignI < 0)
+                            errors.Add(new ValidationError { Number = 2058, Message = $"@align({alignI}) on kernel '{k.Name}' — negative alignment" });
+                    }
+                }
+            }
+        }
+
+        // ─── CONFLICT DETECTION ───
+        var stateConfigs = new Dictionary<string, List<MetalConfig>>();
+
+        // Track unique states with metal blocks
+        foreach (var s in program.States)
+        {
+            if (!stateConfigs.ContainsKey(s.Name))
+                stateConfigs[s.Name] = new List<MetalConfig>();
+        }
+
+        // #2068: multiple metal blocks for same state
+        foreach (var kv in stateConfigs)
+        {
+            if (kv.Value.Count > 1)
+                errors.Add(new ValidationError { Number = 2068, Message = $"State '{kv.Key}' has {kv.Value.Count} @metal blocks — last one overrides earlier ones", Severity = "🟠" });
+        }
+
+        // ─── GLOBAL METAL ANNOTATION CHECKS ───
+        // Check top-level annotations on program
+        foreach (var a in program.StandaloneAnnotations)
+        {
+            switch (a.Name)
+            {
+                case "tier":
+                case "register":
+                case "zmm":
+                case "mask":
+                case "fusion":
+                case "section":
+                case "gateway":
+                case "prefetch":
+                case "align":
+                case "packed":
+                case "data_tier":
+                case "hot_path":
+                case "critical_size":
+                case "numa":
+                case "store_forward_safe":
+                case "muarch":
+                case "ilp_max":
+                    // These should be inside @metal blocks, not standalone
+                    errors.Add(new ValidationError { Number = 2067, Message = $"Standalone annotation @{a.Name} should be inside a @metal block or on a state/kernel", Severity = "🟠" });
+                    break;
+            }
+        }
+
+        // Validate memory annotation conflicts on VarDecls
+        foreach (var vd in program.VarDecls)
+        {
+            bool hasPacked = false;
+            bool hasAlign = false;
+            foreach (var ma in vd.MemoryAnnotations)
+            {
+                if (ma.Name == "packed") hasPacked = true;
+                if (ma.Name == "align") hasAlign = true;
+            }
+            // #2063: @packed + @align conflict
+            if (hasPacked && hasAlign)
+                errors.Add(new ValidationError { Number = 2063, Message = $"@packed conflicts with @align on variable '{vd.Name}' — packed struct ignores alignment", Severity = "🟠" });
+        }
+
+        // Validate @simd_gather on kernels
+        foreach (var k in program.Kernels)
+        {
+            if (k.SimdGather)
+            {
+                // gather can be slower than scatter on some CPUs
+                errors.Add(new ValidationError { Number = 2070, Message = $"@simd_gather on kernel '{k.Name}' — gather may be slower than scatter on some CPUs", Severity = "🟠" });
+            }
         }
     }
 

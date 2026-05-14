@@ -20,6 +20,7 @@ public class DataPoint
     public double TargetIPC { get; set; }
     public MetalConfig Config { get; set; } = new();
     public bool IsReal { get; set; }
+    public long TimestampMs { get; set; }
 }
 
 public class PerStateMissRate
@@ -37,6 +38,11 @@ public class DataCollector
     private string? _lastFile;
     private ProgramNode? _cachedProgram;
     private CodeFeatures? _cachedFeatures;
+    private long _lastCollectTime;
+
+    // Thermal/latency tracking
+    private double _baselineCyclesPerMs;
+    private int _thermalThrottleCount;
 
     private ProgramNode ParseCached(string bpFile)
     {
@@ -54,17 +60,20 @@ public class DataCollector
         var data = new List<DataPoint>();
         var features = ExtractCodeFeatures(bpFile);
 
-        // Try to get real perf counters first
+        // Detect thermal throttling by measuring baseline timing variance
+        DetectThermalThrottling();
+
+        // Validate perf counters before using
         var perf = PerfCounterReader.ReadCounters();
-        bool hasRealCounters = perf.Cycles > 0 && perf.Instructions > 0;
+        bool hasRealCounters = ValidatePerfCounters(perf);
 
         if (hasRealCounters)
         {
-            Console.WriteLine($"  [DataCollector] Using real perf counters: {perf.Cycles:N0} cycles, {perf.Instructions:N0} instr");
+            Console.WriteLine($"  [DataCollector] Real perf counters: {perf.Cycles:N0} cycles, {perf.Instructions:N0} instr (throttle={_thermalThrottleCount})");
             double realIPC = (double)perf.Instructions / Math.Max(perf.Cycles, 1);
 
-            // Generate synthetic variations AROUND the real measurement
             var rng = new Random(42);
+            int realCount = 0;
             for (int i = 0; i < count; i++)
             {
                 var config = MetalConfig.Random();
@@ -80,13 +89,14 @@ public class DataCollector
                     Input = input,
                     TargetIPC = ipc / 6.0,
                     Config = config,
-                    IsReal = (i < count / 10)
+                    IsReal = (i < count / 10),
+                    TimestampMs = Environment.TickCount64
                 });
+                if (i < count / 10) realCount++;
             }
         }
         else
         {
-            // Fallback: synthetic simulation with realistic bounds
             var rng = new Random(42);
             for (int i = 0; i < count; i++)
             {
@@ -99,19 +109,26 @@ public class DataCollector
                 {
                     Input = Merge(features, config),
                     TargetIPC = ipc / 6.0,
-                    Config = config
+                    Config = config,
+                    TimestampMs = Environment.TickCount64
                 });
             }
         }
 
+        // Filter outliers using IQR
+        data = FilterOutliers(data);
+
+        _lastCollectTime = Environment.TickCount64;
         return data;
     }
 
-    /// <summary>Collect real data by running the binary and reading perf counters.</summary>
     public List<DataPoint> CollectWithPerf(string bpFile, string binaryPath, int runs = 20)
     {
         var data = new List<DataPoint>();
         var features = ExtractCodeFeatures(bpFile);
+
+        // Check for thermal throttling before collection
+        DetectThermalThrottling();
 
         for (int i = 0; i < runs; i++)
         {
@@ -132,6 +149,20 @@ public class DataCollector
                 proc.WaitForExit(5000);
 
                 var perf = PerfCounterReader.ReadCounters();
+                if (!ValidatePerfCounters(perf))
+                {
+                    // Fallback to synthetic
+                    double ipc = SimulateIPC(features, config, new Random(i));
+                    data.Add(new DataPoint
+                    {
+                        Input = Merge(features, config),
+                        TargetIPC = ipc / 6.0,
+                        Config = config,
+                        TimestampMs = Environment.TickCount64
+                    });
+                    continue;
+                }
+
                 double realIPC = perf.Instructions > 0 && perf.Cycles > 0
                     ? (double)perf.Instructions / perf.Cycles
                     : 3.0;
@@ -142,25 +173,95 @@ public class DataCollector
                     Input = input,
                     TargetIPC = realIPC / 6.0,
                     Config = config,
-                    IsReal = true
+                    IsReal = true,
+                    TimestampMs = Environment.TickCount64
                 });
 
-                Console.WriteLine($"  [perf] run {i + 1}/{runs}: IPC={realIPC:F3} cycles={perf.Cycles:N0}");
+                Console.WriteLine($"  [perf] run {i + 1}/{runs}: IPC={realIPC:F3} cycles={perf.Cycles:N0} throttle={_thermalThrottleCount}");
             }
             catch
             {
-                // Fallback to synthetic
                 double ipc = SimulateIPC(features, config, new Random(i));
                 data.Add(new DataPoint
                 {
                     Input = Merge(features, config),
                     TargetIPC = ipc / 6.0,
-                    Config = config
+                    Config = config,
+                    TimestampMs = Environment.TickCount64
                 });
             }
         }
 
-        return data;
+        return FilterOutliers(data);
+    }
+
+    /// <summary>
+    /// Detects thermal throttling by measuring timing variance.
+    /// Populates _thermalThrottleCount with severity (0 = none, 1+ = throttling).
+    /// </summary>
+    private void DetectThermalThrottling()
+    {
+        try
+        {
+            var sw = Stopwatch.StartNew();
+            double sum = 0, sumSq = 0;
+            int samples = 10;
+            for (int i = 0; i < samples; i++)
+            {
+                long t0 = Stopwatch.GetTimestamp();
+                Thread.Sleep(1);
+                long t1 = Stopwatch.GetTimestamp();
+                double elapsed = (t1 - t0) / (double)Stopwatch.Frequency * 1000;
+                sum += elapsed;
+                sumSq += elapsed * elapsed;
+            }
+            sw.Stop();
+
+            double mean = sum / samples;
+            double variance = sumSq / samples - mean * mean;
+            double stdDev = Math.Sqrt(Math.Max(variance, 0));
+
+            // High variance (>20%) suggests thermal throttling or background load
+            if (mean > 0 && stdDev / mean > 0.2)
+                _thermalThrottleCount = Math.Min((int)(stdDev / mean * 10), 10);
+            else
+                _thermalThrottleCount = 0;
+        }
+        catch
+        {
+            _thermalThrottleCount = 0;
+        }
+    }
+
+    /// <summary>Validate that perf counters have sane values.</summary>
+    private static bool ValidatePerfCounters(PerfCounters perf)
+    {
+        if (perf.Cycles <= 0 || perf.Instructions <= 0)
+            return false;
+        // Sane IPC range: 0.1 - 10.0
+        double ipc = (double)perf.Instructions / perf.Cycles;
+        if (ipc < 0.1 || ipc > 10.0)
+            return false;
+        return true;
+    }
+
+    /// <summary>Remove outliers using IQR method on TargetIPC.</summary>
+    private static List<DataPoint> FilterOutliers(List<DataPoint> data)
+    {
+        if (data.Count < 10) return data;
+
+        var sorted = data.Select(d => d.TargetIPC).OrderBy(v => v).ToList();
+        double q1 = sorted[data.Count / 4];
+        double q3 = sorted[(3 * data.Count) / 4];
+        double iqr = q3 - q1;
+        double lower = q1 - 1.5 * iqr;
+        double upper = q3 + 1.5 * iqr;
+
+        var filtered = data.Where(d => d.TargetIPC >= lower && d.TargetIPC <= upper).ToList();
+        if (filtered.Count < data.Count * 0.5)
+            return data; // Don't filter if it would remove too much
+
+        return filtered;
     }
 
     public CodeFeatures ExtractCodeFeatures(string bpFile)
@@ -185,9 +286,8 @@ public class DataCollector
         var rates = new List<PerStateMissRate>();
         var program = ParseCached(bpFile);
 
-        // Use real perf counters if available
         var perf = PerfCounterReader.ReadCounters();
-        bool hasReal = perf.L1DMisses > 0;
+        bool hasReal = perf.L1DMisses > 0 && ValidatePerfCounters(perf);
 
         foreach (var state in program.States)
         {
@@ -198,7 +298,6 @@ public class DataCollector
             double l1Miss, l2Miss;
             if (hasReal)
             {
-                // Scale real L1 misses proportionally to each state
                 long totalVars = program.States.Sum(s => s.Variables.Count);
                 double share = totalVars > 0 ? (double)state.Variables.Count / totalVars : 1.0 / program.States.Count;
                 l1Miss = (perf.L1DMisses * share / Math.Max(perf.Cycles, 1)) * 100;

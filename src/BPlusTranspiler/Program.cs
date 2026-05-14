@@ -424,7 +424,11 @@ if (args.Contains("--auto-tune"))
     int tuneIter = 5;
     for (int i = 0; i < args.Length; i++)
         if (args[i] == "--auto-tune" && i + 1 < args.Length && int.TryParse(args[i + 1], out var ti))
+        {
+            if (ti <= 0) { Console.Error.WriteLine("Error: --auto-tune iterations must be > 0"); return 1; }
+            if (ti > 10000) { Console.Error.WriteLine("Error: --auto-tune iterations capped at 10000"); ti = 10000; }
             tuneIter = ti;
+        }
     Console.WriteLine("B+ Auto-Tuner v3.0.4L BETA");
     var tuner = new AutoTuner(input);
     var tuneResult = tuner.Tune(iterations: tuneIter);
@@ -458,6 +462,12 @@ if (args.Contains("--pgo"))
     for (int i = 0; i < args.Length; i++)
         if (args[i] == "--pgo-use" && i + 1 < args.Length) pgoProfile = args[++i];
 
+    if (pgoProfile != null && !File.Exists(pgoProfile))
+    {
+        Console.Error.WriteLine($"Error: PGO profile file '{pgoProfile}' not found");
+        return 1;
+    }
+
     Console.WriteLine("B+ PGO Pipeline v3.0.4L BETA");
     Console.WriteLine($"  Input: {input}");
     Console.WriteLine($"  Mode: {(pgoProfile != null ? "use existing profile" : "collect + recompile")}");
@@ -481,6 +491,12 @@ if (args.Contains("--bolt"))
     string? binaryPath = input;
     for (int i = 0; i < args.Length; i++)
         if (args[i] == "--binary" && i + 1 < args.Length) binaryPath = args[++i];
+
+    if (binaryPath == null || !File.Exists(binaryPath))
+    {
+        Console.Error.WriteLine("Error: --bolt requires a valid binary path (use --binary <path>)");
+        return 1;
+    }
 
     Console.WriteLine("B+ BOLT Post-Link Optimizer v3.0.4L BETA");
     var bolt = new BoltOptimizer();
@@ -711,7 +727,26 @@ if (args.Contains("--metal"))
     string? tierStr = null;
     for (int i = 0; i < args.Length; i++)
         if (args[i].StartsWith("--tier="))
+        {
             tierStr = args[i].Substring("--tier=".Length);
+            var validTiers = new[] { "L0", "L1", "L2", "L3", "0", "1", "2", "3" };
+            if (!validTiers.Contains(tierStr, StringComparer.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine($"Error: invalid --tier '{tierStr}'. Use: L0, L1, L2, L3");
+                return 1;
+            }
+        }
+
+    if (fusion && !args.Contains("--metal"))
+    {
+        Console.Error.WriteLine("Error: --fusion requires --metal");
+        return 1;
+    }
+    if (regAlloc && !args.Contains("--metal"))
+    {
+        Console.Error.WriteLine("Error: --register-alloc requires --metal");
+        return 1;
+    }
 
     return RunMetal(input, fusion, regAlloc, unpack, hiddenBuffers, tierStr);
 }
