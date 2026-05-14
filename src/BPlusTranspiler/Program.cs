@@ -359,7 +359,8 @@ for (int i = 0; i < args.Length; i++)
     // Skip flag values consumed by OptimizationFlags
     else if (args[i] is "--thread-pool" or "--prefetch" or "--pool" or "--memory"
              or "--eco" or "--target-arch" or "--target-os"
-             or "--pin-regs" or "--benchmark" or "--stream")
+             or "--pin-regs" or "--benchmark" or "--stream"
+             or "--samples" or "--binary" or "--pgo-use")
     {
         if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
             i++;
@@ -596,8 +597,12 @@ if (args.Contains("--train-model"))
 {
     int samples = 1_000_000;
     for (int i = 0; i < args.Length; i++)
+    {
         if (args[i] == "--samples" && i + 1 < args.Length && int.TryParse(args[i + 1], out var s))
             samples = Math.Clamp(s, 1000, 10_000_000);
+        else if (args[i].StartsWith("--samples=") && int.TryParse(args[i]["--samples=".Length..], out var s2))
+            samples = Math.Clamp(s2, 1000, 10_000_000);
+    }
 
     Console.WriteLine("B+ AI Model Trainer — Mojo-style 1M samples");
     Console.WriteLine($"  Samples: {samples:N0}");

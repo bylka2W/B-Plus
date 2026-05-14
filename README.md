@@ -1,8 +1,8 @@
-﻿# B+ v3.0.4L BETA — state machine + Metal Stack + AI + µarch + NUMA + ILP + AutoTune
+﻿# B+ v3.0.4L BETA — state machine + Metal Stack + AI + Mojo-inspired optimizer + µarch + AutoTune + Formal Verification
 
 B+ — язык описания конечных автоматов (state machine) с транспиляцией в **Python, C#, C++, C, LLVM IR, HLSL (DXIL), GLSL (SPIR-V)**. Плагины для **Unity, Unreal Engine, Godot, Web (TypeScript), Unigine**. Никакого рантайма.
 
-**v3.0.4L BETA**: NUMA placement (`@numa`), Store forwarding guard (`@store_forward_safe`), µarch profiles (Agner Fog tables for Intel/AMD/ARM), ILP dependency analyzer, Auto-Tune (hardware perf counters → AI retrain).
+**v3.0.4L BETA**: Mojo-inspired optimizer (InlineHotStates, OwnershipPass, MoveOnLastUse, Pre/Post elaboration, Dual-path compilation), Adaptive Runtime (`--adaptive` — CPUID + dispatch table at startup), Pro Debugger v3.0 (`bpc debug` — register tracking + variable watch), Extended Math (`--math` — AVX-512 sin/cos/tan/exp/log + mat4x4 + quaternion), Formal Verification (`--verify` — DO-178C complete report), AI 1M-sample training (`--train-model`), NUMA placement (`@numa`), µarch profiles (Agner Fog tables for Intel/AMD/ARM), Auto-Tune (hardware perf counters → AI retrain). **159 unit tests, 100% pass.**
 
 ---
 
@@ -129,6 +129,7 @@ bpc input.bp --metal --hidden-buffers # LSD/LFB/TLB/BTB/RSB
 bpc input.bp --ai                     # AI-оптимизация metal
 bpc input.bp --auto-tune [N]          # Auto-Tune: AI + perf counters
 bpc --train-unpack                    # обучить UnpackPredictor
+bpc --train-model --samples 1000000   # обучить NeuralPredictor на 1M сэмплов
 
 # === Analysis ===
 bpc input.bp --roofline               # Roofline model
@@ -146,6 +147,11 @@ bpc input.bp --bolt [--binary path]   # BOLT post-link: reorder code by hot path
 bpc input.bp --optimize               # таблица переходов
 bpc input.bp --turbo                  # optimize+pool+pack
 bpc input.bp --predict                # предсказание next state
+
+# === Mojo-inspired ===
+bpc input.bp --adaptive               # runtime CPU dispatch (CPUID + benchmark)
+bpc input.bp --verify [--dal-a]       # DO-178C formal verification report
+bpc input.bp --math                   # AVX-512 math intrinsics (mat4/quat/trig)
 
 # === Streaming ===
 bpc input.bp --stream                 # goto-driven parser
@@ -484,7 +490,7 @@ B+ использует 3-слойную нейросеть для автома�
 ```
 ┌──────────────┐    ┌────────────────┐    ┌────────────────┐    ┌──────────────┐
 │ DataCollector │───→│ NeuralPredictor│───→│ LayoutOptimizer│───→│  AutoTuner   │
-│ 2000 samples  │    │ 21→16→1 NN     │    │ 10k candidates │    │ perf→retrain │
+│ 2000/1M samples│    │ 24→16→1 NN     │    │ 10k candidates │    │ perf→retrain │
 └──────────────┘    └────────────────┘    └────────────────┘    └──────────────┘
        │                     │                      │                     │
        │ real/synthetic IPC  │ predict IPC          │ search best config  │ measure + retrain
@@ -522,6 +528,46 @@ bpc input.bp --metal --unpack
 
 ---
 
+## Mojo-inspired Optimizations (v3.0.4L+)
+
+8 новых оптимизаторов, вдохновлённых Mojo — **без изменения синтаксиса B+**, только на уровне компилятора.
+
+| Оптимизация | Файл | Описание |
+|---|---|---|
+| **InlineHotStates** | `Optimizer/BPlusOptimizer.cs` | Для `@hot(≥0.8)` состояний — inline enter/exit actions прямо в тело transition (замена call на jump) |
+| **OwnershipPass** | `Optimizer/BPlusOptimizer.cs` | Автоматический анализ read/mut/trivial для каждого состояния. Состояния с `read`-семантикой не требуют пула — stateless. Заменяет ручной `--pool` |
+| **MoveOnLastUse** | `Optimizer/BPlusOptimizer.cs` | Copy-to-move: если состояние уходит в переход и больше не используется — reuse памяти без free/alloc |
+| **Pre/Post Elaboration** | `Optimizer/BPlusOptimizer.cs` | Два прохода: preElab (глобальный DCE, guard folding) + postElab (специализированный под tier) |
+| **Register-passable trivial** | `BPlusOptimizer.OwnershipPass` | Состояния без полей → `OwnershipResult.IsTrivial` → передача как `i8` в регистре (через RegisterAllocator) |
+| **Pool-byte analysis** | `OwnershipResult.PoolBytes` | Статический подсчёт пула: 4 байта на int, 8 на double и т.д. Позволяет доказать отсутствие new/delete на уровне компилятора |
+| **SIMD-типы (Mojo-style)** | `Generators/MojoFeatures.cs` | `simd<u8,32>` → парсинг SimdType → маппинг на `__m512i`/`__m256i`/`__m128i` с `alignas(64/32/16)`, LLVM `<N x iW>` |
+| **DualEmit (parallel targets)** | `Program.cs` | Генерация CPU (LLVM) + GPU (DXIL/SPIR-V) из одного AST через `Parallel.ForEach`, без повторного парсинга |
+
+### Новые синтаксические возможности (Mojo-inspired)
+
+```bp
+// @always_inline / @no_inline — inline-подсказки для состояний
+@always_inline state Hot { on tick -> Hot }
+@no_inline state Cold { on tick -> Cold }
+
+// owned / borrowed — статическое владение памятью
+state BufferPool owned { var data: simd<u8, 32> }
+state Reader borrowed { on read -> Process }
+
+// simd<T,N> — типизированные SIMD-векторы
+state Processor {
+    var states: simd<u8, 32>  // 32 состояния в ZMM-регистре
+    var weights: simd<f32, 16> // 16 float'ов в AVX-512
+}
+
+// @llvm_intrinsic — прямые LLVM-вставки
+@llvm_intrinsic(llvm.prefetch) state Prefetcher { on go -> Done }
+
+// @parameter — compile-time условия
+@parameter(target == avx512) state AvxPath { on e -> B }
+@parameter(target == avx2)  state Avx2Path { on e -> B }
+```
+
 ## Known Limitations (roadmap)
 
 | Проблема | Описание | Статус |
@@ -532,7 +578,7 @@ bpc input.bp --metal --unpack
 | Компилятор ×4 быстрее | Парсер, AI, perf counters, бэкенды оптимизированы (Span, ArrayPool, cached fd, Parallel.ForEach, AST cache) | ✅ v3.0.4L |
 | NativeAOT binary | Self-contained бинарник без .NET Runtime (~50 мс запуск). `publish.bat --aot` | ✅ v3.0.4L |
 | 121 real errors fixed | Cyclic inheritance, void type, depth limit, RTL filter, undefined base, parallel races, guard purity, memory conflicts, @quant checks, LLP intrinsics, malloc checks, atomics, BPM lock/SHA256, code injection, GPU barriers | ✅ v3.0.4L |
-| Unit tests | Первый тест-сьют — 29 тестов, 100% pass | ✅ v3.0.4L |
+| Unit tests | 159 тестов (65 stress + 28 new features + 12 Mojo + 12 optimizer + 42 core), 100% pass | ✅ v3.0.4L |
 | BPlusValidator | Централизованный валидатор на 121 ошибку, запускается через `bpc --check` | ✅ v3.0.4L |
 | PGO pipeline | `--pgo` — instrument→run→merge→recompile, 4 фазы | ✅ v3.0.4L |
 | BOLT post-link | `--bolt` — perf→fdata→llvm-bolt→reorder hot paths | ✅ v3.0.4L |
