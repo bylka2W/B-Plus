@@ -360,7 +360,8 @@ for (int i = 0; i < args.Length; i++)
     else if (args[i] is "--thread-pool" or "--prefetch" or "--pool" or "--memory"
              or "--eco" or "--target-arch" or "--target-os"
              or "--pin-regs" or "--benchmark" or "--stream"
-             or "--samples" or "--binary" or "--pgo-use")
+             or "--samples" or "--binary" or "--pgo-use"
+             or "--train-model")
     {
         if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
             i++;

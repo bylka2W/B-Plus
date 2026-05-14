@@ -1,0 +1,35 @@
+import "std.bp"
+
+state Idle {
+    counter: i32 @metal { tier: L1 }
+    flag: bool
+
+    transition idle -> Active => 0.95
+    transition timeout -> Error
+
+    on entry {
+        counter = 0;
+        flag = true;
+    }
+}
+
+state Active {
+    data: f64 @metal { register: "zmm0", fused: mul+add }
+    buf: vec8 @metal { tier: L0, packed }
+
+    transition done -> Idle
+    transition error -> Error
+
+    on process {
+        data = data * 2.0;
+        buf = load(buf + 16);
+    }
+}
+
+state Error {
+    code: i32
+
+    transition reset -> Idle
+}
+
+kernel compute(input: i32, coeff: f64)
