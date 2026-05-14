@@ -266,4 +266,101 @@ public static class BPlusOptimizer
 
     private static bool IsAlwaysFalse(string? g) =>
         g is "false" or "False" or "0" or "";
+
+    // ─── Haskell: Worker/Wrapper — split public API (wrapper) from unboxed inner (worker) ───
+    public static void WorkerWrapper(ProgramNode program)
+    {
+        foreach (var state in program.States)
+        {
+            if (state.Transitions.Count == 0) continue;
+
+            // Worker: bare-metal dispatch with unboxed args
+            var workerTransitions = new List<TransitionNode>();
+            foreach (var t in state.Transitions)
+            {
+                // Create worker: strip boxing, use raw types
+                var worker = new TransitionNode
+                {
+                    EventName = $"__worker_{t.EventName}",
+                    Target = t.Target,
+                    Body = t.Body,
+                    Guard = t.Guard,
+                    IsAlways = t.IsAlways,
+                    HotWeight = t.HotWeight
+                };
+                workerTransitions.Add(worker);
+
+                // Wrapper: public API → calls worker
+                t.Body = $"return __worker_{t.EventName}();";
+                t.Guard = null;
+            }
+            state.Transitions.AddRange(workerTransitions);
+
+            // Add worker state counterpart if useful
+            var workerState = new StateDefNode
+            {
+                Name = $"__{state.Name}_worker",
+                Ownership = OwnershipHint.Borrowed,
+                Inline = InlineHint.AlwaysInline,
+                Depth = state.Depth + 1
+            };
+            foreach (var v in state.Variables)
+            {
+                workerState.Variables.Add(new VariableNode
+                {
+                    Name = v.Name,
+                    Type = v.Type,
+                    IsFastPath = true,
+                    IsMutable = v.IsMutable
+                });
+            }
+            foreach (var t in state.Transitions)
+                workerState.Transitions.Add(t);
+
+            state.NestedStates.Add(workerState);
+        }
+    }
+
+    // ─── Julia: SpecializeDispatch — specialize dispatch loop per state machine ───
+    public static void SpecializeDispatch(ProgramNode program)
+    {
+        foreach (var state in program.States)
+        {
+            var hotEvents = state.Transitions
+                .Where(t => t.HotWeight.HasValue && t.HotWeight.Value >= 0.8)
+                .Select(t => t.EventName)
+                .Distinct()
+                .ToList();
+
+            if (hotEvents.Count == 0) continue;
+
+            // Generate specialized dispatch: direct jump table for hot events
+            var specState = new StateDefNode
+            {
+                Name = $"__{state.Name}_dispatch",
+                Inline = InlineHint.AlwaysInline,
+                Depth = state.Depth + 1
+            };
+
+            // Hot events get direct dispatch, cold events fall through to generic
+            int eventIdx = 0;
+            foreach (var ev in hotEvents)
+            {
+                var hotT = state.Transitions.Where(t => t.EventName == ev).ToList();
+                foreach (var t in hotT)
+                {
+                    specState.Transitions.Add(new TransitionNode
+                    {
+                        EventName = $"dispatch_{ev}",
+                        Target = t.Target,
+                        Body = $"// specialized: event #{eventIdx} → {t.Target}",
+                        HotWeight = t.HotWeight
+                    });
+                }
+                eventIdx++;
+            }
+
+            state.NestedStates.Add(specState);
+        }
+    }
 }

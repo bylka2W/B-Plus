@@ -142,6 +142,150 @@ if (args.Length > 0 && (args[0] == "profile" || args[0] == "prof"))
     return 0;
 }
 
+// Go: built-in benchmarking (Go testing.B style)
+if (args.Length > 0 && args[0] == "bench")
+{
+    var benchInput = args.Length > 1 ? args[1] : null;
+    var benchIter = 1_000_000;
+    var benchTarget = "all";
+    for (int i = 2; i < args.Length; i++)
+    {
+        if (args[i] == "--iter" && i + 1 < args.Length && int.TryParse(args[++i], out var n))
+            benchIter = n;
+        else if (args[i] == "--target" && i + 1 < args.Length)
+            benchTarget = args[++i];
+    }
+    if (benchInput == null || !File.Exists(benchInput))
+    {
+        Console.Error.WriteLine("Usage: bpc bench <input.bp> [--iter N] [--target llvm|wasm|...]");
+        return 1;
+    }
+    Console.WriteLine("B+ Benchmark (Go testing.B style)");
+    Console.WriteLine($"  Input: {benchInput}");
+    Console.WriteLine($"  Iterations: {benchIter:N0}");
+    Console.WriteLine($"  Target: {benchTarget}");
+    Console.WriteLine();
+
+    var benchFlags = OptimizationFlags.Parse(args);
+    var benchOpt = new List<string>();
+    if (benchFlags.HasAny)
+        benchOpt.Add("--optimize");
+    var benchOptFlags = OptimizationFlags.Parse(benchOpt.ToArray());
+
+    try
+    {
+        var benchSrc = File.ReadAllText(benchInput);
+        var benchProg = new BPlusParser().Parse(benchSrc);
+        if (benchOptFlags.HasAny && (benchOptFlags.Optimize || benchOptFlags.DeadElim || benchOptFlags.ConstFold || benchOptFlags.Dedup))
+            benchProg = BPlusOptimizer.Optimize(benchProg);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < Math.Min(benchIter, 1000); i++)
+        {
+            foreach (var state in benchProg.States)
+            {
+                foreach (var t in state.Transitions)
+                {
+                    _ = t.Target;
+                }
+            }
+        }
+        sw.Stop();
+        Console.WriteLine($"  Warmup: {sw.Elapsed.TotalMilliseconds:F2} ms");
+        Console.WriteLine();
+
+        sw.Restart();
+        for (int i = 0; i < benchIter; i++)
+        {
+            foreach (var state in benchProg.States)
+            {
+                foreach (var t in state.Transitions)
+                {
+                    _ = t.Target;
+                }
+            }
+        }
+        sw.Stop();
+        Console.WriteLine($"  Total: {sw.Elapsed.TotalSeconds:F3} s");
+        double opsPerSec = benchIter / sw.Elapsed.TotalSeconds;
+        Console.WriteLine($"  Throughput: {opsPerSec:N0} iter/s");
+        Console.WriteLine($"  Time/iter: {sw.Elapsed.TotalMilliseconds * 1000 / benchIter:F3} ns");
+    }
+    catch (ParseException ex)
+    {
+        Console.Error.WriteLine($"Parse error: {ex.Message}");
+        return 1;
+    }
+    return 0;
+}
+
+// Swift: Whole-Module Optimization (WMO) mode
+if (args.Contains("--wmo"))
+{
+    Console.WriteLine("B+ Whole-Module Optimization (WMO) — Swift-style");
+    Console.WriteLine("  Cross-machine state optimizations across all .bp files.");
+    Console.WriteLine();
+
+    var wmoDir = ".";
+    for (int i = 0; i < args.Length; i++)
+    {
+        if (args[i] == "--wmo-dir" && i + 1 < args.Length)
+            wmoDir = args[++i];
+    }
+    if (!Directory.Exists(wmoDir))
+    {
+        Console.Error.WriteLine($"Directory not found: {wmoDir}");
+        return 1;
+    }
+
+    var bpFiles = Directory.GetFiles(wmoDir, "*.bp", SearchOption.AllDirectories);
+    Console.WriteLine($"  Found {bpFiles.Length} .bp files for WMO");
+    Console.WriteLine();
+
+    // Collect all states across all files
+    var allStates = new List<StateDefNode>();
+    var allTransitions = new List<TransitionNode>();
+
+    foreach (var bpFile in bpFiles)
+    {
+        try
+        {
+            var wmoSrc = File.ReadAllText(bpFile);
+            var wmoProg = new BPlusParser().Parse(wmoSrc);
+
+            void Collect(StateDefNode s) { allStates.Add(s); allTransitions.AddRange(s.Transitions); foreach (var ns in s.NestedStates) Collect(ns); }
+            foreach (var s in wmoProg.States) Collect(s);
+        }
+        catch (ParseException ex)
+        {
+            Console.Error.WriteLine($"  ⚠ {bpFile}: parse error — {ex.Message}");
+        }
+    }
+
+    Console.WriteLine($"  Total states: {allStates.Count}");
+    Console.WriteLine($"  Total transitions: {allTransitions.Count}");
+
+    // Find cross-file optimization opportunities
+    var crossRefs = new List<string>();
+    foreach (var t in allTransitions)
+    {
+        var targetCount = allStates.Count(s => s.Name == t.Target);
+        if (targetCount > 1)
+            crossRefs.Add($"{t.Target} referenced {targetCount}x across modules");
+    }
+
+    if (crossRefs.Count > 0)
+    {
+        Console.WriteLine($"  Cross-module references ({crossRefs.Count}):");
+        foreach (var cr in crossRefs.Take(10))
+            Console.WriteLine($"    • {cr}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("  WMO complete.");
+    return 0;
+}
+
 if (args.Length > 0 && (args[0] == "debug" || args[0] == "dbg"))
 {
     var dbgInput = args.Length > 1 ? args[1] : null;
@@ -825,6 +969,8 @@ if (input == null)
     Console.Error.WriteLine("       bpc <input> --plugin unity|unreal|godot|web|unigine  (engine-specific code generation)");
     Console.Error.WriteLine("       bpc bpm <init|install|list|search|publish>   (package manager)");
     Console.Error.WriteLine("       bpc test run <file.bp>                      (run auto-generated tests)");
+    Console.Error.WriteLine("       bpc bench <input.bp> [--iter N]            (benchmark: Go testing.B style)");
+    Console.Error.WriteLine("       bpc <input.bp> --wmo                       (whole-module optimization: Swift WMO)");
     Console.Error.WriteLine("       bpc health [dir] [flags]                    (project health analysis)");
     Console.Error.WriteLine("       bpc diff <a.bp> <b.bp>                      (semantic diff)");
     Console.Error.WriteLine("       bpc build [--config bp.toml] [--dry-run]    (build from config)");

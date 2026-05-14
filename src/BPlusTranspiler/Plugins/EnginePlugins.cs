@@ -538,10 +538,49 @@ public class UniginePlugin : ICodeGenerator
         cpp.AppendLine("    }");
         cpp.AppendLine("}");
 
+        // Swift: existential types — some IEnginePlugin (monomorphized) vs any IEnginePlugin (vtable)
+        h.AppendLine();
+        h.AppendLine("// Swift-style existential types:");
+        h.AppendLine("// some IEnginePlugin → monomorphized (static dispatch)");
+        h.AppendLine("// any IEnginePlugin → vtable dispatch (runtime plugins)");
+        h.AppendLine();
+        h.AppendLine("// some IEnginePlugin — compile-time known plugin, zero-cost");
+        h.AppendLine("template<typename T>");
+        h.AppendLine("concept IEnginePlugin = requires(T t, int ev) {");
+        h.AppendLine("    { t.OnEvent(ev) } -> std::same_as<void>;");
+        h.AppendLine("};");
+        h.AppendLine();
+        h.AppendLine("// any IEnginePlugin — runtime vtable dispatch for DLL plugins");
+        h.AppendLine("struct AnyPlugin {");
+        h.AppendLine("    virtual void OnEvent(int eventId) = 0;");
+        h.AppendLine("    virtual ~AnyPlugin() = default;");
+        h.AppendLine("};");
+
         return new Dictionary<string, string>
         {
             { $"{name}FSM.h", h.ToString() },
             { $"{name}FSM.cpp", cpp.ToString() }
         };
+    }
+}
+
+// Swift: some IEnginePlugin — monomorphized plugin specialization
+public static class PluginSpecializer
+{
+    public static string GenMonomorphizedDispatch(ProgramNode program, string pluginType)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"// Monomorphized dispatch for {pluginType}");
+        sb.AppendLine($"// some IEnginePlugin → compiler specializes for this exact plugin");
+        sb.AppendLine($"template<>{pluginType}& plugin) {{");
+        foreach (var state in program.States)
+        {
+            foreach (var t in state.Transitions)
+            {
+                sb.AppendLine($"    plugin.OnEvent(/* {t.EventName} */);");
+            }
+        }
+        sb.AppendLine("}}");
+        return sb.ToString();
     }
 }

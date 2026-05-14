@@ -1,3 +1,5 @@
+using BPlusTranspiler.Optimizer;
+
 namespace BPlusTranspiler.Ast;
 
 public enum ActionType { Enter, Exit }
@@ -100,6 +102,16 @@ public class StateDefNode
     public OwnershipHint Ownership { get; set; } = OwnershipHint.Default;
     public List<LlvmIntrinsicDecl> LlvmIntrinsics { get; } = new();
     public List<ParameterCondition> ParameterConditions { get; } = new();
+    // Zig: Error transitions
+    public List<ErrorTransitionNode> ErrorTransitions { get; } = new();
+    // Rust: NLL liveness results
+    public LivenessResult? Liveness { get; set; }
+    // Julia: inferred types per variable
+    public Dictionary<string, string> InferredTypes { get; } = new();
+    // Go: escape analysis result per variable
+    public Dictionary<string, EscapeKind> EscapeResults { get; } = new();
+    // Haskell: demand analysis result
+    public DemandSignature? Demand { get; set; }
 }
 
 public class TransitionNode
@@ -118,6 +130,25 @@ public class TransitionNode
     public double? HotWeight { get; set; }
     // Semantic Inline chain name (set by optimizer)
     public string? ChainId { get; set; }
+    // Zig: ErrorTransition — transition can fail with error payload
+    public bool IsFallible { get; set; }
+    public string? ErrorType { get; set; }    // e.g. "TimeoutError", "string"
+    public string? ErrorTarget { get; set; }  // state to transition to on error
+    public string? ErrorBody { get; set; }    // cleanup code on error path
+}
+
+// Zig: ErrorTransitionNode — fallible transition with explicit error handling
+public class ErrorTransitionNode
+{
+    public string EventName { get; set; } = "";
+    public List<ParamNode> Parameters { get; } = new();
+    public string? Guard { get; set; }
+    public string OkTarget { get; set; } = "";
+    public string? OkBody { get; set; }
+    public string? ErrorType { get; set; }
+    public string ErrorTarget { get; set; } = "";
+    public string? ErrorBody { get; set; }
+    public double? HotWeight { get; set; }
 }
 
 public class ParamNode

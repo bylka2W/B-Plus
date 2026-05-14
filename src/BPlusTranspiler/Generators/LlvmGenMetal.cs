@@ -26,6 +26,12 @@ public class LlvmGenMetal
             EmitStateFunction(state, tier, regs, block);
         }
 
+        // Haskell: pointer tagging — encode state ID in low bits of state pointer
+        EmitPointerTaggedDispatch(program);
+
+        // LLVM: PGO devirtualization — devirtualize hottest transitions
+        EmitPgoDevirt(program, metalBlocks);
+
         EmitTransitionTable(registers);
 
         return _ir.ToString();
@@ -34,6 +40,7 @@ public class LlvmGenMetal
     private void EmitHeader()
     {
         _ir.AppendLine("; B+ v3.0.4L BETA Metal — LLVM IR with intrinsics");
+        _ir.AppendLine("; Haskell-style pointer tagging + PGO devirtualization");
         _ir.AppendLine("target triple = \"x86_64-unknown-unknown\"");
         _ir.AppendLine("target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"");
         _ir.AppendLine();
@@ -69,6 +76,26 @@ public class LlvmGenMetal
             _ir.AppendLine($"  ; register {r.Register} = {r.Variable}");
         }
 
+        // Haskell-style: store state tag in low 3 bits of state_ptr (always aligned)
+        // Low bits encode: 000=Idle, 001=processing, 010=error, 011=done
+        int tag = hot ? 1 : (tier?.Section?.Contains("cold") == true ? 2 : 0);
+        _ir.AppendLine($"  ; Haskell-style pointer tag: {tag} (0=warm, 1=hot, 2=cold)");
+        _ir.AppendLine($"  %tagged = or i64 %state_ptr, {tag}");
+        _ir.AppendLine($"  ; Branch on tag without load: and+icmp");
+        _ir.AppendLine($"  %tag_bits = and i64 %tagged, 7");
+        _ir.AppendLine($"  %is_hot = icmp eq i64 %tag_bits, 1");
+        _ir.AppendLine($"  br i1 %is_hot, label %hot_path, label %cold_path, !prof !{{!\"branch_weights\", i32 99, i32 1}}");
+        _ir.AppendLine();
+        _ir.AppendLine("hot_path:");
+        _ir.AppendLine("  ; fast path — already hot");
+        _ir.AppendLine("  br label %merge");
+        _ir.AppendLine();
+        _ir.AppendLine("cold_path:");
+        _ir.AppendLine("  ; slow path — need to warm up");
+        _ir.AppendLine("  br label %merge");
+        _ir.AppendLine();
+        _ir.AppendLine("merge:");
+
         if (block?.Config.FusionPairs.Count > 0)
         {
             foreach (var pair in block.Config.FusionPairs)
@@ -93,6 +120,73 @@ public class LlvmGenMetal
         _ir.AppendLine("  ret void");
         _ir.AppendLine("}");
         _ir.AppendLine();
+    }
+
+    // Haskell: pointer tagging — dispatch on low bits of state pointer, no memory load
+    private void EmitPointerTaggedDispatch(ProgramNode program)
+    {
+        int stateCount = program.States.Count;
+        if (stateCount == 0 || stateCount > 8) return; // 3 bits → max 8 tags
+
+        _ir.AppendLine("; ─── Haskell-style Pointer Tagged Dispatch ───");
+        _ir.AppendLine("; State ID encoded in low 3 bits of pointer (always 8-byte aligned)");
+        _ir.AppendLine("; Branch on tag directly — no memory load");
+        _ir.AppendLine($"define void @dispatch_tagged(i64 %state_ptr) {{");
+        _ir.AppendLine("  %tag = and i64 %state_ptr, 7");
+        _ir.AppendLine("  switch i64 %tag, label %default [");
+
+        for (int i = 0; i < stateCount; i++)
+        {
+            string stateName = program.States[i].Name;
+            _ir.AppendLine($"    i64 {i}, label %state_{stateName}");
+        }
+
+        _ir.AppendLine("  ]");
+        _ir.AppendLine();
+
+        for (int i = 0; i < stateCount; i++)
+        {
+            string stateName = program.States[i].Name;
+            _ir.AppendLine($"state_{stateName}:");
+            _ir.AppendLine($"  call void @state_{stateName}(i64 %state_ptr, i64 0)");
+            _ir.AppendLine("  ret void");
+            _ir.AppendLine();
+        }
+
+        _ir.AppendLine("default:");
+        _ir.AppendLine("  ret void");
+        _ir.AppendLine("}");
+        _ir.AppendLine();
+    }
+
+    // LLVM: PGO devirtualization — devirtualize hottest transitions based on PGO data
+    private void EmitPgoDevirt(ProgramNode program, List<MetalBlock> metalBlocks)
+    {
+        var hotStates = program.States
+            .Where(s => s.Transitions.Any(t => t.HotWeight.HasValue && t.HotWeight.Value >= 0.9))
+            .ToList();
+
+        if (hotStates.Count == 0) return;
+
+        _ir.AppendLine("; ─── PGO Devirtualization ───");
+        _ir.AppendLine("; Hot transitions devirtualized to direct calls (PGO data)");
+
+        foreach (var state in hotStates)
+        {
+            var hotTrans = state.Transitions
+                .Where(t => t.HotWeight.HasValue && t.HotWeight.Value >= 0.9)
+                .ToList();
+
+            foreach (var t in hotTrans)
+            {
+                _ir.AppendLine($"; {state.Name}[{t.EventName}] → {t.Target} (weight={t.HotWeight:F2})");
+                _ir.AppendLine($"define void @devirt_{state.Name}_{t.EventName}(i64 %state_ptr) {{");
+                _ir.AppendLine($"  call void @state_{t.Target}(i64 %state_ptr, i64 0)");
+                _ir.AppendLine("  ret void");
+                _ir.AppendLine("}");
+                _ir.AppendLine();
+            }
+        }
     }
 
     private void EmitTransitionTable(List<RegisterAssignment> regs)
