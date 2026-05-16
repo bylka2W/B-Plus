@@ -606,6 +606,34 @@ bpc publish --runtime win-x64 --aot
 | **SimplePrefetchInjector** | `AI/PrefetchInjector.cs` | <64 stride = none, 64-256 → T0, >256 → NTA, >1024 → non-temporal |
 | **SimpleHiddenBufferOptimizer** | `AI/HiddenBufferOptimizer.cs` | L1D: DLP loop fission, L2: hugepages, L3: CLWB, TLB: 1GB pages |
 | **AutoTunerWithPerfCounters** | `AI/AutoTunerWithPerfCounters.cs` | Обучение весов: cache_miss_w, branch_miss_w, ipc_w |
+| **CacheMissDetector** | `AI/CacheMissDetector.cs` | Анализ переменных: определение size/tier/penalty. Детекция L2/L3/RAM промахов |
+| **InstructionScheduler** | `AI/InstructionScheduler.cs` | Перестановка инструкций: load→compute→use. Заполнение idle slots в IQ |
+| **TimedPrefetch** | `AI/TimedPrefetch.cs` | Prefetch с таймингом: PREFETCHT0/T1/T2/NTA за 80-200 тактов до использования |
+| **SoftwarePipeline** | `AI/SoftwarePipeline.cs` | Разбиение цикла на стадии: load→compute→store. II (Initiation Interval) = 4 |
+
+### Заполнение промахов кэша
+
+Когда процессор ждёт данные из RAM (промах ~200 тактов), алгоритм вставляет **независимые инструкции**:
+
+```
+┌─────────────────────────────────────────────────┐
+│  До оптимизации:                               │
+│    load A      → stall 200 cycles              │
+│    compute B   → ждёт A                        │
+│                                                 │
+│  После:                                         │
+│    load A[N+1]  → prefetch для след. итерации  │
+│    compute B[N]  → выполняется пока A[N] идёт   │
+│    use A[N]      → данные готовы               │
+└─────────────────────────────────────────────────┘
+```
+
+| Оптимизация | Файл | Speedup |
+|---|---|---|
+| L0 (влезает в кэш) | CacheSimulator | 1.3x |
+| + TimedPrefetch | TimedPrefetch.cs | 2-3x |
+| + InstructionScheduler | InstructionScheduler.cs | 3-5x |
+| + SoftwarePipeline | SoftwarePipeline.cs | **5-10x** |
 
 ### Тесты
 
