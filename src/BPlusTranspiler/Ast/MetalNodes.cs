@@ -145,9 +145,11 @@ public class MetalConfig
         return feat.ToArray();
     }
 
+    private static readonly ThreadLocal<Random> _rng = new(() => new Random());
+
     public static MetalConfig Random()
     {
-        var rng = new Random(42);
+        var rng = _rng.Value!;
         var tiers = new[] { MemoryTier.L0, MemoryTier.L1, MemoryTier.L2, MemoryTier.L3, MemoryTier.Ram };
         var heaps = new[] { HeapType.L1, HeapType.L3, (HeapType)(-1) };
         return new MetalConfig

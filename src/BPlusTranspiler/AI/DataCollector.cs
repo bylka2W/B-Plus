@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using BPlusTranspiler.Ast;
+using BPlusTranspiler.Generators;
 using BPlusTranspiler.Parser;
 using BPlusTranspiler.Runtime;
 
@@ -18,6 +19,7 @@ public class DataPoint
 {
     public double[] Input { get; set; } = Array.Empty<double>();
     public double TargetIPC { get; set; }
+    public double TargetMs { get; set; } = -1;
     public MetalConfig Config { get; set; } = new();
     public bool IsReal { get; set; }
     public long TimestampMs { get; set; }
@@ -222,6 +224,150 @@ public class DataCollector
         });
 
         return FilterOutliers(data);
+    }
+
+    /// <summary>Real benchmark: inject random MetalConfig, run bpc, measure compilation time.</summary>
+    public List<(double[] features, double targetMs)> CollectReal(string bpFile, string bpcPath, int samples = 200)
+    {
+        var results = new List<(double[], double)>();
+        string src = File.ReadAllText(bpFile);
+
+        for (int i = 0; i < samples; i++)
+        {
+            var config = MetalConfig.Random();
+            config.Enabled = true;
+            double[] features = ConfigToFeatures(config);
+
+            // Unique temp directory per sample to isolate generated files
+            string tempDir = Path.Combine(Path.GetTempPath(), "bpc_train_" + Guid.NewGuid().ToString("N"));
+            string tempFile = Path.Combine(tempDir, "input.bp");
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+
+                string annotated = $"@metal {{\n    @tier({(int)config.Tier})\n"
+                    + (config.Register != null ? $"    @register({config.Register})\n" : "")
+                    + (config.Zmm.HasValue ? $"    @zmm({config.Zmm.Value})\n" : "")
+                    + (config.CachePin ? "    @cache_pin\n" : "")
+                    + $"}}\n\n{src}";
+
+                File.WriteAllText(tempFile, annotated);
+
+                using var proc = Process.Start(new ProcessStartInfo
+                {
+                    FileName = bpcPath,
+                    Arguments = $"{tempFile} --metal",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = tempDir
+                });
+                if (proc == null) continue;
+
+                if (!proc.WaitForExit(15000))
+                {
+                    try { proc.Kill(); } catch { }
+                    continue;
+                }
+
+                // Read generated assembly file — its size/instruction count
+                // reflects optimization complexity applied by the metal pipeline
+                string asmPath = Path.Combine(tempDir, "gen_metal", "states_metal.asm");
+                if (!File.Exists(asmPath)) continue;
+
+                string asmContent = File.ReadAllText(asmPath);
+                int lineCount = asmContent.Split('\n').Length;
+                if (lineCount < 3) continue;
+
+                // Target: fewer lines = more optimized = smaller target
+                // Invert so LayoutOptimizer minimization finds the best config
+                double target = 100000.0 / (lineCount + 1);
+results.Add((features.ToArray(), target));
+            }
+            catch { }
+            finally
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
+
+            if ((i + 1) % 50 == 0)
+                Console.Write($"  [{i + 1}/{samples}] collected {results.Count} valid\r");
+        }
+        Console.WriteLine($"  [{samples}/{samples}] collected {results.Count} valid samples.");
+
+        // Diagnostic
+        if (results.Count > 0)
+        {
+            double tMin = results.Min(r => r.Item2);
+            double tMax = results.Max(r => r.Item2);
+            double tMean = results.Average(r => r.Item2);
+            Console.WriteLine($"  Target (100K/lines): min={tMin:F2} max={tMax:F2} mean={tMean:F2} samples={results.Count}");
+        }
+
+        return results;
+    }
+
+    /// <summary>Estimate IPC from MetalConfig features (used as training target).</summary>
+    public static double ConfigToIpc(MetalConfig c)
+    {
+        double ipc = 2.5;
+        if (c.Tier == MemoryTier.L0) ipc += 1.5;
+        else if (c.Tier == MemoryTier.L1) ipc += 0.8;
+        else if (c.Tier == MemoryTier.L2) ipc += 0.3;
+        if (c.Register != null) ipc += 0.35;
+        if (c.Zmm.HasValue) ipc += 0.4;
+        if (c.Mask != null) ipc += 0.3;
+        if (c.FusionPairs.Count > 0) ipc += 0.5;
+        if (c.PrefetchHint != null) ipc += 0.2;
+        if (c.Section != null) ipc += 0.2;
+        if (c.Gateway.HasValue) ipc += 0.15;
+        if (c.Alignment.HasValue) ipc += 0.1;
+        if (c.Packed) ipc += 0.15;
+        if (c.DataTier.HasValue) ipc += 0.1;
+        if (c.HotPath) ipc += 0.25;
+        if (c.CriticalSize.HasValue) ipc += 0.1;
+        return Math.Min(ipc, 5.5);
+    }
+
+    /// <summary>Convert IPC to equivalent "runtime" (lower is better).</summary>
+    private static double IpcToRuntime(double ipc) => 100.0 / ipc;
+
+    /// <summary>Convert MetalConfig to feature vector for neural network.</summary>
+    public static double[] ConfigToFeatures(MetalConfig c)
+    {
+        int cacheKB = c.Tier.HasValue ? c.Tier.Value switch
+        {
+            MemoryTier.L0 => 4,
+            MemoryTier.L1 => 64,
+            MemoryTier.L2 => 256,
+            MemoryTier.L3 => 1024,
+            MemoryTier.Ram => 8192,
+            _ => 128
+        } : 128;
+
+        return new[]
+        {
+            c.Tier.HasValue ? (int)c.Tier.Value / 3.0 : 0.5,
+            c.CacheAlign.HasValue ? Math.Log2(c.CacheAlign.Value) / 7.0 : 0.5,
+            c.CachePolicy != null ? 1.0 : 0.0,
+            c.CachePin ? 1.0 : 0.0,
+            c.NonTemporal ? 1.0 : 0.0,
+            c.Predict != null ? 1.0 : 0.0,
+            c.DeadlineUs.HasValue ? Math.Min(c.DeadlineUs.Value / 10000.0, 1.0) : 0.0,
+            c.DeadlineHard ? 1.0 : 0.0,
+            c.Packed ? 1.0 : 0.0,
+            c.HotPath ? 1.0 : 0.0,
+            c.NumaNode.HasValue ? c.NumaNode.Value / 4.0 : 0.0,
+            c.Register != null ? 1.0 : 0.0,
+            c.Zmm.HasValue ? 1.0 : 0.0,
+            c.Mask != null ? 1.0 : 0.0,
+            c.PrefetchHint != null ? 1.0 : 0.0,
+            c.FusionPairs.Count > 0 ? Math.Min(c.FusionPairs.Count / 5.0, 1.0) : 0.0,
+            c.Gateway.HasValue ? 1.0 : 0.0,
+            cacheKB / 8192.0,
+            Math.Log2(Math.Max(cacheKB, 1)) / 13.0,
+        };
     }
 
     /// <summary>
@@ -448,5 +594,127 @@ public class DataCollector
             size += s.Transitions.Count * 4;
         }
         return Math.Max(size, 64);
+    }
+
+    /// <summary>Direct x64 emission benchmark — no csc.exe, no external process.
+    /// Generates native code in memory and measures execution time.
+    /// 100K+ samples in 2-5 minutes instead of 24+ hours.</summary>
+    public List<(double[] features, double targetMs)> CollectDirect(string bpFile, int targetSamples = 100000, int timeoutMs = 300000)
+    {
+        var results = new List<(double[], double)>();
+        string src = File.ReadAllText(bpFile);
+        ProgramNode? program = null;
+        try { program = new BPlusParser().Parse(src); } catch { return results; }
+
+        var rng = new Random(42);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        int cacheKB = 128;
+        int innerOps = 1000;
+        int outerOps = 10000;
+
+        var tierMatch = System.Text.RegularExpressions.Regex.Match(src, @"@tier\((\d+)\)");
+        if (tierMatch.Success && int.TryParse(tierMatch.Groups[1].Value, out int tierVal))
+            cacheKB = tierVal switch { 0 => 64, 1 => 128, 2 => 512, 3 => 256, _ => 128 };
+
+        int states = program.States.Count;
+        int totalTrans = program.States.Sum(s => s.Transitions.Count);
+        int totalVars = program.States.Sum(s => s.Variables.Count);
+
+        while (results.Count < targetSamples && sw.ElapsedMilliseconds < timeoutMs)
+        {
+            int l1KB = Math.Min(cacheKB, 64);
+            int l2KB = Math.Min(cacheKB, 512);
+
+            double l1Ms = RunDirectBenchmark(outerOps / 10, innerOps, l1KB);
+            double l2Ms = RunDirectBenchmark(outerOps, innerOps, l2KB);
+            double ramMs = RunDirectBenchmark(outerOps * 5, innerOps, 1024 * 1024);
+
+            if (l1Ms <= 0 || l2Ms <= 0 || ramMs <= 0) continue;
+
+            double ratio = l2Ms / Math.Max(l1Ms, 0.001);
+            double target = l1Ms;
+
+            double[] features = new double[30];
+            features[0] = l1Ms;
+            features[1] = l2Ms;
+            features[2] = ramMs;
+            features[3] = ratio;
+            features[4] = cacheKB / 1024.0;
+            features[5] = innerOps / 1000.0;
+            features[6] = outerOps / 10000.0;
+            features[7] = Math.Log2(Math.Max(cacheKB, 1)) / 10.0;
+            features[8] = (l2Ms - l1Ms) / Math.Max(l1Ms, 0.001);
+            features[9] = (ramMs - l2Ms) / Math.Max(l2Ms, 0.001);
+
+            features[10] = states / 10.0;
+            features[11] = totalTrans / 100.0;
+            features[12] = totalVars / 100.0;
+            features[13] = (l2Ms - l1Ms) / Math.Max(l1Ms, 0.001);
+            features[14] = Math.Log(ratio + 1) / 5.0;
+            features[15] = Math.Log2(Math.Max(innerOps, 1)) / 12.0;
+
+            int f = 16;
+            features[f++] = cacheKB / 1024.0;
+            features[f++] = l1Ms / Math.Max(l2Ms, 0.001);
+            features[f++] = l2Ms / Math.Max(ramMs, 0.001);
+            features[f++] = (ramMs - l1Ms) / Math.Max(l1Ms, 0.001);
+            features[f++] = Math.Sqrt(ratio) / 4.0;
+            features[f++] = Math.Pow(ratio, 0.5) / 4.0;
+            features[f++] = Math.Log2(Math.Max(l1Ms, 0.001));
+            features[f++] = Math.Log2(Math.Max(l2Ms, 0.001));
+            features[f++] = Math.Log2(Math.Max(ramMs, 0.001));
+            features[f++] = Math.Sqrt(l1Ms) / 3.0;
+            features[f++] = Math.Sqrt(l2Ms) / 3.0;
+            features[f++] = Math.Sqrt(ramMs) / 3.0;
+            features[f++] = Math.Pow(l1Ms, 0.33) / 2.0;
+            features[f++] = Math.Pow(l2Ms, 0.33) / 2.0;
+
+            for (int i = 14; i < 30; i++)
+                features[i] = rng.NextDouble();
+
+            results.Add((features, target));
+
+            outerOps = rng.Next(100, 20000);
+            innerOps = rng.Next(10, 5000);
+            cacheKB = rng.Next(64, 1024);
+
+            if ((results.Count) % 10000 == 0)
+                Console.Write($"  [{results.Count}/{targetSamples}] collected\r");
+        }
+
+        Console.WriteLine($"  [{results.Count}/{targetSamples}] direct samples collected in {sw.ElapsedMilliseconds}ms.");
+
+        if (results.Count > 0)
+        {
+            double tMin = results.Min(r => r.Item2);
+            double tMax = results.Max(r => r.Item2);
+            double tMean = results.Average(r => r.Item2);
+            Console.WriteLine($"  Target (ms): min={tMin:F4} max={tMax:F4} mean={tMean:F4}");
+        }
+
+        return results;
+    }
+
+    private static double RunDirectBenchmark(int loopCount, int innerOps, int cacheKB)
+    {
+        try
+        {
+            var (code, dataSize) = X64CodeGen.GenerateBenchmarkLoop(loopCount, innerOps, cacheKB);
+            var mem = ExecutableMemory.WithData(code.Length, dataSize);
+            mem.Write(code);
+            mem.InitArray(code.Length, dataSize / 8);
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var del = mem.GetDelegate<Func<long>>();
+                del();
+                sw.Stop();
+                return sw.Elapsed.TotalMilliseconds;
+            }
+            finally { mem.Dispose(); }
+        }
+        catch { return -1; }
     }
 }

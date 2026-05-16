@@ -1,0 +1,1 @@
+using System; using System.Diagnostics; class Program { static void Main() { var fsm = new BPlusStateMachine(); var sw = Stopwatch.StartNew(); for (int i = 0; i < 10000000; i++) fsm.Update(); sw.Stop(); Console.WriteLine(" Всего времени: " + sw.ElapsedMilliseconds + " мс"); Console.WriteLine(" Среднее время перехода: " + ((double)sw.ElapsedTicks * 100 / 10000000) + " нс"); } }

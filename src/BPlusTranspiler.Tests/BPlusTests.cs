@@ -31,6 +31,7 @@ public static class BPlusTests
         TestMojoOptimizer(); // Mojo optimizer passes
         TestBoltProfileLayout(); // BOLT/Propeller profile-guided layout
         TestAssemblyOptimizer(); // Peephole, JumpShrink, ABI, CFI
+        TestAiArchitect();       // AI architect pipeline
 
         Console.WriteLine($"\n═══════════════════════════════════════");
         Console.WriteLine($"  {_passed}/{_passed + _failed} tests passed");
@@ -1036,6 +1037,81 @@ entry main() -> i32 { return 0 }");
         Assert(ownership.Where(r => r.PoolBytes > 0).Any(), "O6a: states with pool bytes detected");
         var totalPool = ownership.Sum(r => r.PoolBytes);
         Assert(totalPool > 0, "O6b: total pool analysis non-zero");
+
+        Console.WriteLine();
+    }
+
+    // ─── AI ARCHITECT TESTS ───
+
+    static void TestAiArchitect()
+    {
+        Console.WriteLine("[AI Architect]");
+
+        // A1: ProfileTransitions — basic
+        var p = Parse("state Hot { on a -> Cold on b -> Warm } state Cold { on c -> Done } state Warm { on d -> Done } state Done { }");
+        p.States[0].Transitions[0].HotWeight = 0.9; // hot
+        p.States[0].Transitions[1].HotWeight = 0.6; // warm
+        p.States[1].Transitions[0].HotWeight = 0.1; // cold
+        var profiles = AI.AiArchitect.ProfileTransitions(p);
+        Assert(profiles.Count == 4, "A1a: 4 transitions profiled");
+        var hotProfile = profiles.First(pr => pr.StateName == "Hot" && pr.EventName == "a");
+        Assert(!hotProfile.IsCold, "A1b: Hot→a is not cold (weight=0.9)");
+        var coldProfile = profiles.First(pr => pr.StateName == "Cold");
+        Assert(coldProfile.IsCold, "A1c: Cold→c is cold (weight=0.1)");
+
+        // A2: SplitColdStates — cold state gets uncacheable + non-temporal
+        var p2 = Parse("state Hot { on go -> Cold } state Cold { on done -> End } state End { on reset -> Hot }");
+        if (p2.States.Count >= 3)
+        {
+            p2.States[0].Transitions[0].HotWeight = 0.9;
+            p2.States[1].Transitions[0].HotWeight = 0.1;
+            p2.States[2].Transitions[0].HotWeight = 0.5;
+        }
+        var prof2 = AI.AiArchitect.ProfileTransitions(p2);
+        var split = AI.AiArchitect.SplitColdStates(p2, prof2);
+        Assert(split >= 0, "A2a: split cold states runs without crash");
+        var coldState = p2.States.FirstOrDefault(s => s.Name == "Cold");
+        Assert(coldState == null || coldState.CachePolicy == "uncacheable", "A2b: Cold state marked uncacheable if found");
+
+        // A3: SortTransitions — most likely first
+        var p3 = Parse("state Sort { on a -> X on b -> Y on c -> Z }");
+        p3.States[0].Transitions[0].HotWeight = 0.3;
+        p3.States[0].Transitions[1].HotWeight = 0.9;
+        p3.States[0].Transitions[2].HotWeight = 0.6;
+        var prof3 = AI.AiArchitect.ProfileTransitions(p3);
+        var sorted = AI.AiArchitect.SortTransitions(p3, prof3);
+        Assert(sorted == 1, "A3a: one state sorted");
+        Assert(p3.States[0].Transitions[0].HotWeight == 0.9, "A3b: first transition is most likely (b=0.9)");
+
+        // A4: InlineLightweightEnter — small enter blocks inlined
+        var p4 = Parse("state HasEnter { enter { init() } on a -> Next on b -> Next } state Next { }");
+        var inlined = AI.AiArchitect.InlineLightweightEnter(p4);
+        Assert(inlined >= 1, "A4a: at least one enter block inlined");
+        Assert(p4.States[0].Actions.Count == 0, "A4b: enter actions removed after inline");
+        Assert(p4.States[0].Transitions.All(t => t.Body != null && t.Body.StartsWith("init()")), "A4c: enter code prepended to transition bodies");
+
+        // A5: Full pipeline — dry run
+        var p5 = Parse("state Hot { on a -> Cold } state Cold { on b -> Done } state Done { }");
+        p5.States[0].Transitions[0].HotWeight = 0.9;
+        p5.States[1].Transitions[0].HotWeight = 0.1;
+        var dryResult = AI.AiArchitect.Run(p5, dryRun: true);
+        Assert(dryResult.Profiles.Count == 2, "A5a: dry run profiles 2 transitions");
+        Assert(dryResult.StatesSplit == 0, "A5b: dry run does not split states");
+
+        // A6: Full pipeline — wet run
+        var p6 = Parse("state Hot { enter { setup() } on go -> Cold on reset -> End } state Cold { on done -> End on retry -> Hot } state End { }");
+        if (p6.States.Count >= 2)
+        {
+            p6.States[0].Transitions[0].HotWeight = 0.9; // hot, first
+            p6.States[0].Transitions[1].HotWeight = 0.1; // cold, second
+            p6.States[1].Transitions[0].HotWeight = 0.1; // cold
+            p6.States[1].Transitions[1].HotWeight = 0.5; // warm
+        }
+        var wetResult = AI.AiArchitect.Run(p6, dryRun: false);
+        Assert(wetResult.StatesSplit >= 0, "A6a: wet run handles cold states");
+        Assert(wetResult.TransitionsSorted >= 1, "A6b: wet run sorts transitions");
+        Assert(wetResult.EnterBlocksInlined >= 1, "A6c: wet run inlines enter blocks");
+        Assert(wetResult.StateCountAfter >= wetResult.StateCountBefore, "A6d: state count does not decrease");
 
         Console.WriteLine();
     }

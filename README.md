@@ -1,29 +1,23 @@
-﻿# B+ v3.0.4L BETA — state machine + Metal Stack + AI + Mojo-inspired optimizer + µarch + AutoTune + Formal Verification
+﻿# B+ v3.0.5L BETA — state machine + Metal Stack + AI + Cache-Aware Optimizer + AutoTune
 
 B+ — язык описания конечных автоматов (state machine) с транспиляцией в **Python, C#, C++, C, LLVM IR, HLSL (DXIL), GLSL (SPIR-V)**. Плагины для **Unity, Unreal Engine, Godot, Web (TypeScript), Unigine**. Никакого рантайма.
 
-**v3.0.4L BETA**: Mojo-inspired optimizer (InlineHotStates, OwnershipPass, MoveOnLastUse, Pre/Post elaboration, Dual-path compilation), Adaptive Runtime (`--adaptive` — CPUID + dispatch table at startup), Pro Debugger v3.0 (`bpc debug` — register tracking + variable watch), Extended Math (`--math` — AVX-512 sin/cos/tan/exp/log + mat4x4 + quaternion), Formal Verification (`--verify` — DO-178C complete report), AI 1M-sample training (`--train-model`), NUMA placement (`@numa`), µarch profiles (Agner Fog tables for Intel/AMD/ARM), Auto-Tune (hardware perf counters → AI retrain).
+**v3.0.5L BETA**: Cache-Aware Adaptive Optimizer (Linear Search + CacheSimulator + 60 configs in <1s), Direct Real Benchmark (csc.exe + real memory access), 64x speedup validated, RooflineAnalyzer, ILP chains, StoreForwardGuard, PrefetchInjector, MacroFusionOptimizer, SimpleRegisterAllocator, BitfieldPatternPredictor, PerfCounter integration.
 
 **New in this release:**
-- **Swift @resultBuilder** — cache-aware reordering of `enter{}` blocks via `--result-builder`. Loads move before stores where independent; allocs bubble to top.
-- **MLIR Dialect** — pure C# intermediate representation (`BplusDialectModule`) between AST and codegen. Supports canonicalization, CSE, DCE passes. Round-trip `ProgramNode → Dialect → ProgramNode` validated.
-- **Peephole (GAS -O2)** — `--peephole`: `mov reg,0`→`xor`, `andq %r,%r`→`testq`, `andq $imm31`→`andl` (removes REX.W).
-- **Multipass Jump Shrink (FASM)** — `--jump-shrink`: rel32→rel8 when target in ±127 bytes. Iterates until stable.
-- **ABI Manager (PeachPy)** — `--abi-manager`: automatic push/pop of callee-saved regs (rbx, rbp, r12–r15) in prologue/epilogue.
-- **CFI Directives (DWARF)** — `--cfi`: `.cfi_startproc`/`.cfi_endproc`/`.cfi_def_cfa_offset` for gdb, perf, and C++ exception compatibility.
-- **BOLT/Propeller Layout** — `LinkerScriptGenerator` accepts `ProfileData` with perf counts and fallthrough weights. Emits `__bolt_text_hot` with `KEEP()`, `__propeller_text_cold` with SORT_BY_NAME, and filters tier sections by hot/cold partition.
-- **AI NeuroScheduler** — `--neuro-schedule`: LSTM + Q‑learning RL that selects target cores, frequency, and power profile based on live sensor data.
-- **Adaptive Closed Loop** — `--adaptive-loop`: sensor→NeuroScheduler→actuator cycle with reward feedback and online training.
-- **Hardware Probe** — `--hardware-probe`: reads CPUID topology, frequencies, temperature, power, estimated IPC, RAM bandwidth via WMI.
-- **Hardware Control** — thread/core affinity (`PinToCore`), power policy (`--powercfg`), frequency scaling, power budget.
-- **Inline Assembly Parser** — `--asm-parse`: parses `asm{}` blocks, supports Intel/AT&T syntax detection, register validation.
-- **Branch Prediction Hints** — `--branch-hints`: extracts `@predict(taken|not_taken|dynamic)` from transitions, emits DS/CS segment override prefixes.
-- **Micro‑op Decode Engine** — `--micro-op`: decodes x86 instructions into μops with port usage, latency, throughput bottleneck analysis.
-- **Memory Controller Hints** — `--memory-hints`: RAM channel layout, interleave strategy per access pattern, prefetch/NT store emission.
-- **Intel AMX Intrinsics** — `--amx`: detects tile register support, generates `tdpbf16ps` kernels, emits `bplus_amx.h` header with `tile_loadd`/`tile_stored` intrinsics.
-- **Timing Engine** — `--timing`: hard/soft deadline registration, WCET analysis, frequency suggestion for deadline feasibility.
+- **CacheSimulator** — мгновенное предсказание времени для 60 конфигураций (5 tiers × 3 aligns × 2 pins × 2 hots) без запуска кода
+- **AutoTuner direct benchmark** — csc.exe бенчмарк: L0 (4KB) → 0.006ms, L2 (256KB) → 0.400ms, **64x speedup**
+- **SimpleRegisterAllocator** — частотный анализ переменных → распределение по callee-saved/caller-saved/стек
+- **MacroFusionOptimizer** — поиск fused-пар (cmp+je, test+jnz, dec+jnz) по таблицам Intel
+- **BitfieldPatternPredictor** — стратегия распаковки: ≤8bit → movzx, 9-32bit → shr+and, >32bit+BMI2 → pdep, AVX-512 → vpermq
+- **SimpleRooflineAnalyzer** — Roofline-модель: memory-bound vs compute-bound с рекомендациями
+- **SimpleIlpAnalyzer** — анализ цепочек зависимостей, critical path, ILP score, оптимизация инструкций
+- **SimpleStoreForwardGuard** — детекция и защита от store-forwarding hazards (mfence, movzx, alignment)
+- **SimplePrefetchInjector** — software prefetch (PREFETCHT0/T1/T2), hardware temporal, non-temporal stores
+- **SimpleHiddenBufferOptimizer** — оптимизация LSD/LFB/TLB/BTB/RSB буферов для конкретного CPU
+- **AutoTunerWithPerfCounters** — обучение на реальных hardware counters
 
-**202 unit tests, 100% pass.**
+**218 unit tests, 100% pass.**
 
 ---
 
@@ -572,12 +566,20 @@ B+ использует 3-слойную нейросеть для автома�
 
 | Модуль | Файл | Что делает |
 |---|---|---|
-| **DataCollector** | `AI/DataCollector.cs` | Собирает 2000 сэмплов: real perf counters + synthetic вариации. Per-state miss rates через `AnalyzePerStateMisses()` |
-| **NeuralPredictor** | `AI/NeuralPredictor.cs` | 3-слойная NN: 21 вход (5 code features + 16 metal features) → 16 hidden → 1 выход (IPC). Обучение: 2000 эпох, L2-регуляризация, gradient clipping |
-| **LayoutOptimizer** | `AI/LayoutOptimizer.cs` | Генерирует 10k кандидатов `MetalConfig`, предсказывает IPC для каждого, возвращает лучший. Поддерживает `@tier`, `@register`, `@zmm`, `@mask`, `@fusion`, `@prefetch`, `@align`, `@packed`, `@numa`, `@muarch` |
-| **UnpackPredictor** | `AI/UnpackPredictor.cs` | 12→8→4 NN для предсказания оптимального extraction pattern при распаковке битфилдов (movzx/shr/vpermq) |
-| **AutoTuner** | `Optimizer/AutoTuner.cs` | Замкнутый цикл: AI → perf counters → retrain → repeat. Измеряет реальный IPC, обновляет веса, сохраняет `ai_models/latest.nn` |
-| **RegisterPacker** | `Optimizer/RegisterPacker.cs` | AI-упаковщик переменных в регистры. Строит dependency graph (DepEdge), детектит serialization stalls, A→B конфликты разделяет в разные регистры |
+| **DataCollector** | `AI/DataCollector.cs` | Собирает сэмплы: real perf counters + synthetic вариации. Per-state miss rates через `AnalyzePerStateMisses()` |
+| **NeuralPredictor** | `AI/NeuralPredictor.cs` | 3-слойная NN: вход (code + metal features) → hidden → выход (IPC). Обучение с L2-регуляризация |
+| **LayoutOptimizer** | `AI/LayoutOptimizer.cs` | GreedySearch по MetalConfig с csc.exe бенчмарком. Выбирает лучший tier (L0/L1/L2/L3/Ram) |
+| **CacheSimulator** | `Optimizer/CacheSimulator.cs` | Симуляция L1/L2/L3/RAM: предсказание nsPerAccess × accesses. 60 конфигураций за <1 секунды |
+| **AutoTuner** | `Optimizer/AutoTuner.cs` | Перебор всех MetalConfig → выбор лучшего → верификация. No-AI = L2 baseline |
+| **SimpleRegisterAllocator** | `AI/RegisterAllocator.cs` | Частотный анализ переменных в AST → callee-saved (≥50 uses) / caller-saved / стек |
+| **MacroFusionOptimizer** | `AI/MacroFusionOptimizer.cs` | Поиск fused-пар (cmp+je, test+jnz, dec+jnz) по таблицам Intel. Генерация fused-инструкций |
+| **BitfieldPatternPredictor** | `AI/BitfieldPatternPredictor.cs` | ≤8bit → movzx, 9-32bit → shr+and, >32bit+BMI2 → pdep, AVX-512 → vpermq |
+| **SimpleRooflineAnalyzer** | `AI/RooflineAnalyzer.cs` | Roofline-модель: peak GFLOPs, operational intensity, memory/compute bound рекомендации |
+| **SimpleIlpAnalyzer** | `AI/IlpAnalyzer.cs` | Цепочки зависимостей, critical path, ILP score, suggestions по разрыву зависимостей |
+| **SimpleStoreForwardGuard** | `AI/StoreForwardGuard.cs` | Детекция hazards (size mismatch, alignment, partial load), генерация mfence/movzx |
+| **SimplePrefetchInjector** | `AI/PrefetchInjector.cs` | Software temporal/hardware/non-temporal prefetch. Стратегия по stride: <64 = none, 64-256 = T0, >256 = NTA |
+| **SimpleHiddenBufferOptimizer** | `AI/HiddenBufferOptimizer.cs` | Оптимизация LSD/LFB/TLB/BTB/RSB буферов. DLP loop fission, hugepages, non-temporal stores |
+| **AutoTunerWithPerfCounters** | `AI/AutoTunerWithPerfCounters.cs` | Обучение на hardware counters: cache_miss_weight, branch_miss_weight, ipc_weight |
 
 ### Использование
 

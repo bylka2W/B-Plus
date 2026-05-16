@@ -504,7 +504,7 @@ for (int i = 0; i < args.Length; i++)
              or "--eco" or "--target-arch" or "--target-os"
              or "--pin-regs" or "--benchmark" or "--stream"
              or "--samples" or "--binary" or "--pgo-use"
-             or "--train-model")
+             or "--train-model" or "--real")
     {
         if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
             i++;
@@ -514,6 +514,135 @@ for (int i = 0; i < args.Length; i++)
         if (input == null && !long.TryParse(args[i], out _))
             input = args[i];
     }
+}
+
+if (args.Contains("--train"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --train [--samples N] [--epochs N] [--real]");
+        Console.Error.WriteLine("  --real  : measure C# execution time (requires C# compiler)");
+        return 1;
+    }
+    int samples = 200;
+    int epochs = 500;
+    string? bpcPath = null;
+    bool realMode = args.Contains("--real");
+    bool megaMode = args.Contains("--mega");
+    for (int i = 0; i < args.Length; i++)
+    {
+        if (args[i] == "--samples" && i + 1 < args.Length) int.TryParse(args[++i], out samples);
+        if (args[i] == "--epochs" && i + 1 < args.Length) int.TryParse(args[++i], out epochs);
+        if (args[i] == "--bpc" && i + 1 < args.Length) bpcPath = args[++i];
+    }
+    bpcPath ??= Environment.ProcessPath ?? "bpc.exe";
+
+    Console.WriteLine("B+ AI Trainer v3.0.4L BETA");
+    Console.WriteLine();
+
+    List<(double[] features, double targetMs)> data;
+
+    if (realMode)
+    {
+        Console.WriteLine($"Collecting {samples} REAL execution benchmarks (C# compile + run)...");
+        var realCol = new RealBenchmarkCollector(bpcPath);
+        try
+        {
+            var rawResults = realCol.Collect(input, samples);
+            data = RealBenchmarkCollector.ToTrainingData(rawResults);
+            if (data.Count < 3)
+            {
+                Console.Error.WriteLine($"Real mode failed: only {data.Count} valid samples. Check that C# compiler (csc.exe) is available.");
+                return 1;
+            }
+            Console.WriteLine($"  Collected {data.Count} valid samples.");
+        }
+        finally { realCol.Dispose(); }
+    }
+    else if (megaMode)
+    {
+        Console.WriteLine($"Collecting {samples} direct x64 benchmarks (native code in memory)...");
+        var collector = new DataCollector();
+        data = collector.CollectDirect(input, samples);
+        if (data.Count < 10)
+        {
+            Console.Error.WriteLine($"Mega mode failed: only {data.Count} valid samples.");
+            return 1;
+        }
+    }
+    else
+    {
+        Console.WriteLine($"Collecting {samples} pipeline benchmarks (assembly lines target)...");
+        var collector = new DataCollector();
+        data = collector.CollectReal(input, bpcPath, samples);
+        if (data.Count < 10)
+        {
+            Console.Error.WriteLine("Not enough samples. Check that bpc path is correct.");
+            return 1;
+        }
+    }
+
+    // Diagnostic
+    double tMin = data.Min(d => d.Item2);
+    double tMax = data.Max(d => d.Item2);
+    double tMean = data.Average(d => d.Item2);
+    double tStd = Math.Sqrt(data.Average(d => Math.Pow(d.Item2 - tMean, 2)));
+    string targetLabel = realMode ? "ms" : "100K/lines";
+    Console.WriteLine($"  Target: min={tMin:F2} max={tMax:F2} mean={tMean:F2} std={tStd:F2} ({targetLabel})");
+
+    Console.WriteLine("Training neural network...");
+    int inputSize = 18;
+    int hidden = megaMode ? 512 : 12;
+    var predictor = new NeuralPredictor(new[] { inputSize, hidden, Math.Max(4, hidden / 2), 1 });
+    predictor.Train(data, epochs);
+
+    string modelDir = "ai_models";
+    Directory.CreateDirectory(modelDir);
+    string modelPath = Path.Combine(modelDir, realMode ? "latest_real.nn" : "latest.nn");
+    predictor.Save(modelPath);
+
+    Console.WriteLine();
+    Console.WriteLine(predictor.GenerateReport());
+    Console.WriteLine($"Model saved to {modelPath}");
+
+    // Find best config
+    var optimizer = new LayoutOptimizer(predictor);
+    var best = optimizer.OptimizeWithFallback();
+    Console.WriteLine($"Best config: tier={best.Tier} align={best.CacheAlign} pin={best.CachePin} hot={best.HotPath}");
+
+return 0;
+}
+
+if (args.Any(a => a == "--ai=architect"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --ai=architect [--ai-dry-run]");
+        return 1;
+    }
+    string archSrc = File.ReadAllText(input);
+    var archParser = new BPlusParser();
+    var archProg = archParser.Parse(archSrc);
+    bool dryRun = args.Contains("--ai-dry-run");
+    var archResult = AiArchitect.Run(archProg, dryRun);
+    Console.WriteLine(archResult.GenerateReport());
+    return 0;
+}
+
+if (args.Contains("--ai-dry-run") && !args.Any(a => a == "--ai=architect"))
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --ai-dry-run");
+        return 1;
+    }
+    string drySrc = File.ReadAllText(input);
+    var dryParser = new BPlusParser();
+    var dryProg = dryParser.Parse(drySrc);
+    var dryProfiles = AiArchitect.ProfileTransitions(dryProg);
+    var dryResult = new AiArchitectResult { Profiles = dryProfiles, StateCountBefore = dryProg.States.Count, StateCountAfter = dryProg.States.Count };
+    Console.WriteLine(dryResult.GenerateReport());
+    return 0;
 }
 
 if (args.Contains("--ai"))
@@ -579,9 +708,10 @@ if (args.Contains("--auto-tune"))
             tuneIter = ti;
         }
     Console.WriteLine("B+ Auto-Tuner v3.0.4L BETA");
-    var tuner = new AutoTuner(input);
+    Console.WriteLine("  Measuring REAL execution time (csc.exe compile + run)...");
+    using var tuner = new AutoTuner(input);
     var tuneResult = tuner.Tune(iterations: tuneIter);
-    Console.WriteLine(AutoTuner.GenerateReport(tuneResult));
+Console.WriteLine(AutoTuner.GenerateReport(tuneResult));
     return 0;
 }
 
@@ -742,41 +872,9 @@ if (args.Contains("--l3-heap"))
 
 if (args.Contains("--train-model"))
 {
-    int samples = 1_000_000;
-    for (int i = 0; i < args.Length; i++)
-    {
-        if (args[i] == "--samples" && i + 1 < args.Length && int.TryParse(args[i + 1], out var s))
-            samples = Math.Clamp(s, 1000, 10_000_000);
-        else if (args[i].StartsWith("--samples=") && int.TryParse(args[i]["--samples=".Length..], out var s2))
-            samples = Math.Clamp(s2, 1000, 10_000_000);
-    }
-
-    Console.WriteLine("╔══════════════════════════════════════════╗");
-    Console.WriteLine("║     B+ AI MODEL TRAINER v1.0             ║");
-    Console.WriteLine("╚══════════════════════════════════════════╝");
-    Console.WriteLine($"  Samples: {samples:N0}");
-
-    var sw = System.Diagnostics.Stopwatch.StartNew();
-    var collector = new DataCollector();
-
-    var features = File.Exists(input)
-        ? collector.ExtractCodeFeatures(input)
-        : new CodeFeatures { StateCount = 10, TotalCodeSize = 1000, HotPathCount = 3, BranchCount = 8, DataSize = 512 };
-
-    var data = collector.GenerateLargeDataset(features, samples);
-    Console.WriteLine($"  Generated {data.Count:N0} samples in {sw.Elapsed.TotalSeconds:F1}s");
-
-    var model = new NeuralPredictor(inputSize: 24, hiddenSize: 16);
-    model.Train(data, epochs: 2000);
-    sw.Stop();
-
-    Console.WriteLine(model.GenerateReport());
-    Console.WriteLine($"  Total training time: {sw.Elapsed.TotalMinutes:F1} min");
-
-    Directory.CreateDirectory("ai_models");
-    model.Save("ai_models/model_1M.nn");
-    Console.WriteLine("  Saved: ai_models/model_1M.nn");
-    return 0;
+    Console.Error.WriteLine("--train-model is deprecated. Use --train for real benchmark-based training:");
+    Console.Error.WriteLine("  bpc <input.bp> --train --samples 500");
+    return 1;
 }
 
 if (args.Contains("--adaptive"))
@@ -1099,6 +1197,8 @@ if (input == null)
     Console.Error.WriteLine("       bpc debug <file.bp>                  (interactive state machine debugger)");
     Console.Error.WriteLine("       bpc profile <file.bp> [iterations]   (profile transition frequencies)");
     Console.Error.WriteLine("       bpc <input.bp> --metal [--tier=L0] [--fusion] [--register-alloc]  (full metal stack)");
+    Console.Error.WriteLine("       bpc <input.bp> --ai=architect [--ai-dry-run]     (AI architect: PGO→split→sort→inline→NUMA dup)");
+    Console.Error.WriteLine("       bpc <input.bp> --ai-dry-run                       (AI architect dry-run: profile only, no changes)");
     Console.Error.WriteLine("       bpc <input.bp> --ai                             (AI optimizer for metal config)");
     Console.Error.WriteLine("       bpc <input.bp> --metal --unpack                 (AI register unpack predictor)");
     Console.Error.WriteLine("       bpc <input.bp> --metal --hidden-buffers          (LSD/LFB/TLB/BTB/RSB analysis)");
@@ -1641,7 +1741,6 @@ static int RunAI(string bpFile)
     string modelPath = Path.Combine(modelDir, "latest.nn");
     Directory.CreateDirectory(modelDir);
 
-    DataCollector collector = new();
     NeuralPredictor? model = null;
 
     if (File.Exists(modelPath))
@@ -1651,92 +1750,69 @@ static int RunAI(string bpFile)
     }
     else
     {
-        Console.WriteLine("Collecting training data...");
-        var data = collector.Collect(bpFile, count: 2000);
-        Console.WriteLine($"  {data.Count} samples collected.");
-
-        CodeFeatures features = collector.ExtractCodeFeatures(bpFile);
-        int inputSize = 5 + new MetalConfig().ToFeatures().Length; // code features + metal config features
-
-        Console.WriteLine("Training neural network...");
-        model = new NeuralPredictor(inputSize, hiddenSize: 16);
-        model.Train(data, epochs: 2000);
-        model.Save(modelPath);
-        Console.WriteLine("  Model saved to " + modelPath);
+        Console.WriteLine("No trained model found. Run --train first or use a pre-trained model.");
+        Console.WriteLine("  bpc <input.bp> --train --samples 500");
+        return 1;
     }
 
     Console.WriteLine();
     Console.WriteLine("Searching optimal configuration...");
 
-    var optimizer = new LayoutOptimizer(model, bpFile);
-    MetalConfig best = optimizer.Optimize(candidates: 10000);
-    double predictedIPC = optimizer.Predict(best);
+    var optimizer = new LayoutOptimizer(model);
+    MetalConfig best = optimizer.OptimizeWithFallback(candidates: 10000);
+    double predictedMs = optimizer.PredictMs(best);
 
-    Console.WriteLine($"  Predicted IPC: {predictedIPC:F3}");
+    Console.WriteLine($"  Predicted time: {predictedMs:F3} ms");
+    Console.WriteLine($"  Model Val R²: {model.ValR2:F4}");
     Console.WriteLine($"  Tier: {best.Tier}");
     Console.WriteLine($"  Register pin: {best.Register ?? "(none)"}");
     Console.WriteLine($"  ZMM: {best.Zmm?.ToString() ?? "(none)"}");
     Console.WriteLine($"  Mask: {best.Mask ?? "(none)"}");
-    Console.WriteLine($"  Fusion: {string.Join(", ", best.FusionPairs)}");
+    Console.WriteLine($"  Cache policy: {best.CachePolicy ?? "(default)"}");
+    Console.WriteLine($"  Cache pin: {best.CachePin}");
+    Console.WriteLine($"  Cache align: {best.CacheAlign?.ToString() ?? "(default)"}");
+    Console.WriteLine($"  Non-temporal: {best.NonTemporal}");
+    Console.WriteLine($"  Packed: {best.Packed}");
+    Console.WriteLine($"  Hot path: {best.HotPath}");
     Console.WriteLine($"  Section: {best.Section ?? "(default)"}");
     Console.WriteLine($"  Gateway: {best.Gateway?.ToString() ?? "(none)"}");
     Console.WriteLine($"  Prefetch: {best.PrefetchHint ?? "(none)"}");
-    Console.WriteLine($"  Alignment: {best.Alignment?.ToString() ?? "(default)"}");
-    Console.WriteLine($"  Packed: {best.Packed}");
     Console.WriteLine($"  Data tier: {best.DataTier?.ToString() ?? "(default)"}");
-    Console.WriteLine($"  Hot path: {best.HotPath}");
-    Console.WriteLine($"  Critical size: {best.CriticalSize?.ToString() ?? "(default)"}");
 
     Console.WriteLine();
     Console.WriteLine("Generating metal-annotated output...");
 
-    // Parse metal blocks from source
     string src = File.ReadAllText(bpFile);
     var metalParser = new MetalParser();
     var blocks = metalParser.ParseMetalBlocks(src);
-    Console.WriteLine($"  Found {blocks.Count} existing metal block(s).");
 
-    // Write optimized config as annotation block
     string outputBp = Path.Combine(
         Path.GetDirectoryName(bpFile) ?? ".",
         Path.GetFileNameWithoutExtension(bpFile) + "_metal.bp");
 
     using (var writer = new StreamWriter(outputBp))
     {
-        writer.WriteLine("// B+ v3.0.4L BETA Metal — AI-optimized + NUMA + µarch + ILP + AutoTune");
-        writer.WriteLine($"// Predicted IPC: {predictedIPC:F3}");
+        writer.WriteLine("// B+ v3.0.4L BETA Metal — AI-optimized");
+        writer.WriteLine($"// Predicted time: {predictedMs:F3} ms (R²={model.ValR2:F4})");
         writer.WriteLine();
         writer.WriteLine("@metal {");
-        if (best.Tier.HasValue)
-            writer.WriteLine($"    @tier({(int)best.Tier.Value})  // {best.Tier}");
-        if (best.Register != null)
-            writer.WriteLine($"    @register({best.Register})");
-        if (best.Zmm.HasValue)
-            writer.WriteLine($"    @zmm({best.Zmm.Value})");
-        if (best.Mask != null)
-            writer.WriteLine($"    @mask({best.Mask})");
-        foreach (var fp in best.FusionPairs)
-            writer.WriteLine($"    @fusion({fp})");
-        if (best.Section != null)
-            writer.WriteLine($"    @section(\"{best.Section}\")");
-        if (best.Gateway.HasValue)
-            writer.WriteLine($"    @gateway({best.Gateway.Value})");
-        if (best.PrefetchHint != null)
-            writer.WriteLine($"    @prefetch({best.PrefetchHint})");
-        if (best.Alignment.HasValue)
-            writer.WriteLine($"    @align({best.Alignment.Value})");
-        if (best.Packed)
-            writer.WriteLine($"    @packed");
-        if (best.DataTier.HasValue)
-            writer.WriteLine($"    @data_tier({(int)best.DataTier.Value})");
-        if (best.HotPath)
-            writer.WriteLine($"    @hot_path(true)");
-        if (best.CriticalSize.HasValue)
-            writer.WriteLine($"    @critical_size({best.CriticalSize.Value})");
+        if (best.Tier.HasValue) writer.WriteLine($"    @tier({(int)best.Tier.Value})");
+        if (best.Register != null) writer.WriteLine($"    @register({best.Register})");
+        if (best.Zmm.HasValue) writer.WriteLine($"    @zmm({best.Zmm.Value})");
+        if (best.Mask != null) writer.WriteLine($"    @mask({best.Mask})");
+        foreach (var fp in best.FusionPairs) writer.WriteLine($"    @fusion({fp})");
+        if (best.Section != null) writer.WriteLine($"    @section(\"{best.Section}\")");
+        if (best.Gateway.HasValue) writer.WriteLine($"    @gateway({best.Gateway.Value})");
+        if (best.PrefetchHint != null) writer.WriteLine($"    @prefetch({best.PrefetchHint})");
+        if (best.CacheAlign.HasValue) writer.WriteLine($"    @cache_align({best.CacheAlign.Value})");
+        if (best.CachePin) writer.WriteLine($"    @cache_pin");
+        if (best.NonTemporal) writer.WriteLine($"    @non_temporal");
+        if (best.CachePolicy != null) writer.WriteLine($"    @cache({best.CachePolicy})");
+        if (best.Packed) writer.WriteLine($"    @packed");
+        if (best.DataTier.HasValue) writer.WriteLine($"    @data_tier({(int)best.DataTier.Value})");
+        if (best.HotPath) writer.WriteLine($"    @hot_path(true)");
         writer.WriteLine("}");
         writer.WriteLine();
-
-        // Write original source
         writer.Write(src);
     }
 
