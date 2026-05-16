@@ -610,6 +610,40 @@ bpc publish --runtime win-x64 --aot
 | **InstructionScheduler** | `AI/InstructionScheduler.cs` | Перестановка инструкций: load→compute→use. Заполнение idle slots в IQ |
 | **TimedPrefetch** | `AI/TimedPrefetch.cs` | Prefetch с таймингом: PREFETCHT0/T1/T2/NTA за 80-200 тактов до использования |
 | **SoftwarePipeline** | `AI/SoftwarePipeline.cs` | Разбиение цикла на стадии: load→compute→store. II (Initiation Interval) = 4 |
+| **CacheLinePacker** | `AI/CacheLinePacker.cs` | Упаковка полей в кэш-линии 64B: частые вместе, редкие раздельно |
+| **NonTemporalHints** | `AI/NonTemporalHints.cs` | Non-temporal stores для данных с 1-3 обращениями (_mm_stream_si64) |
+| **MemoryAccessPatternDetector** | `AI/MemoryAccessPatternDetector.cs` | Определение: sequential/stride/random. Рекомендации по prefetch |
+| **AdaptiveWorkingSet** | `AI/AdaptiveWorkingSet.cs` | Динамический размер working set: miss>50% → shrink, miss<5% → optimal |
+| **NumaAwarePlacement** | `AI/NumaAwarePlacement.cs` | NUMA node binding, interleaved allocation, cross-NUMA warning |
+| **CycleScheduler** | `AI/CycleScheduler.cs` | Планирование по портам P015/P1/P2/P3: latencies из таблиц Intel |
+| **LoadController** | `AI/LoadController.cs` | Thermal throttling: temp>85°C → reduce freq, utilization>90% → boost |
+| **CoreAffinityController** | `AI/CoreAffinityController.cs` | P-core/E-core detection, hot→P-core affinity, cold→E-core |
+
+### Полный цикл оптимизации
+
+```
+Сжатие (Bitfield, Non-Temporal)
+    ↓
+Фасовка в кэш (CacheLinePacker, CacheSimulator)
+    ↓
+Предзагрузка (TimedPrefetch, PrefetchInjector)
+    ↓
+Заполнение промахов (InstructionScheduler, SoftwarePipeline)
+    ↓
+Планирование тактов (CycleScheduler, CoreAffinity)
+    ↓
+Контроль нагрузки (LoadController, NumaAwarePlacement)
+```
+
+| Этап | Модуль | Прирост |
+|---|---|---|
+| Сжатие данных | Bitfield + Non-Temporal | 2-10x |
+| Фасовка в кэш | CacheLinePacker | +10-20% |
+| Предзагрузка | TimedPrefetch | 2-3x |
+| Заполнение промахов | InstructionScheduler + SoftwarePipeline | 3-5x |
+| Тактовое планирование | CycleScheduler | +10-20% |
+| Контроль ядер | CoreAffinityController | +30-50% |
+| **Итого** | **Всё вместе** | **10-100x** |
 
 ### Заполнение промахов кэша
 
