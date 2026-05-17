@@ -153,6 +153,8 @@ if (args.Length > 0 && args[0] == "bench")
             benchIter = n;
         else if (args[i] == "--target" && i + 1 < args.Length)
             benchTarget = args[++i];
+        else if (args[i] == "--bench-algorithm")
+            RunAlgorithmBenchmark();
     }
     if (benchInput == null || !File.Exists(benchInput))
     {
@@ -2100,4 +2102,34 @@ static string StripMetalBlocks(string src)
         i = start;
     }
     return src;
+}
+
+static void RunAlgorithmBenchmark()
+{
+    Console.WriteLine("=== Algorithm Benchmark ===");
+    Console.WriteLine();
+
+    Console.WriteLine("1. XOR optimization:");
+    var withOpt = new BPlusTranspiler.Algorithm.AlgorithmBenchmark().RunWithOptimization(new byte[] { 0x48, 0x31, 0xC0, 0xC3 }, "XOR Init");
+    var withoutOpt = new BPlusTranspiler.Algorithm.AlgorithmBenchmark().RunWithoutOptimization(new byte[] { 0x48, 0x31, 0xC0, 0xC3 }, "XOR Init");
+    Console.WriteLine($"   With Algorithm: {withOpt.WithAlgorithmMs} ms");
+    Console.WriteLine($"   Without Algorithm: {withoutOpt.WithoutAlgorithmMs} ms");
+    Console.WriteLine();
+
+    Console.WriteLine("2. Differential test (optimized vs raw):");
+    var diff = new BPlusTranspiler.Algorithm.DifferentialTest();
+    var diffResult = diff.Compare(
+        "Optimized", new byte[] { 0x48, 0x31, 0xC0, 0xC3 },
+        "Raw", new byte[] { 0x90, 0x90, 0x90, 0xC3 }
+    );
+    Console.WriteLine($"   {diffResult.WithName}: {diffResult.WithMs} ms");
+    Console.WriteLine($"   {diffResult.WithoutName}: {diffResult.WithoutMs} ms");
+    Console.WriteLine($"   Match: {diffResult.Match}");
+    Console.WriteLine();
+
+    Console.WriteLine("3. Full Regression:");
+    new BPlusTranspiler.Algorithm.RegressionBenchmark().Run();
+    Console.WriteLine();
+
+    Console.WriteLine("=== Benchmark Complete ===");
 }
