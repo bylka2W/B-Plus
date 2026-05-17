@@ -539,6 +539,10 @@ for (int i = 0; i < args.Length; i++)
         cAbi = true;
     else if (args[i] == "--x64")
         target = "x64";
+    else if (args[i] == "--linux" || args[i] == "--elf")
+        target = "linux";
+    else if (args[i] == "--macos" || args[i] == "--darwin" || args[i] == "--mac")
+        target = "macos";
     // Skip flag values consumed by OptimizationFlags
     else if (args[i] is "--thread-pool" or "--prefetch" or "--pool" or "--memory"
              or "--eco" or "--target-arch" or "--target-os"
@@ -1226,16 +1230,21 @@ if (args.Contains("--timing"))
     return 0;
 }
 
-if (args.Contains("--x64") || target == "x64")
+if (args.Contains("--x64") || target is "x64" or "linux" or "macos" or "elf")
 {
     if (input == null || !File.Exists(input))
     {
-        Console.Error.WriteLine("Usage: bpc <input.bp> --target x64 [--output gen/]");
+        Console.Error.WriteLine("Usage: bpc <input.bp> --target x64|linux|macos [--output gen/]");
         return 1;
     }
 
+    bool generatePE = target is "x64" or "windows";
+    bool generateELF = target is "linux" or "elf";
+    bool generateMachO = target is "macos" or "darwin" or "mac";
+
     Console.WriteLine($"B+ x64 Generator v3.3.0JU BETA");
     Console.WriteLine($"  Input: {input}");
+    Console.WriteLine($"  Format: {(generatePE ? "PE (.exe)" : generateELF ? "ELF (.out)" : generateMachO ? "MachO (.app)" : "PE (.exe)")}");
 
     var src = File.ReadAllText(input);
     var x64Parser = new BPlusParser();
@@ -1255,15 +1264,51 @@ if (args.Contains("--x64") || target == "x64")
     var gen = new BPlusTranspiler.Generators.X64CodeGen();
     byte[] machineCode = gen.Generate(x64Program);
 
-    var peBuilder = new BPlusTranspiler.Algorithm.PEBuilder();
-    var peFile = peBuilder.Build(machineCode);
+    var exeName = Path.GetFileNameWithoutExtension(input);
+    string exePath;
 
-    var exeName = Path.GetFileNameWithoutExtension(input) + ".exe";
-    var exePath = Path.Combine(output, exeName);
-    peBuilder.WriteFile(peFile, exePath);
-
-    Console.WriteLine($"  Generated: {machineCode.Length} bytes of x64 code");
-    Console.WriteLine($"  Output: {exePath}");
+    if (generateELF)
+    {
+        exePath = Path.Combine(output, exeName);
+        var linker = new BPlusTranspiler.Algorithm.ELFLinker();
+        var obj = new BPlusTranspiler.Algorithm.ObjectFile();
+        obj.Sections.Add(new BPlusTranspiler.Algorithm.Section 
+        { 
+            Name = ".text", 
+            Data = machineCode, 
+            Flags = BPlusTranspiler.Algorithm.Section.SectionFlags.Executable | BPlusTranspiler.Algorithm.Section.SectionFlags.Alloc,
+            Alignment = 16
+        });
+        var elf = linker.BuildElf(obj, new List<BPlusTranspiler.Algorithm.ObjectFile>());
+        File.WriteAllBytes(exePath, elf);
+        Console.WriteLine($"  Generated: {machineCode.Length} bytes of x64 code");
+        Console.WriteLine($"  Output: {exePath}");
+    }
+    else if (generateMachO)
+    {
+        exePath = Path.Combine(output, exeName + ".app");
+        var linker = new BPlusTranspiler.Algorithm.MachOLinker();
+        var obj = new BPlusTranspiler.Algorithm.ObjectFile();
+        obj.Sections.Add(new BPlusTranspiler.Algorithm.Section 
+        { 
+            Name = "__TEXT", 
+            Data = machineCode,
+            Alignment = 16
+        });
+        var macho = linker.BuildMachO(obj, new List<BPlusTranspiler.Algorithm.ObjectFile>());
+        File.WriteAllBytes(exePath, macho);
+        Console.WriteLine($"  Generated: {machineCode.Length} bytes of x64 code");
+        Console.WriteLine($"  Output: {exePath}");
+    }
+    else
+    {
+        var peBuilder = new BPlusTranspiler.Algorithm.PEBuilder();
+        var peFile = peBuilder.Build(machineCode);
+        exePath = Path.Combine(output, exeName + ".exe");
+        peBuilder.WriteFile(peFile, exePath);
+        Console.WriteLine($"  Generated: {machineCode.Length} bytes of x64 code");
+        Console.WriteLine($"  Output: {exePath}");
+    }
 
     return 0;
 }
