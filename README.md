@@ -795,10 +795,7 @@ bpc input.bp --verify --dal-a
 
 | Платформа | Статус | Форматы |
 |:---|:---|:---|
-| Windows x64 | ✅ Готово | PE (.exe), DLL |
-| Linux x64 | 🚧 В разработке | ELF |
-| macOS x64 | 🚧 В разработке | Mach-O |
-| WebAssembly | 🚧 В разработке | Wasm |
+| Windows x64 | ✅ | PE (.exe), DLL |
 
 ---
 
