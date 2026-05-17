@@ -1,0 +1,20 @@
+state Counter {
+    var sum: int
+    var i: int
+
+    on tick [i < 50000] -> Counter enter {
+        sum = sum + i
+        i = i + 1
+    }
+
+    on tick [i >= 50000] -> Done
+
+    on start -> Counter enter {
+        sum = 0
+        i = 0
+    }
+}
+
+state Done {
+    on finish -> Counter
+}
