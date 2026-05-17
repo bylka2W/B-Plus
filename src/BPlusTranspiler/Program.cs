@@ -1,6 +1,6 @@
 ﻿using System.Text.RegularExpressions;
 using BPlusTranspiler;
-using BPlusTranspiler.AI;
+using BPlusTranspiler.Algorithm;
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Generators;
 using BPlusTranspiler.Lsp;

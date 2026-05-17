@@ -1,6 +1,7 @@
 using BPlusTranspiler;
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Parser;
+using BPlusTranspiler.Algorithm;
 
 namespace BPlusTranspiler.Tests;
 
@@ -1027,8 +1028,8 @@ entry main() -> i32 { return 0 }");
         Assert(true, "O4b: pre-elab runs without crash");
 
         // 5. GenerateLargeDataset
-        var collector = new AI.DataCollector();
-        var features = new AI.CodeFeatures { StateCount = 10, TotalCodeSize = 1000, HotPathCount = 3, BranchCount = 8, DataSize = 512 };
+        var collector = new DataCollector();
+        var features = new CodeFeatures { StateCount = 10, TotalCodeSize = 1000, HotPathCount = 3, BranchCount = 8, DataSize = 512 };
         var largeData = collector.GenerateLargeDataset(features, count: 10000);
         Assert(largeData.Count > 0, "O5a: generated dataset has data");
         Assert(largeData.All(d => d.Input.Length == 32), "O5b: each datapoint has 32 features (5 code + 27 metal)");
@@ -1052,7 +1053,7 @@ entry main() -> i32 { return 0 }");
         p.States[0].Transitions[0].HotWeight = 0.9; // hot
         p.States[0].Transitions[1].HotWeight = 0.6; // warm
         p.States[1].Transitions[0].HotWeight = 0.1; // cold
-        var profiles = AI.AiArchitect.ProfileTransitions(p);
+        var profiles = AiArchitect.ProfileTransitions(p);
         Assert(profiles.Count == 4, "A1a: 4 transitions profiled");
         var hotProfile = profiles.First(pr => pr.StateName == "Hot" && pr.EventName == "a");
         Assert(!hotProfile.IsCold, "A1b: Hot→a is not cold (weight=0.9)");
@@ -1067,8 +1068,8 @@ entry main() -> i32 { return 0 }");
             p2.States[1].Transitions[0].HotWeight = 0.1;
             p2.States[2].Transitions[0].HotWeight = 0.5;
         }
-        var prof2 = AI.AiArchitect.ProfileTransitions(p2);
-        var split = AI.AiArchitect.SplitColdStates(p2, prof2);
+        var prof2 = AiArchitect.ProfileTransitions(p2);
+        var split = AiArchitect.SplitColdStates(p2, prof2);
         Assert(split >= 0, "A2a: split cold states runs without crash");
         var coldState = p2.States.FirstOrDefault(s => s.Name == "Cold");
         Assert(coldState == null || coldState.CachePolicy == "uncacheable", "A2b: Cold state marked uncacheable if found");
@@ -1078,14 +1079,14 @@ entry main() -> i32 { return 0 }");
         p3.States[0].Transitions[0].HotWeight = 0.3;
         p3.States[0].Transitions[1].HotWeight = 0.9;
         p3.States[0].Transitions[2].HotWeight = 0.6;
-        var prof3 = AI.AiArchitect.ProfileTransitions(p3);
-        var sorted = AI.AiArchitect.SortTransitions(p3, prof3);
+        var prof3 = AiArchitect.ProfileTransitions(p3);
+        var sorted = AiArchitect.SortTransitions(p3, prof3);
         Assert(sorted == 1, "A3a: one state sorted");
         Assert(p3.States[0].Transitions[0].HotWeight == 0.9, "A3b: first transition is most likely (b=0.9)");
 
         // A4: InlineLightweightEnter — small enter blocks inlined
         var p4 = Parse("state HasEnter { enter { init() } on a -> Next on b -> Next } state Next { }");
-        var inlined = AI.AiArchitect.InlineLightweightEnter(p4);
+        var inlined = AiArchitect.InlineLightweightEnter(p4);
         Assert(inlined >= 1, "A4a: at least one enter block inlined");
         Assert(p4.States[0].Actions.Count == 0, "A4b: enter actions removed after inline");
         Assert(p4.States[0].Transitions.All(t => t.Body != null && t.Body.StartsWith("init()")), "A4c: enter code prepended to transition bodies");
@@ -1094,7 +1095,7 @@ entry main() -> i32 { return 0 }");
         var p5 = Parse("state Hot { on a -> Cold } state Cold { on b -> Done } state Done { }");
         p5.States[0].Transitions[0].HotWeight = 0.9;
         p5.States[1].Transitions[0].HotWeight = 0.1;
-        var dryResult = AI.AiArchitect.Run(p5, dryRun: true);
+        var dryResult = AiArchitect.Run(p5, dryRun: true);
         Assert(dryResult.Profiles.Count == 2, "A5a: dry run profiles 2 transitions");
         Assert(dryResult.StatesSplit == 0, "A5b: dry run does not split states");
 
@@ -1107,7 +1108,7 @@ entry main() -> i32 { return 0 }");
             p6.States[1].Transitions[0].HotWeight = 0.1; // cold
             p6.States[1].Transitions[1].HotWeight = 0.5; // warm
         }
-        var wetResult = AI.AiArchitect.Run(p6, dryRun: false);
+        var wetResult = AiArchitect.Run(p6, dryRun: false);
         Assert(wetResult.StatesSplit >= 0, "A6a: wet run handles cold states");
         Assert(wetResult.TransitionsSorted >= 1, "A6b: wet run sorts transitions");
         Assert(wetResult.EnterBlocksInlined >= 1, "A6c: wet run inlines enter blocks");

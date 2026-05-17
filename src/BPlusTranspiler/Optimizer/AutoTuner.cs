@@ -1,12 +1,12 @@
 using System.Diagnostics;
 using System.Text;
 using System.IO;
-using BPlusTranspiler.AI;
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Generators;
 using BPlusTranspiler.Parser;
 using BPlusTranspiler.Runtime;
+using BPlusTranspiler.Algorithm;
 
 namespace BPlusTranspiler.Optimizer;
 

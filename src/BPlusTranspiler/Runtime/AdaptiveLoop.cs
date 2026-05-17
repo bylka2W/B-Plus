@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using BPlusTranspiler.AI;
+using BPlusTranspiler.Algorithm;
 
 namespace BPlusTranspiler.Runtime;
 
