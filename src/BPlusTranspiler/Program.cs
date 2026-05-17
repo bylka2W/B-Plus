@@ -537,6 +537,8 @@ for (int i = 0; i < args.Length; i++)
         ltoMode = args[++i];
     else if (args[i] == "--c-abi")
         cAbi = true;
+    else if (args[i] == "--x64")
+        target = "x64";
     // Skip flag values consumed by OptimizationFlags
     else if (args[i] is "--thread-pool" or "--prefetch" or "--pool" or "--memory"
              or "--eco" or "--target-arch" or "--target-os"
@@ -1221,6 +1223,48 @@ if (args.Contains("--timing"))
         var plan = TimingOptimizer.AnalyzeTiming(state, deadline);
         Console.WriteLine(TimingOptimizer.GenerateReport(plan));
     }
+    return 0;
+}
+
+if (args.Contains("--x64") || target == "x64")
+{
+    if (input == null || !File.Exists(input))
+    {
+        Console.Error.WriteLine("Usage: bpc <input.bp> --target x64 [--output gen/]");
+        return 1;
+    }
+
+    Console.WriteLine($"B+ x64 Generator v3.3.0JU BETA");
+    Console.WriteLine($"  Input: {input}");
+
+    var src = File.ReadAllText(input);
+    var x64Parser = new BPlusParser();
+    ProgramNode x64Program;
+    try
+    {
+        x64Program = x64Parser.Parse(src);
+    }
+    catch (ParseException ex)
+    {
+        PrintParseError(ex);
+        return 1;
+    }
+
+    Directory.CreateDirectory(output);
+
+    var gen = new BPlusTranspiler.Generators.X64CodeGen();
+    byte[] machineCode = gen.Generate(x64Program);
+
+    var peBuilder = new BPlusTranspiler.Algorithm.PEBuilder();
+    var peFile = peBuilder.Build(machineCode);
+
+    var exeName = Path.GetFileNameWithoutExtension(input) + ".exe";
+    var exePath = Path.Combine(output, exeName);
+    peBuilder.WriteFile(peFile, exePath);
+
+    Console.WriteLine($"  Generated: {machineCode.Length} bytes of x64 code");
+    Console.WriteLine($"  Output: {exePath}");
+
     return 0;
 }
 
