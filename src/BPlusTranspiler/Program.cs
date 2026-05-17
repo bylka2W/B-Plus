@@ -15,7 +15,46 @@ using BPlusTranspiler.PackageManager;
 using BPlusTranspiler.TestRunner;
 using BPlusTranspiler.Runtime;
 using BPlusTranspiler.Verification;
- 
+
+static void PrintParseError(ParseException ex)
+{
+    Console.ForegroundColor = ConsoleColor.Red;
+    Console.WriteLine();
+    Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
+    Console.WriteLine("║                    B+ PARSE ERROR                             ║");
+    Console.WriteLine("╠══════════════════════════════════════════════════════════════╣");
+    Console.WriteLine($"║  Line: {ex.Line,-5} Column: {ex.Column,-5}                              ║");
+    Console.WriteLine("╠══════════════════════════════════════════════════════════════╣");
+
+    var msg = ex.Message;
+    if (msg.Length > 58) msg = msg.Substring(0, 55) + "...";
+    Console.WriteLine($"║  {msg,-60} ║");
+
+    if (!string.IsNullOrEmpty(ex.Context))
+    {
+        Console.WriteLine("╠══════════════════════════════════════════════════════════════╣");
+        Console.WriteLine("║  Context (near error):                                        ║");
+        var ctx = ex.Context;
+        if (ctx.Length > 58) ctx = ctx.Substring(0, 55) + "...";
+        Console.WriteLine($"║    {ctx,-58} ║");
+    }
+
+    if (!string.IsNullOrEmpty(ex.Suggestion))
+    {
+        Console.WriteLine("╠══════════════════════════════════════════════════════════════╣");
+        Console.WriteLine("║  Suggestion:                                                 ║");
+        var sug = ex.Suggestion;
+        if (sug.Length > 58) sug = sug.Substring(0, 55) + "...";
+        Console.WriteLine($"║    {sug,-58} ║");
+    }
+
+    Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
+    Console.ResetColor();
+    Console.WriteLine();
+    Console.WriteLine("  Type 'bpc docs syntax.md' for language reference");
+    Console.WriteLine("  Type 'bpc --lsp' to enable IDE support with real-time error highlighting");
+}
+
 if (args.Length > 0 && args[0] == "health")
 {
     var healthInput = args.Length > 1 && !args[1].StartsWith("-") ? args[1] : null;
@@ -135,13 +174,10 @@ if (args.Length > 0 && (args[0] == "profile" || args[0] == "prof"))
     }
     catch (ParseException ex)
     {
-        Console.Error.WriteLine($"Parse error: {ex.Message}");
+        PrintParseError(ex);
         return 1;
     }
-    return 0;
 }
-
-// Go: built-in benchmarking (Go testing.B style)
 if (args.Length > 0 && args[0] == "bench")
 {
     var benchInput = args.Length > 1 ? args[1] : null;
@@ -214,7 +250,7 @@ if (args.Length > 0 && args[0] == "bench")
     }
     catch (ParseException ex)
     {
-        Console.Error.WriteLine($"Parse error: {ex.Message}");
+        PrintParseError(ex);
         return 1;
     }
     return 0;
@@ -303,7 +339,7 @@ if (args.Length > 0 && (args[0] == "debug" || args[0] == "dbg"))
     }
     catch (ParseException ex)
     {
-        Console.Error.WriteLine($"Parse error: {ex.Message}");
+        PrintParseError(ex);
         return 1;
     }
     return 0;
@@ -434,7 +470,7 @@ if (args.Length > 0 && args[0] == "docs")
     }
     catch (ParseException ex)
     {
-        Console.Error.WriteLine($"Parse error: {ex.Message}");
+        PrintParseError(ex);
         return 1;
     }
     return 0;
@@ -470,7 +506,7 @@ if (args.Length > 0 && (args[0] == "--visualize" || args[0] == "--vis"))
     }
     catch (ParseException ex)
     {
-        Console.Error.WriteLine($"Parse error: {ex.Message}");
+        PrintParseError(ex);
         return 1;
     }
     return 0;
@@ -1280,7 +1316,7 @@ try
 }
 catch (ParseException ex)
 {
-    Console.Error.WriteLine($"Parse error: {ex.Message}");
+    PrintParseError(ex);
     return 1;
 }
 

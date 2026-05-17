@@ -1549,7 +1549,41 @@ public partial class BPlusParser
         return s[..i];
     }
 
-    private ParseException Err(string msg) { throw new ParseException(msg); }
+    private ParseException Err(string msg) 
+    { 
+        var suggestion = "";
+        
+        // Smart suggestions based on common errors
+        if (msg.Contains("Unexpected") && msg.Contains("'state'"))
+        {
+            suggestion = "Did you forget a closing brace '}' before 'state'?";
+        }
+        else if (msg.Contains("Expected"))
+        {
+            if (msg.Contains("'{'") || msg.Contains("{"))
+                suggestion = "State body must start with '{'. Example: state Red { ... }";
+            else if (msg.Contains("'}'") || msg.Contains("}"))
+                suggestion = "State body must end with '}'. Check for missing closing brace.";
+            else if (msg.Contains("'on'") || msg.Contains("on "))
+                suggestion = "Transition syntax: on <event> -> <target>. Example: on timer -> Green";
+        }
+        else if (msg.Contains("Duplicate"))
+        {
+            suggestion = "Each state must have a unique name. Rename or remove duplicate.";
+        }
+        
+        // Get context: 30 chars before error
+        int ctxStart = Math.Max(0, _pos - 30);
+        int ctxLen = Math.Min(60, _src.Length - ctxStart);
+        var context = _src.Substring(ctxStart, ctxLen).Replace("\n", "\\n").Replace("\r", "");
+        if (ctxStart > 0) context = "..." + context;
+        
+        // Calculate column relative to line start
+        int lineStart = _src.LastIndexOf('\n', Math.Max(0, _pos - 1)) + 1;
+        int column = _pos - lineStart + 1;
+        
+        throw new ParseException(msg, _line, column, context, suggestion);
+    }
 
     private static string StripComments(string src)
     {
@@ -1644,5 +1678,29 @@ public partial class BPlusParser
 
 public class ParseException : Exception
 {
-    public ParseException(string msg) : base(msg) { }
+    public int Line { get; }
+    public int Column { get; }
+    public string Context { get; }
+    public string Suggestion { get; }
+
+    public ParseException(string msg, int line = 0, int column = 0, string context = "", string suggestion = "") 
+        : base(msg)
+    {
+        Line = line;
+        Column = column;
+        Context = context;
+        Suggestion = suggestion;
+    }
+
+    public override string ToString()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Error at line {Line}, column {Column}:");
+        sb.AppendLine($"  {Message}");
+        if (!string.IsNullOrEmpty(Context))
+            sb.AppendLine($"  Context: {Context}");
+        if (!string.IsNullOrEmpty(Suggestion))
+            sb.AppendLine($"  Suggestion: {Suggestion}");
+        return sb.ToString();
+    }
 }
