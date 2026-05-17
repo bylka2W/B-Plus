@@ -154,7 +154,7 @@ if (args.Length > 0 && args[0] == "bench")
         else if (args[i] == "--target" && i + 1 < args.Length)
             benchTarget = args[++i];
         else if (args[i] == "--bench-algorithm")
-            RunAlgorithmBenchmark();
+            RunAlgorithmBenchmark(benchInput);
     }
     if (benchInput == null || !File.Exists(benchInput))
     {
@@ -2104,17 +2104,18 @@ static string StripMetalBlocks(string src)
     return src;
 }
 
-static void RunAlgorithmBenchmark()
+static void RunAlgorithmBenchmark(string? inputFile)
 {
     Console.WriteLine("=== Algorithm Benchmark ===");
     Console.WriteLine();
 
     var sw = System.Diagnostics.Stopwatch.StartNew();
 
-    if (File.Exists("bench_real.bp"))
+    var bpFile = inputFile ?? "bench_real.bp";
+    if (File.Exists(bpFile))
     {
-        Console.WriteLine("Reading bench_real.bp...");
-        var bpCode = File.ReadAllText("bench_real.bp");
+        Console.WriteLine($"Reading {bpFile}...");
+        var bpCode = File.ReadAllText(bpFile);
         Console.WriteLine($"  B+ code: {bpCode.Length} chars");
 
         var parser = new BPlusParser();
@@ -2156,7 +2157,7 @@ static void RunAlgorithmBenchmark()
     }
     else
     {
-        Console.WriteLine("bench_real.bp not found");
+        Console.WriteLine($"{bpFile} not found");
     }
 
     sw.Stop();
