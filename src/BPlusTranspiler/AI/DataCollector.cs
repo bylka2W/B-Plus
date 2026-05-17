@@ -3,6 +3,7 @@ using BPlusTranspiler.Ast;
 using BPlusTranspiler.Generators;
 using BPlusTranspiler.Parser;
 using BPlusTranspiler.Runtime;
+using AI = BPlusTranspiler.AI;
 
 namespace BPlusTranspiler.AI;
 
@@ -701,9 +702,9 @@ results.Add((features.ToArray(), target));
         try
         {
             var (code, dataSize) = X64CodeGen.GenerateBenchmarkLoop(loopCount, innerOps, cacheKB);
-            var mem = ExecutableMemory.WithData(code.Length, dataSize);
-            mem.Write(code);
-            mem.InitArray(code.Length, dataSize / 8);
+            var mem = new ExecutableMemory();
+            mem.Allocate(code.Length + dataSize);
+            mem.Write(0, code);
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
@@ -713,7 +714,7 @@ results.Add((features.ToArray(), target));
                 sw.Stop();
                 return sw.Elapsed.TotalMilliseconds;
             }
-            finally { mem.Dispose(); }
+            finally { mem.Free(); }
         }
         catch { return -1; }
     }
