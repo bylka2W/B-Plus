@@ -2,46 +2,9 @@
 
 **Machine Code Optimizer** — compiler for state machines from B+ directly to native x64 code.
 
-## What is B+
-
-B+ is a language for describing finite state machines. One `.bp` file → native executable code without C++ intermediary.
-
-```bp
-state TrafficLight {
-    var timer: int
-
-    on start -> Red enter { timer = 0 }
-}
-
-state Red {
-    on timer >= 30 -> Green enter { stop_traffic() }
-}
-
-state Green {
-    on timer >= 25 -> Yellow enter { allow_traffic() }
-}
-
-state Yellow {
-    on timer >= 5 -> Red enter { warn_traffic() }
-}
-```
-
-```
-bpc traffic_light.bp --metal --output gen/
-```
-
-Result: `gen/traffic_light.exe` — native x64 code.
-
----
-
-## Badges
-
-| | |
-|:---|:---|
-| **Build** | ![Build](https://img.shields.io/badge/build-passing-brightgreen) |
-| **Tests** | ![Tests](https://img.shields.io/badge/tests-218%2F218-blue) |
-| **License** | MIT |
-| **Platform** | Windows x64 |
+[![GitHub Repo](https://img.shields.io/badge/GitHub-CapGames221/B--Plus-blue?logo=github)](https://github.com/CapGames221/B-Plus)
+[![Stars](https://img.shields.io/github/stars/CapGames221/B--Plus?style=flat&logo=github)](https://github.com/CapGames221/B-Plus/stargazers)
+[![Issues](https://img.shields.io/github/issues/CapGames221/B--Plus)](https://github.com/CapGames221/B-Plus/issues)
 
 ---
 

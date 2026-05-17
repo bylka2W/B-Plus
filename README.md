@@ -2,7 +2,13 @@
 
 **Machine Code Optimizer** — компилятор конечных автоматов из B+ напрямую в нативный x64 код.
 
-## Логотип и суть
+[![GitHub Repo](https://img.shields.io/badge/GitHub-CapGames221/B--Plus-blue?logo=github)](https://github.com/CapGames221/B-Plus)
+[![Stars](https://img.shields.io/github/stars/CapGames221/B--Plus?style=flat&logo=github)](https://github.com/CapGames221/B-Plus/stargazers)
+[![Issues](https://img.shields.io/github/issues/CapGames221/B--Plus)](https://github.com/CapGames221/B-Plus/issues)
+
+---
+
+## Бейджи
 
 B+ — язык описания конечных автоматов. Один файл `.bp` → нативный исполняемый код без C++ посредника.
 
@@ -31,17 +37,6 @@ bpc traffic_light.bp --metal --output gen/
 ```
 
 Результат: `gen/traffic_light.exe` — нативный x64 код.
-
----
-
-## Бейджи
-
-| | |
-|:---|:---|
-| **Build** | ![Build](https://img.shields.io/badge/build-passing-brightgreen) |
-| **Tests** | ![Tests](https://img.shields.io/badge/tests-218%2F218-blue) |
-| **License** | MIT |
-| **Platform** | Windows x64 |
 
 ---
 
