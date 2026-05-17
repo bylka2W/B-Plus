@@ -886,6 +886,8 @@ dotnet test src/BPlusTranspiler.Tests
 | Platform | Status | Formats |
 |:---|:---|:---|
 | Windows x64 | ✅ | PE (.exe), DLL |
+| Linux x64 | ✅ | ELF (.out) |
+| macOS x64 | ✅ | MachO (.app) |
 
 ---
 
@@ -1790,6 +1792,8 @@ dotnet test src/BPlusTranspiler.Tests
 | Платформа | Статус | Форматы |
 |:---|:---|:---|
 | Windows x64 | ✅ | PE (.exe), DLL |
+| Linux x64 | ✅ | ELF (.out) |
+| macOS x64 | ✅ | MachO (.app) |
 
 ---
 
