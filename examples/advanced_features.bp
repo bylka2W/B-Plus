@@ -1,0 +1,109 @@
+parallel TrafficSystem {
+    machine TrafficLight {
+        state Red {
+            after 3s -> Green
+            enter { set_light(red) }
+        }
+        state Green {
+            after 5s -> Yellow
+            enter { set_light(green) }
+        }
+        state Yellow {
+            after 2s -> Red
+            enter { set_light(yellow) }
+        }
+    }
+
+    machine Pedestrian {
+        state Idle {
+            on button_pressed -> Waiting
+        }
+        state Waiting {
+            on cross_ok [light_is_red] -> Crossing
+            after 10s -> Idle
+        }
+        state Crossing {
+            after 5s -> Idle
+        }
+    }
+}
+
+state Game {
+    var health: int = 100
+    var stamina: float = 1.0
+    var damage_taken: int = 0
+
+    on damage(amount: int) [health > 50] -> Normal
+    on damage(amount: int) [health <= 50 && health > 20] -> Critical
+    on damage(amount: int) [health <= 20] -> GameOver
+
+    on heal(amount: int) -> Normal { health += amount }
+
+    state Normal {
+        enter { show_normal_ui() }
+    }
+
+    state Critical {
+        enter { show_critical_ui() }
+        on [health > 50] -> Normal
+    }
+}
+
+state Menu {
+    state MainMenu {
+        on start_game -> Playing
+        on settings -> Settings
+    }
+
+    state Settings {
+        on back -> history
+    }
+
+    state Playing {
+        on pause -> Paused
+        on quit -> MainMenu
+    }
+
+    state Paused {
+        on resume -> history
+        on restart -> Playing
+        on quit -> MainMenu
+    }
+}
+
+network GameConnection {
+    state Disconnected {
+        on connect(addr: string, port: int) -> Connecting
+        on [auto_reconnect] -> Reconnecting
+    }
+
+    state Connecting {
+        on success -> Connected
+        on timeout [retries < 5] -> Reconnecting
+        on fail [retries >= 5] -> Failed
+    }
+
+    state Reconnecting {
+        @retry(attempts: 5, backoff: exponential)
+        on success -> Connected
+        on fail -> Disconnected
+    }
+
+    state Connected {
+        var latency: int = 0
+        on packet_loss [loss > 30] -> Degraded
+        on disconnect -> Reconnecting
+        enter { start_heartbeat() }
+    }
+
+    state Degraded {
+        on packet_loss [loss > 50] -> Reconnecting
+        on recovery -> Connected
+        enter { reduce_quality() }
+    }
+
+    state Failed {
+        on retry -> Disconnected
+        enter { show_error() }
+    }
+}

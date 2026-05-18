@@ -1414,7 +1414,9 @@ var generators = new List<ICodeGenerator>
     new PythonGenerator(),
     new CppGenerator(),
     new CSharpGenerator(),
-    new CGenerator()
+    new CGenerator(),
+    new RustGenerator(),
+    new GoGenerator()
 };
 
 // LLVM IR generators (machine code paths)
@@ -1560,7 +1562,8 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
 
         var generators = new List<ICodeGenerator>
         {
-            new PythonGenerator(), new CppGenerator(), new CSharpGenerator(), new CGenerator()
+            new PythonGenerator(), new CppGenerator(), new CSharpGenerator(), new CGenerator(),
+            new RustGenerator(), new GoGenerator()
         };
 
         if (target is "llvm" or "wasm" or "arm64" or "ios" or "android")
