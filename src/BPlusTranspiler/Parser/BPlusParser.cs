@@ -59,6 +59,11 @@ public partial class BPlusParser
                     program.Pipelines.Add(ParsePipeline(annotations));
                 else if (Peek("entry"))
                     program.Entries.Add(ParseEntry());
+                else if (annotations.Any(a => a.Name == "corporate_network"))
+                {
+                    var network = ParseNetwork(corporatePrefix: true);
+                    if (network != null) program.Networks.Add(network);
+                }
                 else if (Peek("state ") || Peek("base "))
                 {
                     var state = ParseStateDef();
@@ -111,6 +116,11 @@ public partial class BPlusParser
                     {
                         program.StandaloneAnnotations.AddRange(annotations);
                     }
+                    else if (Peek("corporate_network"))
+                    {
+                        var network = ParseNetwork(corporatePrefix: true);
+                        if (network != null) program.Networks.Add(network);
+                    }
                     else
                     {
                         var vd = ParseAnnotatedVar(annotations);
@@ -148,9 +158,10 @@ public partial class BPlusParser
             {
                 program.ParallelBlocks.Add(ParseParallel());
             }
-            else if (Peek("state ") || Peek("base "))
+            else if (Peek("network ") || Peek("corporate_network"))
             {
-                program.States.Add(ParseStateDef());
+                var network = ParseNetwork(corporatePrefix: Peek("corporate_network"));
+                if (network != null) program.Networks.Add(network);
             }
             else
             {
@@ -481,16 +492,21 @@ public partial class BPlusParser
             }
         }
 
+        // Handle unconditional transitions: on [condition] -> Target
         string eventName;
-        // Handle quoted char event names: on 'x' -> Target, on '\n' -> Target
-        if (_pos < _src.Length && _src[_pos] == '\'')
+        if (_pos < _src.Length && _src[_pos] == '[')
         {
+            // Guard-only transition: on [health <= 0] -> Dead
+            eventName = "__always__";
+        }
+        else if (_pos < _src.Length && _src[_pos] == '\'')
+        {
+            // Handle quoted char event names: on 'x' -> Target, on '\n' -> Target
             _pos++; // skip opening '
             if (_pos < _src.Length && _src[_pos] != '\'')
             {
                 if (_src[_pos] == '\\' && _pos + 1 < _src.Length)
                 {
-                    // Escape sequence: \n, \r, \t, \\, \', etc.
                     _pos++;
                     eventName = _src[_pos] switch
                     {
@@ -511,7 +527,7 @@ public partial class BPlusParser
             }
             else
                 eventName = "";
-            if (_pos < _src.Length && _src[_pos] == '\'') _pos++; // skip closing '
+            if (_pos < _src.Length && _src[_pos] == '\'') _pos++;
         }
         else
         {
@@ -564,19 +580,29 @@ public partial class BPlusParser
 
         // -> Target
         string target = "";
+
         if (_pos < _src.Length && _src[_pos] == '-')
         {
             Expect("->");
             SkipWs();
-            target = ParseWord();
-            // Handle generics in target like Inventory<T>
-            SkipWs();
-            if (_pos < _src.Length && _src[_pos] == '<')
+
+            // Handle history keyword
+            if (Peek("history"))
             {
-                int gs = _pos;
-                while (_pos < _src.Length && _src[_pos] != '>') _pos++;
-                if (_pos < _src.Length) _pos++;
-                target = _src[gs.._pos];
+                _pos += 7;
+                target = "__history__";
+            }
+            else
+            {
+                target = ParseWord();
+                SkipWs();
+                if (_pos < _src.Length && _src[_pos] == '<')
+                {
+                    int gs = _pos;
+                    while (_pos < _src.Length && _src[_pos] != '>') _pos++;
+                    if (_pos < _src.Length) _pos++;
+                    target = _src[gs.._pos];
+                }
             }
         }
         SkipWs();
@@ -596,7 +622,8 @@ public partial class BPlusParser
             Guard = guard,
             Target = target,
             Body = body,
-            IsAsync = isAsync
+            IsAsync = isAsync,
+            IsHistory = target == "__history__"
         };
         trans.Parameters.AddRange(parameters);
         return trans;
@@ -658,7 +685,37 @@ public partial class BPlusParser
         SkipWs();
         while (_pos < _src.Length && _src[_pos] != '}')
         {
-            if (Peek("state ") || Peek("base "))
+            if (Peek("machine "))
+            {
+                _pos += 7;
+                SkipWs();
+                var machineName = ParseWord();
+                SkipWs();
+                Expect("{");
+                SkipWs();
+                var machine = new StateDefNode { Name = machineName };
+                while (_pos < _src.Length && _src[_pos] != '}')
+                {
+                    if (Peek("state ") || Peek("base "))
+                        machine.NestedStates.Add(ParseStateDef());
+                    else if (Peek("var "))
+                        machine.Variables.Add(ParseVarDecl());
+                    else if (Peek("on "))
+                        machine.Transitions.Add(ParseTransition());
+                    else if (Peek("after "))
+                        machine.Timers.Add(ParseTimer());
+                    else if (Peek("enter ") || Peek("exit "))
+                        machine.Actions.Add(ParseAction());
+                    else if (Peek("always"))
+                        machine.Transitions.Add(ParseAlways());
+                    else
+                        throw Err($"Unexpected in machine '{machineName}'");
+                    SkipWs();
+                }
+                Expect("}");
+                par.States.Add(machine);
+            }
+            else if (Peek("state ") || Peek("base "))
                 par.States.Add(ParseStateDef());
             else
                 throw Err($"Unexpected in parallel '{name}'");
@@ -666,6 +723,671 @@ public partial class BPlusParser
         }
         Expect("}");
         return par;
+    }
+
+    private NetworkNode? ParseNetwork(bool corporatePrefix = false)
+    {
+        if (!corporatePrefix && Peek("corporate_network"))
+            _pos += 16;
+        var name = ParseWord();
+        SkipWs();
+
+        var network = new NetworkNode { Name = name };
+
+        if (_pos < _src.Length && _src[_pos] == '"')
+        {
+            _pos++;
+            int end = _src.IndexOf('"', _pos);
+            if (end > _pos)
+            {
+                network.Description = _src[_pos..end];
+                _pos = end + 1;
+            }
+        }
+
+        while (_pos < _src.Length && _src[_pos] != '{')
+        {
+            if (Peek("protocol:"))
+            {
+                _pos += 8;
+                SkipWs();
+                var proto = ParseWord();
+                network.Protocol = proto.ToUpper() switch
+                {
+                    "TCP" => NetworkProtocol.TCP,
+                    "UDP" => NetworkProtocol.UDP,
+                    "QUIC" => NetworkProtocol.QUIC,
+                    "WEBRTC" => NetworkProtocol.WebRTC,
+                    "WEBSOCKET" => NetworkProtocol.WebSocket,
+                    "GRPC" => NetworkProtocol.gRPC,
+                    _ => NetworkProtocol.TCP
+                };
+            }
+            else if (Peek("host:"))
+            {
+                _pos += 5;
+                SkipWs();
+                var m = Regex.Match(_src[_pos..], @"^""([^""]*)""");
+                if (m.Success)
+                {
+                    network.Host = m.Groups[1].Value;
+                    _pos += m.Length;
+                }
+            }
+            else if (Peek("port:"))
+            {
+                _pos += 5;
+                SkipWs();
+                var portStr = "";
+                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                {
+                    portStr += _src[_pos];
+                    _pos++;
+                }
+                if (int.TryParse(portStr, out var port))
+                    network.Port = port;
+            }
+            else if (Peek("auto_reconnect"))
+            {
+                network.AutoReconnect = true;
+                _pos += 14;
+            }
+            else if (Peek("timeout:"))
+            {
+                _pos += 8;
+                SkipWs();
+                var timeoutStr = "";
+                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                {
+                    timeoutStr += _src[_pos];
+                    _pos++;
+                }
+                if (int.TryParse(timeoutStr, out var t))
+                    network.TimeoutMs = t;
+            }
+            else if (Peek("heartbeat:"))
+            {
+                _pos += 10;
+                SkipWs();
+                var hbStr = "";
+                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                {
+                    hbStr += _src[_pos];
+                    _pos++;
+                }
+                if (int.TryParse(hbStr, out var hb))
+                    network.HeartbeatIntervalMs = hb;
+            }
+            else if (Peek("retries:"))
+            {
+                _pos += 7;
+                SkipWs();
+                var retriesStr = "";
+                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                {
+                    retriesStr += _src[_pos];
+                    _pos++;
+                }
+                if (int.TryParse(retriesStr, out var r))
+                    network.MaxRetries = r;
+            }
+            else if (Peek("tls"))
+            {
+                network.Security = SecurityLevel.TLS;
+                _pos += 3;
+            }
+            else if (Peek("encrypted"))
+            {
+                network.Security = SecurityLevel.Encrypted;
+                _pos += 9;
+            }
+            else
+            {
+                break;
+            }
+            SkipWs();
+        }
+
+        Expect("{");
+        SkipWs();
+
+        while (_pos < _src.Length && _src[_pos] != '}')
+        {
+            SkipWs();
+            if (Peek("crypto:"))
+            {
+                network.Crypto = ParseCryptoConfig();
+            }
+            else if (Peek("access:") || Peek("zero_trust"))
+            {
+                network.ZeroTrust = ParseZeroTrustConfig();
+            }
+            else if (Peek("segments:"))
+            {
+                ParseSegments(network);
+            }
+            else if (Peek("sites:"))
+            {
+                ParseSites(network);
+            }
+            else if (Peek("resilience:"))
+            {
+                network.Resilience = ParseResilienceConfig();
+            }
+            else if (Peek("state ") || Peek("base "))
+            {
+                network.States.Add(ParseStateDef());
+            }
+            else
+            {
+                throw Err($"Unexpected in network '{name}': '{PeekWord()}'");
+            }
+            SkipWs();
+        }
+
+        Expect("}");
+        return network;
+    }
+
+    private CorporateCryptoConfig ParseCryptoConfig()
+    {
+        Expect("crypto:");
+        SkipWs();
+        var config = new CorporateCryptoConfig();
+
+        SkipWs();
+
+        if (_pos < _src.Length && _src[_pos] == '{')
+        {
+            _pos++;
+            SkipWs();
+
+            while (_pos < _src.Length && _src[_pos] != '}')
+            {
+                if (Peek("transport:"))
+                {
+                    _pos += 9;
+                    SkipWs();
+                    var m = Regex.Match(_src[_pos..], @"^(tls[_0-9]+|wireguard)");
+                    if (m.Success)
+                    {
+                        var val = m.Value.ToLower();
+                        if (val.Contains("tls13") || val == "tls_1_3") config.Transport = CryptoTransportMode.TLS13;
+                        else if (val.Contains("tls12")) config.Transport = CryptoTransportMode.TLS12;
+                        else if (val.Contains("tls11")) config.Transport = CryptoTransportMode.TLS11;
+                        else if (val.Contains("tls10") || val == "tls") config.Transport = CryptoTransportMode.TLS10;
+                        else if (val == "wireguard") config.Transport = CryptoTransportMode.WireGuard;
+                        _pos += m.Length;
+                    }
+                    else if (Peek("tls_1_3"))
+                    {
+                        config.Transport = CryptoTransportMode.TLS13;
+                        _pos += 7;
+                    }
+                }
+                else if (Peek("session:"))
+                {
+                    _pos += 8;
+                    SkipWs();
+                    if (Peek("double_ratchet"))
+                    {
+                        config.Session = CryptoSessionMode.DoubleRatchet;
+                        _pos += 14;
+                    }
+                    else if (Peek("signal"))
+                    {
+                        config.Session = CryptoSessionMode.Signal;
+                        _pos += 6;
+                    }
+                }
+                else if (Peek("payload:"))
+                {
+                    _pos += 8;
+                    SkipWs();
+                    if (Peek("aes_256_gcm"))
+                    {
+                        config.Payload = CryptoPayloadMode.AES256GCM;
+                        _pos += 10;
+                    }
+                    else if (Peek("chacha20_poly1305"))
+                    {
+                        config.Payload = CryptoPayloadMode.ChaCha20Poly1305;
+                        _pos += 16;
+                    }
+                }
+                else if (Peek("post_quantum:"))
+                {
+                    _pos += 13;
+                    SkipWs();
+                    if (Peek("hybrid"))
+                    {
+                        config.PostQuantum = PostQuantumMode.HybridX25519MLKEM;
+                        _pos += 5;
+                    }
+                    else if (Peek("ml_kem_1024"))
+                    {
+                        config.PostQuantum = PostQuantumMode.MLKEM1024;
+                        _pos += 11;
+                    }
+                    else if (Peek("ml_kem_768"))
+                    {
+                        config.PostQuantum = PostQuantumMode.MLKEM768;
+                        _pos += 9;
+                    }
+                }
+                else if (Peek("key_rotation:"))
+                {
+                    _pos += 13;
+                    SkipWs();
+                    if (Peek("every("))
+                    {
+                        _pos += 6;
+                        var numStr = "";
+                        while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                        {
+                            numStr += _src[_pos];
+                            _pos++;
+                        }
+                        if (int.TryParse(numStr, out var num))
+                        {
+                            SkipWs();
+                            if (Peek("s)"))
+                            {
+                                config.KeyRotationSeconds = num;
+                                _pos += 2;
+                            }
+                            else if (Peek("mb)"))
+                            {
+                                config.KeyRotationBytes = num * 1_000_000;
+                                _pos += 3;
+                            }
+                        }
+                    }
+                }
+                else if (Peek("ciphers:"))
+                {
+                    _pos += 8;
+                    SkipWs();
+                    if (_src[_pos] == '[')
+                    {
+                        _pos++;
+                        while (_pos < _src.Length && _src[_pos] != ']')
+                        {
+                            var cipher = ParseWord();
+                            config.Ciphers.Add(cipher);
+                            SkipWs();
+                            if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                        }
+                        Expect("]");
+                    }
+                }
+                else
+                {
+                    SkipToEndOfLine();
+                }
+                SkipWs();
+            }
+
+            Expect("}");
+        }
+
+        return config;
+    }
+
+    private ZeroTrustConfig ParseZeroTrustConfig()
+    {
+        var config = new ZeroTrustConfig();
+
+        if (Peek("access:"))
+        {
+            _pos += 7;
+            SkipWs();
+        }
+
+        if (Peek("zero_trust"))
+        {
+            _pos += 10;
+            SkipWs();
+        }
+
+        if (_pos < _src.Length && _src[_pos] == '{')
+        {
+            Expect("{");
+            SkipWs();
+
+            while (_pos < _src.Length && _src[_pos] != '}')
+            {
+                SkipWs();
+                if (Peek("identity:"))
+                {
+                    _pos += 9;
+                    SkipWs();
+                    while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '\r' && _src[_pos] != ',' && _src[_pos] != '{' && _src[_pos] != '}')
+                    {
+                        if (_src[_pos] == '+')
+                        {
+                            _pos++;
+                            SkipWs();
+                            continue;
+                        }
+                        var method = ParseWord();
+                        if (method == "certificate") config.IdentityAuth |= AuthMethod.Certificate;
+                        else if (method == "hardware_key" || method == "yubikey") config.IdentityAuth |= AuthMethod.HardwareKey;
+                        else if (method == "tpm") config.IdentityAuth |= AuthMethod.TPM;
+                        else if (method == "biometric") config.IdentityAuth |= AuthMethod.Biometric;
+                        else break;
+                        SkipWs();
+                    }
+                }
+                else if (Peek("session:") || Peek("time:"))
+                {
+                    SkipWs();
+                    if (Peek("max("))
+                    {
+                        _pos += 4;
+                        var hrs = "";
+                        while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                        {
+                            hrs += _src[_pos];
+                            _pos++;
+                        }
+                        if (int.TryParse(hrs, out var h))
+                            config.MaxSessionHours = h;
+                        Expect("h)");
+                        _pos += 2;
+                    }
+                }
+                else if (Peek("behavior:") || Peek("anomaly:"))
+                {
+                    _pos += 9;
+                    SkipWs();
+                    config.MLAnomalyDetection = Peek("ml_") || Peek("ml_");
+                    if (Peek("ml_")) _pos += 3;
+                    while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '\r' && _src[_pos] != ',' && _src[_pos] != '{' && _src[_pos] != '}')
+                    {
+                        ParseWord();
+                        SkipWs();
+                    }
+                }
+                else if (Peek("device:") || Peek("tpm"))
+                {
+                    config.TPMAttestation = true;
+                    SkipToEndOfLine();
+                }
+                else if (Peek("mfa:") || Peek("require_mfa"))
+                {
+                    config.RequireMFA = true;
+                    SkipToEndOfLine();
+                }
+                else if (Peek("threshold:"))
+                {
+                    _pos += 10;
+                    SkipWs();
+                    var th = "";
+                    while (_pos < _src.Length && (char.IsDigit(_src[_pos]) || _src[_pos] == '.'))
+                    {
+                        th += _src[_pos];
+                        _pos++;
+                    }
+                    if (double.TryParse(th, out var threshold))
+                        config.AnomalyThreshold = threshold;
+                }
+                else
+                {
+                    SkipToEndOfLine();
+                }
+                SkipWs();
+            }
+
+            Expect("}");
+        }
+
+        return config;
+    }
+
+    private void ParseSegments(NetworkNode network)
+    {
+        Expect("segments:");
+        SkipWs();
+        Expect("[");
+        SkipWs();
+
+        while (_pos < _src.Length && _src[_pos] != ']')
+        {
+            SkipWs();
+            if (_pos >= _src.Length || _src[_pos] == ']') break;
+
+            if (_src[_pos] == '{')
+            {
+                _pos++;
+                SkipWs();
+                var segment = new NetworkSegment();
+
+                int braceDepth = 1;
+                while (_pos < _src.Length && braceDepth > 0)
+                {
+                    if (_src[_pos] == '{') { braceDepth++; _pos++; }
+                    else if (_src[_pos] == '}') { braceDepth--; if (braceDepth == 0) { _pos++; break; } _pos++; }
+                    else
+                    {
+                        if (Peek("vlan:"))
+                        {
+                            _pos += 5;
+                            SkipWs();
+                            var vlan = "";
+                            while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                            {
+                                vlan += _src[_pos];
+                                _pos++;
+                            }
+                            if (int.TryParse(vlan, out var v))
+                                segment.Vlan = v;
+                        }
+                        else if (Peek("access:"))
+                        {
+                            _pos += 7;
+                            SkipWs();
+                            if (_pos < _src.Length && _src[_pos] == '[')
+                            {
+                                _pos++;
+                                while (_pos < _src.Length && _src[_pos] != ']')
+                                {
+                                    var resource = ParseWord();
+                                    segment.AllowedResources.Add(resource);
+                                    SkipWs();
+                                    if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                                }
+                                if (_pos < _src.Length && _src[_pos] == ']') _pos++;
+                            }
+                        }
+                        else if (Peek("isolated"))
+                        {
+                            segment.Isolated = true;
+                            _pos += 8;
+                        }
+                        else if (Peek("name:"))
+                        {
+                            _pos += 5;
+                            SkipWs();
+                            segment.Name = ParseWord();
+                        }
+                        else
+                        {
+                            _pos++;
+                        }
+                        SkipWs();
+                    }
+                }
+                
+                SkipWs();
+                network.Segments.Add(segment);
+            }
+            else
+            {
+                var name = ParseWord();
+                network.Segments.Add(new NetworkSegment { Name = name, Vlan = network.Segments.Count * 10 + 10 });
+            }
+            SkipWs();
+            if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+        }
+
+        Expect("]");
+    }
+
+    private void ParseSites(NetworkNode network)
+    {
+        Expect("sites:");
+        SkipWs();
+        Expect("[");
+        SkipWs();
+
+        while (_pos < _src.Length && _src[_pos] != ']')
+        {
+            if (_src[_pos] == '{')
+            {
+                _pos++;
+                SkipWs();
+                var site = new NetworkSite();
+
+                while (_pos < _src.Length && _src[_pos] != '}')
+                {
+                    if (Peek("name:"))
+                    {
+                        _pos += 5;
+                        SkipWs();
+                        site.Name = ParseWord();
+                    }
+                    else if (Peek("role:"))
+                    {
+                        _pos += 5;
+                        SkipWs();
+                        var role = ParseWord().ToLower();
+                        site.Role = role switch
+                        {
+                            "primary" => SiteRole.Primary,
+                            "replica" => SiteRole.Replica,
+                            "backup" => SiteRole.Backup,
+                            _ => SiteRole.Endpoint
+                        };
+                    }
+                    else if (Peek("primary") || Peek("address:"))
+                    {
+                        _pos += 8;
+                        SkipWs();
+                        var m = Regex.Match(_src[_pos..], @"^""([^""]*)""");
+                        if (m.Success)
+                        {
+                            site.PrimaryAddress = m.Groups[1].Value;
+                            _pos += m.Length;
+                        }
+                    }
+                    else
+                    {
+                        SkipToEndOfLine();
+                    }
+                    SkipWs();
+                }
+
+                Expect("}");
+                network.Sites.Add(site);
+            }
+            else
+            {
+                var name = ParseWord();
+                network.Sites.Add(new NetworkSite { Name = name, Role = SiteRole.Endpoint });
+            }
+            SkipWs();
+            if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+        }
+
+        Expect("]");
+    }
+
+    private ResilienceConfig ParseResilienceConfig()
+    {
+        Expect("resilience:");
+        SkipWs();
+        var config = new ResilienceConfig();
+
+        if (_src[_pos] == '{')
+        {
+            Expect("{");
+            SkipWs();
+
+            while (_pos < _src.Length && _src[_pos] != '}')
+            {
+                if (Peek("multipath:"))
+                {
+                    _pos += 9;
+                    SkipWs();
+                    if (Peek("active_active"))
+                    {
+                        config.Multipath = MultipathMode.ActiveActive;
+                        _pos += 12;
+                    }
+                    else if (Peek("active_standby"))
+                    {
+                        config.Multipath = MultipathMode.ActiveStandby;
+                        _pos += 13;
+                    }
+                }
+                else if (Peek("failover:"))
+                {
+                    _pos += 9;
+                    SkipWs();
+                    var ms = "";
+                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                    {
+                        ms += _src[_pos];
+                        _pos++;
+                    }
+                    if (int.TryParse(ms, out var m))
+                        config.FailoverMs = m;
+                    if (_pos < _src.Length && _src[_pos] == 'm') _pos++;
+                }
+                else if (Peek("mesh:") || Peek("nodes:"))
+                {
+                    _pos += 5;
+                    SkipWs();
+                    if (Peek("raft"))
+                    {
+                        config.Consensus = ConsensusProtocol.Raft;
+                        _pos += 4;
+                    }
+                    else if (Peek("paxos"))
+                    {
+                        config.Consensus = ConsensusProtocol.Paxos;
+                        _pos += 5;
+                    }
+                    else
+                    {
+                        var nodes = "";
+                        while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                        {
+                            nodes += _src[_pos];
+                            _pos++;
+                        }
+                        if (int.TryParse(nodes, out var n))
+                            config.MeshNodes = n;
+                    }
+                }
+                else
+                {
+                    SkipToEndOfLine();
+                }
+                SkipWs();
+            }
+
+            Expect("}");
+        }
+
+        return config;
+    }
+
+    private void SkipToEndOfLine()
+    {
+        while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '\r')
+            _pos++;
     }
 
     // ════════════════════════════════════════

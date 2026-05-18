@@ -35,6 +35,7 @@ public class ProgramNode
     public List<EnumNode> Enums { get; } = new();
     public List<StateDefNode> States { get; } = new();
     public List<ParallelBlockNode> ParallelBlocks { get; } = new();
+    public List<NetworkNode> Networks { get; } = new();
 
     // Streaming mode (#parser directive or --stream flag)
     public BPlusStreamMode StreamMode { get; set; }
@@ -143,19 +144,15 @@ public class TransitionNode
     public bool IsAsync { get; set; }
     public bool IsAlways { get; set; }
     public bool IsEnterAuto { get; set; }
-    // @hot / @cold PGO weight (0.0–1.0), null = no hint
+    public bool IsHistory { get; set; }
     public double? HotWeight { get; set; }
-    // Semantic Inline chain name (set by optimizer)
     public string? ChainId { get; set; }
-    // Branch prediction
     public string? Predict { get; set; }
     public double? PredictProbability { get; set; }
-
-    // Zig: ErrorTransition — transition can fail with error payload
     public bool IsFallible { get; set; }
-    public string? ErrorType { get; set; }    // e.g. "TimeoutError", "string"
-    public string? ErrorTarget { get; set; }  // state to transition to on error
-    public string? ErrorBody { get; set; }    // cleanup code on error path
+    public string? ErrorType { get; set; }
+    public string? ErrorTarget { get; set; }
+    public string? ErrorBody { get; set; }
 }
 
 // Zig: ErrorTransitionNode — fallible transition with explicit error handling
@@ -198,6 +195,86 @@ public class ParallelBlockNode
     public List<string> SharedVariables { get; } = new();
     public Dictionary<string, HashSet<string>> DepGraph { get; set; } = new();
 }
+
+public class NetworkNode
+{
+    public string Name { get; set; } = "";
+    public List<StateDefNode> States { get; } = new();
+    public NetworkProtocol Protocol { get; set; } = NetworkProtocol.TCP;
+    public string? Host { get; set; }
+    public int Port { get; set; }
+    public bool AutoReconnect { get; set; }
+    public int MaxRetries { get; set; } = 5;
+    public int TimeoutMs { get; set; } = 30000;
+    public int HeartbeatIntervalMs { get; set; } = 5000;
+    public int PacketLossThreshold { get; set; } = 30;
+    public SecurityLevel Security { get; set; } = SecurityLevel.None;
+
+    public CorporateCryptoConfig? Crypto { get; set; }
+    public ZeroTrustConfig? ZeroTrust { get; set; }
+    public List<NetworkSegment> Segments { get; } = new();
+    public List<NetworkSite> Sites { get; } = new();
+    public ResilienceConfig? Resilience { get; set; }
+    public string? Description { get; set; }
+}
+
+public class CorporateCryptoConfig
+{
+    public CryptoTransportMode Transport { get; set; } = CryptoTransportMode.TLS13;
+    public CryptoSessionMode Session { get; set; } = CryptoSessionMode.DoubleRatchet;
+    public CryptoPayloadMode Payload { get; set; } = CryptoPayloadMode.AES256GCM;
+    public PostQuantumMode PostQuantum { get; set; } = PostQuantumMode.HybridX25519MLKEM;
+    public int KeyRotationSeconds { get; set; } = 60;
+    public int KeyRotationBytes { get; set; } = 100_000_000;
+    public List<string> Ciphers { get; } = new() { "chacha20_poly1305", "aes_256_gcm" };
+}
+
+public class ZeroTrustConfig
+{
+    public bool NeverImplicitTrust { get; set; } = true;
+    public AuthMethod IdentityAuth { get; set; } = AuthMethod.Certificate | AuthMethod.HardwareKey;
+    public int MaxSessionHours { get; set; } = 4;
+    public bool MLAnomalyDetection { get; set; } = true;
+    public bool TPMAttestation { get; set; } = true;
+    public bool RequireMFA { get; set; } = true;
+    public double AnomalyThreshold { get; set; } = 0.8;
+}
+
+public class NetworkSegment
+{
+    public string Name { get; set; } = "";
+    public int Vlan { get; set; }
+    public List<string> AllowedResources { get; } = new();
+    public bool Isolated { get; set; }
+}
+
+public class NetworkSite
+{
+    public string Name { get; set; } = "";
+    public SiteRole Role { get; set; } = SiteRole.Endpoint;
+    public string? PrimaryAddress { get; set; }
+    public List<string> SecondaryAddresses { get; } = new();
+}
+
+public class ResilienceConfig
+{
+    public MultipathMode Multipath { get; set; } = MultipathMode.ActiveActive;
+    public int FailoverMs { get; set; } = 200;
+    public int MeshNodes { get; set; } = 3;
+    public ConsensusProtocol Consensus { get; set; } = ConsensusProtocol.Raft;
+}
+
+public enum CryptoTransportMode { TLS10, TLS11, TLS12, TLS13, WireGuard }
+public enum CryptoSessionMode { Simple, DoubleRatchet, Signal }
+public enum CryptoPayloadMode { AES128GCM, AES256GCM, ChaCha20Poly1305 }
+public enum PostQuantumMode { None, MLKEM768, MLKEM1024, HybridX25519MLKEM, HybridBIKE }
+public enum AuthMethod { Password, Certificate, HardwareKey, TPM, Biometric, None }
+public enum SiteRole { Primary, Replica, Endpoint, Backup }
+public enum MultipathMode { None, ActiveStandby, ActiveActive }
+public enum ConsensusProtocol { None, Raft, Paxos, BFT }
+
+public enum NetworkProtocol { TCP, UDP, QUIC, WebRTC, WebSocket, gRPC }
+public enum SecurityLevel { None, TLS, MutualAuth, Encrypted }
 
 // ════════════════════════════════════════
 // NEW v2.2: Kernel / FSR / Pipeline AST

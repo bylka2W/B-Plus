@@ -847,6 +847,32 @@ state Error {
 }
 ```
 
+### 10.6 Corporate Network
+
+```bp
+@corporate_network MyCompany {
+    crypto: {
+        transport: tls_1_3
+        session: double_ratchet
+        payload: aes_256_gcm
+        post_quantum: hybrid_x25519_mlkem
+        key_rotation: 60s / 100mb
+    }
+
+    access: zero_trust {
+        identity: certificate + hardware_key + tpm
+        session: max(4h)
+        ml_detection: true
+        require_mfa: true
+    }
+
+    segments: [
+        { name: finance, vlan: 10 },
+        { name: hr, vlan: 20 }
+    ]
+}
+```
+
 ---
 
 ## 11. Project Structure
@@ -1753,9 +1779,178 @@ state Error {
 }
 ```
 
+### 10.6 Корпоративная сеть
+
+```bp
+@corporate_network MyCompany {
+    crypto: {
+        transport: tls_1_3
+        session: double_ratchet
+        payload: aes_256_gcm
+        post_quantum: hybrid_x25519_mlkem
+        key_rotation: 60s / 100mb
+    }
+
+    access: zero_trust {
+        identity: certificate + hardware_key + tpm
+        session: max(4h)
+        ml_detection: true
+        require_mfa: true
+    }
+
+    segments: [
+        { name: finance, vlan: 10 },
+        { name: hr, vlan: 20 }
+    ]
+}
+```
+
+### 10.6 Corporate Network
+
+```bp
+@corporate_network MyCompany {
+    crypto: {
+        transport: tls_1_3
+        session: double_ratchet
+        payload: aes_256_gcm
+        post_quantum: hybrid_x25519_mlkem
+        key_rotation: 60s / 100mb
+    }
+
+    access: zero_trust {
+        identity: certificate + hardware_key + tpm
+        session: max(4h)
+        ml_detection: true
+        require_mfa: true
+    }
+
+    segments: [
+        { name: finance, vlan: 10 },
+        { name: hr, vlan: 20 }
+    ]
+}
+```
+
 ---
 
-## 11. Структура проекта
+## 11. Corporate Network (@corporate_network)
+
+The `@corporate_network` directive creates enterprise networks with Zero Trust Security and cryptography support.
+
+### 11.1 Structure
+
+```bp
+@corporate_network Name {
+    crypto: { ... }
+    access: zero_trust { ... }
+    segments: [ ... ]
+    state StateName { ... }
+}
+```
+
+### 11.2 Cryptography (crypto)
+
+| Parameter | Description |
+|:---|:---|
+| `transport` | Protocol: `tls_1_3`, `tls_1_2`, `dtls` |
+| `session` | Session: `double_ratchet`, `chacha20_poly1305` |
+| `payload` | Encryption: `aes_256_gcm`, `aes_128_gcm`, `chacha20` |
+| `post_quantum` | Post-quantum: `hybrid_x25519_mlkem`, `kyber768` |
+| `key_rotation` | Key rotation: `60s / 100mb` |
+
+### 11.3 Zero Trust (access: zero_trust)
+
+| Parameter | Description |
+|:---|:---|
+| `identity` | Auth methods: `certificate`, `hardware_key`, `tpm`, `biometric` |
+| `session` | Max session time: `max(4h)` |
+| `ml_detection` | ML anomaly detection |
+| `require_mfa` | Require MFA |
+
+### 11.4 Network Segments (segments)
+
+```bp
+segments: [
+    { name: finance, vlan: 10, access: [finance_servers] },
+    { name: hr, vlan: 20, access: [hr_servers] }
+]
+```
+
+### 11.5 Network States (state)
+
+```bp
+state Disconnected {
+    on connect -> Connecting
+}
+
+state Connecting {
+    on success -> Connected
+}
+
+state Connected {
+}
+```
+
+### 11.6 Network Parameters
+
+| Parameter | Default | Description |
+|:---|:---|:---|
+| `timeout:` | 30000ms | Connection timeout |
+| `heartbeat:` | 5000ms | Heartbeat interval |
+| `max_retries:` | 5 | Max retries |
+| `auto_reconnect` | false | Auto-reconnect |
+
+### 11.7 Generated Types (Go)
+
+```go
+type AuthMethod int
+const (
+    AuthNone AuthMethod = iota
+    AuthPassword
+    AuthCertificate
+    AuthHardwareKey
+    AuthTPM
+    AuthBiometric
+)
+
+type NetworkState int
+const (
+    NetworkDisconnected NetworkState = iota
+    NetworkConnecting
+    NetworkConnected
+    NetworkReconnecting
+    NetworkDegraded
+    NetworkFailed
+)
+
+type MyCompany struct {
+    CryptoTransport    string
+    CryptoSession     string
+    CryptoPayload     string
+    CryptoPostQuantum string
+    KeyRotationSecs   uint64
+    KeyRotationBytes  uint64
+    Protocol          NetworkProtocol
+    Host              string
+    Port              int
+    Conn              net.Conn
+    Deadline          time.Duration
+    Heartbeat         time.Duration
+    MaxRetries        int
+    AutoReconnect     bool
+
+    // Zero Trust
+    IdentityAuth       AuthMethod
+    MaxSessionHours    uint32
+    MLAnomalyDetection bool
+    TPMAttestation     bool
+    RequireMFA         bool
+}
+```
+
+---
+
+## 12. Структура проекта
 
 ```
 B+ v1.0/

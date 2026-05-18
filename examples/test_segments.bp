@@ -1,0 +1,6 @@
+@corporate_network Test {
+
+    segments: [
+        { name: finance, vlan: 10, access: [finance_servers, reports] }
+    ]
+}

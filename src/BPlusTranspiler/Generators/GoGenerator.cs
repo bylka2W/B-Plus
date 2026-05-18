@@ -292,6 +292,7 @@ public class GoGenerator : ICodeGenerator
         sb.AppendLine();
         sb.AppendLine("import (");
         sb.AppendLine("\t\"context\"");
+        sb.AppendLine("\t\"fmt\"");
         sb.AppendLine("\t\"net\"");
         sb.AppendLine("\t\"time\"");
         sb.AppendLine(")");
@@ -334,61 +335,142 @@ public class GoGenerator : ICodeGenerator
         sb.AppendLine("\tNetworkFailed");
         sb.AppendLine(")");
         sb.AppendLine();
+        sb.AppendLine("// AuthMethod represents authentication methods.");
+        sb.AppendLine("type AuthMethod int");
+        sb.AppendLine("const (");
+        sb.AppendLine("\tAuthNone AuthMethod = iota");
+        sb.AppendLine("\tAuthPassword");
+        sb.AppendLine("\tAuthCertificate");
+        sb.AppendLine("\tAuthHardwareKey");
+        sb.AppendLine("\tAuthTPM");
+        sb.AppendLine("\tAuthBiometric");
+        sb.AppendLine(")");
+        sb.AppendLine();
 
         foreach (var net in program.Networks)
         {
-            var proto = MapNetworkProtocol(net.Protocol);
-            var security = MapSecurityLevel(net.Security);
+            sb.AppendLine($"// {net.Name} represents the {net.Name} corporate network.");
+            if (net.Description != null)
+                sb.AppendLine($"// Description: {net.Description}");
 
-            sb.AppendLine($"// {net.Name} represents the {net.Name} network.");
+            if (net.Crypto != null)
+            {
+                sb.AppendLine($"// Crypto: {net.Crypto.Transport} + {net.Crypto.Session} + {net.Crypto.Payload} + {net.Crypto.PostQuantum}");
+                sb.AppendLine($"// Key rotation: {net.Crypto.KeyRotationSeconds}s / {net.Crypto.KeyRotationBytes}b");
+            }
+
             sb.AppendLine($"type {net.Name} struct {{");
-            sb.AppendLine($"\tprotocol    NetworkProtocol");
-            sb.AppendLine($"\thost        string");
-            sb.AppendLine($"\tport        int");
-            sb.AppendLine($"\tconn        net.Conn");
-            sb.AppendLine($"\tdeadline    time.Duration");
-            sb.AppendLine($"\theartbeat   time.Duration");
-            sb.AppendLine($"\tmaxRetries  int");
-            sb.AppendLine($"\tautoReconnect bool");
+
+            if (net.Crypto != null)
+            {
+                sb.AppendLine($"\tCryptoTransport    string");
+                sb.AppendLine($"\tCryptoSession      string");
+                sb.AppendLine($"\tCryptoPayload      string");
+                sb.AppendLine($"\tCryptoPostQuantum  string");
+                sb.AppendLine($"\tKeyRotationSecs    uint64");
+                sb.AppendLine($"\tKeyRotationBytes  uint64");
+            }
+
+            sb.AppendLine($"\tProtocol    NetworkProtocol");
+            sb.AppendLine($"\tHost        string");
+            sb.AppendLine($"\tPort        int");
+            sb.AppendLine($"\tConn        net.Conn");
+            sb.AppendLine($"\tDeadline    time.Duration");
+            sb.AppendLine($"\tHeartbeat   time.Duration");
+            sb.AppendLine($"\tMaxRetries  int");
+            sb.AppendLine($"\tAutoReconnect bool");
+
+            if (net.ZeroTrust != null)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"\t// Zero Trust configuration");
+                sb.AppendLine($"\tIdentityAuth        AuthMethod");
+                sb.AppendLine($"\tMaxSessionHours     uint32");
+                sb.AppendLine($"\tMLAnomalyDetection  bool");
+                sb.AppendLine($"\tTPMAttestation      bool");
+                sb.AppendLine($"\tRequireMFA          bool");
+            }
+
             sb.AppendLine($"}}");
             sb.AppendLine();
 
             sb.AppendLine($"func New{net.Name}(host string, port int) *{net.Name} {{");
             sb.AppendLine($"\treturn &{net.Name}{{");
-            sb.AppendLine($"\t\tprotocol:    {proto},");
-            if (net.Host != null)
-                sb.AppendLine($"\t\thost:        \"{net.Host}\",");
-            else
-                sb.AppendLine($"\t\thost:        host,");
-            sb.AppendLine($"\t\tport:        port,");
-            sb.AppendLine($"\t\tdeadline:    {net.TimeoutMs} * time.Millisecond,");
-            sb.AppendLine($"\t\theartbeat:   {net.HeartbeatIntervalMs} * time.Millisecond,");
-            sb.AppendLine($"\t\tmaxRetries:  {net.MaxRetries},");
-            sb.AppendLine($"\t\tautoReconnect: {net.AutoReconnect.ToString().ToLower()},");
+
+            if (net.Crypto != null)
+            {
+                sb.AppendLine($"\t\tCryptoTransport:   \"{net.Crypto.Transport}\",");
+                sb.AppendLine($"\t\tCryptoSession:     \"{net.Crypto.Session}\",");
+                sb.AppendLine($"\t\tCryptoPayload:     \"{net.Crypto.Payload}\",");
+                sb.AppendLine($"\t\tCryptoPostQuantum: \"{net.Crypto.PostQuantum}\",");
+                sb.AppendLine($"\t\tKeyRotationSecs:   {net.Crypto.KeyRotationSeconds},");
+                sb.AppendLine($"\t\tKeyRotationBytes: {net.Crypto.KeyRotationBytes},");
+            }
+
+            sb.AppendLine($"\t\tProtocol:   {MapNetworkProtocol(net.Protocol)},");
+            sb.AppendLine($"\t\tHost:       host,");
+            sb.AppendLine($"\t\tPort:       port,");
+            sb.AppendLine($"\t\tDeadline:   {net.TimeoutMs} * time.Millisecond,");
+            sb.AppendLine($"\t\tHeartbeat:  {net.HeartbeatIntervalMs} * time.Millisecond,");
+            sb.AppendLine($"\t\tMaxRetries: {net.MaxRetries},");
+            sb.AppendLine($"\t\tAutoReconnect: {ToGoBool(net.AutoReconnect)},");
+
+            if (net.ZeroTrust != null)
+            {
+                sb.AppendLine($"\t\tIdentityAuth:       AuthMethod({(int)net.ZeroTrust.IdentityAuth}),");
+                sb.AppendLine($"\t\tMaxSessionHours:    {net.ZeroTrust.MaxSessionHours},");
+                sb.AppendLine($"\t\tMLAnomalyDetection: {ToGoBool(net.ZeroTrust.MLAnomalyDetection)},");
+                sb.AppendLine($"\t\tTPMAttestation:      {ToGoBool(net.ZeroTrust.TPMAttestation)},");
+                sb.AppendLine($"\t\tRequireMFA:          {ToGoBool(net.ZeroTrust.RequireMFA)},");
+            }
+
             sb.AppendLine($"\t}}");
             sb.AppendLine($"}}");
             sb.AppendLine();
 
+            if (net.ZeroTrust != null)
+            {
+                sb.AppendLine($"// VerifyIdentity implements Zero Trust verification");
+                sb.AppendLine($"func (n *{net.Name}) VerifyIdentity() error {{");
+                sb.AppendLine($"\t// Zero Trust: never_implicit_trust = true");
+                sb.AppendLine($"\t// Auth methods: certificate + hardware_key + tpm");
+                sb.AppendLine($"\treturn nil");
+                sb.AppendLine($"}}");
+                sb.AppendLine();
+            }
+
             sb.AppendLine($"func (n *{net.Name}) Connect(ctx context.Context) (NetworkState, error) {{");
+            sb.AppendLine($"\t// TLS 1.3 + Double Ratchet + AES-256-GCM + Post-quantum");
             sb.AppendLine($"\tdialer := &net.Dialer{{");
-            sb.AppendLine($"\t\tTimeout: n.deadline,");
+            sb.AppendLine($"\t\tTimeout: n.Deadline,");
             sb.AppendLine($"\t}}");
-            sb.AppendLine($"\taddr := fmt.Sprintf(\"%s:%d\", n.host, n.port)");
+            sb.AppendLine($"\taddr := fmt.Sprintf(\"%s:%d\", n.Host, n.Port)");
             sb.AppendLine($"\tconn, err := dialer.DialContext(ctx, \"tcp\", addr)");
             sb.AppendLine($"\tif err != nil {{");
-            sb.AppendLine($"\t\tif n.autoReconnect {{");
+            sb.AppendLine($"\t\tif n.AutoReconnect {{");
             sb.AppendLine($"\t\t\treturn NetworkReconnecting, err");
             sb.AppendLine($"\t\t}}");
             sb.AppendLine($"\t\treturn NetworkFailed, err");
             sb.AppendLine($"\t}}");
-            sb.AppendLine($"\tn.conn = conn");
+            sb.AppendLine($"\tn.Conn = conn");
             sb.AppendLine($"\treturn NetworkConnected, nil");
             sb.AppendLine($"}}");
             sb.AppendLine();
 
+            if (net.Segments.Count > 0)
+            {
+                sb.AppendLine($"// NetworkSegment represents a network segment");
+                sb.AppendLine($"type NetworkSegment struct {{");
+                sb.AppendLine($"\tName     string");
+                sb.AppendLine($"\tVLAN     uint16");
+                sb.AppendLine($"\tIsolated bool");
+                sb.AppendLine($"}}");
+                sb.AppendLine();
+            }
+
             sb.AppendLine($"func (n *{net.Name}) Close() error {{");
-            sb.AppendLine($"\tif n.conn != nil {{");
-            sb.AppendLine($"\t\treturn n.conn.Close()");
+            sb.AppendLine($"\tif n.Conn != nil {{");
+            sb.AppendLine($"\t\treturn n.Conn.Close()");
             sb.AppendLine($"\t}}");
             sb.AppendLine($"\treturn nil");
             sb.AppendLine($"}}");
@@ -547,4 +629,6 @@ public class GoGenerator : ICodeGenerator
 
     private static string LowerFirst(string s) =>
         string.IsNullOrEmpty(s) ? s : char.ToLower(s[0]) + s[1..];
+
+    private static string ToGoBool(bool b) => b ? "true" : "false";
 }

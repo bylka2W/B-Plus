@@ -1,0 +1,13 @@
+corporate_network MyCompany {
+
+    state Disconnected {
+        on connect -> Connecting
+    }
+
+    state Connecting {
+        on success -> Connected
+    }
+
+    state Connected {
+    }
+}

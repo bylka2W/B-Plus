@@ -1,0 +1,6 @@
+corporate_network Test {
+
+    access: zero_trust {
+        identity: certificate
+    }
+}

@@ -1,14 +1,11 @@
 @corporate_network Test {
 
-    crypto: {
-        transport: tls_1_3
-    }
-
     access: zero_trust {
         identity: certificate
+        session: max(4h)
     }
 
     segments: [
-        { name: finance, vlan: 10 }
+        { name: finance }
     ]
 }
