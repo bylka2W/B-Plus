@@ -1950,7 +1950,167 @@ type MyCompany struct {
 
 ---
 
-## 12. Структура проекта
+## 12. Blockchain Network (@blockchain)
+
+The `@blockchain` directive creates distributed ledger networks with consensus algorithms, P2P protocols, and cryptocurrency wallet support.
+
+### 12.1 Structure
+
+```bp
+@blockchain Name {
+    consensus: pbft
+    wallet: ed25519
+    p2p: kademlia
+    sharding: state_sharding
+    state StateName { ... }
+}
+```
+
+### 12.2 Consensus Algorithms
+
+| Algorithm | Description | Use Case |
+|:---|:---|:---|
+| `pow` | Proof-of-Work | Bitcoin-style mining |
+| `pos` | Proof-of-Stake | Ethereum-style staking |
+| `dpos` | Delegated PoS | High TPS blockchains |
+| `pbft` | Practical Byzantine Fault Tolerance | Enterprise consortium |
+| `raft` | Raft consensus | Crash-fault tolerant |
+
+### 12.3 Wallet Algorithms
+
+| Algorithm | Description |
+|:---|:---|
+| `ecdsa` | ECDSA signatures |
+| `ed25519` | Ed25519 signatures |
+| `schnorr` | Schnorr signatures |
+
+### 12.4 P2P Protocols
+
+| Protocol | Description |
+|:---|:---|
+| `kademlia` | Kademlia DHT for peer discovery |
+| `gossip` | Gossip protocol for propagation |
+| `chord` | Chord DHT for peer lookup |
+
+### 12.5 Sharding Types
+
+| Type | Description |
+|:---|:---|
+| `none` | No sharding |
+| `shard_chain` | Horizontal sharding by chain |
+| `state_sharding` | State partition across shards |
+
+### 12.6 Network Parameters
+
+| Parameter | Default | Description |
+|:---|:---|:---|
+| `max_peers:` | 100 | Max P2P connections |
+| `min_validators:` | 4 | Min validators for PBFT |
+| `block_time:` | 1000ms | Block production interval |
+| `difficulty:` | 4 | PoW difficulty target |
+| `min_stake:` | 1000 | Min stake for PoS validator |
+| `shard_count:` | 16 | Number of shards |
+
+### 12.7 Generated Types (Go)
+
+```go
+type ConsensusType int
+const (
+    ConsensusPoW ConsensusType = iota
+    ConsensusPoS
+    ConsensusDPoS
+    ConsensusPBFT
+    ConsensusRaft
+)
+
+type WalletAlgorithm int
+const (
+    WalletECDSA WalletAlgorithm = iota
+    WalletEd25519
+    WalletSchnorr
+)
+
+type P2PProtocol int
+const (
+    P2PKademlia P2PProtocol = iota
+    P2PGossip
+    P2PChord
+)
+
+type LedgerEntry struct {
+    From      string
+    To        string
+    Amount    int64
+    Hash      string
+    Timestamp int64
+    Nonce     int
+    Signature []byte
+}
+
+type Block struct {
+    Height       int
+    PrevHash     string
+    MerkleRoot   string
+    Transactions []LedgerEntry
+    Timestamp    int64
+    Validator    string
+    Nonce        int
+    Hash         string
+}
+
+type Node struct {
+    Name          string
+    Address       string
+    Port          int
+    PublicKey     string
+    IsValidator   bool
+    Stake         int64
+    Peers         map[string]*Node
+    Ledger        []LedgerEntry
+    PendingTxs    []LedgerEntry
+    Blocks        []Block
+    Consensus     ConsensusType
+    WalletAlgo    WalletAlgorithm
+    P2PMode       P2PProtocol
+    Sharding      ShardingType
+    MaxPeers      int
+    MinValidators int
+    BlockTimeMs   int
+    Difficulty    int
+    MinStake      int64
+    ShardCount    int
+}
+```
+
+### 12.8 Example: Simple Token
+
+```bp
+@blockchain MyToken {
+    consensus: pbft
+    wallet: ed25519
+    p2p: kademlia
+    sharding: state_sharding
+    max_peers: 100
+    min_validators: 4
+    block_time: 1000
+
+    genesis: [
+        { from: alice, to: bob, amount: 1000 }
+    ]
+
+    state Syncing {
+        on sync_done -> Synced
+    }
+
+    state Synced {
+        on new_block -> Synced
+    }
+}
+```
+
+---
+
+## 13. Структура проекта
 
 ```
 B+ v1.0/
