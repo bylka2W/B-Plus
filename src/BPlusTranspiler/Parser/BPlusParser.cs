@@ -64,6 +64,16 @@ public partial class BPlusParser
                     var network = ParseNetwork(corporatePrefix: true);
                     if (network != null) program.Networks.Add(network);
                 }
+                else if (Peek("blockchain") || Peek("@blockchain"))
+                {
+                    var chain = ParseBlockchain();
+                    if (chain != null) program.BlockchainNetworks.Add(chain);
+                }
+                else if (annotations.Any(a => a.Name == "blockchain"))
+                {
+                    var chain = ParseBlockchain();
+                    if (chain != null) program.BlockchainNetworks.Add(chain);
+                }
                 else if (Peek("state ") || Peek("base "))
                 {
                     var state = ParseStateDef();
@@ -162,6 +172,11 @@ public partial class BPlusParser
             {
                 var network = ParseNetwork(corporatePrefix: Peek("corporate_network"));
                 if (network != null) program.Networks.Add(network);
+            }
+            else if (Peek("blockchain ") || Peek("@blockchain"))
+            {
+                var chain = ParseBlockchain();
+                if (chain != null) program.BlockchainNetworks.Add(chain);
             }
             else
             {
@@ -887,6 +902,286 @@ public partial class BPlusParser
 
         Expect("}");
         return network;
+    }
+
+    private BlockchainNetworkNode? ParseBlockchain()
+    {
+        // Caller has already consumed "@blockchain" or "blockchain" keyword
+        // Position is already past the keyword, just parse name and body
+        
+        SkipWs();
+        var name = ParseWord();
+        var chain = new BlockchainNetworkNode { Name = name };
+
+        Expect("{");
+        SkipWs();
+
+        while (_pos < _src.Length && _src[_pos] != '}')
+        {
+            SkipWs();
+            if (Peek("consensus:"))
+            {
+                _pos += 9;
+                SkipWs();
+                var c = ParseWord().ToUpper();
+                chain.Consensus = c switch
+                {
+                    "POW" => ConsensusType.PoW,
+                    "POS" => ConsensusType.PoS,
+                    "DPOS" => ConsensusType.DPoS,
+                    "PBFT" => ConsensusType.PBFT,
+                    "RAFT" => ConsensusType.Raft,
+                    _ => ConsensusType.PBFT
+                };
+            }
+            else if (Peek("wallet:"))
+            {
+                _pos += 6;
+                SkipWs();
+                var w = ParseWord().ToUpper();
+                chain.WalletAlgo = w switch
+                {
+                    "ECDSA" => WalletAlgorithm.ECDSA,
+                    "ED25519" => WalletAlgorithm.Ed25519,
+                    "SCHNORR" => WalletAlgorithm.Schnorr,
+                    _ => WalletAlgorithm.Ed25519
+                };
+            }
+            else if (Peek("p2p:"))
+            {
+                _pos += 4;
+                SkipWs();
+                var p = ParseWord().ToUpper();
+                chain.P2PMode = p switch
+                {
+                    "KADEMLIA" => P2PProtocol.Kademlia,
+                    "GOSSIP" => P2PProtocol.Gossip,
+                    "CHORD" => P2PProtocol.Chord,
+                    _ => P2PProtocol.Kademlia
+                };
+            }
+            else if (Peek("sharding:"))
+            {
+                _pos += 8;
+                SkipWs();
+                var s = ParseWord().ToUpper();
+                chain.Sharding = s switch
+                {
+                    "NONE" => ShardingType.None,
+                    "SHARD_CHAIN" => ShardingType.ShardChain,
+                    "STATE_SHARDING" => ShardingType.StateSharding,
+                    _ => ShardingType.None
+                };
+            }
+            else if (Peek("max_peers:"))
+            {
+                _pos += 9;
+                SkipWs();
+                var n = "";
+                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                    n += _src[_pos++];
+                if (int.TryParse(n, out var mp)) chain.MaxPeers = mp;
+            }
+            else if (Peek("min_validators:"))
+            {
+                _pos += 14;
+                SkipWs();
+                var n = "";
+                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                    n += _src[_pos++];
+                if (int.TryParse(n, out var mv)) chain.MinValidators = mv;
+            }
+            else if (Peek("block_time:"))
+            {
+                _pos += 10;
+                SkipWs();
+                var n = "";
+                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                    n += _src[_pos++];
+                if (int.TryParse(n, out var bt)) chain.BlockTimeMs = bt;
+            }
+            else if (Peek("difficulty:"))
+            {
+                _pos += 10;
+                SkipWs();
+                var n = "";
+                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                    n += _src[_pos++];
+                if (int.TryParse(n, out var d)) chain.Difficulty = d;
+            }
+            else if (Peek("min_stake:"))
+            {
+                _pos += 9;
+                SkipWs();
+                var n = "";
+                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                    n += _src[_pos++];
+                if (long.TryParse(n, out var ms)) chain.MinStake = ms;
+            }
+            else if (Peek("shard_count:"))
+            {
+                _pos += 11;
+                SkipWs();
+                var n = "";
+                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                    n += _src[_pos++];
+                if (int.TryParse(n, out var sc)) chain.ShardCount = sc;
+            }
+            else if (Peek("segments:"))
+            {
+                _pos += 9;
+                SkipWs();
+                if (_pos < _src.Length && _src[_pos] == '[')
+                {
+                    _pos++;
+                    SkipWs();
+                    while (_pos < _src.Length && _src[_pos] != ']')
+                    {
+                        SkipWs();
+                        if (_src[_pos] == '{')
+                        {
+                            _pos++;
+                            SkipWs();
+                            var seg = new NetworkSegment();
+                            while (_pos < _src.Length && _src[_pos] != '}')
+                            {
+                                if (Peek("name:"))
+                                {
+                                    _pos += 5;
+                                    SkipWs();
+                                    seg.Name = ParseWord();
+                                }
+                                else if (Peek("vlan:"))
+                                {
+                                    _pos += 5;
+                                    SkipWs();
+                                    var n = "";
+                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                                        n += _src[_pos++];
+                                    if (int.TryParse(n, out var v)) seg.Vlan = v;
+                                }
+                                else
+                                {
+                                    _pos += ParseWord().Length;
+                                }
+                                SkipWs();
+                            }
+                            Expect("}");
+                            chain.Segments.Add(seg);
+                        }
+                        SkipWs();
+                        if (_src[_pos] == ',') _pos++;
+                        SkipWs();
+                    }
+                    Expect("]");
+                }
+            }
+            else if (Peek("genesis:"))
+            {
+                foreach (var entry in ParseGenesisLedger())
+                    chain.GenesisLedger.Add(entry);
+            }
+            else if (Peek("boot_nodes:"))
+            {
+                _pos += 10;
+                SkipWs();
+                while (_src[_pos] == '[')
+                {
+                    _pos++;
+                    SkipWs();
+                    var addr = "";
+                    while (_pos < _src.Length && _src[_pos] != ']' && _src[_pos] != ',')
+                    {
+                        addr += _src[_pos++];
+                    }
+                    if (_pos < _src.Length && _src[_pos] == ']') _pos++;
+                    SkipWs();
+                    var parts = addr.Trim().Split(':');
+                    if (parts.Length == 2 && int.TryParse(parts[1], out var port))
+                    {
+                        chain.BootNodes.Add(new BlockchainNetworkNode
+                        {
+                            Name = "boot",
+                            Address = parts[0]
+                        });
+                    }
+                    if (_src[_pos] == ',') _pos++;
+                    SkipWs();
+                }
+            }
+            else if (Peek("state ") || Peek("base "))
+            {
+                chain.States.Add(ParseStateDef());
+            }
+            else
+            {
+                throw Err($"Unexpected in blockchain '{name}': '{PeekWord()}'");
+            }
+            SkipWs();
+        }
+
+        Expect("}");
+        return chain;
+    }
+
+    private List<LedgerEntry> ParseGenesisLedger()
+    {
+        Expect("genesis:");
+        SkipWs();
+        var entries = new List<LedgerEntry>();
+
+        if (_pos < _src.Length && _src[_pos] == '[')
+        {
+            _pos++;
+            SkipWs();
+            while (_pos < _src.Length && _src[_pos] != ']')
+            {
+                SkipWs();
+                if (_src[_pos] == '{')
+                {
+                    _pos++;
+                    SkipWs();
+                    var entry = new LedgerEntry();
+                    while (_pos < _src.Length && _src[_pos] != '}')
+                    {
+                        if (Peek("from:"))
+                        {
+                            _pos += 5;
+                            SkipWs();
+                            entry.From = ParseWord();
+                        }
+                        else if (Peek("to:"))
+                        {
+                            _pos += 3;
+                            SkipWs();
+                            entry.To = ParseWord();
+                        }
+                        else if (Peek("amount:"))
+                        {
+                            _pos += 7;
+                            SkipWs();
+                            var n = "";
+                            while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                                n += _src[_pos++];
+                            if (long.TryParse(n, out var amt)) entry.Amount = amt;
+                        }
+                        else
+                        {
+                            _pos += ParseWord().Length;
+                        }
+                        SkipWs();
+                    }
+                    Expect("}");
+                    entries.Add(entry);
+                }
+                SkipWs();
+                if (_src[_pos] == ',') _pos++;
+                SkipWs();
+            }
+            Expect("]");
+        }
+
+        return entries;
     }
 
     private CorporateCryptoConfig ParseCryptoConfig()
@@ -2201,6 +2496,7 @@ public partial class BPlusParser
 
     private bool Peek(string s)
     {
+        // NOTE: SkipWs is NOT called here - caller should call SkipWs before Peek if needed
         if (_pos + s.Length > _src.Length) return false;
         for (int i = 0; i < s.Length; i++)
             if (_src[_pos + i] != s[i]) return false;

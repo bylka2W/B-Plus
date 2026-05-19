@@ -52,6 +52,9 @@ public class ProgramNode
     public MemoryConfig? Memory { get; set; }
     public List<VarDecl> VarDecls { get; } = new();
     public List<Annotation> StandaloneAnnotations { get; } = new();
+
+    // v3.3 Blockchain/Defi networks
+    public List<BlockchainNetworkNode> BlockchainNetworks { get; } = new();
 }
 
 public class ImportNode
@@ -246,6 +249,59 @@ public class NetworkSegment
     public int Vlan { get; set; }
     public List<string> AllowedResources { get; } = new();
     public bool Isolated { get; set; }
+}
+
+public enum ConsensusType { PoW, PoS, DPoS, PBFT, Raft }
+public enum WalletAlgorithm { ECDSA, Ed25519, Schnorr }
+public enum P2PProtocol { Kademlia, Gossip, Chord }
+public enum ShardingType { None, ShardChain, StateSharding }
+
+public class BlockchainNetworkNode
+{
+    public string Name { get; set; } = "";
+    public string Address { get; set; } = "";
+    public int Port { get; set; }
+    public string PublicKey { get; set; } = "";
+    public bool IsValidator { get; set; }
+    public long Stake { get; set; }
+    public long Reputation { get; set; }
+    public ConsensusType Consensus { get; set; } = ConsensusType.PBFT;
+    public WalletAlgorithm WalletAlgo { get; set; } = WalletAlgorithm.Ed25519;
+    public P2PProtocol P2PMode { get; set; } = P2PProtocol.Kademlia;
+    public ShardingType Sharding { get; set; } = ShardingType.None;
+    public List<StateDefNode> States { get; } = new();
+    public List<NetworkSegment> Segments { get; } = new();
+    public List<BlockchainNetworkNode> BootNodes { get; } = new();
+    public List<LedgerEntry> GenesisLedger { get; } = new();
+    public int MaxPeers { get; set; } = 100;
+    public int MinValidators { get; set; } = 4;
+    public int BlockTimeMs { get; set; } = 1000;
+    public int Difficulty { get; set; } = 4;
+    public long MinStake { get; set; } = 1000;
+    public int ShardCount { get; set; } = 16;
+}
+
+public class LedgerEntry
+{
+    public string From { get; set; } = "";
+    public string To { get; set; } = "";
+    public long Amount { get; set; }
+    public string Hash { get; set; } = "";
+    public long Timestamp { get; set; }
+    public int Nonce { get; set; }
+    public byte[] Signature { get; set; } = Array.Empty<byte>();
+}
+
+public class Block
+{
+    public int Height { get; set; }
+    public string PrevHash { get; set; } = "";
+    public string MerkleRoot { get; set; } = "";
+    public List<LedgerEntry> Transactions { get; } = new();
+    public long Timestamp { get; set; }
+    public string Validator { get; set; } = "";
+    public int Nonce { get; set; }
+    public string Hash { get; set; } = "";
 }
 
 public class NetworkSite

@@ -1,0 +1,8 @@
+@blockchain MyToken {
+    consensus: pbft
+    wallet: ed25519
+    p2p: kademlia
+    sharding: state_sharding
+    max_peers: 100
+    min_validators: 4
+}

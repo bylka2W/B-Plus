@@ -19,6 +19,8 @@ public class RustGenerator : ICodeGenerator
         result["pipelines.rs"] = GenPipelines(program);
         result["networks.rs"] = GenNetworks(program);
         result["context.rs"] = GenContext(program);
+        if (program.BlockchainNetworks.Count > 0)
+            result["blockchain.rs"] = GenBlockchainRust(program);
         return result;
     }
 
@@ -590,4 +592,244 @@ public class RustGenerator : ICodeGenerator
 
     private static string Sanitize(string name) =>
         Regex.Replace(name, @"[^a-zA-Z0-9_]", "_");
+
+    private string GenBlockchainRust(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("use std::collections::HashMap;");
+        sb.AppendLine("use std::sync::{Arc, RwLock};");
+        sb.AppendLine();
+        sb.AppendLine("/// Consensus algorithm type.");
+        sb.AppendLine("#[derive(Debug, Clone, Copy, PartialEq)]");
+        sb.AppendLine("pub enum ConsensusType {");
+        sb.AppendLine("    PoW,");
+        sb.AppendLine("    PoS,");
+        sb.AppendLine("    DPoS,");
+        sb.AppendLine("    PBFT,");
+        sb.AppendLine("    Raft,");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("/// Wallet signature algorithm.");
+        sb.AppendLine("#[derive(Debug, Clone, Copy, PartialEq)]");
+        sb.AppendLine("pub enum WalletAlgorithm {");
+        sb.AppendLine("    ECDSA,");
+        sb.AppendLine("    Ed25519,");
+        sb.AppendLine("    Schnorr,");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("/// P2P network protocol.");
+        sb.AppendLine("#[derive(Debug, Clone, Copy, PartialEq)]");
+        sb.AppendLine("pub enum P2PProtocol {");
+        sb.AppendLine("    Kademlia,");
+        sb.AppendLine("    Gossip,");
+        sb.AppendLine("    Chord,");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("/// Sharding strategy.");
+        sb.AppendLine("#[derive(Debug, Clone, Copy, PartialEq)]");
+        sb.AppendLine("pub enum ShardingType {");
+        sb.AppendLine("    None,");
+        sb.AppendLine("    ShardChain,");
+        sb.AppendLine("    StateSharding,");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("/// Ledger entry (transaction).");
+        sb.AppendLine("#[derive(Debug, Clone)]");
+        sb.AppendLine("pub struct LedgerEntry {");
+        sb.AppendLine("    pub from: String,");
+        sb.AppendLine("    pub to: String,");
+        sb.AppendLine("    pub amount: i64,");
+        sb.AppendLine("    pub hash: String,");
+        sb.AppendLine("    pub timestamp: i64,");
+        sb.AppendLine("    pub nonce: i32,");
+        sb.AppendLine("    pub signature: Vec<u8>,");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("/// Blockchain block.");
+        sb.AppendLine("#[derive(Debug, Clone)]");
+        sb.AppendLine("pub struct Block {");
+        sb.AppendLine("    pub height: i32,");
+        sb.AppendLine("    pub prev_hash: String,");
+        sb.AppendLine("    pub merkle_root: String,");
+        sb.AppendLine("    pub transactions: Vec<LedgerEntry>,");
+        sb.AppendLine("    pub timestamp: i64,");
+        sb.AppendLine("    pub validator: String,");
+        sb.AppendLine("    pub nonce: i32,");
+        sb.AppendLine("    pub hash: String,");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("/// Blockchain node.");
+        sb.AppendLine("#[derive(Debug, Clone)]");
+        sb.AppendLine("pub struct Node {");
+        sb.AppendLine("    pub name: String,");
+        sb.AppendLine("    pub address: String,");
+        sb.AppendLine("    pub port: u16,");
+        sb.AppendLine("    pub public_key: String,");
+        sb.AppendLine("    pub is_validator: bool,");
+        sb.AppendLine("    pub stake: i64,");
+        sb.AppendLine("    pub reputation: i64,");
+        sb.AppendLine("}");
+        sb.AppendLine();
+
+        foreach (var chain in program.BlockchainNetworks)
+        {
+            sb.AppendLine($"/// {chain.Name} blockchain network.");
+            sb.AppendLine($"pub struct {chain.Name} {{");
+            sb.AppendLine($"    pub name: String,");
+            sb.AppendLine($"    pub address: String,");
+            sb.AppendLine($"    pub port: u16,");
+            sb.AppendLine($"    pub peers: HashMap<String, Node>,");
+            sb.AppendLine($"    pub ledger: Vec<LedgerEntry>,");
+            sb.AppendLine($"    pub pending_txs: Vec<LedgerEntry>,");
+            sb.AppendLine($"    pub blocks: Vec<Block>,");
+            sb.AppendLine($"    pub consensus: ConsensusType,");
+            sb.AppendLine($"    pub wallet_algo: WalletAlgorithm,");
+            sb.AppendLine($"    pub p2p_mode: P2PProtocol,");
+            sb.AppendLine($"    pub sharding: ShardingType,");
+            sb.AppendLine($"    pub max_peers: usize,");
+            sb.AppendLine($"    pub min_validators: usize,");
+            sb.AppendLine($"    pub block_time_ms: i32,");
+            sb.AppendLine($"    pub difficulty: usize,");
+            sb.AppendLine($"    pub min_stake: i64,");
+            sb.AppendLine($"    pub shard_count: usize,");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+            sb.AppendLine($"impl {chain.Name} {{");
+            sb.AppendLine($"    pub fn new(address: String, port: u16) -> Self {{");
+            sb.AppendLine($"        Self {{");
+            sb.AppendLine($"            name: \"{chain.Name}\".to_string(),");
+            sb.AppendLine($"            address,");
+            sb.AppendLine($"            port,");
+            sb.AppendLine($"            peers: HashMap::new(),");
+            sb.AppendLine($"            ledger: Vec::new(),");
+            sb.AppendLine($"            pending_txs: Vec::new(),");
+            sb.AppendLine($"            blocks: Vec::new(),");
+            sb.AppendLine($"            consensus: {MapConsensusRust(chain.Consensus)},");
+            sb.AppendLine($"            wallet_algo: {MapWalletRust(chain.WalletAlgo)},");
+            sb.AppendLine($"            p2p_mode: {MapP2PRust(chain.P2PMode)},");
+            sb.AppendLine($"            sharding: {MapShardingRust(chain.Sharding)},");
+            sb.AppendLine($"            max_peers: {chain.MaxPeers},");
+            sb.AppendLine($"            min_validators: {chain.MinValidators},");
+            sb.AppendLine($"            block_time_ms: {chain.BlockTimeMs},");
+            sb.AppendLine($"            difficulty: {chain.Difficulty},");
+            sb.AppendLine($"            min_stake: {chain.MinStake},");
+            sb.AppendLine($"            shard_count: {chain.ShardCount},");
+            sb.AppendLine($"        }}");
+            sb.AppendLine($"    }}");
+            sb.AppendLine();
+            sb.AppendLine($"    /// Add peer to P2P network.");
+            sb.AppendLine($"    pub fn add_peer(&mut self, peer: Node) {{");
+            sb.AppendLine($"        if self.peers.len() < self.max_peers {{");
+            sb.AppendLine($"            let key = format!(\"{{}}:{{}}\", peer.address, peer.port);");
+            sb.AppendLine($"            self.peers.insert(key, peer);");
+            sb.AppendLine($"        }}");
+            sb.AppendLine($"    }}");
+            sb.AppendLine();
+            sb.AppendLine($"    /// Submit transaction to pending pool.");
+            sb.AppendLine($"    pub fn submit_transaction(&mut self, mut tx: LedgerEntry) {{");
+            sb.AppendLine($"        tx.timestamp = std::time::SystemTime::now()");
+            sb.AppendLine($"            .duration_since(std::time::UNIX_EPOCH)");
+            sb.AppendLine($"            .unwrap()");
+            sb.AppendLine($"            .as_millis() as i64;");
+            sb.AppendLine($"        tx.hash = self.hash_transaction(&tx);");
+            sb.AppendLine($"        self.pending_txs.push(tx);");
+            sb.AppendLine($"    }}");
+            sb.AppendLine();
+            sb.AppendLine($"    /// Propose new block.");
+            sb.AppendLine($"    pub fn propose_block(&mut self) -> Block {{");
+            sb.AppendLine($"        let prev_hash = self.blocks.last()");
+            sb.AppendLine($"            .map(|b| b.hash.clone())");
+            sb.AppendLine($"            .unwrap_or_default();");
+            sb.AppendLine();
+            sb.AppendLine($"        let mut block = Block {{");
+            sb.AppendLine($"            height: self.blocks.len() as i32,");
+            sb.AppendLine($"            prev_hash,");
+            sb.AppendLine($"            merkle_root: String::new(),");
+            sb.AppendLine($"            transactions: std::mem::take(&mut self.pending_txs),");
+            sb.AppendLine($"            timestamp: std::time::SystemTime::now()");
+            sb.AppendLine($"                .duration_since(std::time::UNIX_EPOCH)");
+            sb.AppendLine($"                .unwrap()");
+            sb.AppendLine($"                .as_millis() as i64,");
+            sb.AppendLine($"            validator: self.address.clone(),");
+            sb.AppendLine($"            nonce: 0,");
+            sb.AppendLine($"            hash: String::new(),");
+            sb.AppendLine($"        }};");
+            sb.AppendLine();
+            sb.AppendLine($"        block.merkle_root = self.merkle_root(&block.transactions);");
+            sb.AppendLine($"        block.hash = self.hash_block(&block);");
+            sb.AppendLine($"        self.blocks.push(block.clone());");
+            sb.AppendLine($"        block");
+            sb.AppendLine($"    }}");
+            sb.AppendLine();
+            sb.AppendLine($"    /// Get balance for address.");
+            sb.AppendLine($"    pub fn get_balance(&self, addr: &str) -> i64 {{");
+            sb.AppendLine($"        let mut balance = 0i64;");
+            sb.AppendLine($"        for entry in &self.ledger {{");
+            sb.AppendLine($"            if entry.from == addr {{ balance -= entry.amount; }}");
+            sb.AppendLine($"            if entry.to == addr {{ balance += entry.amount; }}");
+            sb.AppendLine($"        }}");
+            sb.AppendLine($"        balance");
+            sb.AppendLine($"    }}");
+            sb.AppendLine();
+            sb.AppendLine($"    fn hash_transaction(&self, tx: &LedgerEntry) -> String {{");
+            sb.AppendLine($"        use std::collections::hash_map::DefaultHasher;");
+            sb.AppendLine($"        use std::hash::Hasher;");
+            sb.AppendLine($"        let mut s = DefaultHasher::new();");
+            sb.AppendLine($"        tx.from.hash(&mut s);");
+            sb.AppendLine($"        tx.to.hash(&mut s);");
+            sb.AppendLine($"        tx.amount.hash(&mut s);");
+            sb.AppendLine($"        tx.nonce.hash(&mut s);");
+            sb.AppendLine($"        format!(\"{{:x}}\", s.finish())");
+            sb.AppendLine($"    }}");
+            sb.AppendLine();
+            sb.AppendLine($"    fn hash_block(&self, block: &Block) -> String {{");
+            sb.AppendLine($"        use std::collections::hash_map::DefaultHasher;");
+            sb.AppendLine($"        use std::hash::Hasher;");
+            sb.AppendLine($"        let mut s = DefaultHasher::new();");
+            sb.AppendLine($"        block.height.hash(&mut s);");
+            sb.AppendLine($"        block.prev_hash.hash(&mut s);");
+            sb.AppendLine($"        block.timestamp.hash(&mut s);");
+            sb.AppendLine($"        block.nonce.hash(&mut s);");
+            sb.AppendLine($"        format!(\"{{:x}}\", s.finish())");
+            sb.AppendLine($"    }}");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static string MapConsensusRust(ConsensusType c) => c switch
+    {
+        ConsensusType.PoW => "ConsensusType::PoW",
+        ConsensusType.PoS => "ConsensusType::PoS",
+        ConsensusType.DPoS => "ConsensusType::DPoS",
+        ConsensusType.PBFT => "ConsensusType::PBFT",
+        ConsensusType.Raft => "ConsensusType::Raft",
+        _ => "ConsensusType::PBFT"
+    };
+
+    private static string MapWalletRust(WalletAlgorithm w) => w switch
+    {
+        WalletAlgorithm.ECDSA => "WalletAlgorithm::ECDSA",
+        WalletAlgorithm.Ed25519 => "WalletAlgorithm::Ed25519",
+        WalletAlgorithm.Schnorr => "WalletAlgorithm::Schnorr",
+        _ => "WalletAlgorithm::Ed25519"
+    };
+
+    private static string MapP2PRust(P2PProtocol p) => p switch
+    {
+        P2PProtocol.Kademlia => "P2PProtocol::Kademlia",
+        P2PProtocol.Gossip => "P2PProtocol::Gossip",
+        P2PProtocol.Chord => "P2PProtocol::Chord",
+        _ => "P2PProtocol::Kademlia"
+    };
+
+    private static string MapShardingRust(ShardingType s) => s switch
+    {
+        ShardingType.None => "ShardingType::None",
+        ShardingType.ShardChain => "ShardingType::ShardChain",
+        ShardingType.StateSharding => "ShardingType::StateSharding",
+        _ => "ShardingType::None"
+    };
 }

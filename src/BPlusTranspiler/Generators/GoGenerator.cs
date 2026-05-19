@@ -19,6 +19,8 @@ public class GoGenerator : ICodeGenerator
         result["networks.go"] = GenNetworks(program);
         result["context.go"] = GenContext(program);
         result["main.go"] = GenMain(program);
+        if (program.BlockchainNetworks.Count > 0)
+            result["blockchain.go"] = GenBlockchain(program);
         return result;
     }
 
@@ -631,4 +633,393 @@ public class GoGenerator : ICodeGenerator
         string.IsNullOrEmpty(s) ? s : char.ToLower(s[0]) + s[1..];
 
     private static string ToGoBool(bool b) => b ? "true" : "false";
+
+    private string GenBlockchain(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("package bplus");
+        sb.AppendLine();
+        sb.AppendLine("import (");
+        sb.AppendLine("\t\"context\"");
+        sb.AppendLine("\t\"crypto/sha256\"");
+        sb.AppendLine("\t\"encoding/hex\"");
+        sb.AppendLine("\t\"fmt\"");
+        sb.AppendLine("\t\"sort\"");
+        sb.AppendLine("\t\"sync\"");
+        sb.AppendLine("\t\"time\"");
+        sb.AppendLine(")");
+        sb.AppendLine();
+
+        sb.AppendLine("// ConsensusType for blockchain consensus algorithms.");
+        sb.AppendLine("type ConsensusType int");
+        sb.AppendLine("const (");
+        sb.AppendLine("\tConsensusPoW ConsensusType = iota");
+        sb.AppendLine("\tConsensusPoS");
+        sb.AppendLine("\tConsensusDPoS");
+        sb.AppendLine("\tConsensusPBFT");
+        sb.AppendLine("\tConsensusRaft");
+        sb.AppendLine(")");
+        sb.AppendLine();
+
+        sb.AppendLine("// WalletAlgorithm for transaction signing.");
+        sb.AppendLine("type WalletAlgorithm int");
+        sb.AppendLine("const (");
+        sb.AppendLine("\tWalletECDSA WalletAlgorithm = iota");
+        sb.AppendLine("\tWalletEd25519");
+        sb.AppendLine("\tWalletSchnorr");
+        sb.AppendLine(")");
+        sb.AppendLine();
+
+        sb.AppendLine("// P2PProtocol for network topology.");
+        sb.AppendLine("type P2PProtocol int");
+        sb.AppendLine("const (");
+        sb.AppendLine("\tP2PKademlia P2PProtocol = iota");
+        sb.AppendLine("\tP2PGossip");
+        sb.AppendLine("\tP2PChord");
+        sb.AppendLine(")");
+        sb.AppendLine();
+
+        sb.AppendLine("// ShardingType for horizontal scaling.");
+        sb.AppendLine("type ShardingType int");
+        sb.AppendLine("const (");
+        sb.AppendLine("\tShardingNone ShardingType = iota");
+        sb.AppendLine("\tShardingShardChain");
+        sb.AppendLine("\tShardingStateSharding");
+        sb.AppendLine(")");
+        sb.AppendLine();
+
+        sb.AppendLine("// LedgerEntry represents a single transaction.");
+        sb.AppendLine("type LedgerEntry struct {");
+        sb.AppendLine("\tFrom      string");
+        sb.AppendLine("\tTo        string");
+        sb.AppendLine("\tAmount    int64");
+        sb.AppendLine("\tHash      string");
+        sb.AppendLine("\tTimestamp int64");
+        sb.AppendLine("\tNonce     int");
+        sb.AppendLine("\tSignature []byte");
+        sb.AppendLine("}");
+        sb.AppendLine();
+
+        sb.AppendLine("// Block represents a blockchain block.");
+        sb.AppendLine("type Block struct {");
+        sb.AppendLine("\tHeight       int");
+        sb.AppendLine("\tPrevHash     string");
+        sb.AppendLine("\tMerkleRoot   string");
+        sb.AppendLine("\tTransactions []LedgerEntry");
+        sb.AppendLine("\tTimestamp    int64");
+        sb.AppendLine("\tValidator    string");
+        sb.AppendLine("\tNonce        int");
+        sb.AppendLine("\tHash         string");
+        sb.AppendLine("}");
+        sb.AppendLine();
+
+        sb.AppendLine("// Node represents a blockchain network node.");
+        sb.AppendLine("type Node struct {");
+        sb.AppendLine("\tName         string");
+        sb.AppendLine("\tAddress      string");
+        sb.AppendLine("\tPort         int");
+        sb.AppendLine("\tPublicKey    string");
+        sb.AppendLine("\tIsValidator  bool");
+        sb.AppendLine("\tStake        int64");
+        sb.AppendLine("\tReputation   int64");
+        sb.AppendLine("\tPeers        map[string]*Node");
+        sb.AppendLine("\tMu           sync.RWMutex");
+        sb.AppendLine("\tLedger       []LedgerEntry");
+        sb.AppendLine("\tPendingTxs   []LedgerEntry");
+        sb.AppendLine("\tBlocks       []Block");
+        sb.AppendLine("\tConsensus    ConsensusType");
+        sb.AppendLine("\tWalletAlgo   WalletAlgorithm");
+        sb.AppendLine("\tP2PMode      P2PProtocol");
+        sb.AppendLine("\tSharding     ShardingType");
+        sb.AppendLine("\tMaxPeers     int");
+        sb.AppendLine("\tMinValidators int");
+        sb.AppendLine("\tBlockTimeMs  int");
+        sb.AppendLine("\tDifficulty   int");
+        sb.AppendLine("\tMinStake     int64");
+        sb.AppendLine("\tShardCount   int");
+        sb.AppendLine("\tShardId      int");
+        sb.AppendLine("}");
+        sb.AppendLine();
+
+        foreach (var chain in program.BlockchainNetworks)
+        {
+            sb.AppendLine($"// {chain.Name} represents the {chain.Name} blockchain network.");
+            sb.AppendLine($"func New{chain.Name}(nodeAddr string, port int) *{chain.Name} {{");
+            sb.AppendLine($"\treturn &{chain.Name}{{");
+            sb.AppendLine($"\t\tName:         \"{chain.Name}\",");
+            sb.AppendLine($"\t\tAddress:      nodeAddr,");
+            sb.AppendLine($"\t\tPort:          port,");
+            sb.AppendLine($"\t\tPeers:         make(map[string]*Node),");
+            sb.AppendLine($"\t\tLedger:        []LedgerEntry{{}},");
+            sb.AppendLine($"\t\tPendingTxs:    []LedgerEntry{{}},");
+            sb.AppendLine($"\t\tBlocks:        []Block{{}},");
+            sb.AppendLine($"\t\tConsensus:     {MapConsensus(chain.Consensus)},");
+            sb.AppendLine($"\t\tWalletAlgo:    {MapWalletAlgo(chain.WalletAlgo)},");
+            sb.AppendLine($"\t\tP2PMode:       {MapP2PProtocol(chain.P2PMode)},");
+            sb.AppendLine($"\t\tSharding:      {MapSharding(chain.Sharding)},");
+            sb.AppendLine($"\t\tMaxPeers:      {chain.MaxPeers},");
+            sb.AppendLine($"\t\tMinValidators: {chain.MinValidators},");
+            sb.AppendLine($"\t\tBlockTimeMs:   {chain.BlockTimeMs},");
+            sb.AppendLine($"\t\tDifficulty:    {chain.Difficulty},");
+            sb.AppendLine($"\t\tMinStake:      {chain.MinStake},");
+            sb.AppendLine($"\t\tShardCount:    {chain.ShardCount},");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// Consensus returns the consensus type for {chain.Name}.");
+            sb.AppendLine($"func (n *{chain.Name}) GetConsensus() ConsensusType {{");
+            sb.AppendLine($"\treturn n.Consensus");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// AddPeer adds a peer to the P2P network.");
+            sb.AppendLine($"func (n *{chain.Name}) AddPeer(peer *Node) {{");
+            sb.AppendLine($"\tn.Mu.Lock()");
+            sb.AppendLine($"\tdefer n.Mu.Unlock()");
+            sb.AppendLine($"\tif len(n.Peers) < n.MaxPeers {{");
+            sb.AppendLine($"\t\taddr := fmt.Sprintf(\"%s:%d\", peer.Address, peer.Port)");
+            sb.AppendLine($"\t\tn.Peers[addr] = peer");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// SubmitTransaction adds a transaction to the pending pool.");
+            sb.AppendLine($"func (n *{chain.Name}) SubmitTransaction(tx LedgerEntry) {{");
+            sb.AppendLine($"\tn.Mu.Lock()");
+            sb.AppendLine($"\tdefer n.Mu.Unlock()");
+            sb.AppendLine($"\ttx.Timestamp = time.Now().UnixMilli()");
+            sb.AppendLine($"\ttx.Hash = n.hashTransaction(tx)");
+            sb.AppendLine($"\tn.PendingTxs = append(n.PendingTxs, tx)");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// ProposeBlock creates a new block with pending transactions.");
+            sb.AppendLine($"func (n *{chain.Name}) ProposeBlock() *Block {{");
+            sb.AppendLine($"\tn.Mu.Lock()");
+            sb.AppendLine($"\tdefer n.Mu.Unlock()");
+            sb.AppendLine();
+            sb.AppendLine($"\tvar prevHash string");
+            sb.AppendLine($"\tif len(n.Blocks) > 0 {{");
+            sb.AppendLine($"\t\tprevHash = n.Blocks[len(n.Blocks)-1].Hash");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine();
+            sb.AppendLine($"\tblock := &Block{{");
+            sb.AppendLine($"\t\tHeight:       len(n.Blocks),");
+            sb.AppendLine($"\t\tPrevHash:     prevHash,");
+            sb.AppendLine($"\t\tTimestamp:    time.Now().UnixMilli(),");
+            sb.AppendLine($"\t\tValidator:    n.Address,");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine();
+            sb.AppendLine($"\tswitch n.Consensus {{");
+            sb.AppendLine($"\tcase ConsensusPoW:");
+            sb.AppendLine($"\t\tblock = n.mineBlock(block)");
+            sb.AppendLine($"\tcase ConsensusPoS:");
+            sb.AppendLine($"\t\tblock = n.selectValidatorAndPropose(block)");
+            sb.AppendLine($"\tcase ConsensusPBFT:");
+            sb.AppendLine($"\t\tblock = n.pbftPropose(block)");
+            sb.AppendLine($"\tdefault:");
+            sb.AppendLine($"\t\tblock.Nonce = 0");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine();
+            sb.AppendLine($"\tblock.MerkleRoot = n.merkleRoot(n.PendingTxs)");
+            sb.AppendLine($"\tblock.Hash = n.hashBlock(block)");
+            sb.AppendLine($"\tn.Blocks = append(n.Blocks, *block)");
+            sb.AppendLine($"\tn.PendingTxs = nil");
+            sb.AppendLine($"\treturn block");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// mineBlock performs Proof-of-Work mining.");
+            sb.AppendLine($"func (n *{chain.Name}) mineBlock(block *Block) *Block {{");
+            sb.AppendLine($"\ttarget := make([]byte, n.Difficulty)");
+            sb.AppendLine($"\tfor block.Nonce = 0; block.Nonce < 1<<31; block.Nonce++ {{");
+            sb.AppendLine($"\t\thash := n.hashBlock(block)");
+            sb.AppendLine($"\t\tif n.checkDifficulty(hash, target) {{");
+            sb.AppendLine($"\t\t\treturn block");
+            sb.AppendLine($"\t\t}}");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\treturn block");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// selectValidatorAndPropose selects validator by stake for PoS.");
+            sb.AppendLine($"func (n *{chain.Name}) selectValidatorAndPropose(block *Block) *Block {{");
+            sb.AppendLine($"\tvar totalStake int64");
+            sb.AppendLine($"\tfor _, p := range n.Peers {{");
+            sb.AppendLine($"\t\ttotalStake += p.Stake");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\tif totalStake > 0 && n.Stake*100/totalStake > 50 {{");
+            sb.AppendLine($"\t\tblock.Validator = n.Address");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\treturn block");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// pbftPropose handles PBFT consensus proposal.");
+            sb.AppendLine($"func (n *{chain.Name}) pbftPropose(block *Block) *Block {{");
+            sb.AppendLine($"\t// PBFT: prepare -> commit -> reply");
+            sb.AppendLine($"\t// Simplified: require 2f+1 signatures");
+            sb.AppendLine($"\tf := (n.MinValidators - 1) / 3");
+            sb.AppendLine($"\t// In real PBFT, collect prepare messages from f+1 validators");
+            sb.AppendLine($"\treturn block");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// VerifyBlock verifies block integrity.");
+            sb.AppendLine($"func (n *{chain.Name}) VerifyBlock(block *Block) bool {{");
+            sb.AppendLine($"\tif block.Height > 0 && block.PrevHash != n.Blocks[block.Height-1].Hash {{");
+            sb.AppendLine($"\t\treturn false");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\tif n.Consensus == ConsensusPoW && !n.checkDifficulty(block.Hash, make([]byte, n.Difficulty)) {{");
+            sb.AppendLine($"\t\treturn false");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\treturn block.MerkleRoot == n.merkleRoot(block.Transactions)");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// GetBalance returns balance for an address.");
+            sb.AppendLine($"func (n *{chain.Name}) GetBalance(addr string) int64 {{");
+            sb.AppendLine($"\tn.Mu.RLock()");
+            sb.AppendLine($"\tdefer n.Mu.RUnlock()");
+            sb.AppendLine($"\tvar balance int64");
+            sb.AppendLine($"\tfor _, entry := range n.Ledger {{");
+            sb.AppendLine($"\t\tif entry.From == addr {{");
+            sb.AppendLine($"\t\t\tbalance -= entry.Amount");
+            sb.AppendLine($"\t\t}}");
+            sb.AppendLine($"\t\tif entry.To == addr {{");
+            sb.AppendLine($"\t\t\tbalance += entry.Amount");
+            sb.AppendLine($"\t\t}}");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\treturn balance");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// Gossip propagates transaction to peers.");
+            sb.AppendLine($"func (n *{chain.Name}) Gossip(tx LedgerEntry) {{");
+            sb.AppendLine($"\tn.Mu.RLock()");
+            sb.AppendLine($"\tdefer n.Mu.RUnlock()");
+            sb.AppendLine($"\tfor _, peer := range n.Peers {{");
+            sb.AppendLine($"\t\tpeer.SubmitTransaction(tx)");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// KademliaFindNode finds node in Kademlia DHT.");
+            sb.AppendLine($"func (n *{chain.Name}) KademliaFindNode(targetKey string) *Node {{");
+            sb.AppendLine($"\t// Kademlia: XOR distance for node lookup");
+            sb.AppendLine($"\tvar closest *Node");
+            sb.AppendLine($"\tvar minDist int");
+            sb.AppendLine($"\tn.Mu.RLock()");
+            sb.AppendLine($"\tdefer n.Mu.RUnlock()");
+            sb.AppendLine($"\tfor _, peer := range n.Peers {{");
+            sb.AppendLine($"\t\tdist := n.xorDistance(peer.PublicKey, targetKey)");
+            sb.AppendLine($"\t\tif closest == nil || dist < minDist {{");
+            sb.AppendLine($"\t\t\tclosest = peer");
+            sb.AppendLine($"\t\t\tminDist = dist");
+            sb.AppendLine($"\t\t}}");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\treturn closest");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// hashTransaction computes SHA-256 hash of transaction.");
+            sb.AppendLine($"func (n *{chain.Name}) hashTransaction(tx LedgerEntry) string {{");
+            sb.AppendLine($"\tdata := fmt.Sprintf(\"%s%s%d%d\", tx.From, tx.To, tx.Amount, tx.Nonce)");
+            sb.AppendLine($"\thash := sha256.Sum256([]byte(data))");
+            sb.AppendLine($"\treturn hex.EncodeToString(hash[:])");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// hashBlock computes SHA-256 hash of block.");
+            sb.AppendLine($"func (n *{chain.Name}) hashBlock(block *Block) string {{");
+            sb.AppendLine($"\tdata := fmt.Sprintf(\"%d%s%d%d\", block.Height, block.PrevHash, block.Timestamp, block.Nonce)");
+            sb.AppendLine($"\thash := sha256.Sum256([]byte(data))");
+            sb.AppendLine($"\treturn hex.EncodeToString(hash[:])");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// merkleRoot computes Merkle root of transactions.");
+            sb.AppendLine($"func (n *{chain.Name}) merkleRoot(txs []LedgerEntry) string {{");
+            sb.AppendLine($"\tif len(txs) == 0 {{");
+            sb.AppendLine($"\t\treturn \"\"");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\tvar hashes []string");
+            sb.AppendLine($"\tfor _, tx := range txs {{");
+            sb.AppendLine($"\t\thashes = append(hashes, n.hashTransaction(tx))");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\tfor len(hashes) > 1 {{");
+            sb.AppendLine($"\t\tif len(hashes)%2 != 0 {{");
+            sb.AppendLine($"\t\t\thashes = append(hashes, hashes[len(hashes)-1])");
+            sb.AppendLine($"\t\t}}");
+            sb.AppendLine($"\t\tvar next []string");
+            sb.AppendLine($"\t\tfor i := 0; i < len(hashes); i += 2 {{");
+            sb.AppendLine($"\t\t\tcombined := hashes[i] + hashes[i+1]");
+            sb.AppendLine($"\t\t\th := sha256.Sum256([]byte(combined))");
+            sb.AppendLine($"\t\t\tnext = append(next, hex.EncodeToString(h[:]))");
+            sb.AppendLine($"\t\t}}");
+            sb.AppendLine($"\t\thashes = next");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\treturn hashes[0]");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// checkDifficulty verifies proof-of-work target.");
+            sb.AppendLine($"func (n *{chain.Name}) checkDifficulty(hash string, target []byte) bool {{");
+            sb.AppendLine($"\tfor i := 0; i < len(target) && i < len(hash); i++ {{");
+            sb.AppendLine($"\t\tif hash[i] != 0 {{");
+            sb.AppendLine($"\t\t\treturn false");
+            sb.AppendLine($"\t\t}}");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\treturn true");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// xorDistance computes XOR distance between two keys.");
+            sb.AppendLine($"func (n *{chain.Name}) xorDistance(a, b string) int {{");
+            sb.AppendLine($"\tvar sum int");
+            sb.AppendLine($"\tfor i := 0; i < len(a) && i < len(b); i++ {{");
+            sb.AppendLine($"\t\tsum += int(a[i] ^ b[i])");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"\treturn sum");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static string MapConsensus(ConsensusType c) => c switch
+    {
+        ConsensusType.PoW => "ConsensusPoW",
+        ConsensusType.PoS => "ConsensusPoS",
+        ConsensusType.DPoS => "ConsensusDPoS",
+        ConsensusType.PBFT => "ConsensusPBFT",
+        ConsensusType.Raft => "ConsensusRaft",
+        _ => "ConsensusPBFT"
+    };
+
+    private static string MapWalletAlgo(WalletAlgorithm w) => w switch
+    {
+        WalletAlgorithm.ECDSA => "WalletECDSA",
+        WalletAlgorithm.Ed25519 => "WalletEd25519",
+        WalletAlgorithm.Schnorr => "WalletSchnorr",
+        _ => "WalletEd25519"
+    };
+
+    private static string MapP2PProtocol(P2PProtocol p) => p switch
+    {
+        P2PProtocol.Kademlia => "P2PKademlia",
+        P2PProtocol.Gossip => "P2PGossip",
+        P2PProtocol.Chord => "P2PChord",
+        _ => "P2PKademlia"
+    };
+
+    private static string MapSharding(ShardingType s) => s switch
+    {
+        ShardingType.None => "ShardingNone",
+        ShardingType.ShardChain => "ShardingShardChain",
+        ShardingType.StateSharding => "ShardingStateSharding",
+        _ => "ShardingNone"
+    };
 }

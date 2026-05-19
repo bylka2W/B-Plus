@@ -1,0 +1,30 @@
+@blockchain MyToken {
+    consensus: pbft
+    wallet: ed25519
+    p2p: kademlia
+    sharding: state_sharding
+
+    max_peers: 100
+    min_validators: 4
+    block_time: 1000
+    difficulty: 4
+    min_stake: 1000
+    shard_count: 16
+
+    segments: [
+        { name: validators, vlan: 1 },
+        { name: users, vlan: 2 }
+    ]
+
+    genesis: [
+        { from: alice, to: bob, amount: 1000 }
+    ]
+
+    state Syncing {
+        on sync_done -> Synced
+    }
+
+    state Synced {
+        on new_block -> Synced
+    }
+}
