@@ -21,6 +21,8 @@ public class GoGenerator : ICodeGenerator
         result["main.go"] = GenMain(program);
         if (program.BlockchainNetworks.Count > 0)
             result["blockchain.go"] = GenBlockchain(program);
+        if (program.GraphicsKernels.Count > 0)
+            result["graphics.go"] = GenGraphics(program);
         return result;
     }
 
@@ -1021,5 +1023,163 @@ public class GoGenerator : ICodeGenerator
         ShardingType.ShardChain => "ShardingShardChain",
         ShardingType.StateSharding => "ShardingStateSharding",
         _ => "ShardingNone"
+    };
+
+    private string GenGraphics(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("package bplus");
+        sb.AppendLine();
+        sb.AppendLine("import \"github.com/golang-collections/collections/stack\"");
+        sb.AppendLine();
+        sb.AppendLine("// ShaderStage for graphics pipeline.");
+        sb.AppendLine("type ShaderStage int");
+        sb.AppendLine("const (");
+        sb.AppendLine("    ShaderVertex ShaderStage = iota");
+        sb.AppendLine("    ShaderFragment");
+        sb.AppendLine("    ShaderCompute");
+        sb.AppendLine("    ShaderRayTrace");
+        sb.AppendLine(")");
+        sb.AppendLine();
+        sb.AppendLine("// TextureFormat for GPU textures.");
+        sb.AppendLine("type TextureFormat int");
+        sb.AppendLine("const (");
+        sb.AppendLine("    TextureRGBA8 TextureFormat = iota");
+        sb.AppendLine("    TextureRGBA16");
+        sb.AppendLine("    TextureRGB32");
+        sb.AppendLine("    TextureRGBA32");
+        sb.AppendLine("    TextureBC7");
+        sb.AppendLine("    TextureASTC");
+        sb.AppendLine(")");
+        sb.AppendLine();
+        sb.AppendLine("// Texture represents a GPU texture resource.");
+        sb.AppendLine("type Texture struct {");
+        sb.AppendLine("    Name      string");
+        sb.AppendLine("    Format    TextureFormat");
+        sb.AppendLine("    Width     int");
+        sb.AppendLine("    Height    int");
+        sb.AppendLine("    Depth     int");
+        sb.AppendLine("    Slot      int");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("// Buffer represents a GPU buffer resource.");
+        sb.AppendLine("type Buffer struct {");
+        sb.AppendLine("    Name         string");
+        sb.AppendLine("    ElementType  string");
+        sb.AppendLine("    Count        int");
+        sb.AppendLine("    Slot         int");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("// Sampler represents a texture sampler.");
+        sb.AppendLine("type Sampler struct {");
+        sb.AppendLine("    Name         string");
+        sb.AppendLine("    Slot         int");
+        sb.AppendLine("    Filter       string");
+        sb.AppendLine("    AddressMode  string");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("// GraphicsKernel represents a GPU compute kernel.");
+        sb.AppendLine("type GraphicsKernel struct {");
+        sb.AppendLine("    Name      string");
+        sb.AppendLine("    Stage     ShaderStage");
+        sb.AppendLine("    ThreadsX int");
+        sb.AppendLine("    ThreadsY int");
+        sb.AppendLine("    ThreadsZ int");
+        sb.AppendLine("    Textures []Texture");
+        sb.AppendLine("    Buffers  []Buffer");
+        sb.AppendLine("    Samplers []Sampler");
+        sb.AppendLine("}");
+        sb.AppendLine();
+
+        foreach (var gk in program.GraphicsKernels)
+        {
+            sb.AppendLine($"// New{gk.Name} creates {gk.Name} graphics kernel.");
+            sb.AppendLine($"func New{gk.Name}() *{gk.Name} {{");
+            sb.AppendLine($"\treturn &{gk.Name}{{");
+            sb.AppendLine($"\t\tName:      \"{gk.Name}\",");
+            sb.AppendLine($"\t\tStage:     {MapShaderStage(gk.Stage)},");
+            sb.AppendLine($"\t\tThreadsX: {gk.ThreadsX},");
+            sb.AppendLine($"\t\tThreadsY: {gk.ThreadsY},");
+            sb.AppendLine($"\t\tThreadsZ: {gk.ThreadsZ},");
+            sb.AppendLine($"\t\tTextures: []Texture{{}},");
+            sb.AppendLine($"\t\tBuffers:  []Buffer{{}},");
+            sb.AppendLine($"\t\tSamplers: []Sampler{{}},");
+            sb.AppendLine($"\t}}");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// Dispatch launches {gk.ThreadsX}x{gk.ThreadsY}x{gk.ThreadsZ} threads.");
+            sb.AppendLine($"func (g *{gk.Name}) Dispatch(ctx context.Context) {{");
+            sb.AppendLine($"\t// GPU dispatch: dispatchSize = [{gk.ThreadsX}, {gk.ThreadsY}, {gk.ThreadsZ}]");
+            sb.AppendLine($"\t// Each thread processes one pixel");
+            sb.AppendLine($"\t_ = ctx");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// BindTexture attaches a texture to slot.");
+            sb.AppendLine($"func (g *{gk.Name}) BindTexture(slot int, tex Texture) {{");
+            sb.AppendLine($"\tg.Textures = append(g.Textures, tex)");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// BindBuffer attaches a buffer to slot.");
+            sb.AppendLine($"func (g *{gk.Name}) BindBuffer(slot int, buf Buffer) {{");
+            sb.AppendLine($"\tg.Buffers = append(g.Buffers, buf)");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+
+            sb.AppendLine($"// Lerp performs linear interpolation for upscaling.");
+            sb.AppendLine($"func Lerp(a, b float32, t float32) float32 {{");
+            sb.AppendLine($"\treturn a*(1-t) + b*t");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+            sb.AppendLine($"// Clamp restricts value to range [min, max].");
+            sb.AppendLine($"func Clamp(v, min, max float32) float32 {{");
+            sb.AppendLine($"\tif v < min {{ return min }}");
+            sb.AppendLine($"\tif v > max {{ return max }}");
+            sb.AppendLine($"\treturn v");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+            sb.AppendLine($"// Dot computes dot product of two vectors.");
+            sb.AppendLine($"func Dot(x1, y1, x2, y2 float32) float32 {{");
+            sb.AppendLine($"\treturn x1*x2 + y1*y2");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+            sb.AppendLine($"// Cross computes cross product of two 3D vectors.");
+            sb.AppendLine($"func Cross(x1, y1, z1, x2, y2, z2 float32) (float32, float32, float32) {{");
+            sb.AppendLine($"\treturn y1*z2-z1*y2, z1*x2-x1*z2, x1*y2-y1*x2");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+            sb.AppendLine($"// Normalize scales vector to unit length.");
+            sb.AppendLine($"func Normalize(x, y, z float32) (float32, float32, float32) {{");
+            sb.AppendLine($"\tlen := float32(math.Sqrt(float64(x*x + y*y + z*z)))");
+            sb.AppendLine($"\tif len > 0 {{ return x/len, y/len, z/len }}");
+            sb.AppendLine($"\treturn 0, 0, 0");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+            sb.AppendLine($"// SampleTexture bilinear samples texture at UV coordinate.");
+            sb.AppendLine($"func SampleTexture(tex Texture, u, v float32) (float32, float32, float32, float32) {{");
+            sb.AppendLine($"\tux := Clamp(u*float32(tex.Width), 0, float32(tex.Width-1))");
+            sb.AppendLine($"\tvy := Clamp(v*float32(tex.Height), 0, float32(tex.Height-1))");
+            sb.AppendLine($"\treturn ux/float32(tex.Width), vy/float32(tex.Height), 1, 1");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+            sb.AppendLine($"// Reproject applies motion vector reprojection for TAA.");
+            sb.AppendLine($"func Reproject(currentUV float32, motionX, motionY float32) (float32, float32) {{");
+            sb.AppendLine($"\treturn currentUV - motionX, currentUV - motionY");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static string MapShaderStage(ShaderStage s) => s switch
+    {
+        ShaderStage.Vertex => "ShaderVertex",
+        ShaderStage.Fragment => "ShaderFragment",
+        ShaderStage.Compute => "ShaderCompute",
+        ShaderStage.RayTrace => "ShaderRayTrace",
+        _ => "ShaderCompute"
     };
 }

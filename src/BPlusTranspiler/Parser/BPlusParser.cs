@@ -69,6 +69,11 @@ public partial class BPlusParser
                     var chain = ParseBlockchain();
                     if (chain != null) program.BlockchainNetworks.Add(chain);
                 }
+                else if (Peek("graphics_kernel") || Peek("@graphics_kernel") || annotations.Any(a => a.Name == "graphics_kernel"))
+                {
+                    var gk = ParseGraphicsKernel();
+                    if (gk != null) program.GraphicsKernels.Add(gk);
+                }
                 else if (annotations.Any(a => a.Name == "blockchain"))
                 {
                     var chain = ParseBlockchain();
@@ -177,6 +182,11 @@ public partial class BPlusParser
             {
                 var chain = ParseBlockchain();
                 if (chain != null) program.BlockchainNetworks.Add(chain);
+            }
+            else if (Peek("graphics_kernel ") || Peek("@graphics_kernel"))
+            {
+                var gk = ParseGraphicsKernel();
+                if (gk != null) program.GraphicsKernels.Add(gk);
             }
             else
             {
@@ -1182,6 +1192,274 @@ public partial class BPlusParser
         }
 
         return entries;
+    }
+
+    private GraphicsKernelDecl? ParseGraphicsKernel()
+    {
+        if (Peek("graphics_kernel"))
+            _pos += 14;
+        else if (Peek("@graphics_kernel"))
+            _pos += 15;
+        
+        SkipWs();
+        var name = ParseWord();
+        var gk = new GraphicsKernelDecl { Name = name };
+
+        Expect("{");
+        SkipWs();
+
+        while (_pos < _src.Length && _src[_pos] != '}')
+        {
+            SkipWs();
+            if (Peek("stage:"))
+            {
+                _pos += 6;
+                SkipWs();
+                var stage = ParseWord().ToLower();
+                gk.Stage = stage switch
+                {
+                    "vertex" => ShaderStage.Vertex,
+                    "fragment" => ShaderStage.Fragment,
+                    "compute" => ShaderStage.Compute,
+                    "raytrace" => ShaderStage.RayTrace,
+                    _ => ShaderStage.Compute
+                };
+            }
+            else if (Peek("threads:"))
+            {
+                _pos += 8;
+                SkipWs();
+                if (_pos < _src.Length && _src[_pos] == '(')
+                {
+                    _pos++;
+                    SkipWs();
+                    var n1 = "";
+                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                        n1 += _src[_pos++];
+                    if (int.TryParse(n1, out var x)) gk.ThreadsX = x;
+                    SkipWs();
+                    if (_src[_pos] == ',') _pos++;
+                    SkipWs();
+                    var n2 = "";
+                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                        n2 += _src[_pos++];
+                    if (int.TryParse(n2, out var y)) gk.ThreadsY = y;
+                    SkipWs();
+                    if (_src[_pos] == ',') _pos++;
+                    SkipWs();
+                    var n3 = "";
+                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                        n3 += _src[_pos++];
+                    if (int.TryParse(n3, out var z)) gk.ThreadsZ = z;
+                    SkipWs();
+                    if (_src[_pos] == ')') _pos++;
+                }
+            }
+            else if (Peek("texture:"))
+            {
+                _pos += 8;
+                SkipWs();
+                if (_pos < _src.Length && _src[_pos] == '[')
+                {
+                    _pos++;
+                    SkipWs();
+                    while (_pos < _src.Length && _src[_pos] != ']')
+                    {
+                        SkipWs();
+                        if (_src[_pos] == '{')
+                        {
+                            _pos++;
+                            SkipWs();
+                            var tex = new TextureDecl();
+                            while (_pos < _src.Length && _src[_pos] != '}')
+                            {
+                                if (Peek("name:"))
+                                {
+                                    _pos += 5;
+                                    SkipWs();
+                                    tex.Name = ParseWord();
+                                }
+                                else if (Peek("format:"))
+                                {
+                                    _pos += 7;
+                                    SkipWs();
+                                    var fmt = ParseWord().ToUpper();
+                                    tex.Format = fmt switch
+                                    {
+                                        "R8G8B8A8" => TextureFormat.R8G8B8A8,
+                                        "R16G16B16A16" => TextureFormat.R16G16B16A16,
+                                        "R32G32B32" => TextureFormat.R32G32B32,
+                                        "R32G32B32A32" => TextureFormat.R32G32B32A32,
+                                        "BC7" => TextureFormat.BC7,
+                                        "ASTC" => TextureFormat.ASTC,
+                                        _ => TextureFormat.R8G8B8A8
+                                    };
+                                }
+                                else if (Peek("size:"))
+                                {
+                                    _pos += 5;
+                                    SkipWs();
+                                    var s = ParseWord().ToLower().Replace("(", "").Replace(")", "").Split('x');
+                                    if (s.Length >= 1 && int.TryParse(s[0].Trim(), out var w)) tex.Width = w;
+                                    if (s.Length >= 2 && int.TryParse(s[1].Trim(), out var h)) tex.Height = h;
+                                }
+                                else if (Peek("slot:"))
+                                {
+                                    _pos += 5;
+                                    SkipWs();
+                                    var n = "";
+                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                                        n += _src[_pos++];
+                                    if (int.TryParse(n, out var slot)) tex.Slot = slot;
+                                }
+                                else
+                                {
+                                    _pos += ParseWord().Length;
+                                }
+                                SkipWs();
+                            }
+                            Expect("}");
+                            gk.Textures.Add(tex);
+                        }
+                        SkipWs();
+                        if (_src[_pos] == ',') _pos++;
+                        SkipWs();
+                    }
+                    Expect("]");
+                }
+            }
+            else if (Peek("buffer:"))
+            {
+                _pos += 7;
+                SkipWs();
+                if (_pos < _src.Length && _src[_pos] == '[')
+                {
+                    _pos++;
+                    SkipWs();
+                    while (_pos < _src.Length && _src[_pos] != ']')
+                    {
+                        SkipWs();
+                        if (_src[_pos] == '{')
+                        {
+                            _pos++;
+                            SkipWs();
+                            var buf = new BufferDecl();
+                            while (_pos < _src.Length && _src[_pos] != '}')
+                            {
+                                if (Peek("name:"))
+                                {
+                                    _pos += 5;
+                                    SkipWs();
+                                    buf.Name = ParseWord();
+                                }
+                                else if (Peek("type:"))
+                                {
+                                    _pos += 5;
+                                    SkipWs();
+                                    buf.ElementType = ParseWord();
+                                }
+                                else if (Peek("count:"))
+                                {
+                                    _pos += 6;
+                                    SkipWs();
+                                    var n = "";
+                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                                        n += _src[_pos++];
+                                    if (int.TryParse(n, out var c)) buf.Count = c;
+                                }
+                                else if (Peek("slot:"))
+                                {
+                                    _pos += 5;
+                                    SkipWs();
+                                    var n = "";
+                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                                        n += _src[_pos++];
+                                    if (int.TryParse(n, out var s)) buf.Slot = s;
+                                }
+                                else
+                                {
+                                    _pos += ParseWord().Length;
+                                }
+                                SkipWs();
+                            }
+                            Expect("}");
+                            gk.Buffers.Add(buf);
+                        }
+                        SkipWs();
+                        if (_src[_pos] == ',') _pos++;
+                        SkipWs();
+                    }
+                    Expect("]");
+                }
+            }
+            else if (Peek("sampler:"))
+            {
+                _pos += 7;
+                SkipWs();
+                if (_pos < _src.Length && _src[_pos] == '[')
+                {
+                    _pos++;
+                    SkipWs();
+                    while (_pos < _src.Length && _src[_pos] != ']')
+                    {
+                        SkipWs();
+                        if (_src[_pos] == '{')
+                        {
+                            _pos++;
+                            SkipWs();
+                            var sam = new SamplerDecl();
+                            while (_pos < _src.Length && _src[_pos] != '}')
+                            {
+                                if (Peek("name:"))
+                                {
+                                    _pos += 5;
+                                    SkipWs();
+                                    sam.Name = ParseWord();
+                                }
+                                else if (Peek("filter:"))
+                                {
+                                    _pos += 7;
+                                    SkipWs();
+                                    sam.Filter = ParseWord();
+                                }
+                                else if (Peek("slot:"))
+                                {
+                                    _pos += 5;
+                                    SkipWs();
+                                    var n = "";
+                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                                        n += _src[_pos++];
+                                    if (int.TryParse(n, out var s)) sam.Slot = s;
+                                }
+                                else
+                                {
+                                    _pos += ParseWord().Length;
+                                }
+                                SkipWs();
+                            }
+                            Expect("}");
+                            gk.Samplers.Add(sam);
+                        }
+                        SkipWs();
+                        if (_src[_pos] == ',') _pos++;
+                        SkipWs();
+                    }
+                    Expect("]");
+                }
+            }
+            else if (Peek("state ") || Peek("base "))
+            {
+                gk.States.Add(ParseStateDef());
+            }
+            else
+            {
+                throw Err($"Unexpected in graphics_kernel '{name}': '{PeekWord()}'");
+            }
+            SkipWs();
+        }
+
+        Expect("}");
+        return gk;
     }
 
     private CorporateCryptoConfig ParseCryptoConfig()

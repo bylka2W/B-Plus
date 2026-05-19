@@ -55,6 +55,9 @@ public class ProgramNode
 
     // v3.3 Blockchain/Defi networks
     public List<BlockchainNetworkNode> BlockchainNetworks { get; } = new();
+
+    // v3.4 Graphics types for GPU compute and upscaling
+    public List<GraphicsKernelDecl> GraphicsKernels { get; } = new();
 }
 
 public class ImportNode
@@ -302,6 +305,51 @@ public class Block
     public string Validator { get; set; } = "";
     public int Nonce { get; set; }
     public string Hash { get; set; } = "";
+}
+
+public enum ShaderStage { Vertex, Fragment, Compute, RayTrace }
+public enum TextureFormat { R8G8B8A8, R16G16B16A16, R32G32B32, R32G32B32A32, BC7, ASTC }
+
+public class TextureDecl
+{
+    public string Name { get; set; } = "";
+    public TextureFormat Format { get; set; } = TextureFormat.R8G8B8A8;
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public int Depth { get; set; } = 1;
+    public bool IsRenderTarget { get; set; }
+    public bool IsDepthStencil { get; set; }
+    public int Slot { get; set; }
+}
+
+public class BufferDecl
+{
+    public string Name { get; set; } = "";
+    public string ElementType { get; set; } = "float";
+    public int Count { get; set; }
+    public int Slot { get; set; }
+    public bool IsRw { get; set; }
+}
+
+public class SamplerDecl
+{
+    public string Name { get; set; } = "";
+    public int Slot { get; set; }
+    public string Filter { get; set; } = "linear";
+    public string AddressMode { get; set; } = "clamp";
+}
+
+public class GraphicsKernelDecl
+{
+    public string Name { get; set; } = "";
+    public ShaderStage Stage { get; set; } = ShaderStage.Compute;
+    public int ThreadsX { get; set; } = 16;
+    public int ThreadsY { get; set; } = 16;
+    public int ThreadsZ { get; set; } = 1;
+    public List<TextureDecl> Textures { get; } = new();
+    public List<BufferDecl> Buffers { get; } = new();
+    public List<SamplerDecl> Samplers { get; } = new();
+    public List<StateDefNode> States { get; } = new();
 }
 
 public class NetworkSite

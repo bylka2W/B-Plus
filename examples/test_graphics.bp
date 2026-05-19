@@ -1,0 +1,32 @@
+@graphics_kernel UpscaleFSR {
+    stage: compute
+    threads: (16, 16, 1)
+
+    texture: [
+        { name: InputColor, format: R8G8B8A8, size: 1920x1080, slot: 0 }
+        { name: OutputColor, format: R8G8B8A8, size: 3840x2160, slot: 1 }
+        { name: MotionVectors, format: R16G16B16A16, size: 1920x1080, slot: 2 }
+        { name: HistoryBuffer, format: R16G16B16A16, size: 3840x2160, slot: 3 }
+    ]
+
+    buffer: [
+        { name: EdgeThreshold, type: float, count: 1, slot: 0 }
+        { name: Contrast, type: float, count: 1, slot: 1 }
+    ]
+
+    sampler: [
+        { name: LinearSampler, filter: linear, slot: 0 }
+    ]
+
+    state ProcessUpscale {
+        enter {
+            // Read motion vector for current pixel
+            // Reproject from previous frame
+            // Apply EASU (Edge Adaptive Spatial Upscaling)
+        }
+        on Done -> EndFrame
+    }
+
+    state EndFrame {
+    }
+}
