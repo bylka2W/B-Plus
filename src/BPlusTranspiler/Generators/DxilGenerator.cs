@@ -83,6 +83,46 @@ public class DxilGenerator : ICodeGenerator
             sb.AppendLine();
         }
 
+        // v4.0: ComputeShaderDecl
+        if (program.ComputeShaders.Count > 0)
+        {
+            foreach (var cs in program.ComputeShaders)
+            {
+                GenComputeShader(sb, cs);
+                sb.AppendLine();
+            }
+        }
+
+        // v4.0: FragmentShaderDecl
+        if (program.FragmentShaders.Count > 0)
+        {
+            foreach (var fs in program.FragmentShaders)
+            {
+                GenFragmentShader(sb, fs);
+                sb.AppendLine();
+            }
+        }
+
+        // v4.0: VertexShaderDecl
+        if (program.VertexShaders.Count > 0)
+        {
+            foreach (var vs in program.VertexShaders)
+            {
+                GenVertexShader(sb, vs);
+                sb.AppendLine();
+            }
+        }
+
+        // v4.0: RayTracingShaderDecl
+        if (program.RayTracingShaders.Count > 0)
+        {
+            foreach (var rt in program.RayTracingShaders)
+            {
+                GenRayTracingShader(sb, rt);
+                sb.AppendLine();
+            }
+        }
+
         files.Add("shaders.hlsl", sb.ToString());
 
         // Compile batch script
@@ -105,6 +145,76 @@ public class DxilGenerator : ICodeGenerator
         files.Add("compile_dxil.bat", bat.ToString());
 
         return files;
+    }
+
+    void GenComputeShader(StringBuilder sb, ComputeShaderDecl cs)
+    {
+        sb.AppendLine($"// ComputeShader: {cs.Name}");
+        sb.AppendLine($"// Threads: ({cs.ThreadsX}, {cs.ThreadsY}, {cs.ThreadsZ})");
+        sb.AppendLine($"// GroupSize: ({cs.GroupSizeX}, {cs.GroupSizeY}, {cs.GroupSizeZ})");
+        if (cs.AutoDiff) sb.AppendLine("// AutoDiff enabled");
+        sb.AppendLine();
+
+        foreach (var r in cs.Resources)
+            sb.AppendLine($"RWStructuredBuffer<float> {r.Name} : register(u{r.Register});");
+
+        sb.AppendLine();
+        sb.AppendLine($"[numthreads({cs.GroupSizeX}, {cs.GroupSizeY}, {cs.GroupSizeZ})]");
+        sb.AppendLine($"void cs_{cs.Name}(uint3 id : SV_DispatchThreadID)");
+        sb.AppendLine("{");
+        sb.AppendLine($"    // Compute shader body for {cs.Name}");
+        sb.AppendLine("}");
+    }
+
+    void GenFragmentShader(StringBuilder sb, FragmentShaderDecl fs)
+    {
+        sb.AppendLine($"// FragmentShader: {fs.Name}");
+        if (fs.EarlyDepthStencil) sb.AppendLine("// EarlyDepthStencil: true");
+        if (fs.AlphaToCoverage) sb.AppendLine("// AlphaToCoverage: true");
+        sb.AppendLine();
+
+        foreach (var r in fs.Resources)
+            sb.AppendLine($"Texture2D<float4> {r.Name} : register(t{r.Register});");
+
+        sb.AppendLine("struct PS_INPUT { float4 pos : SV_POSITION; };");
+        sb.AppendLine($"float4 ps_{fs.Name}(PS_INPUT input) : SV_Target");
+        sb.AppendLine("{");
+        sb.AppendLine($"    return float4(1,0,1,1); // placeholder for {fs.Name}");
+        sb.AppendLine("}");
+    }
+
+    void GenVertexShader(StringBuilder sb, VertexShaderDecl vs)
+    {
+        sb.AppendLine($"// VertexShader: {vs.Name}");
+        if (!string.IsNullOrEmpty(vs.InputLayout))
+            sb.AppendLine($"// InputLayout: {vs.InputLayout}");
+        sb.AppendLine();
+
+        foreach (var r in vs.Resources)
+            sb.AppendLine($"cbuffer {r.Name} : register(b{r.Register}) {{ }};");
+
+        sb.AppendLine($"struct VS_OUTPUT {{ float4 pos : SV_POSITION; }};");
+        sb.AppendLine($"VS_OUTPUT vs_{vs.Name}(float3 pos : POSITION)");
+        sb.AppendLine("{");
+        sb.AppendLine("    VS_OUTPUT o;");
+        sb.AppendLine("    o.pos = float4(pos, 1.0);");
+        sb.AppendLine("    return o;");
+        sb.AppendLine("}");
+    }
+
+    void GenRayTracingShader(StringBuilder sb, RayTracingShaderDecl rt)
+    {
+        sb.AppendLine($"// RayTracingShader: {rt.Name}");
+        sb.AppendLine($"// MaxRecursionDepth: {rt.MaxRecursionDepth}");
+        sb.AppendLine();
+
+        foreach (var r in rt.Resources)
+            sb.AppendLine($"RaytracingAccelerationStructure {r.Name} : register(u{r.Register});");
+
+        sb.AppendLine($"void rt_{rt.Name}()");
+        sb.AppendLine("{");
+        sb.AppendLine($"    // Ray tracing shader for {rt.Name}");
+        sb.AppendLine("}");
     }
 
     void EmitKernel(StringBuilder sb, KernelDecl k, int idx)

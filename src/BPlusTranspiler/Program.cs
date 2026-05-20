@@ -1242,7 +1242,7 @@ if (args.Contains("--x64") || target is "x64" or "linux" or "macos" or "elf")
     bool generateELF = target is "linux" or "elf";
     bool generateMachO = target is "macos" or "darwin" or "mac";
 
-    Console.WriteLine($"B+ x64 Generator v3.3.0JU BETA");
+    Console.WriteLine($"B+ x64 Generator v4.0.0 BETA");
     Console.WriteLine($"  Input: {input}");
     Console.WriteLine($"  Format: {(generatePE ? "PE (.exe)" : generateELF ? "ELF (.out)" : generateMachO ? "MachO (.app)" : "PE (.exe)")}");
 

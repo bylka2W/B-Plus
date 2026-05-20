@@ -93,6 +93,56 @@ public class GlslGenerator : ICodeGenerator
             sb.AppendLine();
         }
 
+        // v4.0: ComputeShaderDecl
+        if (program.ComputeShaders.Count > 0)
+        {
+            foreach (var cs in program.ComputeShaders)
+            {
+                GenComputeShaderGlsl(sb, cs);
+                sb.AppendLine();
+            }
+        }
+
+        // v4.0: FragmentShaderDecl
+        if (program.FragmentShaders.Count > 0)
+        {
+            foreach (var fs in program.FragmentShaders)
+            {
+                GenFragmentShaderGlsl(sb, fs);
+                sb.AppendLine();
+            }
+        }
+
+        // v4.0: VertexShaderDecl
+        if (program.VertexShaders.Count > 0)
+        {
+            foreach (var vs in program.VertexShaders)
+            {
+                GenVertexShaderGlsl(sb, vs);
+                sb.AppendLine();
+            }
+        }
+
+        // v4.0: RayTracingShaderDecl
+        if (program.RayTracingShaders.Count > 0)
+        {
+            foreach (var rt in program.RayTracingShaders)
+            {
+                GenRayTracingShaderGlsl(sb, rt);
+                sb.AppendLine();
+            }
+        }
+
+        // v4.0: LocalGroupDecl
+        if (program.LocalGroups.Count > 0)
+        {
+            foreach (var lg in program.LocalGroups)
+            {
+                GenLocalGroupGlsl(sb, lg);
+                sb.AppendLine();
+            }
+        }
+
         files.Add("shaders.comp", sb.ToString());
 
         // Compile script
@@ -106,6 +156,45 @@ public class GlslGenerator : ICodeGenerator
         files.Add("compile_spirv.bat", bat.ToString());
 
         return files;
+    }
+
+    void GenComputeShaderGlsl(StringBuilder sb, ComputeShaderDecl cs)
+    {
+        sb.AppendLine($"// ComputeShader: {cs.Name}");
+        sb.AppendLine($"layout(local_size_x = {cs.GroupSizeX}, local_size_y = {cs.GroupSizeY}, local_size_z = {cs.GroupSizeZ}) in;");
+        sb.AppendLine($"void main() {{ // {cs.Name}");
+        sb.AppendLine("}");
+    }
+
+    void GenFragmentShaderGlsl(StringBuilder sb, FragmentShaderDecl fs)
+    {
+        sb.AppendLine($"// FragmentShader: {fs.Name}");
+        sb.AppendLine("layout(location = 0) out vec4 fragColor;");
+        sb.AppendLine($"void main() {{ fragColor = vec4(1,0,1,1); // {fs.Name}");
+        sb.AppendLine("}");
+    }
+
+    void GenVertexShaderGlsl(StringBuilder sb, VertexShaderDecl vs)
+    {
+        sb.AppendLine($"// VertexShader: {vs.Name}");
+        sb.AppendLine($"void main() {{ gl_Position = vec4(0); // {vs.Name}");
+        sb.AppendLine("}");
+    }
+
+    void GenRayTracingShaderGlsl(StringBuilder sb, RayTracingShaderDecl rt)
+    {
+        sb.AppendLine($"// RayTracingShader: {rt.Name}");
+        sb.AppendLine($"// MaxRecursionDepth: {rt.MaxRecursionDepth}");
+        sb.AppendLine($"void main() {{ // {rt.Name}");
+        sb.AppendLine("}");
+    }
+
+    void GenLocalGroupGlsl(StringBuilder sb, LocalGroupDecl lg)
+    {
+        sb.AppendLine($"// LocalGroup: {lg.Name}");
+        sb.AppendLine($"// Work group size: {lg.Width}x{lg.Height}");
+        foreach (var sv in lg.SharedVariables)
+            sb.AppendLine($"// shared {sv.Name}: {sv.SizeBytes} bytes");
     }
 
     void EmitKernel(StringBuilder sb, KernelDecl k)

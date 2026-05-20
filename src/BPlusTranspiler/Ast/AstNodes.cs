@@ -58,6 +58,14 @@ public class ProgramNode
 
     // v3.4 Graphics types for GPU compute and upscaling
     public List<GraphicsKernelDecl> GraphicsKernels { get; } = new();
+    public List<ComputeShaderDecl> ComputeShaders { get; } = new();
+    public List<FragmentShaderDecl> FragmentShaders { get; } = new();
+    public List<VertexShaderDecl> VertexShaders { get; } = new();
+    public List<RayTracingShaderDecl> RayTracingShaders { get; } = new();
+    public List<LocalGroupDecl> LocalGroups { get; } = new();
+
+    // v3.5 Scientific computing types
+    public List<ScientificKernelDecl> ScientificKernels { get; } = new();
 }
 
 public class ImportNode
@@ -568,6 +576,162 @@ public class VarDecl
     public BPlusType Type { get; set; } = null!;
     public string? Init { get; set; }
     public List<MemoryAnnotation> MemoryAnnotations { get; } = new();
+}
+
+public enum QubitState { Zero, One, Superposition }
+public enum TensorCoreMode { WMMA, DP4A, HMMA }
+public enum MemoryArchitecture { UMA, NUMA, HCC }
+
+public class QubitType
+{
+    public string Name { get; set; } = "";
+    public List<QubitState> States { get; } = new();
+    public int Slot { get; set; }
+}
+
+public class TensorOperand
+{
+    public string Name { get; set; } = "";
+    public string Shape { get; set; } = "";
+    public TensorCoreMode Mode { get; set; } = TensorCoreMode.WMMA;
+    public int Slot { get; set; }
+}
+
+public class SparseMatrix
+{
+    public string Name { get; set; } = "";
+    public string Format { get; set; } = "CSR";
+    public int Rows { get; set; }
+    public int Cols { get; set; }
+    public int NonZeros { get; set; }
+}
+
+public class UnifiedMemoryBuffer
+{
+    public string Name { get; set; } = "";
+    public int SizeBytes { get; set; }
+    public bool CpuAccessible { get; set; }
+    public bool GpuAccessible { get; set; }
+    public MemoryArchitecture Architecture { get; set; } = MemoryArchitecture.UMA;
+}
+
+public class ScientificKernelDecl
+{
+    public string Name { get; set; } = "";
+    public List<StateDefNode> States { get; } = new();
+    public List<QubitType> Qubits { get; } = new();
+    public List<TensorOperand> Tensors { get; } = new();
+    public List<SparseMatrix> Matrices { get; } = new();
+    public List<UnifiedMemoryBuffer> Buffers { get; } = new();
+    public List<AsyncComputeQueue> AsyncQueues { get; } = new();
+    public TensorCoreMode TensorMode { get; set; } = TensorCoreMode.WMMA;
+    public IntervalArithmetic? IntervalConfig { get; set; }
+    public TPUConfig? TPU { get; set; }
+    public FPGAConfig? FPGA { get; set; }
+    public OpticalFlowConfig? OpticalFlow { get; set; }
+    public bool AutoDiff { get; set; }
+}
+
+public class IntervalArithmetic
+{
+    public double Lower { get; set; }
+    public double Upper { get; set; }
+    public double Precision { get; set; }
+}
+
+public class TPUConfig
+{
+    public string Name { get; set; } = "";
+    public string Backend { get; set; } = "tpu";
+    public int PodSlice { get; set; }
+}
+
+public class FPGAConfig
+{
+    public string Name { get; set; } = "";
+    public string TargetLanguage { get; set; } = "verilog";
+    public int ClockMhz { get; set; }
+    public int LogicCells { get; set; }
+}
+
+public class AsyncComputeQueue
+{
+    public string Name { get; set; } = "";
+    public int Priority { get; set; }
+    public int MaxWorkItems { get; set; }
+}
+
+public class OpticalFlowConfig
+{
+    public string Name { get; set; } = "";
+    public bool UseHardware { get; set; }
+    public string Algorithm { get; set; } = "farneback";
+}
+
+public enum SamplerFilter { Point, Linear, Anisotropic, Cubic }
+public enum SamplerAddress { Clamp, Repeat, Mirror, Border }
+public enum ResourceDimension { Buffer, Texture1D, Texture2D, Texture3D, TextureCube }
+
+public class ShaderResourceBinding
+{
+    public string Name { get; set; } = "";
+    public string Register { get; set; } = "";
+    public int Space { get; set; }
+    public ResourceDimension Dimension { get; set; } = ResourceDimension.Buffer;
+}
+
+public class ComputeShaderDecl
+{
+    public string Name { get; set; } = "";
+    public int ThreadsX { get; set; } = 16;
+    public int ThreadsY { get; set; } = 16;
+    public int ThreadsZ { get; set; } = 1;
+    public int GroupSizeX { get; set; } = 16;
+    public int GroupSizeY { get; set; } = 16;
+    public int GroupSizeZ { get; set; } = 1;
+    public List<ShaderResourceBinding> Resources { get; } = new();
+    public List<StateDefNode> States { get; } = new();
+    public bool AutoDiff { get; set; }
+}
+
+public class FragmentShaderDecl
+{
+    public string Name { get; set; } = "";
+    public bool EarlyDepthStencil { get; set; }
+    public bool AlphaToCoverage { get; set; }
+    public List<ShaderResourceBinding> Resources { get; } = new();
+    public List<StateDefNode> States { get; } = new();
+}
+
+public class VertexShaderDecl
+{
+    public string Name { get; set; } = "";
+    public string InputLayout { get; set; } = "";
+    public List<ShaderResourceBinding> Resources { get; } = new();
+    public List<StateDefNode> States { get; } = new();
+}
+
+public class RayTracingShaderDecl
+{
+    public string Name { get; set; } = "";
+    public int MaxRecursionDepth { get; set; } = 1;
+    public List<ShaderResourceBinding> Resources { get; } = new();
+    public List<StateDefNode> States { get; } = new();
+}
+
+public class SharedMemoryDecl
+{
+    public string Name { get; set; } = "";
+    public int SizeBytes { get; set; }
+    public int Alignment { get; set; } = 4;
+}
+
+public class LocalGroupDecl
+{
+    public string Name { get; set; } = "";
+    public int Width { get; set; } = 16;
+    public int Height { get; set; } = 16;
+    public List<SharedMemoryDecl> SharedVariables { get; } = new();
 }
 
 

@@ -22,7 +22,81 @@ public class GpuGenerator : ICodeGenerator
         // OpenMP-style pragma hints
         result["parallel_hints.h"] = GenOpenMPHints(program);
 
+        // v4.0: ComputeShaderDecl
+        if (program.ComputeShaders.Count > 0)
+            result["compute_shaders.hlsl"] = GenComputeShadersHlsl(program);
+
+        // v4.0: FragmentShaderDecl
+        if (program.FragmentShaders.Count > 0)
+            result["fragment_shaders.hlsl"] = GenFragmentShadersHlsl(program);
+
+        // v4.0: VertexShaderDecl
+        if (program.VertexShaders.Count > 0)
+            result["vertex_shaders.hlsl"] = GenVertexShadersHlsl(program);
+
+        // v4.0: RayTracingShaderDecl
+        if (program.RayTracingShaders.Count > 0)
+            result["raytracing_shaders.hlsl"] = GenRayTracingShadersHlsl(program);
+
         return result;
+    }
+
+    private string GenComputeShadersHlsl(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("// B+ v4.0 — HLSL Compute Shaders");
+        sb.AppendLine();
+        foreach (var cs in program.ComputeShaders)
+        {
+            sb.AppendLine($"[numthreads({cs.GroupSizeX}, {cs.GroupSizeY}, {cs.GroupSizeZ})]");
+            sb.AppendLine($"void cs_{cs.Name}(uint3 id : SV_DispatchThreadID) {{ }}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    private string GenFragmentShadersHlsl(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("// B+ v4.0 — HLSL Fragment/Pixel Shaders");
+        sb.AppendLine();
+        foreach (var fs in program.FragmentShaders)
+        {
+            sb.AppendLine($"float4 ps_{fs.Name}(float4 pos : SV_POSITION) : SV_Target {{");
+            sb.AppendLine($"    return float4(1,0,1,1); // placeholder");
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    private string GenVertexShadersHlsl(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("// B+ v4.0 — HLSL Vertex Shaders");
+        sb.AppendLine();
+        foreach (var vs in program.VertexShaders)
+        {
+            sb.AppendLine($"float4 vs_{vs.Name}(float3 pos : POSITION) : SV_POSITION {{");
+            sb.AppendLine("    return float4(pos, 1.0);");
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    private string GenRayTracingShadersHlsl(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("// B+ v4.0 — HLSL Ray Tracing Shaders");
+        sb.AppendLine();
+        foreach (var rt in program.RayTracingShaders)
+        {
+            sb.AppendLine($"// RayTracingShader: {rt.Name}, MaxRecursion: {rt.MaxRecursionDepth}");
+            sb.AppendLine($"void rt_{rt.Name}() {{ }}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
     }
 
     private string GenHlsl(ProgramNode program)

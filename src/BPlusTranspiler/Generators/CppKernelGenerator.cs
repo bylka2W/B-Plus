@@ -10,11 +10,205 @@ public class CppKernelGenerator : ICodeGenerator
 
     public Dictionary<string, string> GenerateFiles(ProgramNode program)
     {
-        return new Dictionary<string, string>
+        var result = new Dictionary<string, string>
         {
             { "kernels.h", GenHeader(program) },
             { "kernels.cpp", GenImpl(program) }
         };
+
+        // v4.0: ComputeShaderDecl
+        if (program.ComputeShaders.Count > 0)
+        {
+            result["compute_shaders.h"] = GenComputeShadersHeader(program);
+            result["compute_shaders.cpp"] = GenComputeShadersImpl(program);
+        }
+
+        // v4.0: FragmentShaderDecl
+        if (program.FragmentShaders.Count > 0)
+        {
+            result["fragment_shaders.h"] = GenFragmentShadersHeader(program);
+            result["fragment_shaders.cpp"] = GenFragmentShadersImpl(program);
+        }
+
+        // v4.0: VertexShaderDecl
+        if (program.VertexShaders.Count > 0)
+        {
+            result["vertex_shaders.h"] = GenVertexShadersHeader(program);
+            result["vertex_shaders.cpp"] = GenVertexShadersImpl(program);
+        }
+
+        // v4.0: RayTracingShaderDecl
+        if (program.RayTracingShaders.Count > 0)
+        {
+            result["raytracing_shaders.h"] = GenRayTracingShadersHeader(program);
+            result["raytracing_shaders.cpp"] = GenRayTracingShadersImpl(program);
+        }
+
+        // v4.0: LocalGroupDecl
+        if (program.LocalGroups.Count > 0)
+        {
+            result["local_groups.h"] = GenLocalGroupsHeader(program);
+            result["local_groups.cpp"] = GenLocalGroupsImpl(program);
+        }
+
+        // v4.0: ScientificKernelDecl
+        if (program.ScientificKernels.Count > 0)
+        {
+            result["scientific_kernels.h"] = GenScientificKernelsHeader(program);
+            result["scientific_kernels.cpp"] = GenScientificKernelsImpl(program);
+        }
+
+        return result;
+    }
+
+    private string GenComputeShadersHeader(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#pragma once");
+        sb.AppendLine("// B+ v4.0 Compute Shaders");
+        sb.AppendLine();
+        foreach (var cs in program.ComputeShaders)
+            sb.AppendLine($"void {cs.Name}_compute_shader();");
+        return sb.ToString();
+    }
+
+    private string GenComputeShadersImpl(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#include \"compute_shaders.h\"");
+        sb.AppendLine();
+        foreach (var cs in program.ComputeShaders)
+        {
+            sb.AppendLine($"void {cs.Name}_compute_shader() {{");
+            sb.AppendLine($"    // Compute shader: {cs.Name}");
+            sb.AppendLine("}");
+        }
+        return sb.ToString();
+    }
+
+    private string GenFragmentShadersHeader(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#pragma once");
+        sb.AppendLine("// B+ v4.0 Fragment Shaders");
+        sb.AppendLine();
+        foreach (var fs in program.FragmentShaders)
+            sb.AppendLine($"void {fs.Name}_fragment_shader();");
+        return sb.ToString();
+    }
+
+    private string GenFragmentShadersImpl(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#include \"fragment_shaders.h\"");
+        sb.AppendLine();
+        foreach (var fs in program.FragmentShaders)
+        {
+            sb.AppendLine($"void {fs.Name}_fragment_shader() {{");
+            sb.AppendLine($"    // Fragment shader: {fs.Name}");
+            sb.AppendLine("}");
+        }
+        return sb.ToString();
+    }
+
+    private string GenVertexShadersHeader(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#pragma once");
+        sb.AppendLine("// B+ v4.0 Vertex Shaders");
+        sb.AppendLine();
+        foreach (var vs in program.VertexShaders)
+            sb.AppendLine($"void {vs.Name}_vertex_shader();");
+        return sb.ToString();
+    }
+
+    private string GenVertexShadersImpl(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#include \"vertex_shaders.h\"");
+        sb.AppendLine();
+        foreach (var vs in program.VertexShaders)
+        {
+            sb.AppendLine($"void {vs.Name}_vertex_shader() {{");
+            sb.AppendLine($"    // Vertex shader: {vs.Name}");
+            sb.AppendLine("}");
+        }
+        return sb.ToString();
+    }
+
+    private string GenRayTracingShadersHeader(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#pragma once");
+        sb.AppendLine("// B+ v4.0 Ray Tracing Shaders");
+        sb.AppendLine();
+        foreach (var rt in program.RayTracingShaders)
+            sb.AppendLine($"void {rt.Name}_raytracing_shader();");
+        return sb.ToString();
+    }
+
+    private string GenRayTracingShadersImpl(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#include \"raytracing_shaders.h\"");
+        sb.AppendLine();
+        foreach (var rt in program.RayTracingShaders)
+        {
+            sb.AppendLine($"void {rt.Name}_raytracing_shader() {{");
+            sb.AppendLine($"    // Ray tracing shader: {rt.Name}");
+            sb.AppendLine("}");
+        }
+        return sb.ToString();
+    }
+
+    private string GenLocalGroupsHeader(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#pragma once");
+        sb.AppendLine("// B+ v4.0 Local Groups");
+        sb.AppendLine();
+        foreach (var lg in program.LocalGroups)
+            sb.AppendLine($"void {lg.Name}_local_group();");
+        return sb.ToString();
+    }
+
+    private string GenLocalGroupsImpl(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#include \"local_groups.h\"");
+        sb.AppendLine();
+        foreach (var lg in program.LocalGroups)
+        {
+            sb.AppendLine($"void {lg.Name}_local_group() {{");
+            sb.AppendLine($"    // Local group: {lg.Name}, size: {lg.Width}x{lg.Height}");
+            sb.AppendLine("}");
+        }
+        return sb.ToString();
+    }
+
+    private string GenScientificKernelsHeader(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#pragma once");
+        sb.AppendLine("// B+ v4.0 Scientific Kernels");
+        sb.AppendLine();
+        foreach (var sk in program.ScientificKernels)
+            sb.AppendLine($"void {sk.Name}_scientific_kernel();");
+        return sb.ToString();
+    }
+
+    private string GenScientificKernelsImpl(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#include \"scientific_kernels.h\"");
+        sb.AppendLine();
+        foreach (var sk in program.ScientificKernels)
+        {
+            sb.AppendLine($"void {sk.Name}_scientific_kernel() {{");
+            sb.AppendLine($"    // Scientific kernel: {sk.Name}");
+            sb.AppendLine("}");
+        }
+        return sb.ToString();
     }
 
     private string GenHeader(ProgramNode program)

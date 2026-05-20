@@ -21,7 +21,210 @@ public class RustGenerator : ICodeGenerator
         result["context.rs"] = GenContext(program);
         if (program.BlockchainNetworks.Count > 0)
             result["blockchain.rs"] = GenBlockchainRust(program);
+
+        // v4.0: ComputeShaderDecl
+        if (program.ComputeShaders.Count > 0)
+            result["compute_shaders.rs"] = GenComputeShadersRust(program);
+
+        // v4.0: FragmentShaderDecl
+        if (program.FragmentShaders.Count > 0)
+            result["fragment_shaders.rs"] = GenFragmentShadersRust(program);
+
+        // v4.0: VertexShaderDecl
+        if (program.VertexShaders.Count > 0)
+            result["vertex_shaders.rs"] = GenVertexShadersRust(program);
+
+        // v4.0: RayTracingShaderDecl
+        if (program.RayTracingShaders.Count > 0)
+            result["raytracing_shaders.rs"] = GenRayTracingShadersRust(program);
+
+        // v4.0: LocalGroupDecl
+        if (program.LocalGroups.Count > 0)
+            result["local_groups.rs"] = GenLocalGroupsRust(program);
+
+        // v4.0: ScientificKernelDecl
+        if (program.ScientificKernels.Count > 0)
+            result["scientific_kernels.rs"] = GenScientificKernelsRust(program);
+
         return result;
+    }
+
+    private string GenComputeShadersRust(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#![forbid(unsafe_code)]");
+        sb.AppendLine("//! B+ v4.0 Compute Shaders");
+        sb.AppendLine();
+        foreach (var cs in program.ComputeShaders)
+        {
+            sb.AppendLine($"/// ComputeShader: {cs.Name}");
+            sb.AppendLine($"pub struct {cs.Name} {{");
+            sb.AppendLine($"    pub threads_x: u32,");
+            sb.AppendLine($"    pub threads_y: u32,");
+            sb.AppendLine($"    pub threads_z: u32,");
+            sb.AppendLine($"    pub group_size_x: u32,");
+            sb.AppendLine($"    pub group_size_y: u32,");
+            sb.AppendLine($"    pub group_size_z: u32,");
+            sb.AppendLine($"    pub auto_diff: bool,");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine($"impl {cs.Name} {{");
+            sb.AppendLine($"    pub fn new() -> Self {{");
+            sb.AppendLine($"        Self {{");
+            sb.AppendLine($"            threads_x: {cs.ThreadsX},");
+            sb.AppendLine($"            threads_y: {cs.ThreadsY},");
+            sb.AppendLine($"            threads_z: {cs.ThreadsZ},");
+            sb.AppendLine($"            group_size_x: {cs.GroupSizeX},");
+            sb.AppendLine($"            group_size_y: {cs.GroupSizeY},");
+            sb.AppendLine($"            group_size_z: {cs.GroupSizeZ},");
+            sb.AppendLine($"            auto_diff: {cs.AutoDiff},");
+            sb.AppendLine($"        }}");
+            sb.AppendLine($"    }}");
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    private string GenFragmentShadersRust(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#![forbid(unsafe_code)]");
+        sb.AppendLine("//! B+ v4.0 Fragment Shaders");
+        sb.AppendLine();
+        foreach (var fs in program.FragmentShaders)
+        {
+            sb.AppendLine($"/// FragmentShader: {fs.Name}");
+            sb.AppendLine($"pub struct {fs.Name} {{");
+            sb.AppendLine($"    pub early_depth_stencil: bool,");
+            sb.AppendLine($"    pub alpha_to_coverage: bool,");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine($"impl {fs.Name} {{");
+            sb.AppendLine($"    pub fn new() -> Self {{");
+            sb.AppendLine($"        Self {{");
+            sb.AppendLine($"            early_depth_stencil: {fs.EarlyDepthStencil},");
+            sb.AppendLine($"            alpha_to_coverage: {fs.AlphaToCoverage},");
+            sb.AppendLine($"        }}");
+            sb.AppendLine($"    }}");
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    private string GenVertexShadersRust(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#![forbid(unsafe_code)]");
+        sb.AppendLine("//! B+ v4.0 Vertex Shaders");
+        sb.AppendLine();
+        foreach (var vs in program.VertexShaders)
+        {
+            sb.AppendLine($"/// VertexShader: {vs.Name}");
+            sb.AppendLine($"pub struct {vs.Name} {{");
+            sb.AppendLine($"    pub input_layout: String,");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine($"impl {vs.Name} {{");
+            sb.AppendLine($"    pub fn new() -> Self {{");
+            sb.AppendLine($"        Self {{");
+            sb.AppendLine($"            input_layout: \"{vs.InputLayout}\".to_string(),");
+            sb.AppendLine($"        }}");
+            sb.AppendLine($"    }}");
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    private string GenRayTracingShadersRust(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#![forbid(unsafe_code)]");
+        sb.AppendLine("//! B+ v4.0 Ray Tracing Shaders");
+        sb.AppendLine();
+        foreach (var rt in program.RayTracingShaders)
+        {
+            sb.AppendLine($"/// RayTracingShader: {rt.Name}");
+            sb.AppendLine($"pub struct {rt.Name} {{");
+            sb.AppendLine($"    pub max_recursion_depth: u32,");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine($"impl {rt.Name} {{");
+            sb.AppendLine($"    pub fn new() -> Self {{");
+            sb.AppendLine($"        Self {{");
+            sb.AppendLine($"            max_recursion_depth: {rt.MaxRecursionDepth},");
+            sb.AppendLine($"        }}");
+            sb.AppendLine($"    }}");
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    private string GenLocalGroupsRust(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#![forbid(unsafe_code)]");
+        sb.AppendLine("//! B+ v4.0 Local Groups");
+        sb.AppendLine();
+        foreach (var lg in program.LocalGroups)
+        {
+            sb.AppendLine($"/// LocalGroup: {lg.Name}");
+            sb.AppendLine($"pub struct {lg.Name} {{");
+            sb.AppendLine($"    pub width: u32,");
+            sb.AppendLine($"    pub height: u32,");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine($"impl {lg.Name} {{");
+            sb.AppendLine($"    pub fn new() -> Self {{");
+            sb.AppendLine($"        Self {{");
+            sb.AppendLine($"            width: {lg.Width},");
+            sb.AppendLine($"            height: {lg.Height},");
+            sb.AppendLine($"        }}");
+            sb.AppendLine($"    }}");
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    private string GenScientificKernelsRust(ProgramNode program)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#![forbid(unsafe_code)]");
+        sb.AppendLine("//! B+ v4.0 Scientific Kernels");
+        sb.AppendLine();
+        sb.AppendLine("use std::collections::HashMap;");
+        sb.AppendLine();
+        foreach (var sk in program.ScientificKernels)
+        {
+            sb.AppendLine($"/// ScientificKernel: {sk.Name}");
+            sb.AppendLine($"pub struct {sk.Name} {{");
+            sb.AppendLine($"    pub tensor_mode: String,");
+            sb.AppendLine($"    pub auto_diff: bool,");
+            if (sk.TPU != null)
+                sb.AppendLine($"    pub tpu_name: String,");
+            if (sk.FPGA != null)
+                sb.AppendLine($"    pub fpga_name: String,");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine($"impl {sk.Name} {{");
+            sb.AppendLine($"    pub fn new() -> Self {{");
+            sb.AppendLine($"        Self {{");
+            sb.AppendLine($"            tensor_mode: \"{sk.TensorMode}\".to_string(),");
+            sb.AppendLine($"            auto_diff: {sk.AutoDiff},");
+            if (sk.TPU != null)
+                sb.AppendLine($"            tpu_name: \"{sk.TPU.Name}\".to_string(),");
+            if (sk.FPGA != null)
+                sb.AppendLine($"            fpga_name: \"{sk.FPGA.Name}\".to_string(),");
+            sb.AppendLine($"        }}");
+            sb.AppendLine($"    }}");
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
     }
 
     private string GenLib(ProgramNode program)
