@@ -1013,6 +1013,130 @@ bpc input.bp --target spirv --auto-intrinsics
 bpc input.bp --target spirv --vendor=amd --arch=rDNA3
 ```
 
+### 12.8 Async Compute + Multi-Queue GPU Execution
+
+FSR3 frame generation uses async compute to overlap copy and compute operations.
+
+```bp
+@async_compute
+pipeline fsr3_pipeline {
+    # Copy queue: history buffer update (async)
+    pass update_history(
+        src: Image[2160, 3840],
+        dst: Image[2160, 3840]
+    )
+    queue: copy  # Run on copy queue
+
+    # Compute queue: EASU + RCAS (concurrent with copy)
+    pass upscale(
+        src: Image[1080, 1920],
+        dst: Image[2160, 3840]
+    )
+    queue: compute  # Run on compute queue
+
+    # Frame generation (async compute)
+    pass framegen(
+        prev: Image[2160, 3840],
+        curr: Image[2160, 3840],
+        motion: Image[2160, 3840],
+        output: Image[2160, 3840]
+    )
+    queue: compute
+}
+```
+
+#### Queue Synchronization
+
+```bp
+# Wait for copy queue to finish before reading history
+@wait_on(copy_queue)
+kernel read_history(
+    history: Image[2160, 3840]
+)
+
+# Barrier between passes
+@barrier(compute, compute)
+kernel after_copy(
+    input: Image
+)
+```
+
+| Queue | Operations | Priority |
+|:---|:---|:---|
+| `compute` | EASU, RCAS, TAA, FrameGen | High |
+| `copy` | History update, texture copy | Low |
+| `transfer` | GPU->GPU copy | Medium |
+
+### 12.9 Pipeline Composition (multi-file)
+
+Import and compose upscaling pipelines from multiple `.bp` files.
+
+```bp
+# pipeline/upscale.bp
+kernel easu_upscale(src: Image) -> Image
+
+# pipeline/sharpen.bp
+kernel rcas_sharpen(src: Image) -> Image
+
+# main.bp
+import "pipeline/upscale.bp"
+import "pipeline/sharpen.bp"
+
+kernel full_pipeline(
+    input: Image[1080, 1920]
+) -> Image[2160, 3840]
+    body:
+        input |> easu_upscale |> rcas_sharpen >> output
+```
+
+#### Pipeline Configuration
+
+```bp
+# pipeline.cfg.bp
+@config {
+    resolution: 2160x3840
+    sharpening: 0.2
+    temporal: true
+    history_frames: 4
+    async_compute: true
+}
+
+kernel compose(
+    input: Image[1080, 1920],
+    history: Image[2160, 3840]
+) -> Image[2160, 3840]
+    @bind history_buffer(ping_pong=2)
+    body:
+        input |> easu(history) |> rcas >> output
+```
+
+### 12.10 WMMA Tensor Core Support
+
+Batched matrix multiply for DLSS-style neural networks.
+
+```bp
+@wmma(layout=row_major)
+@tensor_core(m=16, n=8, k=16)
+kernel tensor_matmul(
+    A: f16mat[16, 16],
+    B: f16mat[16, 16]
+) -> f16mat[16, 16]
+    body:
+        # Cooperative matrix MMA on tensor cores
+        wmma.load(A, a_ptr, stride)
+        wmma.load(B, b_ptr, stride)
+        wmma.mma(D, A, B, D)
+        wmma.store(D, d_ptr, stride)
+        >> output
+```
+
+| Format | Tensor Core Support | Use Case |
+|:---|:---|:---|
+| `f16` | AMD RDNA3, NVIDIA Ampere+ | General ML inference |
+| `bf16` | NVIDIA Ampere+, AMD RDNA3 | High precision ML |
+| `int8` | NVIDIA Turing+ | Quantized networks |
+| `fp8` | NVIDIA Hopper | Low precision inference |
+
 ---
 
 ## 13. Project Structure
@@ -2191,6 +2315,130 @@ bpc input.bp --target spirv --auto-intrinsics
 # Force specific vendor
 bpc input.bp --target spirv --vendor=amd --arch=rDNA3
 ```
+
+### 12.8 Async Compute + Multi-Queue GPU Execution
+
+FSR3 frame generation использует async compute для overlap copy и compute операций.
+
+```bp
+@async_compute
+pipeline fsr3_pipeline {
+    # Copy queue: history buffer update (async)
+    pass update_history(
+        src: Image[2160, 3840],
+        dst: Image[2160, 3840]
+    )
+    queue: copy  # Run on copy queue
+
+    # Compute queue: EASU + RCAS (concurrent with copy)
+    pass upscale(
+        src: Image[1080, 1920],
+        dst: Image[2160, 3840]
+    )
+    queue: compute  # Run on compute queue
+
+    # Frame generation (async compute)
+    pass framegen(
+        prev: Image[2160, 3840],
+        curr: Image[2160, 3840],
+        motion: Image[2160, 3840],
+        output: Image[2160, 3840]
+    )
+    queue: compute
+}
+```
+
+#### Queue Synchronization
+
+```bp
+# Wait for copy queue to finish before reading history
+@wait_on(copy_queue)
+kernel read_history(
+    history: Image[2160, 3840]
+)
+
+# Barrier between passes
+@barrier(compute, compute)
+kernel after_copy(
+    input: Image
+)
+```
+
+| Queue | Operations | Priority |
+|:---|:---|:---|
+| `compute` | EASU, RCAS, TAA, FrameGen | High |
+| `copy` | History update, texture copy | Low |
+| `transfer` | GPU->GPU copy | Medium |
+
+### 12.9 Pipeline Composition (multi-file)
+
+Import и compose upscaling pipelines из нескольких `.bp` файлов.
+
+```bp
+# pipeline/upscale.bp
+kernel easu_upscale(src: Image) -> Image
+
+# pipeline/sharpen.bp
+kernel rcas_sharpen(src: Image) -> Image
+
+# main.bp
+import "pipeline/upscale.bp"
+import "pipeline/sharpen.bp"
+
+kernel full_pipeline(
+    input: Image[1080, 1920]
+) -> Image[2160, 3840]
+    body:
+        input |> easu_upscale |> rcas_sharpen >> output
+```
+
+#### Pipeline Configuration
+
+```bp
+# pipeline.cfg.bp
+@config {
+    resolution: 2160x3840
+    sharpening: 0.2
+    temporal: true
+    history_frames: 4
+    async_compute: true
+}
+
+kernel compose(
+    input: Image[1080, 1920],
+    history: Image[2160, 3840]
+) -> Image[2160, 3840]
+    @bind history_buffer(ping_pong=2)
+    body:
+        input |> easu(history) |> rcas >> output
+```
+
+### 12.10 WMMA Tensor Core Support
+
+Batched matrix multiply для DLSS-style neural networks.
+
+```bp
+@wmma(layout=row_major)
+@tensor_core(m=16, n=8, k=16)
+kernel tensor_matmul(
+    A: f16mat[16, 16],
+    B: f16mat[16, 16]
+) -> f16mat[16, 16]
+    body:
+        # Cooperative matrix MMA on tensor cores
+        wmma.load(A, a_ptr, stride)
+        wmma.load(B, b_ptr, stride)
+        wmma.mma(D, A, B, D)
+        wmma.store(D, d_ptr, stride)
+        >> output
+```
+
+| Формат | Tensor Core Support | Применение |
+|:---|:---|:---|
+| `f16` | AMD RDNA3, NVIDIA Ampere+ | General ML inference |
+| `bf16` | NVIDIA Ampere+, AMD RDNA3 | High precision ML |
+| `int8` | NVIDIA Turing+ | Quantized networks |
+| `fp8` | NVIDIA Hopper | Low precision inference |
 
 ---
 
