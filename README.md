@@ -633,9 +633,9 @@ bpc --neuro-schedule
 bpc --adaptive-loop
 ```
 
-> ⚠️ **Warning**: The AI optimizer is currently **very experimental** and produces suboptimal results. It is not recommended for production use. The neural prediction accuracy is low and the auto-tuning often selects non-optimal configurations. Use at your own risk.
+> ⚠️ **Warning**: The AI optimizer is **experimental** and often gives worse results than classical optimization. Neural prediction is inaccurate and auto-tuning frequently picks bad configs. Use at your own risk.
 
-> **Note**: The classical optimization algorithm (branch prediction, cache-aware layout, register allocation) performs significantly better than AI-based approaches for FSM compilation. AI features are experimental and may degrade performance compared to the well-tuned heuristics.
+> **Note**: Classical optimization (branch prediction, cache layout, register allocation) works better than AI for FSM compilation. AI features may make code slower.
 
 AI optimizer includes:
 - NeuralPredictor — neural performance prediction
@@ -648,7 +648,7 @@ AI optimizer includes:
 
 ## 9. Why B+ is Fast
 
-B+ is fast not by magic, but by compiler architecture. Here's how it's designed:
+B+ is fast because of compiler architecture. Here's how it works:
 
 ### Direct x64 Compilation
 
@@ -714,7 +714,7 @@ AVX2/AVX-512 instructions process 8-16 values per cycle. B+ automatically:
 | Branch misprediction | Reduced (jump tables) |
 | Tests | 218/218 (100%) |
 
-This isn't marketing — these are metrics confirmed by benchmarks in the repository.
+These are real metrics from benchmarks in the repository.
 
 ---
 
@@ -840,7 +840,7 @@ state Error {
 
 ## 12. FSR/FSR2/FSR3 Upscaling Pipeline
 
-B+ includes a complete upscaling pipeline for GPU-based image scaling, competitive with AMD FSR, NVIDIA DLSS, and Intel XeSS.
+B+ has an upscaling pipeline for GPU image scaling. Similar to FSR/DLSS/XeSS in functionality.
 
 ### 12.1 Temporal Accumulation
 
@@ -1862,9 +1862,9 @@ bpc --neuro-schedule
 bpc --adaptive-loop
 ```
 
-> ⚠️ **Внимание**: AI-оптимизатор сейчас **очень сырой** и даёт плохие результаты. Не рекомендуется для продакшена. Нейронное предсказание неточное, автонастройка часто выбирает неоптимальные конфигурации. Используйте на свой страх и риск.
+> ⚠️ **Внимание**: AI-оптимизатор **экспериментальный** и часто даёт худшие результаты чем классическая оптимизация. Нейронное предсказание неточное, автонастройка часто выбирает плохие конфиги. Используйте на свой страх и риск.
 
-> **Примечание**: Классический оптимизационный алгоритм (branch prediction, cache-aware layout, register allocation) работает значительно лучше чем AI-подходы для компиляции FSM. AI-функции экспериментальные и могут ухудшить производительность по сравнению с хорошо настроенными эвристиками.
+> **Примечание**: Классическая оптимизация (branch prediction, cache layout, register allocation) работает лучше AI для компиляции FSM. AI-функции могут замедлить код.
 
 AI-оптимизатор включает:
 - NeuralPredictor — нейронное предсказание производительности
@@ -1877,7 +1877,7 @@ AI-оптимизатор включает:
 
 ## 9. Почему B+ быстрый
 
-B+ работает быстро не магией, а архитектурой компилятора. Вот как это устроено:
+B+ работает быстро за счёт архитектуры компилятора. Вот как это устроено:
 
 ### Прямая компиляция в x64
 
@@ -1943,7 +1943,7 @@ AVX2/AVX-512 инструкции обрабатывают 8-16 значений
 | Branch misprediction | Снижено (jump tables) |
 | Тестов | 218/218 (100%) |
 
-Это не маркетинг — это метрики, подтверждённые бенчмарками в репозитории.
+Это реальные метрики из бенчмарков в репозитории.
 
 ---
 
@@ -2143,7 +2143,7 @@ B+ v1.0/
 
 ## 12. FSR/FSR2/FSR3 Upscaling Pipeline
 
-B+ включает полный upscaling pipeline для GPU-based image scaling, конкурентный с AMD FSR, NVIDIA DLSS, и Intel XeSS.
+B+ имеет upscaling pipeline для GPU image scaling. Похоже на FSR/DLSS/XeSS.
 
 ### 12.1 Temporal Accumulation
 
