@@ -929,6 +929,90 @@ bpc input.bp --target spirv --output pipeline.spv
 bpc input.bp --target spirv --validate --output pipeline.spv
 ```
 
+### 12.7 Platform-Specific Intrinsics
+
+B+ supports vendor-specific GPU intrinsics for maximum performance on AMD, NVIDIA, and console platforms.
+
+#### AMD RDNA2/RDNA3/RDNA4
+
+```bp
+@target(gpu=amd)
+@arch(rDNA3)
+kernel wave_reduce(data: f32vec4) -> f32
+    body:
+        // Wave-level operations
+        wave.shift_right(val, 1)     // shift right by 1 lane
+        wave.ballot(predicate)        // ballot across wave
+        wave.reduce_sum(value)        // sum reduction
+        wave.all_equal(value)         // all lanes equal?
+        ds.swizzle(val, mask)        // lane swizzle
+        ds.bpermute(idx, val)        // bit permute
+        >> output
+```
+
+| Intrinsic | Description | RDNA2 | RDNA3 | RDNA4 |
+|:---|:---|:---|:---|:---|
+| `wave.shift` | Wave shift | ✅ | ✅ | ✅ |
+| `wave.ballot` | Ballot mask | ✅ | ✅ | ✅ |
+| `wave.reduce_*` | Reduce ops | ✅ | ✅ | ✅ |
+| `ds.swizzle` | Swizzle lanes | ✅ | ✅ | ✅ |
+| `ds.bpermute` | Bit permute | ✅ | ✅ | ✅ |
+| `v_pk_fma_f16` | F16 FMA | ✅ | ✅ | ✅ |
+| `v_dot2_f16` | Dot product | ❌ | ✅ | ✅ |
+
+#### NVIDIA Ampere/Ada/Hopper
+
+```bp
+@target(gpu=nvidia)
+@arch(ampere)
+kernel warp_process(data: f32vec4) -> f32
+    body:
+        // Warp-level primitives
+        __shfl_sync(val, lane)       // shuffle
+        __shfl_up_sync(val, delta)   // shift up
+        __ballot_sync(pred)          // ballot
+        __reduce_add_sync(val)       // reduce
+        __scan_add_sync(val)         // prefix sum
+        >> output
+```
+
+| Intrinsic | Description | Ampere | Ada | Hopper |
+|:---|:---|:---|:---|:---|
+| `__shfl_sync` | Shuffle | ✅ | ✅ | ✅ |
+| `__ballot_sync` | Ballot | ✅ | ✅ | ✅ |
+| `__reduce_*_sync` | Reduce | ✅ | ✅ | ✅ |
+| `__scan_*_sync` | Prefix sum | ✅ | ✅ | ✅ |
+| `__match_any_sync` | Match any | ❌ | ✅ | ✅ |
+| `wmma::*` | Tensor core | ✅ | ✅ | ✅ |
+| `hfma/bfma` | Fused multiply | ✅ | ✅ | ✅ |
+
+#### Console (PS5, Xbox, Switch)
+
+```bp
+@target(console=ps5)
+kernel console_opt(data: f32vec4) -> f32
+    body:
+        ds_bpermute(sel, val)        // PS5 wave ops
+        lds.store(ptr, val)         // Local data store
+        >> output
+
+@target(console=xbox)
+kernel xbox_opt(data: f32vec4) -> f32
+    body:
+        RdNAW(ptr, offset)          // Xbox memory ops
+        >> output
+```
+
+#### Auto-Detection
+
+```bash
+# Auto-detect GPU and use optimal intrinsics
+bpc input.bp --target spirv --auto-intrinsics
+
+# Force specific vendor
+bpc input.bp --target spirv --vendor=amd --arch=rDNA3
+```
+
 ---
 
 ## 13. Project Structure
@@ -945,7 +1029,8 @@ B+ v1.0/
 │       ├── Shader/                  ← FSR/upscaling pipeline
 │       │   ├── Types/              ← FP16/BF16, vector/matrix types
 │       │   ├── Upscaling/           ← EASU, RCAS, TAA, framegen
-│       │   └── Emit/                ← SPIR-V binary emitter
+│       │   ├── Emit/                ← SPIR-V binary emitter
+│       │   └── Platform/            ← AMD/NVIDIA/GCN intrinsics
 │       ├── Generators/             ← code generators
 │       ├── Parser/                 ← parser
 │       ├── Ast/                    ← AST nodes
@@ -1919,7 +2004,8 @@ B+ v1.0/
 │       ├── Shader/                  ← FSR/upscaling pipeline
 │       │   ├── Types/              ← FP16/BF16, vector/matrix types
 │       │   ├── Upscaling/           ← EASU, RCAS, TAA, framegen
-│       │   └── Emit/                ← SPIR-V binary emitter
+│       │   ├── Emit/                ← SPIR-V binary emitter
+│       │   └── Platform/            ← AMD/NVIDIA/GCN intrinsics
 │       ├── Generators/             ← генераторы кода
 │       ├── Parser/                 ← парсер
 │       ├── Ast/                    ← AST узлы
@@ -2020,6 +2106,90 @@ bpc input.bp --target spirv --output pipeline.spv
 
 # С валидацией
 bpc input.bp --target spirv --validate --output pipeline.spv
+```
+
+### 12.7 Platform-Specific Intrinsics
+
+B+ поддерживает вендор-специфичные GPU интринсики для максимальной производительности на AMD, NVIDIA и консольных платформах.
+
+#### AMD RDNA2/RDNA3/RDNA4
+
+```bp
+@target(gpu=amd)
+@arch(rDNA3)
+kernel wave_reduce(data: f32vec4) -> f32
+    body:
+        // Wave-level operations
+        wave.shift_right(val, 1)     // сдвиг вправо на 1 lane
+        wave.ballot(predicate)        // ballot across wave
+        wave.reduce_sum(value)        // sum reduction
+        wave.all_equal(value)         // все lane равны?
+        ds.swizzle(val, mask)        // swizzle lanes
+        ds.bpermute(idx, val)        // bit permute
+        >> output
+```
+
+| Интринсик | Описание | RDNA2 | RDNA3 | RDNA4 |
+|:---|:---|:---|:---|:---|
+| `wave.shift` | Wave shift | ✅ | ✅ | ✅ |
+| `wave.ballot` | Ballot mask | ✅ | ✅ | ✅ |
+| `wave.reduce_*` | Reduce ops | ✅ | ✅ | ✅ |
+| `ds.swizzle` | Swizzle lanes | ✅ | ✅ | ✅ |
+| `ds.bpermute` | Bit permute | ✅ | ✅ | ✅ |
+| `v_pk_fma_f16` | F16 FMA | ✅ | ✅ | ✅ |
+| `v_dot2_f16` | Dot product | ❌ | ✅ | ✅ |
+
+#### NVIDIA Ampere/Ada/Hopper
+
+```bp
+@target(gpu=nvidia)
+@arch(ampere)
+kernel warp_process(data: f32vec4) -> f32
+    body:
+        // Warp-level primitives
+        __shfl_sync(val, lane)       // shuffle
+        __shfl_up_sync(val, delta)   // shift up
+        __ballot_sync(pred)          // ballot
+        __reduce_add_sync(val)       // reduce
+        __scan_add_sync(val)         // prefix sum
+        >> output
+```
+
+| Интринсик | Описание | Ampere | Ada | Hopper |
+|:---|:---|:---|:---|:---|
+| `__shfl_sync` | Shuffle | ✅ | ✅ | ✅ |
+| `__ballot_sync` | Ballot | ✅ | ✅ | ✅ |
+| `__reduce_*_sync` | Reduce | ✅ | ✅ | ✅ |
+| `__scan_*_sync` | Prefix sum | ✅ | ✅ | ✅ |
+| `__match_any_sync` | Match any | ❌ | ✅ | ✅ |
+| `wmma::*` | Tensor core | ✅ | ✅ | ✅ |
+| `hfma/bfma` | Fused multiply | ✅ | ✅ | ✅ |
+
+#### Консоли (PS5, Xbox, Switch)
+
+```bp
+@target(console=ps5)
+kernel console_opt(data: f32vec4) -> f32
+    body:
+        ds_bpermute(sel, val)        // PS5 wave ops
+        lds.store(ptr, val)         // Local data store
+        >> output
+
+@target(console=xbox)
+kernel xbox_opt(data: f32vec4) -> f32
+    body:
+        RdNAW(ptr, offset)          // Xbox memory ops
+        >> output
+```
+
+#### Auto-Detection
+
+```bash
+# Auto-detect GPU and use optimal intrinsics
+bpc input.bp --target spirv --auto-intrinsics
+
+# Force specific vendor
+bpc input.bp --target spirv --vendor=amd --arch=rDNA3
 ```
 
 ---
