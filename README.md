@@ -648,6 +648,8 @@ bpc --neuro-schedule
 bpc --adaptive-loop
 ```
 
+> ⚠️ **Warning**: The AI optimizer is currently **very experimental** and produces suboptimal results. It is not recommended for production use. The neural prediction accuracy is low and the auto-tuning often selects non-optimal configurations. Use at your own risk.
+
 AI optimizer includes:
 - NeuralPredictor — neural performance prediction
 - UnpackPredictor — AI prediction for register unpack
@@ -1602,6 +1604,8 @@ bpc --neuro-schedule
 # AI Closed-loop
 bpc --adaptive-loop
 ```
+
+> ⚠️ **Внимание**: AI-оптимизатор сейчас **очень сырой** и даёт плохие результаты. Не рекомендуется для продакшена. Нейронное предсказание неточное, автонастройка часто выбирает неоптимальные конфигурации. Используйте на свой страх и риск.
 
 AI-оптимизатор включает:
 - NeuralPredictor — нейронное предсказание производительности
