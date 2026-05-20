@@ -838,7 +838,100 @@ state Error {
 
 ---
 
-## 11. Project Structure
+## 12. FSR/FSR2/FSR3 Upscaling Pipeline
+
+B+ includes a complete upscaling pipeline for GPU-based image scaling, competitive with AMD FSR, NVIDIA DLSS, and Intel XeSS.
+
+### 12.1 Temporal Accumulation
+
+```bp
+# Temporal state machine for history buffer management
+@fsr2_pipeline
+kernel upscale(
+    input: Image[1080, 1920],
+    history: Image[2160, 3840],
+    motion: Image[2160, 3840]
+) -> Image[2160, 3840]
+    touches: reads[input, history, motion], writes[output]
+    body:
+        // Automatic ping-pong history management
+        // Disocclusion detection
+        // Luma-based ghosting prevention
+        input |> easu >> output
+```
+
+### 12.2 EASU + RCAS Passes
+
+```bp
+# EASU (Efficient Adaptive Sampling Unit)
+@fsr2_easu
+kernel easu(
+    src: Image[1080, 1920],
+    output: Image[2160, 3840]
+)
+
+# RCAS (Robust Contrast Adaptive Sharpening)
+@fsr2_rcas(sharpness=0.2)
+kernel rcas(
+    src: Image[2160, 3840],
+    output: Image[2160, 3840]
+)
+```
+
+### 12.3 FSR3 Frame Generation
+
+```bp
+# Motion vector based frame interpolation
+@fsr3_framegen
+kernel framegen(
+    prev: Image[2160, 3840],
+    curr: Image[2160, 3840],
+    motion: Image[2160, 3840]
+) -> Image[2160, 3840]
+    touches: reads[prev, curr, motion], writes[output]
+    body:
+        // Bidirectional blending
+        // Confidence-based dilution
+        // Async compute support
+```
+
+### 12.4 Sampling Primitives
+
+| Filter | Quality | Performance | Use Case |
+|:---|:---|:---|:---|
+| Bilinear | Low | Best | Low-power devices |
+| Bicubic | Medium | Good | General upscaling |
+| Lanczos-8 | High | Medium | Quality balance |
+| Catmull-Rom | Very High | Medium | Sharp edges |
+| RCAS | Highest | Good | Sharpening pass |
+
+### 12.5 Numeric Types
+
+```bp
+# FP16 (half) for tensor cores
+var color: f16vec4
+
+# BF16 (brain float) for ML inference
+var features: bf16vec8
+
+# Matrix multiplication for DLSS-style networks
+@wmma
+kernel matmul(A: f16mat[16, 16], B: f16mat[16, 16]) -> f16mat[16, 16]
+```
+
+### 12.6 SPIR-V Binary Emission
+
+```bp
+# Direct SPIR-V binary output (not transpilation)
+bpc input.bp --target spirv --output pipeline.spv
+
+# With validation
+bpc input.bp --target spirv --validate --output pipeline.spv
+```
+
+---
+
+## 13. Project Structure
 
 ```
 B+ v1.0/
@@ -849,6 +942,10 @@ B+ v1.0/
 │       ├── Algorithm/              ← MPI/cluster, distributed computing
 │       ├── Debugger/               ← graphics debugger integration
 │       ├── Optimizer/              ← BigFloat, optimizations
+│       ├── Shader/                  ← FSR/upscaling pipeline
+│       │   ├── Types/              ← FP16/BF16, vector/matrix types
+│       │   ├── Upscaling/           ← EASU, RCAS, TAA, framegen
+│       │   └── Emit/                ← SPIR-V binary emitter
 │       ├── Generators/             ← code generators
 │       ├── Parser/                 ← parser
 │       ├── Ast/                    ← AST nodes
@@ -1819,6 +1916,10 @@ B+ v1.0/
 │       ├── Algorithm/              ← MPI/кластер, распределённые вычисления
 │       ├── Debugger/               ← интеграция графического отладчика
 │       ├── Optimizer/              ← BigFloat, оптимизации
+│       ├── Shader/                  ← FSR/upscaling pipeline
+│       │   ├── Types/              ← FP16/BF16, vector/matrix types
+│       │   ├── Upscaling/           ← EASU, RCAS, TAA, framegen
+│       │   └── Emit/                ← SPIR-V binary emitter
 │       ├── Generators/             ← генераторы кода
 │       ├── Parser/                 ← парсер
 │       ├── Ast/                    ← AST узлы
@@ -1826,6 +1927,99 @@ B+ v1.0/
 │       └── Program.cs              ← точка входа CLI
 ├── examples/                       ← примеры B+ кода
 └── bench_*.bp                      ← бенчмарки
+```
+
+---
+
+## 12. FSR/FSR2/FSR3 Upscaling Pipeline
+
+B+ включает полный upscaling pipeline для GPU-based image scaling, конкурентный с AMD FSR, NVIDIA DLSS, и Intel XeSS.
+
+### 12.1 Temporal Accumulation
+
+```bp
+# Temporal state machine для управления history buffer
+@fsr2_pipeline
+kernel upscale(
+    input: Image[1080, 1920],
+    history: Image[2160, 3840],
+    motion: Image[2160, 3840]
+) -> Image[2160, 3840]
+    touches: reads[input, history, motion], writes[output]
+    body:
+        # Автоматическое ping-pong управление историей
+        # Детекция disocclusion
+        # Luma-based ghosting prevention
+        input |> easu >> output
+```
+
+### 12.2 EASU + RCAS Passes
+
+```bp
+# EASU (Efficient Adaptive Sampling Unit)
+@fsr2_easu
+kernel easu(
+    src: Image[1080, 1920],
+    output: Image[2160, 3840]
+)
+
+# RCAS (Robust Contrast Adaptive Sharpening)
+@fsr2_rcas(sharpness=0.2)
+kernel rcas(
+    src: Image[2160, 3840],
+    output: Image[2160, 3840]
+)
+```
+
+### 12.3 FSR3 Frame Generation
+
+```bp
+# Motion vector based frame interpolation
+@fsr3_framegen
+kernel framegen(
+    prev: Image[2160, 3840],
+    curr: Image[2160, 3840],
+    motion: Image[2160, 3840]
+) -> Image[2160, 3840]
+    touches: reads[prev, curr, motion], writes[output]
+    body:
+        # Bidirectional blending
+        # Confidence-based dilution
+        # Async compute support
+```
+
+### 12.4 Sampling Primitives
+
+| Фильтр | Качество | Производительность | Применение |
+|:---|:---|:---|:---|
+| Bilinear | Низкое | Лучшая | Low-power устройства |
+| Bicubic | Среднее | Хорошая | General upscaling |
+| Lanczos-8 | Высокое | Средняя | Quality balance |
+| Catmull-Rom | Очень высокое | Средняя | Sharp edges |
+| RCAS | Наивысшее | Хорошая | Sharpening pass |
+
+### 12.5 Numeric Types
+
+```bp
+# FP16 (half) для tensor cores
+var color: f16vec4
+
+# BF16 (brain float) для ML inference
+var features: bf16vec8
+
+# Matrix multiplication для DLSS-style networks
+@wmma
+kernel matmul(A: f16mat[16, 16], B: f16mat[16, 16]) -> f16mat[16, 16]
+```
+
+### 12.6 SPIR-V Binary Emission
+
+```bash
+# Прямой SPIR-V binary output (не транспиляция)
+bpc input.bp --target spirv --output pipeline.spv
+
+# С валидацией
+bpc input.bp --target spirv --validate --output pipeline.spv
 ```
 
 ---
