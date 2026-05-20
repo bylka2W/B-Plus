@@ -883,8 +883,9 @@ B+ v1.0/
 ├── LICENSE
 ├── src/
 │   └── BPlusTranspiler/           ← compiler
-│       ├── Algorithm/              ← 30+ optimization modules
-│       ├── Optimizer/              ← optimizations
+│       ├── Algorithm/              ← MPI/cluster, distributed computing
+│       ├── Debugger/               ← graphics debugger integration
+│       ├── Optimizer/              ← BigFloat, optimizations
 │       ├── Generators/             ← code generators
 │       ├── Parser/                 ← parser
 │       ├── Ast/                    ← AST nodes
@@ -1446,6 +1447,25 @@ kernel process(src: Image[1080, 1920]) -> Image[1080, 1920]
 enum Direction { Up, Down, Left, Right }
 ```
 
+**BigFloat**
+
+```bp
+var pi: bigfloat[1024] = 3.14159  // произвольная точность
+```
+
+**Graphics Debugger**
+
+```bp
+@debug_graphics
+kernel render(src: Image) -> Image
+```
+
+**MPI Cluster**
+
+```bp
+#mpi_config nodes=4, ppn=16
+```
+
 ---
 
 ## 6. Директивы и аннотации
@@ -1457,6 +1477,8 @@ enum Direction { Up, Down, Left, Right }
 | `#memory comptime` | Компиляция времени |
 | `#memory stack` | Stack allocation |
 | `#memory heap` | Heap allocation |
+| `#256` / `#512` / `#1024` | BigFloat точность (256/512/1024 бит) |
+| `#mpi_config nodes=N, ppn=N` | Конфигурация MPI кластера |
 
 ### 6.2 Аннотации (@)
 
@@ -1477,6 +1499,7 @@ enum Direction { Up, Down, Left, Right }
 | `@predict(_val="next_state", p="0.95")` | Предсказание состояния |
 | `@parameter(target="gpu")` | Целевая платформа |
 | `@llvm_intrinsic("...")` | LLVM intrinsic |
+| `@debug_graphics` | Встроить графический отладчик |
 
 ---
 
@@ -1831,9 +1854,56 @@ state Error {
 }
 ```
 
+### 10.7 High-Precision Arithmetic (BigFloat)
+
+```bp
+# BigFloat precision levels
+#256   // 256-bit precision (default)
+#512   // 512-bit precision (high)
+#1024  // 1024-bit precision (ultra)
+
+kernel compute_pi(iterations: int) -> float
+    touches: reads[scratch], writes[output]
+    body:
+        // Use BigFloat for arbitrary precision
+        var result: bigfloat[512] = 0
+        for i in 0..iterations:
+            result = result + bigfloat(1) / bigfloat(i * i)
+        >> output
+```
+
+### 10.8 Graphics Debugger Integration
+
+```bp
+@debug_graphics
+kernel render_frame(src: Image[1080, 1920]) -> Image[1080, 1920]
+    touches: reads[src], writes[output]
+    body:
+        // Capture frame buffer for debugging
+        debugger.capture_frame("main", pixels)
+        debugger.breakpoint(640, 360)  // pixel at center
+        debugger.watch("brightness", expr)
+        src |> tone_map >> output
+```
+
+### 10.9 MPI/Cluster Distributed Computing
+
+```bp
+#mpi_config nodes=4, ppn=16, ntasks=64
+
+kernel distributed_matmul(A: Matrix[1024, 1024], B: Matrix[1024, 1024]) -> Matrix[1024, 1024]
+    touches: reads[A, B], writes[C]
+    body:
+        // Distribute across cluster
+        mpi.broadcast("matrix_A", A.data)
+        mpi.barrier()
+        mpi.all_reduce("gradient", op=sum)
+        A @ B >> output
+```
+
 ---
 
-## 11. Corporate Network (@corporate_network)
+## 11. Project Structure
 
 The `@corporate_network` directive creates enterprise networks with Zero Trust Security and cryptography support.
 
@@ -2118,8 +2188,9 @@ B+ v1.0/
 ├── LICENSE
 ├── src/
 │   └── BPlusTranspiler/           ← компилятор
-│       ├── Algorithm/              ← 30+ оптимизационных модулей
-│       ├── Optimizer/              ← оптимизации
+│       ├── Algorithm/              ← MPI/кластер, распределённые вычисления
+│       ├── Debugger/               ← интеграция графического отладчика
+│       ├── Optimizer/              ← BigFloat, оптимизации
 │       ├── Generators/             ← генераторы кода
 │       ├── Parser/                 ← парсер
 │       ├── Ast/                    ← AST узлы
