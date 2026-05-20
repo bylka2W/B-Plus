@@ -185,21 +185,6 @@ entry main {
 #memory heap        // heap allocation
 ```
 
-### 1.12 Mojo-style Annotations
-
-```bp
-@stream
-@always_inline
-@no_inline
-@parameter(target="gpu")
-@llvm_intrinsic("llvm.nvvm.sqrt.f")
-@deadline(hard=true, _val="1000")
-@cache(_val="L1")
-@cache_pin
-@cache_align(_val="64")
-@predict(_val="next_state", p="0.95")
-```
-
 ---
 
 ## 2. Installation
@@ -650,6 +635,8 @@ bpc --adaptive-loop
 
 > ⚠️ **Warning**: The AI optimizer is currently **very experimental** and produces suboptimal results. It is not recommended for production use. The neural prediction accuracy is low and the auto-tuning often selects non-optimal configurations. Use at your own risk.
 
+> **Note**: The classical optimization algorithm (branch prediction, cache-aware layout, register allocation) performs significantly better than AI-based approaches for FSM compilation. AI features are experimental and may degrade performance compared to the well-tuned heuristics.
+
 AI optimizer includes:
 - NeuralPredictor — neural performance prediction
 - UnpackPredictor — AI prediction for register unpack
@@ -846,32 +833,6 @@ state Jumping {
 
 state Error {
     on retry -> Idle
-}
-```
-
-### 10.6 Corporate Network
-
-```bp
-@corporate_network MyCompany {
-    crypto: {
-        transport: tls_1_3
-        session: double_ratchet
-        payload: aes_256_gcm
-        post_quantum: hybrid_x25519_mlkem
-        key_rotation: 60s / 100mb
-    }
-
-    access: zero_trust {
-        identity: certificate + hardware_key + tpm
-        session: max(4h)
-        ml_detection: true
-        require_mfa: true
-    }
-
-    segments: [
-        { name: finance, vlan: 10 },
-        { name: hr, vlan: 20 }
-    ]
 }
 ```
 
@@ -1120,19 +1081,9 @@ entry main {
 #memory heap        // heap allocation
 ```
 
-### 1.12 Mojo-style annotations
+---
 
-```bp
-@stream
-@always_inline
-@no_inline
-@parameter(target="gpu")
-@llvm_intrinsic("llvm.nvvm.sqrt.f")
-@deadline(hard=true, _val="1000")
-@cache(_val="L1")
-@cache_pin
-@cache_align(_val="64")
-@predict(_val="next_state", p="0.95")
+## 2. Установка
 ```
 
 ---
@@ -1607,6 +1558,8 @@ bpc --adaptive-loop
 
 > ⚠️ **Внимание**: AI-оптимизатор сейчас **очень сырой** и даёт плохие результаты. Не рекомендуется для продакшена. Нейронное предсказание неточное, автонастройка часто выбирает неоптимальные конфигурации. Используйте на свой страх и риск.
 
+> **Примечание**: Классический оптимизационный алгоритм (branch prediction, cache-aware layout, register allocation) работает значительно лучше чем AI-подходы для компиляции FSM. AI-функции экспериментальные и могут ухудшить производительность по сравнению с хорошо настроенными эвристиками.
+
 AI-оптимизатор включает:
 - NeuralPredictor — нейронное предсказание производительности
 - UnpackPredictor — AI-предсказание для register unpack
@@ -1806,58 +1759,6 @@ state Error {
 }
 ```
 
-### 10.6 Корпоративная сеть
-
-```bp
-@corporate_network MyCompany {
-    crypto: {
-        transport: tls_1_3
-        session: double_ratchet
-        payload: aes_256_gcm
-        post_quantum: hybrid_x25519_mlkem
-        key_rotation: 60s / 100mb
-    }
-
-    access: zero_trust {
-        identity: certificate + hardware_key + tpm
-        session: max(4h)
-        ml_detection: true
-        require_mfa: true
-    }
-
-    segments: [
-        { name: finance, vlan: 10 },
-        { name: hr, vlan: 20 }
-    ]
-}
-```
-
-### 10.6 Corporate Network
-
-```bp
-@corporate_network MyCompany {
-    crypto: {
-        transport: tls_1_3
-        session: double_ratchet
-        payload: aes_256_gcm
-        post_quantum: hybrid_x25519_mlkem
-        key_rotation: 60s / 100mb
-    }
-
-    access: zero_trust {
-        identity: certificate + hardware_key + tpm
-        session: max(4h)
-        ml_detection: true
-        require_mfa: true
-    }
-
-    segments: [
-        { name: finance, vlan: 10 },
-        { name: hr, vlan: 20 }
-    ]
-}
-```
-
 ### 10.7 High-Precision Arithmetic (BigFloat)
 
 ```bp
@@ -1907,284 +1808,7 @@ kernel distributed_matmul(A: Matrix[1024, 1024], B: Matrix[1024, 1024]) -> Matri
 
 ---
 
-## 11. Project Structure
-
-The `@corporate_network` directive creates enterprise networks with Zero Trust Security and cryptography support.
-
-### 11.1 Structure
-
-```bp
-@corporate_network Name {
-    crypto: { ... }
-    access: zero_trust { ... }
-    segments: [ ... ]
-    state StateName { ... }
-}
-```
-
-### 11.2 Cryptography (crypto)
-
-| Parameter | Description |
-|:---|:---|
-| `transport` | Protocol: `tls_1_3`, `tls_1_2`, `dtls` |
-| `session` | Session: `double_ratchet`, `chacha20_poly1305` |
-| `payload` | Encryption: `aes_256_gcm`, `aes_128_gcm`, `chacha20` |
-| `post_quantum` | Post-quantum: `hybrid_x25519_mlkem`, `kyber768` |
-| `key_rotation` | Key rotation: `60s / 100mb` |
-
-### 11.3 Zero Trust (access: zero_trust)
-
-| Parameter | Description |
-|:---|:---|
-| `identity` | Auth methods: `certificate`, `hardware_key`, `tpm`, `biometric` |
-| `session` | Max session time: `max(4h)` |
-| `ml_detection` | ML anomaly detection |
-| `require_mfa` | Require MFA |
-
-### 11.4 Network Segments (segments)
-
-```bp
-segments: [
-    { name: finance, vlan: 10, access: [finance_servers] },
-    { name: hr, vlan: 20, access: [hr_servers] }
-]
-```
-
-### 11.5 Network States (state)
-
-```bp
-state Disconnected {
-    on connect -> Connecting
-}
-
-state Connecting {
-    on success -> Connected
-}
-
-state Connected {
-}
-```
-
-### 11.6 Network Parameters
-
-| Parameter | Default | Description |
-|:---|:---|:---|
-| `timeout:` | 30000ms | Connection timeout |
-| `heartbeat:` | 5000ms | Heartbeat interval |
-| `max_retries:` | 5 | Max retries |
-| `auto_reconnect` | false | Auto-reconnect |
-
-### 11.7 Generated Types (Go)
-
-```go
-type AuthMethod int
-const (
-    AuthNone AuthMethod = iota
-    AuthPassword
-    AuthCertificate
-    AuthHardwareKey
-    AuthTPM
-    AuthBiometric
-)
-
-type NetworkState int
-const (
-    NetworkDisconnected NetworkState = iota
-    NetworkConnecting
-    NetworkConnected
-    NetworkReconnecting
-    NetworkDegraded
-    NetworkFailed
-)
-
-type MyCompany struct {
-    CryptoTransport    string
-    CryptoSession     string
-    CryptoPayload     string
-    CryptoPostQuantum string
-    KeyRotationSecs   uint64
-    KeyRotationBytes  uint64
-    Protocol          NetworkProtocol
-    Host              string
-    Port              int
-    Conn              net.Conn
-    Deadline          time.Duration
-    Heartbeat         time.Duration
-    MaxRetries        int
-    AutoReconnect     bool
-
-    // Zero Trust
-    IdentityAuth       AuthMethod
-    MaxSessionHours    uint32
-    MLAnomalyDetection bool
-    TPMAttestation     bool
-    RequireMFA         bool
-}
-```
-
----
-
-## 12. Blockchain Network (@blockchain)
-
-The `@blockchain` directive creates distributed ledger networks with consensus algorithms, P2P protocols, and cryptocurrency wallet support.
-
-### 12.1 Structure
-
-```bp
-@blockchain Name {
-    consensus: pbft
-    wallet: ed25519
-    p2p: kademlia
-    sharding: state_sharding
-    state StateName { ... }
-}
-```
-
-### 12.2 Consensus Algorithms
-
-| Algorithm | Description | Use Case |
-|:---|:---|:---|
-| `pow` | Proof-of-Work | Bitcoin-style mining |
-| `pos` | Proof-of-Stake | Ethereum-style staking |
-| `dpos` | Delegated PoS | High TPS blockchains |
-| `pbft` | Practical Byzantine Fault Tolerance | Enterprise consortium |
-| `raft` | Raft consensus | Crash-fault tolerant |
-
-### 12.3 Wallet Algorithms
-
-| Algorithm | Description |
-|:---|:---|
-| `ecdsa` | ECDSA signatures |
-| `ed25519` | Ed25519 signatures |
-| `schnorr` | Schnorr signatures |
-
-### 12.4 P2P Protocols
-
-| Protocol | Description |
-|:---|:---|
-| `kademlia` | Kademlia DHT for peer discovery |
-| `gossip` | Gossip protocol for propagation |
-| `chord` | Chord DHT for peer lookup |
-
-### 12.5 Sharding Types
-
-| Type | Description |
-|:---|:---|
-| `none` | No sharding |
-| `shard_chain` | Horizontal sharding by chain |
-| `state_sharding` | State partition across shards |
-
-### 12.6 Network Parameters
-
-| Parameter | Default | Description |
-|:---|:---|:---|
-| `max_peers:` | 100 | Max P2P connections |
-| `min_validators:` | 4 | Min validators for PBFT |
-| `block_time:` | 1000ms | Block production interval |
-| `difficulty:` | 4 | PoW difficulty target |
-| `min_stake:` | 1000 | Min stake for PoS validator |
-| `shard_count:` | 16 | Number of shards |
-
-### 12.7 Generated Types (Go)
-
-```go
-type ConsensusType int
-const (
-    ConsensusPoW ConsensusType = iota
-    ConsensusPoS
-    ConsensusDPoS
-    ConsensusPBFT
-    ConsensusRaft
-)
-
-type WalletAlgorithm int
-const (
-    WalletECDSA WalletAlgorithm = iota
-    WalletEd25519
-    WalletSchnorr
-)
-
-type P2PProtocol int
-const (
-    P2PKademlia P2PProtocol = iota
-    P2PGossip
-    P2PChord
-)
-
-type LedgerEntry struct {
-    From      string
-    To        string
-    Amount    int64
-    Hash      string
-    Timestamp int64
-    Nonce     int
-    Signature []byte
-}
-
-type Block struct {
-    Height       int
-    PrevHash     string
-    MerkleRoot   string
-    Transactions []LedgerEntry
-    Timestamp    int64
-    Validator    string
-    Nonce        int
-    Hash         string
-}
-
-type Node struct {
-    Name          string
-    Address       string
-    Port          int
-    PublicKey     string
-    IsValidator   bool
-    Stake         int64
-    Peers         map[string]*Node
-    Ledger        []LedgerEntry
-    PendingTxs    []LedgerEntry
-    Blocks        []Block
-    Consensus     ConsensusType
-    WalletAlgo    WalletAlgorithm
-    P2PMode       P2PProtocol
-    Sharding      ShardingType
-    MaxPeers      int
-    MinValidators int
-    BlockTimeMs   int
-    Difficulty    int
-    MinStake      int64
-    ShardCount    int
-}
-```
-
-### 12.8 Example: Simple Token
-
-```bp
-@blockchain MyToken {
-    consensus: pbft
-    wallet: ed25519
-    p2p: kademlia
-    sharding: state_sharding
-    max_peers: 100
-    min_validators: 4
-    block_time: 1000
-
-    genesis: [
-        { from: alice, to: bob, amount: 1000 }
-    ]
-
-    state Syncing {
-        on sync_done -> Synced
-    }
-
-    state Synced {
-        on new_block -> Synced
-    }
-}
-```
-
----
-
-## 13. Структура проекта
+## 11. Структура проекта
 
 ```
 B+ v1.0/
