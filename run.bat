@@ -25,3 +25,5 @@ if %ERRORLEVEL% neq 0 (
     exit /b %ERRORLEVEL%
 )
 echo Done.
+
+call compile
