@@ -272,6 +272,7 @@ public class CppKernelGenerator : ICodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("#include \"kernels.h\"");
         sb.AppendLine("#include <cstdio>");
+        sb.AppendLine("#include <iostream>");
         sb.AppendLine("#include <cmath>");
         sb.AppendLine("#include <thread>");
         sb.AppendLine("#include <atomic>");
@@ -456,23 +457,27 @@ public class CppKernelGenerator : ICodeGenerator
         foreach (var line in e.BodyLines)
         {
             var trimmed = line.TrimStart();
-            var indent = line.Length - trimmed.Length;
-            var last = stack.Count > 0 ? stack[^1] : ("", 0);
+            var ind = stack.Count > 0 ? "    " + new string(' ', stack.Count * 4) : "    ";
+            if (trimmed.StartsWith("$$"))
+            {
+                sb.AppendLine($"{ind}{trimmed[2..]}");
+                continue;
+            }
             if (trimmed == "end")
             {
                 if (stack.Count > 0) stack.RemoveAt(stack.Count - 1);
-                sb.AppendLine("    }");
+                sb.AppendLine($"{ind[..^4]}}}");
                 continue;
             }
-            if (trimmed.StartsWith("while ") || trimmed.StartsWith("if "))
+            if (trimmed.StartsWith("while ") || trimmed.StartsWith("if ") || trimmed.StartsWith("for "))
             {
-                stack.Add(("    ", stack.Count + 1));
+                stack.Add((ind, stack.Count + 1));
                 var cpp = TranslateBPlusToCpp(trimmed);
-                sb.AppendLine($"    {cpp} {{");
+                sb.AppendLine($"{ind}{cpp} {{");
                 continue;
             }
             var trans = TranslateBPlusToCpp(trimmed);
-            sb.AppendLine($"    {trans};");
+            sb.AppendLine($"{ind}{trans};");
         }
         while (stack.Count > 0) { sb.AppendLine("    }"); stack.RemoveAt(stack.Count - 1); }
 
@@ -537,6 +542,8 @@ public class CppKernelGenerator : ICodeGenerator
             return "while (" + line[6..] + ")";
         if (line.StartsWith("if "))
             return "if (" + line[3..] + ")";
+        if (line.StartsWith("for "))
+            return "for (" + line[4..] + ")";
         return line;
     }
 }
