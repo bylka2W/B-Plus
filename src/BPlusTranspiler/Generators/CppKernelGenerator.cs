@@ -506,8 +506,8 @@ public class CppKernelGenerator : ICodeGenerator
         {
             var inner = line[6..^1];
             if (inner.StartsWith("\"") && inner.EndsWith("\""))
-                return $"printf({inner})";
-            return $"printf(\"%s\\n\", {inner}.c_str())";
+                return $"printf({inner.Substring(0, inner.Length - 1)}\\n\")";
+            return $"printf(\"%d\\n\", {inner})";
         }
         if (line.Contains("ExitCode::Ok"))
             return "return 0";
