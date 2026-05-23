@@ -2,15 +2,20 @@
 title B+ - Compile and Run
 
 if "%1"=="" (
-    echo Usage: run ^<file.bp^>
-    echo Example: run hello.bp
+    echo Usage: run ^<file^>
+    echo Example: run hello
+    echo       or: run hello.bp
     exit /b 1
 )
 
 set "FILE=%1"
 if not exist "%FILE%" (
-    echo File not found: %FILE%
-    exit /b 1
+    if exist "%FILE%.bp" (
+        set "FILE=%FILE%.bp"
+    ) else (
+        echo File not found: %FILE% ^(or %FILE%.bp^)
+        exit /b 1
+    )
 )
 
 echo Compiling %FILE%...

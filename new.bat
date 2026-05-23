@@ -7,12 +7,9 @@ if "%1"=="" (
     set "FILE=%1"
 )
 
-echo kernel main { > "%FILE%"
-echo     entry() { >> "%FILE%"
-echo         print("Hello from B+!"); >> "%FILE%"
-echo         return 0; >> "%FILE%"
-echo     } >> "%FILE%"
-echo } >> "%FILE%"
+echo entry main() > "%FILE%"
+echo     print("Hello from B+!") >> "%FILE%"
+echo     return 0 >> "%FILE%"
 
 echo Created %FILE%
-echo Run: bplus %FILE%
+echo Run: run %FILE%
