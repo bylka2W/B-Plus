@@ -33,8 +33,9 @@ echo === B+ v4.0.0 ready ===
 echo.
 echo Commands:
 echo   new          - create hello.bp
-echo   run hello    - compile hello.bp
+echo   run          - transpile + compile + run hello.bp
+echo   run myfile   - transpile + compile + run myfile.bp
 echo.
-echo Open .bp file in any VS - syntax highlighting works.
+echo Open .bp file in VS - syntax highlighting works.
 echo.
 exit

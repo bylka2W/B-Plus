@@ -12,4 +12,4 @@ echo     print("Hello from B+!") >> "%FILE%"
 echo     return 0 >> "%FILE%"
 
 echo Created %FILE%
-echo Run: run %FILE%
+echo Now: run %FILE%

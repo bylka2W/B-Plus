@@ -1,14 +1,8 @@
 @echo off
-title B+ - Compile and Run
+title B+ - Transpile + Compile + Run
 
-if "%1"=="" (
-    echo Usage: run ^<file^>
-    echo Example: run hello
-    echo       or: run hello.bp
-    exit /b 1
-)
-
-set "FILE=%1"
+set "FILE=hello.bp"
+if not "%1"=="" set "FILE=%1"
 if not exist "%FILE%" (
     if exist "%FILE%.bp" (
         set "FILE=%FILE%.bp"
