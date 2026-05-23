@@ -13,6 +13,12 @@ if exist "%VSIXINSTALL%" (
     "%VSIXINSTALL%" /quiet "%VSIX%" >nul 2>&1
 )
 
-start devenv
+if not exist "hello.bp" (
+    echo state Hello { > hello.bp
+    echo     on start -^> World >> hello.bp
+    echo     enter { print("b+ v4.0.0") } >> hello.bp
+    echo } >> hello.bp
+)
 
+start devenv hello.bp
 exit
