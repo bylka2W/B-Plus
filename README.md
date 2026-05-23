@@ -197,7 +197,30 @@ cd "B+ v1.0"
 bplus.bat
 ```
 
-VS откроется сразу с установленным расширением для B+.
+VS opens with B+ syntax highlighting installed.
+
+---
+
+### Quick Start / Workflow
+
+Run from `C:\B+ v1.0`:
+
+| Command | What it does |
+|:---|:---|
+| `.\new`         | Create `hello.bp` template |
+| `.\new myfile`  | Create `myfile.bp` template |
+| `.\run`         | Transpile `hello.bp` → C++, compile with MSVC, run |
+| `.\run myfile`  | Same for `myfile.bp` |
+
+Full cycle:
+
+```powershell
+cd "C:\B+ v1.0"
+.\new                    # create hello.bp
+.\run                    # transpile + compile + run → "Hello from B+!"
+```
+
+Edit `.bp` files in any editor. Visual Studio has syntax highlighting.
 
 ---
 
@@ -1397,12 +1420,30 @@ cd "B+ v1.0"
 bplus.bat
 ```
 
-VS откроется сразу с расширением для B+.
+VS откроется сразу с расширением для B+ (подсветка синтаксиса).
 
-```bash
-dotnet run --project src/BPlusTranspiler -- --version
-# B+ Transpiler v3.3.0JU BETA
+---
+
+### Быстрый старт / Рабочий процесс
+
+После установки доступны команды (запускать из папки `C:\B+ v1.0`):
+
+| Команда | Что делает |
+|:---|:---|
+| `.\new`         | Создать `hello.bp` с шаблоном |
+| `.\new myfile`  | Создать `myfile.bp` с шаблоном |
+| `.\run`         | Транслировать `hello.bp` → C++, скомпилировать MSVC, запустить |
+| `.\run myfile`  | То же для `myfile.bp` |
+
+Пример полного цикла:
+
+```powershell
+cd "C:\B+ v1.0"
+.\new                    # создали hello.bp
+.\run                    # transpile + compile + run → "Hello from B+!"
 ```
+
+Редактировать `.bp` файлы можно в любом редакторе. В Visual Studio — подсветка синтаксиса.
 
 ---
 
