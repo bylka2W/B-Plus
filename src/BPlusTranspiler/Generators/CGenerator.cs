@@ -45,21 +45,33 @@ public class CGenerator : ICodeGenerator
         sb.AppendLine();
 
         sb.AppendLine("typedef struct State State;");
-        sb.AppendLine("struct State {");
 
-        bool anyEnter = allStates.Any(s => s.Actions.Any(a => a.Type == ActionType.Enter));
-        bool anyExit = allStates.Any(s => s.Actions.Any(a => a.Type == ActionType.Exit));
-        if (anyEnter) sb.AppendLine("    void (*enter)(void);");
-        if (anyExit) sb.AppendLine("    void (*exit)(void);");
+        bool hasMembers = false;
+        var stateMembers = new List<string>();
+        if (allStates.Any(s => s.Actions.Any(a => a.Type == ActionType.Enter)))
+        { stateMembers.Add("    void (*enter)(void);"); hasMembers = true; }
+        if (allStates.Any(s => s.Actions.Any(a => a.Type == ActionType.Exit)))
+        { stateMembers.Add("    void (*exit)(void);"); hasMembers = true; }
 
         foreach (var s in allStates)
         {
             foreach (var t in s.Transitions)
-                sb.AppendLine($"    State* (*{Lower(s.Name)}_on_{t.EventName})(void);");
+            { stateMembers.Add($"    State* (*{Lower(s.Name)}_on_{t.EventName})(void);"); hasMembers = true; }
             foreach (var timer in s.Timers)
-                sb.AppendLine($"    State* (*{Lower(s.Name)}_after_{timer.Duration})(void);");
+            { stateMembers.Add($"    State* (*{Lower(s.Name)}_after_{timer.Duration})(void);"); hasMembers = true; }
         }
-        sb.AppendLine("};");
+
+        if (hasMembers)
+        {
+            sb.AppendLine("struct State {");
+            foreach (var m in stateMembers)
+                sb.AppendLine(m);
+            sb.AppendLine("};");
+        }
+        else
+        {
+            sb.AppendLine("struct State { int __dummy; };");
+        }
         sb.AppendLine();
 
         foreach (var s in allStates)

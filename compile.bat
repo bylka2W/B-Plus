@@ -15,7 +15,7 @@ if not exist "%GEN_DIR%\kernels.cpp" (
 echo Compiling generated C++...
 
 cl /nologo /O2 /EHsc /std:c++17 /Fe:bplus_output.exe ^
-    %GEN_DIR%\kernels.cpp %GEN_DIR%\states.cpp %GEN_DIR%\states.c 2>&1
+    %GEN_DIR%\kernels.cpp %GEN_DIR%\states.cpp 2>&1
 
 if %ERRORLEVEL% neq 0 (
     echo Compilation failed

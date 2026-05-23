@@ -271,6 +271,7 @@ public class CppKernelGenerator : ICodeGenerator
     {
         var sb = new StringBuilder();
         sb.AppendLine("#include \"kernels.h\"");
+        sb.AppendLine("#include <cstdio>");
         sb.AppendLine("#include <vector>");
         sb.AppendLine("#include <chrono>");
         sb.AppendLine();
@@ -500,6 +501,13 @@ public class CppKernelGenerator : ICodeGenerator
         {
             // run pipeline(args) >> output  ->  pipeline(args);
             return line[4..].Replace(">>", "/*>>*/");
+        }
+        if (line.StartsWith("print("))
+        {
+            var inner = line[6..^1];
+            if (inner.StartsWith("\"") && inner.EndsWith("\""))
+                return $"printf({inner})";
+            return $"printf(\"%s\\n\", {inner}.c_str())";
         }
         if (line.Contains("ExitCode::Ok"))
             return "return 0";

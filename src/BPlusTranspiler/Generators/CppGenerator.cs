@@ -27,12 +27,13 @@ public class CppGenerator : ICodeGenerator
     {
         var sb = new StringBuilder();
         sb.AppendLine("#pragma once");
+        sb.AppendLine("#ifdef __cplusplus");
         sb.AppendLine("#include <cstdint>");
         sb.AppendLine("#include <optional>");
-        sb.AppendLine("#include <atomic>");
-        sb.AppendLine("#include <mutex>");
-        sb.AppendLine("#include <thread>");
-        sb.AppendLine("#include \"State.h\"");
+        sb.AppendLine("#else");
+        sb.AppendLine("#include <stdint.h>");
+        sb.AppendLine("#include <stdbool.h>");
+        sb.AppendLine("#endif");
         sb.AppendLine();
 
         // Enums
