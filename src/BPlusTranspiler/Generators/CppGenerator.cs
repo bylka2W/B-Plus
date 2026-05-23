@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text;
 using BPlusTranspiler.Ast;
 
@@ -77,9 +78,10 @@ public class CppGenerator : ICodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("#include \"states.h\"");
         sb.AppendLine("#include <new>");
-        sb.AppendLine("#if __has_include(<expected>)");
-        sb.AppendLine("#include <expected>");
-        sb.AppendLine("#endif");
+        if (HasFallibleTransitions(program))
+        {
+            sb.AppendLine("#include <expected>");
+        }
 
         if (program.Context is { Variables.Count: > 0 })
         {
@@ -303,6 +305,16 @@ public class CppGenerator : ICodeGenerator
 
         foreach (var ns in state.NestedStates)
             EmitStateImpl(sb, ns, depth + 1);
+    }
+
+    private static bool HasFallibleTransitions(ProgramNode program)
+    {
+        bool Check(StateDefNode s) =>
+            s.Transitions.Any(t => t.IsFallible) ||
+            s.ErrorTransitions.Count > 0 ||
+            s.NestedStates.Any(Check);
+        return program.States.Any(Check) ||
+               program.ParallelBlocks.Any(pb => pb.States.Any(Check));
     }
 
     private static string DefaultLiteral(string type) => type.ToLower() switch
