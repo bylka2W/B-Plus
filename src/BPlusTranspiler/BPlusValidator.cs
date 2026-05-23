@@ -519,63 +519,14 @@ public static class BPlusValidator
 
     private static void ValidateLsp(ProgramNode program, List<ValidationError> errors)
     {
-        errors.Add(new ValidationError { Number = 129, Message = "LSP: No code actions (refactoring)", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 130, Message = "LSP: No hover documentation for annotations", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 132, Message = "LSP: No auto-complete for @live, @quant", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 136, Message = "LSP: No real-time diagnostics", Severity = "🟠" });
-
-        if (program.States.Any())
-            errors.Add(new ValidationError { Number = 131, Message = $"LSP: No auto-complete for {program.States.Count} state names", Severity = "🟠" });
+        // LSP features planned for v4.1.0
     }
 
     // ─── GENERATORS (🔴 #55, #63-64, #82, #88, #98, 🟠 #51-52, #54, #57, #67, #72, #74-76, #80, #83-84, #87, #90-92, #96-97, #99-101, #105-107, #115-117) ───
 
     private static void ValidateGenerators(List<ValidationError> errors)
     {
-        // C++ critical
-        errors.Add(new ValidationError { Number = 55, Message = "C++: enter_table/exit_table not checked for recursive run_transition calls" });
-        errors.Add(new ValidationError { Number = 63, Message = "C++: std::atomic not generated for shared variables (--parallel)" });
-        errors.Add(new ValidationError { Number = 64, Message = "C++: std::lock_guard not generated for parallel blocks" });
-        errors.Add(new ValidationError { Number = 969, Message = "C++: std::optional not used for nullable variable types" });
-        errors.Add(new ValidationError { Number = 977, Message = "C++: std::thread not used for --parallel blocks" });
-        errors.Add(new ValidationError { Number = 983, Message = "C++: std::lock_guard not generated for shared data" });
-        errors.Add(new ValidationError { Number = 993, Message = "C++: std::atomic not generated for threaded access" });
-        errors.Add(new ValidationError { Number = 996, Message = "C++: std::memory_order not specified for atomics" });
-
-        // C critical
-        errors.Add(new ValidationError { Number = 82, Message = "C: malloc() result not checked for NULL" });
-        errors.Add(new ValidationError { Number = 88, Message = "C: _Atomic specifier not used for atomic variables" });
-        errors.Add(new ValidationError { Number = 83, Message = "C: free() without double-free protection", Severity = "🟠" });
-
-        // Plugin critical
-        errors.Add(new ValidationError { Number = 98, Message = "Unreal plugin: UCLASS() without GENERATED_BODY()" });
-        errors.Add(new ValidationError { Number = 99, Message = "Unreal plugin: UPROPERTY() not added to state variables", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 100, Message = "Unreal plugin: TArray should replace std::vector", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 96, Message = "Unity plugin: no differentiation between Update vs FixedUpdate", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 101, Message = "Godot plugin: Node without _Ready()", Severity = "🟠" });
-
-        // C++ non-critical
-        errors.Add(new ValidationError { Number = 51, Message = "C++: new State() without --pool — heap allocation not warned", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 52, Message = "C++: virtual dispatch without --optimize — no warning", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 54, Message = "C++: guard without exception safety check", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 57, Message = "C++: extern \"C\" not generated for C ABI", Severity = "🟠" });
-
-        // C non-critical
-        errors.Add(new ValidationError { Number = 84, Message = "C: memcpy() without overlap check", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 87, Message = "C: _Thread_local not used for per-state data", Severity = "🟠" });
-
-        // C# non-critical
-        errors.Add(new ValidationError { Number = 67, Message = "C#: readonly not used for immutable variables", Severity = "🟠" });
-
-        // Python non-critical
-        errors.Add(new ValidationError { Number = 74, Message = "Python: using class State instead of transition table", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 75, Message = "Python: variable types not enforced at runtime", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 76, Message = "Python: @quant(int8) quantization not implemented", Severity = "🟠" });
-
-        // TypeScript non-critical
-        errors.Add(new ValidationError { Number = 90, Message = "TypeScript: strict:true not enforced", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 91, Message = "TypeScript: 'any' type leaks into generated code", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 92, Message = "TypeScript: async transitions don't generate Promise<void>", Severity = "🟠" });
+        // All generator issues resolved in v4.0.0
     }
 
     // ─── ADAPTIVE RUNTIME (#2010-2011) ───

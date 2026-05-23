@@ -29,6 +29,9 @@ public class CppGenerator : ICodeGenerator
         sb.AppendLine("#pragma once");
         sb.AppendLine("#include <cstdint>");
         sb.AppendLine("#include <optional>");
+        sb.AppendLine("#include <atomic>");
+        sb.AppendLine("#include <mutex>");
+        sb.AppendLine("#include <thread>");
         sb.AppendLine("#include \"State.h\"");
         sb.AppendLine();
 

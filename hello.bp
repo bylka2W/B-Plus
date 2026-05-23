@@ -1,0 +1,3 @@
+entry main() 
+    print("Hello from B+!") 
+    return 0 
