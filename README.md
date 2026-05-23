@@ -194,14 +194,25 @@ entry main {
 ```powershell
 git clone https://github.com/CapGames221/B-Plus.git "B+ v1.0"
 cd "B+ v1.0"
+install.bat
+```
+
+Or manually:
+
+```powershell
 dotnet build src/BPlusTranspiler
 ```
+
+### Visual Studio Extension
+
+`install.bat` builds the VSIX and opens it. Click **Install**.
+
+Or open manually: `src/vs-extension/BPlusLanguage/bin/Release/BPlusLanguage.vsix`
 
 ### Verification
 
 ```bash
-dotnet run --project src/BPlusTranspiler -- --version
-# B+ Transpiler v3.3.0JU BETA
+run.bat --version
 ```
 
 ---
@@ -1143,6 +1154,9 @@ kernel tensor_matmul(
 
 ```
 B+ v1.0/
+├── install.bat                       ← установка в один клик
+├── build.bat                         ← сборка
+├── run.bat                           ← запуск (run.bat input.bp)
 ├── README.md
 ├── LICENSE
 ├── src/
@@ -1160,6 +1174,8 @@ B+ v1.0/
 │       ├── Ast/                    ← AST nodes
 │       ├── Runtime/                ← runtime
 │       └── Program.cs              ← CLI entry point
+│   └── vs-extension/                  ← Visual Studio extension
+│       └── BPlusLanguage/            ← VSIX проект
 ├── examples/                       ← B+ code examples
 └── bench_*.bp                      ← benchmarks
 ```
@@ -1390,21 +1406,32 @@ entry main {
 ---
 
 ## 2. Установка
-```
-
----
-
-## 2. Установка
 
 ### Windows (.NET 8 SDK)
 
 ```powershell
 git clone https://github.com/CapGames221/B-Plus.git "B+ v1.0"
 cd "B+ v1.0"
+install.bat
+```
+
+Или вручную:
+
+```powershell
 dotnet build src/BPlusTranspiler
 ```
 
+### Visual Studio Extension
+
+`install.bat` собирает VSIX и открывает его. Нажми **Install**.
+
+Или открой вручную: `src/vs-extension/BPlusLanguage/bin/Release/BPlusLanguage.vsix`
+
 ### Проверка
+
+```bash
+run.bat --version
+```
 
 ```bash
 dotnet run --project src/BPlusTranspiler -- --version
