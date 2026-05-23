@@ -10,7 +10,7 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Curr
 & $msbuild $proj /p:Configuration=$Configuration /t:Build /v:minimal /noconlog
 if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
 
-# Create VSIX
+# Create VSIX as OPC package using ZipArchive
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -18,7 +18,7 @@ Remove-Item -Path $vsix -Force -ErrorAction SilentlyContinue
 
 $zip = [System.IO.Compression.ZipFile]::Open($vsix, [System.IO.Compression.ZipArchiveMode]::Create)
 
-# [Content_Types].xml
+# [Content_Types].xml (must be first entry)
 $entry = $zip.CreateEntry("[Content_Types].xml")
 $w = New-Object System.IO.StreamWriter($entry.Open())
 $w.Write('<?xml version="1.0" encoding="utf-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="vsixmanifest" ContentType="text/xml" /><Default Extension="dll" ContentType="application/octet-stream" /></Types>')

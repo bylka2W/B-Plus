@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="BPlusLanguage.97f3b2a1-5c6d-4e8f-9a0b-1c2d3e4f5a6b" Version="4.0.0" Publisher="CapGames221" />
+    <Identity Id="BPlusLanguage.97f3b2a1-5c6d-4e8f-9a0b-1c2d3e4f5a6b" Version="4.0.0" Publisher="CapGames221" Language="en-US" />
     <DisplayName>B+ Language</DisplayName>
     <Description>B+ state machine language support for Visual Studio</Description>
     <Tags>b+;bplus;fsm</Tags>
@@ -11,8 +11,9 @@
   </Installation>
   <Dependencies>
     <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" Version="[4.7.2,)" />
+    <Dependency Id="Microsoft.VisualStudio.MPF.17.0" DisplayName="Visual Studio MPF 17.0" Version="[17.0,)" />
   </Dependencies>
   <Assets>
-    <Asset Type="Microsoft.VisualStudio.MefComponent" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%|" />
+    <Asset Type="Microsoft.VisualStudio.MefComponent" Path="BPlusLanguage.dll" />
   </Assets>
 </PackageManifest>
