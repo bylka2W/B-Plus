@@ -16,14 +16,16 @@ dotnet build src/vs-extension/BPlusLanguage -c Release >nul 2>&1
 
 echo Installing to all Visual Studio versions...
 
-for /f "delims=" %%i in ('dir "%LOCALAPPDATA%\Microsoft\VisualStudio\*.*_" /b /o:-n 2^>nul') do (
+for /f "delims=" %%i in ('dir "%LOCALAPPDATA%\Microsoft\VisualStudio" /b /ad 2^>nul') do (
     set "EXT_DIR=%LOCALAPPDATA%\Microsoft\VisualStudio\%%i\Extensions\CapGames221\BPlusLanguage\4.0.0"
     if not exist "!EXT_DIR!" mkdir "!EXT_DIR!"
-    copy /y src\vs-extension\BPlusLanguage\bin\Release\BPlusLanguage.dll "!EXT_DIR!\BPlusLanguage.dll" >nul
-    copy /y src\vs-extension\BPlusLanguage\source.extension.vsixmanifest "!EXT_DIR!\extension.vsixmanifest" >nul
-    del /f /q "%LOCALAPPDATA%\Microsoft\VisualStudio\%%i\Extensions\ExtensionMetadata*" >nul 2>&1
-    del /f /q "%LOCALAPPDATA%\Microsoft\VisualStudio\%%i\Extensions\extensions.configurationchanged" >nul 2>&1
-    echo   Installed to: %%i
+    if exist src\vs-extension\BPlusLanguage\bin\Release\BPlusLanguage.dll (
+        copy /y src\vs-extension\BPlusLanguage\bin\Release\BPlusLanguage.dll "!EXT_DIR!\BPlusLanguage.dll" >nul
+        copy /y src\vs-extension\BPlusLanguage\source.extension.vsixmanifest "!EXT_DIR!\extension.vsixmanifest" >nul
+        del /f /q "%LOCALAPPDATA%\Microsoft\VisualStudio\%%i\Extensions\ExtensionMetadata*" >nul 2>&1
+        del /f /q "%LOCALAPPDATA%\Microsoft\VisualStudio\%%i\Extensions\extensions.configurationchanged" >nul 2>&1
+        echo   Installed to: %%i
+    )
 )
 
 echo.
