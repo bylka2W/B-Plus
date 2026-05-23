@@ -272,6 +272,9 @@ public class CppKernelGenerator : ICodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("#include \"kernels.h\"");
         sb.AppendLine("#include <cstdio>");
+        sb.AppendLine("#include <cmath>");
+        sb.AppendLine("#include <thread>");
+        sb.AppendLine("#include <atomic>");
         sb.AppendLine("#include <vector>");
         sb.AppendLine("#include <chrono>");
         sb.AppendLine();
@@ -449,12 +452,29 @@ public class CppKernelGenerator : ICodeGenerator
         sb.AppendLine($"int main(int argc, char** argv) {{");
         sb.AppendLine($"    (void)argc; (void)argv;");
 
+        var stack = new List<(string indent, int depth)>();
         foreach (var line in e.BodyLines)
         {
-            // Translate B+ syntax to C++
-            var cpp = TranslateBPlusToCpp(line);
-            sb.AppendLine($"    {cpp};");
+            var trimmed = line.TrimStart();
+            var indent = line.Length - trimmed.Length;
+            var last = stack.Count > 0 ? stack[^1] : ("", 0);
+            if (trimmed == "end")
+            {
+                if (stack.Count > 0) stack.RemoveAt(stack.Count - 1);
+                sb.AppendLine("    }");
+                continue;
+            }
+            if (trimmed.StartsWith("while ") || trimmed.StartsWith("if "))
+            {
+                stack.Add(("    ", stack.Count + 1));
+                var cpp = TranslateBPlusToCpp(trimmed);
+                sb.AppendLine($"    {cpp} {{");
+                continue;
+            }
+            var trans = TranslateBPlusToCpp(trimmed);
+            sb.AppendLine($"    {trans};");
         }
+        while (stack.Count > 0) { sb.AppendLine("    }"); stack.RemoveAt(stack.Count - 1); }
 
         sb.AppendLine("}");
         sb.AppendLine();
@@ -507,12 +527,16 @@ public class CppKernelGenerator : ICodeGenerator
             var inner = line[6..^1];
             if (inner.StartsWith("\"") && inner.EndsWith("\""))
                 return $"printf({inner.Substring(0, inner.Length - 1)}\\n\")";
-            return $"printf(\"%d\\n\", {inner})";
+            return $"printf(\"%g\\n\", (double){inner})";
         }
         if (line.Contains("ExitCode::Ok"))
             return "return 0";
         if (line.Contains("ExitCode::Err"))
             return "return 1";
+        if (line.StartsWith("while "))
+            return "while (" + line[6..] + ")";
+        if (line.StartsWith("if "))
+            return "if (" + line[3..] + ")";
         return line;
     }
 }
