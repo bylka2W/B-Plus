@@ -77,8 +77,9 @@ public class CppGenerator : ICodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("#include \"states.h\"");
         sb.AppendLine("#include <new>");
-        sb.AppendLine("#include <expected>"); // std::expected for error unions
-        sb.AppendLine();
+        sb.AppendLine("#if __has_include(<expected>)");
+        sb.AppendLine("#include <expected>");
+        sb.AppendLine("#endif");
 
         if (program.Context is { Variables.Count: > 0 })
         {
