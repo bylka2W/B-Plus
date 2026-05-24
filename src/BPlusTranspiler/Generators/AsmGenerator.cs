@@ -15,7 +15,7 @@ public class AsmGenerator
         bool peephole, bool jumpShrink, bool abi, bool cfi)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("; B+ v3.0.4L BETA Metal — x86-64 assembly");
+        sb.AppendLine("; B+ v4.0.0 BETA Metal — x86-64 assembly");
         sb.AppendLine("section .text");
         sb.AppendLine();
 

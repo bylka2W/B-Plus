@@ -79,7 +79,7 @@ public static class LinkerScriptGenerator
     public static string Generate(ProgramNode program, List<TierResult> tiers, List<DataSection> dataSections, ProfileData? profile = null)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("/* B+ v3.0.4L BETA Metal — Linker Script */");
+        sb.AppendLine("/* B+ v4.0.0 BETA Metal — Linker Script */");
         sb.AppendLine();
         sb.AppendLine("ENTRY(_start)");
         sb.AppendLine();

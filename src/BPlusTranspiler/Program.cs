@@ -581,7 +581,7 @@ if (args.Contains("--train"))
     }
     bpcPath ??= Environment.ProcessPath ?? "bpc.exe";
 
-    Console.WriteLine("B+ AI Trainer v3.0.4L BETA");
+    Console.WriteLine("B+ AI Trainer v4.0.0 BETA");
     Console.WriteLine();
 
     List<(double[] features, double targetMs)> data;
@@ -751,7 +751,7 @@ if (args.Contains("--auto-tune"))
             if (ti > 10000) { Console.Error.WriteLine("Error: --auto-tune iterations capped at 10000"); ti = 10000; }
             tuneIter = ti;
         }
-    Console.WriteLine("B+ Auto-Tuner v3.0.4L BETA");
+    Console.WriteLine("B+ Auto-Tuner v4.0.0 BETA");
     Console.WriteLine("  Measuring REAL execution time (csc.exe compile + run)...");
     using var tuner = new AutoTuner(input);
     var tuneResult = tuner.Tune(iterations: tuneIter);
@@ -791,7 +791,7 @@ if (args.Contains("--pgo"))
         return 1;
     }
 
-    Console.WriteLine("B+ PGO Pipeline v3.0.4L BETA");
+    Console.WriteLine("B+ PGO Pipeline v4.0.0 BETA");
     Console.WriteLine($"  Input: {input}");
     Console.WriteLine($"  Mode: {(pgoProfile != null ? "use existing profile" : "collect + recompile")}");
     var pipeline = new PgoPipeline(input, collect: pgoProfile == null, pgoUsePath: pgoProfile);
@@ -821,7 +821,7 @@ if (args.Contains("--bolt"))
         return 1;
     }
 
-    Console.WriteLine("B+ BOLT Post-Link Optimizer v3.0.4L BETA");
+    Console.WriteLine("B+ BOLT Post-Link Optimizer v4.0.0 BETA");
     var bolt = new BoltOptimizer();
     var result = bolt.Optimize(binaryPath);
     Console.WriteLine(BoltOptimizer.GenerateReport(result));
@@ -830,7 +830,7 @@ if (args.Contains("--bolt"))
 
 if (args.Contains("--buffer-counters"))
 {
-    Console.WriteLine("B+ Buffer PMC Counters v3.0.4L BETA");
+    Console.WriteLine("B+ Buffer PMC Counters v4.0.0 BETA");
     var analysis = BPlusTranspiler.Runtime.PerfCounterReader.AnalyzeBuffers(input ?? "");
     Console.WriteLine(BPlusTranspiler.Runtime.PerfCounterReader.GenerateBufferReport(analysis));
     return 0;
@@ -862,7 +862,7 @@ if (args.Contains("--l3-heap"))
             numaNode = nn;
     }
 
-    Console.WriteLine("B+ L3-Heap Allocator v3.0.4L BETA");
+    Console.WriteLine("B+ L3-Heap Allocator v4.0.0 BETA");
     Console.WriteLine($"  Heap size: {heapSize / (1024*1024)} MB");
     Console.WriteLine($"  NUMA node: {(numaNode >= 0 ? numaNode.ToString() : "auto")}");
 
@@ -1032,7 +1032,7 @@ if (args.Contains("--math") || args.Contains("--math-intrinsics"))
 
 if (args.Contains("--train-unpack"))
 {
-    Console.WriteLine("B+ AI UnpackPredictor Trainer v3.0.4L BETA");
+    Console.WriteLine("B+ AI UnpackPredictor Trainer v4.0.0 BETA");
 
     Console.WriteLine();
     Console.WriteLine("Generating training data and training model...");
@@ -1620,7 +1620,7 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
 
 static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool hiddenBuffers, string? tierStr)
 {
-    Console.WriteLine("B+ v3.0.4L BETA Metal — NUMA + µarch + ILP + StoreFwd + AutoTune");
+    Console.WriteLine("B+ v4.0.0 BETA Metal — NUMA + µarch + ILP + StoreFwd + AutoTune");
     Console.WriteLine();
 
     var srcRaw = File.ReadAllText(bpFile);
@@ -1864,7 +1864,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
 
 static int RunAI(string bpFile)
 {
-    Console.WriteLine("B+ AI Optimizer v3.0.4L BETA");
+    Console.WriteLine("B+ AI Optimizer v4.0.0 BETA");
     Console.WriteLine();
 
     string modelDir = "ai_models";
@@ -1922,7 +1922,7 @@ static int RunAI(string bpFile)
 
     using (var writer = new StreamWriter(outputBp))
     {
-        writer.WriteLine("// B+ v3.0.4L BETA Metal — AI-optimized");
+        writer.WriteLine("// B+ v4.0.0 BETA Metal — AI-optimized");
         writer.WriteLine($"// Predicted time: {predictedMs:F3} ms (R²={model.ValR2:F4})");
         writer.WriteLine();
         writer.WriteLine("@metal {");

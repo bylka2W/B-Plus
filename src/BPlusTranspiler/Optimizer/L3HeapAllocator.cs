@@ -33,7 +33,7 @@ public class L3HeapAllocator
         var useHugePages = _config.UseHugePages ? "MAP_HUGETLB | " : "";
         var guardPage = _config.UseGuardPage ? " + BPLUS_L3_GUARD_PAGE" : "";
 
-        writer.WriteLine("// B+ L3-Heap Runtime — auto-generated v3.0.4L BETA");
+        writer.WriteLine("// B+ L3-Heap Runtime — auto-generated v4.0.0 BETA");
         writer.WriteLine("// Objects stored in L3 cache instead of RAM: ~40 cycles vs ~100+ cycles");
         writer.WriteLine("// Uses: mmap + MAP_HUGETLB + mbind (NUMA) + madvise (THP)");
         writer.WriteLine("#ifndef BPLUS_L3_HEAP_H");

@@ -178,7 +178,7 @@ namespace BPlusTranspiler.Optimizer
         {
             var lines = new List<string>();
             lines.Add("╔══════════════════════════════════════════════╗");
-            lines.Add("║  HIDDEN BUFFER OPTIMIZATION REPORT  v3.0.4L BETA ║");
+            lines.Add("║  HIDDEN BUFFER OPTIMIZATION REPORT  v4.0.0 BETA ║");
             lines.Add("╚══════════════════════════════════════════════╝");
             lines.Add("");
 

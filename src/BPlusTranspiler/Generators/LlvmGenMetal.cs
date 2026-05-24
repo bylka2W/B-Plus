@@ -39,7 +39,7 @@ public class LlvmGenMetal
 
     private void EmitHeader()
     {
-        _ir.AppendLine("; B+ v3.0.4L BETA Metal — LLVM IR with intrinsics");
+        _ir.AppendLine("; B+ v4.0.0 BETA Metal — LLVM IR with intrinsics");
         _ir.AppendLine("; Haskell-style pointer tagging + PGO devirtualization");
         _ir.AppendLine("target triple = \"x86_64-unknown-unknown\"");
         _ir.AppendLine("target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"");

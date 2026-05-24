@@ -250,7 +250,7 @@ public class PgoPipeline
 
     private string GenerateMakefile(string? irPath, string? profdata, bool forInstr)
     {
-        return $@"# PGO pipeline makefile — B+ v3.0.4L BETA
+        return $@"# PGO pipeline makefile — B+ v4.0.0 BETA
 PGO_DIR := {_outputDir}
 .PHONY: all instrument use
 all: binary

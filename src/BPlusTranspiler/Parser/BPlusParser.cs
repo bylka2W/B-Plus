@@ -16,6 +16,10 @@ public partial class BPlusParser
 
     public ProgramNode Parse(string source)
     {
+        // Strip UTF-8 BOM (\uFEFF) — added by Notepad and other editors
+        if (source.Length > 0 && source[0] == '\uFEFF')
+            source = source[1..];
+
         _src = StripComments(source);
         _pos = 0;
         _line = 1;
