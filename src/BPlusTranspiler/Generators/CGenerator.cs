@@ -48,17 +48,20 @@ public class CGenerator : ICodeGenerator
 
         bool hasMembers = false;
         var stateMembers = new List<string>();
-        if (allStates.Any(s => s.Actions.Any(a => a.Type == ActionType.Enter)))
-        { stateMembers.Add("    void (*enter)(void);"); hasMembers = true; }
-        if (allStates.Any(s => s.Actions.Any(a => a.Type == ActionType.Exit)))
-        { stateMembers.Add("    void (*exit)(void);"); hasMembers = true; }
 
+        // Group transitions by (state, event) to avoid duplicate struct fields
         foreach (var s in allStates)
         {
-            foreach (var t in s.Transitions)
-            { stateMembers.Add($"    State* (*{Lower(s.Name)}_on_{t.EventName})(void);"); hasMembers = true; }
+            foreach (var group in s.Transitions.GroupBy(t => t.EventName))
+            {
+                stateMembers.Add($"    State* (*{Lower(s.Name)}_on_{group.Key})(void);");
+                hasMembers = true;
+            }
             foreach (var timer in s.Timers)
-            { stateMembers.Add($"    State* (*{Lower(s.Name)}_after_{timer.Duration})(void);"); hasMembers = true; }
+            {
+                stateMembers.Add($"    State* (*{Lower(s.Name)}_after_{timer.Duration})(void);");
+                hasMembers = true;
+            }
         }
 
         if (hasMembers)
@@ -89,8 +92,8 @@ public class CGenerator : ICodeGenerator
         {
             foreach (var a in s.Actions)
                 sb.AppendLine($"void {Lower(s.Name)}_{a.Type.ToString().ToLower()}(void);");
-            foreach (var t in s.Transitions)
-                sb.AppendLine($"State* {Lower(s.Name)}_on_{t.EventName}(void);");
+            foreach (var group in s.Transitions.GroupBy(t => t.EventName))
+                sb.AppendLine($"State* {Lower(s.Name)}_on_{group.Key}(void);");
             foreach (var timer in s.Timers)
                 sb.AppendLine($"State* {Lower(s.Name)}_after_{timer.Duration}(void);");
         }
@@ -125,24 +128,27 @@ public class CGenerator : ICodeGenerator
             foreach (var a in s.Actions)
                 sb.AppendLine($"void {Lower(s.Name)}_{a.Type.ToString().ToLower()}(void) {{ {a.Body.TrimEnd(';')}; }}");
 
-            foreach (var t in s.Transitions)
+            foreach (var group in s.Transitions.GroupBy(t => t.EventName))
             {
-                var fn = $"{Lower(s.Name)}_on_{t.EventName}";
-                if (t.Guard != null)
+                var fn = $"{Lower(s.Name)}_on_{group.Key}";
+                var needsFallback = group.All(t => t.Guard != null);
+                sb.AppendLine($"State* {fn}(void) {{");
+                foreach (var t in group)
                 {
-                    sb.AppendLine($"State* {fn}(void) {{");
-                    if (t.Body != null) sb.AppendLine($"    {t.Body.TrimEnd(';')};");
-                    sb.AppendLine($"    if ({t.Guard}) return &{Lower(t.Target)}_state;");
+                    foreach (var line in SplitBodyCGen(t.Body))
+                        sb.AppendLine($"    {line.TrimEnd(';')};");
+                    if (t.Guard != null)
+                    {
+                        sb.AppendLine($"    if ({t.Guard}) return &{Lower(t.Target)}_state;");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"    return &{Lower(t.Target)}_state;");
+                    }
+                }
+                if (needsFallback)
                     sb.AppendLine($"    return NULL;");
-                    sb.AppendLine("}");
-                }
-                else
-                {
-                    sb.AppendLine($"State* {fn}(void) {{");
-                    if (t.Body != null) sb.AppendLine($"    {t.Body.TrimEnd(';')};");
-                    sb.AppendLine($"    return &{Lower(t.Target)}_state;");
-                    sb.AppendLine("}");
-                }
+                sb.AppendLine("}");
             }
 
             foreach (var timer in s.Timers)
@@ -172,8 +178,8 @@ public class CGenerator : ICodeGenerator
             foreach (var a in s.Actions)
                 sb.AppendLine($"    .{a.Type.ToString().ToLower()} = {Lower(s.Name)}_{a.Type.ToString().ToLower()},");
 
-            foreach (var t in s.Transitions)
-                sb.AppendLine($"    .{Lower(s.Name)}_on_{t.EventName} = {Lower(s.Name)}_on_{t.EventName},");
+            foreach (var group in s.Transitions.GroupBy(t => t.EventName))
+                sb.AppendLine($"    .{Lower(s.Name)}_on_{group.Key} = {Lower(s.Name)}_on_{group.Key},");
 
             foreach (var timer in s.Timers)
                 sb.AppendLine($"    .{Lower(s.Name)}_after_{timer.Duration} = {Lower(s.Name)}_after_{timer.Duration},");
@@ -223,6 +229,9 @@ public class CGenerator : ICodeGenerator
 
     private static string Lower(string s) =>
         s.Length > 0 ? char.ToLower(s[0]) + s[1..] : s;
+
+    private static string[] SplitBodyCGen(string? body) =>
+        body?.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? Array.Empty<string>();
 
     private static string TranslateBPlusToC(string line)
     {

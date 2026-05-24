@@ -21,6 +21,20 @@ public class CSharpGenerator : ICodeGenerator
         sb.AppendLine("        public virtual void Exit() {}");
         sb.AppendLine("        public virtual State Always() => null;");
         sb.AppendLine("        public static void print(object s) => Console.WriteLine(s);");
+
+        // Collect all unique event names across all states
+        var allEvents = new HashSet<string>();
+        void CollectEvents(StateDefNode s)
+        {
+            foreach (var t in s.Transitions)
+                if (!t.IsAlways) allEvents.Add(t.EventName);
+            foreach (var ns in s.NestedStates) CollectEvents(ns);
+        }
+        foreach (var st in program.States) CollectEvents(st);
+        foreach (var par in program.ParallelBlocks)
+            foreach (var st in par.States) CollectEvents(st);
+        foreach (var ev in allEvents.OrderBy(e => e))
+            sb.AppendLine($"        public virtual State On{ToPascal(ev)}() => null;");
         sb.AppendLine("    }");
         sb.AppendLine();
 
@@ -128,36 +142,57 @@ public class CSharpGenerator : ICodeGenerator
             sb.AppendLine($"{ind}    }}");
         }
 
-        foreach (var t in state.Transitions)
-        {
-            var ev = ToPascal(t.EventName);
-            var pars = string.Join(", ", t.Parameters.Select(p => $"{p.Type} {p.Name}"));
+        // Group transitions by event name to avoid duplicate methods
+        var alwaysTrans = state.Transitions.Where(t => t.IsAlways).ToList();
+        var eventGroups = state.Transitions.Where(t => !t.IsAlways).GroupBy(t => t.EventName).ToList();
 
-            if (t.IsAlways)
+        if (alwaysTrans.Count > 0)
+        {
+            sb.AppendLine($"{ind}    public override State Always()");
+            sb.AppendLine($"{ind}    {{");
+            foreach (var t in alwaysTrans)
             {
-                sb.AppendLine($"{ind}    public override State Always()");
-                sb.AppendLine($"{ind}    {{");
-                sb.AppendLine($"{ind}        return new {t.Target}();");
-                sb.AppendLine($"{ind}    }}");
+                if (t.Guard != null)
+                    sb.AppendLine($"{ind}        if ({t.Guard}) return new {t.Target}();");
+                else
+                    sb.AppendLine($"{ind}        return new {t.Target}();");
             }
-            else
+            sb.AppendLine($"{ind}        return null;");
+            sb.AppendLine($"{ind}    }}");
+        }
+
+        foreach (var group in eventGroups)
+        {
+            var ev = ToPascal(group.Key);
+            var first = group.First();
+            var pars = string.Join(", ", first.Parameters.Select(p => $"{p.Type} {p.Name}"));
+            var needsFallback = group.All(t => t.Guard != null);
+            sb.AppendLine($"{ind}    public override State On{ev}({pars})");
+            sb.AppendLine($"{ind}    {{");
+            foreach (var t in group)
             {
-                sb.AppendLine($"{ind}    public override State On{ev}({pars})");
-                sb.AppendLine($"{ind}    {{");
                 foreach (var line in SplitBody(t.Body))
                     sb.AppendLine($"{ind}        {line.TrimEnd(';')};");
                 if (t.Guard != null)
                 {
-                    sb.AppendLine($"{ind}        if ({t.Guard})");
-                    sb.AppendLine($"{ind}            return new {t.Target}();");
-                    sb.AppendLine($"{ind}        return null;");
+                    if (t.Body != null)
+                    {
+                        sb.AppendLine($"{ind}        if ({t.Guard})");
+                        sb.AppendLine($"{ind}            return new {t.Target}();");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"{ind}        if ({t.Guard}) return new {t.Target}();");
+                    }
                 }
                 else
                 {
                     sb.AppendLine($"{ind}        return new {t.Target}();");
                 }
-                sb.AppendLine($"{ind}    }}");
             }
+            if (needsFallback)
+                sb.AppendLine($"{ind}        return null;");
+            sb.AppendLine($"{ind}    }}");
         }
 
         foreach (var timer in state.Timers)

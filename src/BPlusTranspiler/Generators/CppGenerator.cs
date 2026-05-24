@@ -178,19 +178,22 @@ public class CppGenerator : ICodeGenerator
         foreach (var a in state.Actions)
             sb.AppendLine($"{ind}    void {a.Type.ToString().ToLower()}() override;");
 
-        foreach (var t in state.Transitions)
+        // Group transitions by event name to avoid duplicate declarations
+        foreach (var group in state.Transitions.Where(t => !t.IsAlways).GroupBy(t => t.EventName))
         {
-            var pars = string.Join(", ", t.Parameters.Select(p => $"{p.Type} {p.Name}"));
-            if (t.IsAlways)
-                sb.AppendLine($"{ind}    State* always() override;");
-            else if (t.IsFallible)
+            var first = group.First();
+            var pars = string.Join(", ", first.Parameters.Select(p => $"{p.Type} {p.Name}"));
+            if (first.IsFallible)
             {
-                var errType = t.ErrorType ?? "std::string";
-                sb.AppendLine($"{ind}    std::expected<State*, {errType}> on_{t.EventName}({pars}) override;");
+                var errType = first.ErrorType ?? "std::string";
+                sb.AppendLine($"{ind}    std::expected<State*, {errType}> on_{group.Key}({pars}) override;");
             }
             else
-                sb.AppendLine($"{ind}    State* on_{t.EventName}({pars}) override;");
+                sb.AppendLine($"{ind}    State* on_{group.Key}({pars}) override;");
         }
+        // Always transitions
+        foreach (var t in state.Transitions.Where(t => t.IsAlways))
+            sb.AppendLine($"{ind}    State* always() override;");
 
         // Error transitions
         foreach (var et in state.ErrorTransitions)
@@ -220,54 +223,51 @@ public class CppGenerator : ICodeGenerator
             sb.AppendLine($"{ind}void {state.Name}::{n}() {{ {a.Body.TrimEnd(';')}; }}");
         }
 
-        foreach (var t in state.Transitions)
-        {
-            if (t.IsAlways)
-            {
-                sb.AppendLine($"{ind}State* {state.Name}::always() {{ return new {t.Target}(); }}");
-            }
-            else
-            {
-                var pars = string.Join(", ", t.Parameters.Select(p => $"{p.Type} {p.Name}"));
+        // Always transitions
+        foreach (var t in state.Transitions.Where(t => t.IsAlways))
+            sb.AppendLine($"{ind}State* {state.Name}::always() {{ return new {t.Target}(); }}");
 
-                if (t.IsFallible)
+        // Group non-always transitions by event name
+        foreach (var group in state.Transitions.Where(t => !t.IsAlways).GroupBy(t => t.EventName))
+        {
+            var first = group.First();
+            var pars = string.Join(", ", first.Parameters.Select(p => $"{p.Type} {p.Name}"));
+            var isFallible = first.IsFallible;
+            var errType = first.ErrorType ?? "std::string";
+            var needsFallback = group.All(t => t.Guard != null);
+
+            if (isFallible)
+                sb.AppendLine($"{ind}std::expected<State*, {errType}> {state.Name}::on_{group.Key}({pars}) {{");
+            else
+                sb.AppendLine($"{ind}State* {state.Name}::on_{group.Key}({pars}) {{");
+            foreach (var t in group.Where(t => t.Body != null && t.Body.Contains("cleanup")))
+                EmitErrDefer(sb, t, ind);
+            foreach (var t in group)
+            {
+                foreach (var line in SplitBodyCpp(t.Body))
+                    sb.AppendLine($"{ind}    {line.TrimEnd(';')};");
+                if (t.Guard != null)
                 {
-                    var errType = t.ErrorType ?? "std::string";
-                    sb.AppendLine($"{ind}std::expected<State*, {errType}> {state.Name}::on_{t.EventName}({pars}) {{");
-                    EmitErrDefer(sb, t, ind);
                     if (t.Body != null)
-                        sb.AppendLine($"{ind}    {t.Body.TrimEnd(';')};");
-                    if (t.Guard != null)
                     {
                         sb.AppendLine($"{ind}    if ({t.Guard})");
                         sb.AppendLine($"{ind}        return new {t.Target}();");
-                        sb.AppendLine($"{ind}    return std::unexpected<{errType}>({errType}{{}});");
                     }
                     else
                     {
-                        sb.AppendLine($"{ind}    return new {t.Target}();");
+                        sb.AppendLine($"{ind}    if ({t.Guard}) return new {t.Target}();");
                     }
-                    sb.AppendLine($"{ind}}}");
                 }
                 else
                 {
-                    sb.AppendLine($"{ind}State* {state.Name}::on_{t.EventName}({pars}) {{");
-                    EmitErrDefer(sb, t, ind);
-                    if (t.Body != null)
-                        sb.AppendLine($"{ind}    {t.Body.TrimEnd(';')};");
-                    if (t.Guard != null)
-                    {
-                        sb.AppendLine($"{ind}    if ({t.Guard})");
-                        sb.AppendLine($"{ind}        return new {t.Target}();");
-                        sb.AppendLine($"{ind}    return nullptr;");
-                    }
-                    else
-                    {
-                        sb.AppendLine($"{ind}    return new {t.Target}();");
-                    }
-                    sb.AppendLine($"{ind}}}");
+                    sb.AppendLine($"{ind}    return new {t.Target}();");
                 }
             }
+            if (isFallible && needsFallback)
+                sb.AppendLine($"{ind}    return std::unexpected<{errType}>({errType}{{}});");
+            else if (!isFallible && needsFallback)
+                sb.AppendLine($"{ind}    return nullptr;");
+            sb.AppendLine($"{ind}}}");
         }
 
         // Error transitions
@@ -306,6 +306,9 @@ public class CppGenerator : ICodeGenerator
         foreach (var ns in state.NestedStates)
             EmitStateImpl(sb, ns, depth + 1);
     }
+
+    private static string[] SplitBodyCpp(string? body) =>
+        body?.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? Array.Empty<string>();
 
     private static bool HasFallibleTransitions(ProgramNode program)
     {
