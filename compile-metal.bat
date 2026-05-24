@@ -67,6 +67,17 @@ if %ERRORLEVEL% neq 0 (
 )
 echo Object: %GEN_DIR%\kernels_metal.obj
 
+:: --- Compile legacy_stdio.ll (no-CRT puts/printf via kernel32) ---
+if not exist "legacy_stdio.ll" (
+    echo Error: legacy_stdio.ll not found — required for entry main() output.
+    exit /b 1
+)
+echo Compiling legacy_stdio.ll...
+llc -filetype=obj "legacy_stdio.ll" -o "%GEN_DIR%\legacy_stdio.obj"
+if %ERRORLEVEL% neq 0 (
+    echo Warning: legacy_stdio.ll compilation failed — entry print() may not work.
+)
+
 :: --- Link .obj → .exe (lld-link, fallback to MSVC link.exe) ---
 set "LINKER="
 where lld-link >nul 2>&1 && set "LINKER=lld-link"
@@ -93,9 +104,9 @@ if "%LINKER%"=="" (
 
 echo Linking with %LINKER%...
 if "%LINKER%"=="lld-link" (
-    %LINKER% "%GEN_DIR%\kernels_metal.obj" /OUT:"bplus_metal_output.exe" /NOLOGO /ENTRY:main /SUBSYSTEM:CONSOLE
+    %LINKER% "%GEN_DIR%\kernels_metal.obj" "%GEN_DIR%\legacy_stdio.obj" /OUT:"bplus_metal_output.exe" /NOLOGO /ENTRY:main /SUBSYSTEM:CONSOLE kernel32.lib /NODEFAULTLIB
 ) else (
-    %LINKER% "%GEN_DIR%\kernels_metal.obj" /OUT:"bplus_metal_output.exe" /NOLOGO
+    %LINKER% "%GEN_DIR%\kernels_metal.obj" "%GEN_DIR%\legacy_stdio.obj" /OUT:"bplus_metal_output.exe" /NOLOGO
 )
 if %ERRORLEVEL% neq 0 (
     echo Linking failed.
