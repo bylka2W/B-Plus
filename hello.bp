@@ -12,3 +12,7 @@ state Yellow {
     on timer -> Red
     enter { print("Yellow light - WAIT"); }
 }
+
+entry main()
+    print("traffic light ready")
+    return 0

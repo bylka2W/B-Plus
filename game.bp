@@ -1,0 +1,22 @@
+state Game {
+    on start -> Play
+    on hit [score > 10] -> Win
+    on hit -> Play { score = score + 1; print("Score +1"); }
+    on die [lives <= 1] -> GameOver
+    on die [lives > 1] -> Game { lives = lives - 1; print("Lost a life"); }
+    on win -> Win
+    on restart -> Game
+    enter { print("Game started"); }
+}
+
+state Play {
+    on hit -> Game { score = score + 1; }
+}
+
+state Win {
+    enter { print("You win!"); }
+}
+
+state GameOver {
+    enter { print("Game Over!"); }
+}
