@@ -61,7 +61,6 @@ public class LlvmGenMetal
         bool hot = tier?.IsHot ?? false;
 
         _ir.AppendLine($"; --- {state.Name} ---");
-        _ir.AppendLine($"$section = !{{i32 1, !\"{section}\", !\"{state.Name}\"}}");
 
         if (hot)
         {

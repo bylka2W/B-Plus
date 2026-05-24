@@ -20,3 +20,7 @@ state Win {
 state GameOver {
     enter { print("Game Over!"); }
 }
+ 
+entry main() 
+    print("Game compiled!") 
+    return 0 
