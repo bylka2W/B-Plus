@@ -50,6 +50,41 @@ public class PythonGenerator : ICodeGenerator
         foreach (var st in program.States)
             EmitState(sb, st, 0);
 
+        foreach (var entry in program.Entries)
+        {
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.AppendLine($"def {entry.Name}():");
+            var stack = new List<string>();
+            foreach (var line in entry.BodyLines)
+            {
+                var trimmed = line.TrimStart();
+                var indent = new string(' ', 4 + stack.Count * 4);
+                if (trimmed.StartsWith("$$"))
+                {
+                    sb.AppendLine($"{indent}{trimmed[2..]}");
+                    continue;
+                }
+                if (trimmed == "end")
+                {
+                    if (stack.Count > 0) stack.RemoveAt(stack.Count - 1);
+                    continue;
+                }
+                if (trimmed.StartsWith("while ") || trimmed.StartsWith("if ") || trimmed.StartsWith("for "))
+                {
+                    stack.Add("");
+                    var kw = trimmed.Split(' ')[0];
+                    var rest = trimmed.Substring(kw.Length).Trim();
+                    sb.AppendLine($"{indent}{kw} {rest}:");
+                    continue;
+                }
+                sb.AppendLine($"{indent}{line}");
+            }
+            sb.AppendLine();
+            sb.AppendLine("if __name__ == \"__main__\":");
+            sb.AppendLine($"    {entry.Name}()");
+        }
+
         return new Dictionary<string, string> { { "generated" + GetFileExtension(), sb.ToString() } };
     }
 

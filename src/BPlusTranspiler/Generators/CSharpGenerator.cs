@@ -51,6 +51,51 @@ public class CSharpGenerator : ICodeGenerator
         foreach (var st in program.States)
             EmitState(sb, st, 1);
 
+        foreach (var entry in program.Entries)
+        {
+            sb.AppendLine();
+            sb.AppendLine("    class Program");
+            sb.AppendLine("    {");
+            var retType = entry.ReturnType ?? "int";
+            sb.AppendLine($"        static {retType} Main(string[] args)");
+            sb.AppendLine("        {");
+            var stack = new List<string>();
+            foreach (var line in entry.BodyLines)
+            {
+                var trimmed = line.TrimStart();
+                var indent = new string(' ', 12 + stack.Count * 4);
+                if (trimmed.StartsWith("$$"))
+                {
+                    sb.AppendLine($"{indent}{trimmed[2..]}");
+                    continue;
+                }
+                if (trimmed == "end")
+                {
+                    if (stack.Count > 0)
+                    {
+                        stack.RemoveAt(stack.Count - 1);
+                        sb.AppendLine($"{indent[..^4]}}}");
+                    }
+                    continue;
+                }
+                if (trimmed.StartsWith("while ") || trimmed.StartsWith("if ") || trimmed.StartsWith("for "))
+                {
+                    stack.Add("");
+                    var parts = trimmed.Split(' ');
+                    var kw = parts[0];
+                    var rest = string.Join(" ", parts.Skip(1));
+                    sb.AppendLine($"{indent}{kw} ({rest})");
+                    sb.AppendLine($"{indent}{{");
+                    continue;
+                }
+                var csharp = TranslateEntryLine(trimmed);
+                sb.AppendLine($"{indent}{csharp};");
+            }
+            while (stack.Count > 0) { sb.AppendLine("            }"); stack.RemoveAt(stack.Count - 1); }
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+        }
+
         sb.AppendLine("}");
         return new Dictionary<string, string> { { "generated" + GetFileExtension(), sb.ToString() } };
     }
@@ -153,4 +198,11 @@ public class CSharpGenerator : ICodeGenerator
         "string" => "\"\"",
         _ => "null"
     };
+
+    private static string TranslateEntryLine(string line)
+    {
+        if (line.StartsWith("print("))
+            return "Console.WriteLine" + line.Substring(5);
+        return line;
+    }
 }
