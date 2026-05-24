@@ -12,6 +12,17 @@ public class PythonGenerator : ICodeGenerator
     {
         var sb = new StringBuilder();
 
+        // Runtime: State base class
+        sb.AppendLine("import enum");
+        sb.AppendLine("from enum import auto");
+        sb.AppendLine();
+        sb.AppendLine();
+        sb.AppendLine("class State:");
+        sb.AppendLine("    def enter(self): pass");
+        sb.AppendLine("    def exit(self): pass");
+        sb.AppendLine("    def always(self): return None");
+        sb.AppendLine();
+
         foreach (var imp in program.Imports)
             sb.AppendLine($"from {Path.GetFileNameWithoutExtension(imp.Path)} import *");
         if (program.Imports.Count > 0) sb.AppendLine();
@@ -67,7 +78,7 @@ public class PythonGenerator : ICodeGenerator
         {
             sb.AppendLine();
             sb.AppendLine($"{indent}    def {a.Type.ToString().ToLower()}(self):");
-            sb.AppendLine($"{indent}        {a.Body}");
+            sb.AppendLine($"{indent}        {a.Body.TrimEnd(';')}");
         }
 
         foreach (var t in state.Transitions)
@@ -83,7 +94,7 @@ public class PythonGenerator : ICodeGenerator
                 var pars = string.Join(", ", t.Parameters.Select(p => $"{p.Name}: {p.Type}"));
                 sb.AppendLine($"{indent}    def on_{t.EventName}(self{(pars != "" ? ", " + pars : "")}):");
                 if (t.Body != null)
-                    sb.AppendLine($"{indent}        {t.Body}");
+                    sb.AppendLine($"{indent}        {t.Body.TrimEnd(';')}");
                 if (t.Guard != null)
                 {
                     sb.AppendLine($"{indent}        if {t.Guard}:");

@@ -15,6 +15,14 @@ public class CSharpGenerator : ICodeGenerator
         sb.AppendLine();
         sb.AppendLine("namespace BPlusGenerated");
         sb.AppendLine("{");
+        sb.AppendLine("    public abstract class State");
+        sb.AppendLine("    {");
+        sb.AppendLine("        public virtual void Enter() {}");
+        sb.AppendLine("        public virtual void Exit() {}");
+        sb.AppendLine("        public virtual State Always() => null;");
+        sb.AppendLine("        public static void print(object s) => Console.WriteLine(s);");
+        sb.AppendLine("    }");
+        sb.AppendLine();
 
         if (program.Context is { Variables.Count: > 0 })
         {
@@ -71,7 +79,7 @@ public class CSharpGenerator : ICodeGenerator
             sb.AppendLine($"{ind}    public override void {name}()");
             sb.AppendLine($"{ind}    {{");
             foreach (var line in SplitBody(a.Body))
-                sb.AppendLine($"{ind}        {line};");
+                sb.AppendLine($"{ind}        {line.TrimEnd(';')};");
             sb.AppendLine($"{ind}    }}");
         }
 
@@ -92,7 +100,7 @@ public class CSharpGenerator : ICodeGenerator
                 sb.AppendLine($"{ind}    public override State On{ev}({pars})");
                 sb.AppendLine($"{ind}    {{");
                 foreach (var line in SplitBody(t.Body))
-                    sb.AppendLine($"{ind}        {line};");
+                    sb.AppendLine($"{ind}        {line.TrimEnd(';')};");
                 if (t.Guard != null)
                 {
                     sb.AppendLine($"{ind}        if ({t.Guard})");
