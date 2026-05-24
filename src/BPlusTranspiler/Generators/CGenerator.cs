@@ -102,6 +102,7 @@ public class CGenerator : ICodeGenerator
     {
         var sb = new StringBuilder();
         sb.AppendLine("#include \"states.h\"");
+        sb.AppendLine("#include <stdio.h>");
         sb.AppendLine();
 
         // Context
@@ -180,11 +181,63 @@ public class CGenerator : ICodeGenerator
             sb.AppendLine("};");
         }
 
+        // Entry point
+        foreach (var entry in program.Entries)
+        {
+            sb.AppendLine();
+            var retType = entry.ReturnType ?? "int";
+            sb.AppendLine($"{retType} main(int argc, char** argv) {{");
+            sb.AppendLine("    (void)argc; (void)argv;");
+            var stack = new List<string>();
+            foreach (var line in entry.BodyLines)
+            {
+                var trimmed = line.TrimStart();
+                var indent = new string(' ', 4 + stack.Count * 4);
+                if (trimmed.StartsWith("$$"))
+                {
+                    sb.AppendLine($"{indent}{trimmed[2..]}");
+                    continue;
+                }
+                if (trimmed == "end")
+                {
+                    if (stack.Count > 0) { stack.RemoveAt(stack.Count - 1); sb.AppendLine($"{indent[..^4]}}}"); }
+                    continue;
+                }
+                if (trimmed.StartsWith("while ") || trimmed.StartsWith("if ") || trimmed.StartsWith("for "))
+                {
+                    stack.Add("");
+                    var parts = trimmed.Split(' ');
+                    var kw = parts[0];
+                    var rest = string.Join(" ", parts.Skip(1));
+                    sb.AppendLine($"{indent}{kw} ({rest}) {{");
+                    continue;
+                }
+                sb.AppendLine($"{indent}{TranslateBPlusToC(trimmed)};");
+            }
+            while (stack.Count > 0) { sb.AppendLine("    }"); stack.RemoveAt(stack.Count - 1); }
+            sb.AppendLine("}");
+        }
+
         return sb.ToString();
     }
 
     private static string Lower(string s) =>
         s.Length > 0 ? char.ToLower(s[0]) + s[1..] : s;
+
+    private static string TranslateBPlusToC(string line)
+    {
+        if (line.StartsWith("print(") && line.EndsWith(")"))
+        {
+            var inner = line.Substring(6, line.Length - 7);
+            if (inner.StartsWith("\""))
+            {
+                var content = inner.Substring(1, inner.Length - 2);
+                return $"printf(\"{content}\\n\")";
+            }
+            return $"printf(\"%d\\n\", {inner})";
+        }
+        return line;
+    }
 
     private static string DefaultLiteral(string type) => type.ToLower() switch
     {

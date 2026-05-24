@@ -535,17 +535,34 @@ public class GoGenerator : ICodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("package main");
         sb.AppendLine();
-        sb.AppendLine("import \"bplus\"");
+        sb.AppendLine("import \"fmt\"");
         sb.AppendLine();
 
         if (program.Entries.Count > 0)
         {
-            sb.AppendLine("func main() {");
             foreach (var entry in program.Entries)
             {
-                sb.AppendLine($"\tbplus.{entry.Name}()");
+                if (entry.Name == "main")
+                {
+                    sb.AppendLine("func main() {");
+                    EmitEntryBodyGo(sb, entry);
+                    sb.AppendLine("}");
+                }
+                else
+                {
+                    sb.AppendLine($"func {entry.Name}() {{");
+                    EmitEntryBodyGo(sb, entry);
+                    sb.AppendLine("}");
+                    sb.AppendLine();
+                }
             }
-            sb.AppendLine("}");
+            if (program.Entries.All(e => e.Name != "main"))
+            {
+                sb.AppendLine("func main() {");
+                foreach (var entry in program.Entries)
+                    sb.AppendLine($"\t{entry.Name}()");
+                sb.AppendLine("}");
+            }
         }
         else
         {
@@ -566,6 +583,52 @@ public class GoGenerator : ICodeGenerator
         }
 
         return sb.ToString();
+    }
+
+    private void EmitEntryBodyGo(StringBuilder sb, EntryDecl entry)
+    {
+        var stack = new List<string>();
+        foreach (var line in entry.BodyLines)
+        {
+            var trimmed = line.TrimStart();
+            var indent = new string('\t', 1 + stack.Count);
+            if (trimmed.StartsWith("$$"))
+            {
+                sb.AppendLine($"{indent}{trimmed[2..]}");
+                continue;
+            }
+            if (trimmed == "end")
+            {
+                if (stack.Count > 0) { stack.RemoveAt(stack.Count - 1); sb.AppendLine($"{indent[..^1]}}}"); }
+                continue;
+            }
+            if (trimmed.StartsWith("while ") || trimmed.StartsWith("if ") || trimmed.StartsWith("for "))
+            {
+                stack.Add("");
+                var parts = trimmed.Split(' ');
+                var kw = parts[0];
+                var rest = string.Join(" ", parts.Skip(1));
+                var goKw = kw switch { "while" => "for", _ => kw };
+                sb.AppendLine($"{indent}{goKw} {rest} {{");
+                continue;
+            }
+            sb.AppendLine($"{indent}{TranslateEntryGo(trimmed)}");
+        }
+        while (stack.Count > 0) { sb.AppendLine("\t}"); stack.RemoveAt(stack.Count - 1); }
+    }
+
+    private static string TranslateEntryGo(string line)
+    {
+        if (line.StartsWith("print(") && line.EndsWith(")"))
+        {
+            var inner = line.Substring(6, line.Length - 7);
+            if (inner.StartsWith("\""))
+                return $"fmt.Println({inner})";
+            return $"fmt.Println({inner})";
+        }
+        if (line.StartsWith("return "))
+            return line;
+        return line;
     }
 
     private static string MapToGo(BPlusType type) => type switch

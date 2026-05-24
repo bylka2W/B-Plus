@@ -739,10 +739,35 @@ public class RustGenerator : ICodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine($"/// Entry: {entry.Name}");
         sb.AppendLine($"pub fn {entry.Name}() -> {MapToRust(retType)} {{");
-        if (entry.Body != null)
+        if (entry.BodyLines.Count > 0)
         {
+            var stack = new List<string>();
             foreach (var line in entry.BodyLines)
-                sb.AppendLine($"    {line}");
+            {
+                var trimmed = line.TrimStart();
+                var indent = new string(' ', 4 + stack.Count * 4);
+                if (trimmed.StartsWith("$$"))
+                {
+                    sb.AppendLine($"{indent}{trimmed[2..]}");
+                    continue;
+                }
+                if (trimmed == "end")
+                {
+                    if (stack.Count > 0) { stack.RemoveAt(stack.Count - 1); sb.AppendLine($"{indent[..^4]}}}"); }
+                    continue;
+                }
+                if (trimmed.StartsWith("while ") || trimmed.StartsWith("if ") || trimmed.StartsWith("for "))
+                {
+                    stack.Add("");
+                    var parts = trimmed.Split(' ');
+                    var kw = parts[0];
+                    var rest = string.Join(" ", parts.Skip(1));
+                    sb.AppendLine($"{indent}{kw} {rest} {{");
+                    continue;
+                }
+                sb.AppendLine($"{indent}{TranslateEntryRust(trimmed)};");
+            }
+            while (stack.Count > 0) { sb.AppendLine("    }"); stack.RemoveAt(stack.Count - 1); }
         }
         else
         {
@@ -751,6 +776,13 @@ public class RustGenerator : ICodeGenerator
         sb.AppendLine($"}}");
         sb.AppendLine();
         return sb.ToString();
+    }
+
+    private static string TranslateEntryRust(string line)
+    {
+        if (line.StartsWith("print("))
+            return "println!" + line.Substring(5, line.Length - 6) + ")";
+        return line;
     }
 
     private static string MapToRust(BPlusType type) => type switch
