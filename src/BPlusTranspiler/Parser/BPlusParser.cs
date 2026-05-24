@@ -198,6 +198,11 @@ public partial class BPlusParser
             {
                 program.ParallelBlocks.Add(ParseParallel());
             }
+            else if (Peek("state ") || Peek("base "))
+            {
+                var state = ParseStateDef();
+                program.States.Add(state);
+            }
             else if (Peek("network ") || Peek("corporate_network"))
             {
                 var network = ParseNetwork(corporatePrefix: Peek("corporate_network"));
