@@ -34,6 +34,10 @@ public class LlvmGenMetal
 
         EmitTransitionTable(registers);
 
+        // Emit entry point (main) from entry declarations
+        foreach (var entry in program.Entries)
+            EmitEntry(entry);
+
         return _ir.ToString();
     }
 
@@ -51,6 +55,7 @@ public class LlvmGenMetal
         _ir.AppendLine("declare <16 x float> @llvm.x86.avx512.vpermq.512(<8 x i64>, i32)");
         _ir.AppendLine("declare <8 x i64> @llvm.x86.avx512.gather.dpq.512(<8 x i64>, i8*, i32)");
         _ir.AppendLine("declare i32 @llvm.x86.avx512.kortest.w(i16, i16)");
+        _ir.AppendLine("declare i32 @printf(ptr, ...)");
         _ir.AppendLine();
     }
 
@@ -212,6 +217,87 @@ public class LlvmGenMetal
         int id = _metadataId++;
         _ir.AppendLine($"!{id} = !{{!\"{name}\", {value}}}");
         return $"!{id}";
+    }
+
+    private void EmitEntry(EntryDecl e)
+    {
+        _ir.AppendLine("; ─── Entry Point ───");
+        string retType = e.ReturnType ?? "i32";
+
+        // First pass: collect string constants (must be at module level)
+        var stringConsts = new List<(int id, string val, int len)>();
+        foreach (var line in e.BodyLines)
+        {
+            var trimmed = line.TrimStart();
+            if (trimmed.StartsWith("print(") && trimmed.EndsWith(")"))
+            {
+                var arg = trimmed[6..^1].Trim();
+                int id = stringConsts.Count;
+                if (arg.StartsWith("\"") && arg.EndsWith("\""))
+                {
+                    var strVal = arg[1..^1];
+                    string escaped = strVal.Replace("\\", "\\5C").Replace("\"", "\\22")
+                                           .Replace("\n", "\\0A").Replace("\r", "\\0D")
+                                           .Replace("\t", "\\09");
+                    stringConsts.Add((id, c: $"c\"{escaped}\\00\"", len: strVal.Length + 1));
+                }
+                else
+                {
+                    stringConsts.Add((id, c: "c\"%d\\0A\\00\"", len: 4));
+                }
+            }
+        }
+
+        // Emit string constants at module level
+        foreach (var (id, val, len) in stringConsts)
+            _ir.AppendLine($"@.str{id} = private unnamed_addr constant [{len} x i8] {val}");
+
+        // Emit main function body
+        _ir.AppendLine($"define {retType} @main() {{");
+        bool hasRet = false;
+        int strIdx = 0;
+
+        foreach (var line in e.BodyLines)
+        {
+            var trimmed = line.TrimStart();
+
+            if (trimmed.StartsWith("$$"))
+            {
+                _ir.AppendLine($"  {trimmed[2..]}");
+                continue;
+            }
+
+            if (trimmed == "end")
+                continue;
+
+            if (trimmed.StartsWith("while ") || trimmed.StartsWith("if ") || trimmed.StartsWith("for "))
+                continue;
+
+            if (trimmed.StartsWith("return "))
+            {
+                _ir.AppendLine($"  ret {retType} {trimmed[7..].Trim()}");
+                hasRet = true;
+                continue;
+            }
+
+            if (trimmed.StartsWith("print(") && trimmed.EndsWith(")"))
+            {
+                var arg = trimmed[6..^1].Trim();
+                int id = strIdx++;
+                if (arg.StartsWith("\"") && arg.EndsWith("\""))
+                    _ir.AppendLine($"  %call{id} = call i32 (ptr, ...) @printf(ptr @.str{id})");
+                else
+                    _ir.AppendLine($"  %call{id} = call i32 (ptr, ...) @printf(ptr @.str{id}, {retType} {arg})");
+                continue;
+            }
+
+            _ir.AppendLine($"  ; {trimmed}");
+        }
+
+        if (!hasRet)
+            _ir.AppendLine("  ret i32 0");
+        _ir.AppendLine("}");
+        _ir.AppendLine();
     }
 
     public string GenerateFusionAsm(string instr1, string instr2)
