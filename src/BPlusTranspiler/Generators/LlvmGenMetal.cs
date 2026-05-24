@@ -55,7 +55,7 @@ public class LlvmGenMetal
         _ir.AppendLine("declare <16 x float> @llvm.x86.avx512.vpermq.512(<8 x i64>, i32)");
         _ir.AppendLine("declare <8 x i64> @llvm.x86.avx512.gather.dpq.512(<8 x i64>, i8*, i32)");
         _ir.AppendLine("declare i32 @llvm.x86.avx512.kortest.w(i16, i16)");
-        _ir.AppendLine("declare i32 @printf(ptr, ...)");
+        _ir.AppendLine("declare i32 @puts(ptr)");
         _ir.AppendLine();
     }
 
@@ -223,8 +223,9 @@ public class LlvmGenMetal
     {
         _ir.AppendLine("; ─── Entry Point ───");
         string retType = e.ReturnType ?? "i32";
+        bool needsPrintf = false;
 
-        // First pass: collect string constants (must be at module level)
+        // First pass: collect string constants and detect printf needs
         var stringConsts = new List<(int id, string val, int len)>();
         foreach (var line in e.BodyLines)
         {
@@ -243,6 +244,7 @@ public class LlvmGenMetal
                 }
                 else
                 {
+                    needsPrintf = true;
                     stringConsts.Add((id, c: "c\"%d\\0A\\00\"", len: 4));
                 }
             }
@@ -251,6 +253,10 @@ public class LlvmGenMetal
         // Emit string constants at module level
         foreach (var (id, val, len) in stringConsts)
             _ir.AppendLine($"@.str{id} = private unnamed_addr constant [{len} x i8] {val}");
+
+        // Declare printf only if needed
+        if (needsPrintf)
+            _ir.AppendLine("declare i32 @printf(ptr, ...)");
 
         // Emit main function body
         _ir.AppendLine($"define {retType} @main() {{");
@@ -285,9 +291,9 @@ public class LlvmGenMetal
                 var arg = trimmed[6..^1].Trim();
                 int id = strIdx++;
                 if (arg.StartsWith("\"") && arg.EndsWith("\""))
-                    _ir.AppendLine($"  %call{id} = call i32 (ptr, ...) @printf(ptr @.str{id})");
+                    _ir.AppendLine($"  %call{id} = call i32 @puts(ptr @.str{id})");
                 else
-                    _ir.AppendLine($"  %call{id} = call i32 (ptr, ...) @printf(ptr @.str{id}, {retType} {arg})");
+                    _ir.AppendLine($"  %call{id} = call i32 (ptr, ...) @printf(ptr @.str{id}, i32 {arg})");
                 continue;
             }
 
