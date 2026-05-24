@@ -217,7 +217,7 @@ public class CppGenerator : ICodeGenerator
         foreach (var a in state.Actions)
         {
             var n = a.Type.ToString().ToLower();
-            sb.AppendLine($"{ind}void {state.Name}::{n}() {{ {a.Body}; }}");
+            sb.AppendLine($"{ind}void {state.Name}::{n}() {{ {a.Body.TrimEnd(';')}; }}");
         }
 
         foreach (var t in state.Transitions)
@@ -236,7 +236,7 @@ public class CppGenerator : ICodeGenerator
                     sb.AppendLine($"{ind}std::expected<State*, {errType}> {state.Name}::on_{t.EventName}({pars}) {{");
                     EmitErrDefer(sb, t, ind);
                     if (t.Body != null)
-                        sb.AppendLine($"{ind}    {t.Body};");
+                        sb.AppendLine($"{ind}    {t.Body.TrimEnd(';')};");
                     if (t.Guard != null)
                     {
                         sb.AppendLine($"{ind}    if ({t.Guard})");
@@ -254,7 +254,7 @@ public class CppGenerator : ICodeGenerator
                     sb.AppendLine($"{ind}State* {state.Name}::on_{t.EventName}({pars}) {{");
                     EmitErrDefer(sb, t, ind);
                     if (t.Body != null)
-                        sb.AppendLine($"{ind}    {t.Body};");
+                        sb.AppendLine($"{ind}    {t.Body.TrimEnd(';')};");
                     if (t.Guard != null)
                     {
                         sb.AppendLine($"{ind}    if ({t.Guard})");

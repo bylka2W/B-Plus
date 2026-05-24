@@ -122,7 +122,7 @@ public class CGenerator : ICodeGenerator
         foreach (var s in allStates)
         {
             foreach (var a in s.Actions)
-                sb.AppendLine($"void {Lower(s.Name)}_{a.Type.ToString().ToLower()}(void) {{ {a.Body}; }}");
+                sb.AppendLine($"void {Lower(s.Name)}_{a.Type.ToString().ToLower()}(void) {{ {a.Body.TrimEnd(';')}; }}");
 
             foreach (var t in s.Transitions)
             {
@@ -130,7 +130,7 @@ public class CGenerator : ICodeGenerator
                 if (t.Guard != null)
                 {
                     sb.AppendLine($"State* {fn}(void) {{");
-                    if (t.Body != null) sb.AppendLine($"    {t.Body};");
+                    if (t.Body != null) sb.AppendLine($"    {t.Body.TrimEnd(';')};");
                     sb.AppendLine($"    if ({t.Guard}) return &{Lower(t.Target)}_state;");
                     sb.AppendLine($"    return NULL;");
                     sb.AppendLine("}");
@@ -138,7 +138,7 @@ public class CGenerator : ICodeGenerator
                 else
                 {
                     sb.AppendLine($"State* {fn}(void) {{");
-                    if (t.Body != null) sb.AppendLine($"    {t.Body};");
+                    if (t.Body != null) sb.AppendLine($"    {t.Body.TrimEnd(';')};");
                     sb.AppendLine($"    return &{Lower(t.Target)}_state;");
                     sb.AppendLine("}");
                 }
