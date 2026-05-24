@@ -1,5 +1,6 @@
 using System.Text;
 using BPlusTranspiler.Ast;
+using System.Linq;
 
 namespace BPlusTranspiler.Generators;
 
@@ -116,18 +117,15 @@ public class PythonGenerator : ICodeGenerator
             sb.AppendLine($"{indent}        {a.Body.TrimEnd(';')}");
         }
 
-        foreach (var t in state.Transitions)
+        // Group transitions by event name
+        foreach (var group in state.Transitions.Where(t => !t.IsAlways).GroupBy(t => t.EventName))
         {
             sb.AppendLine();
-            if (t.IsAlways)
+            var pars = string.Join(", ", group.First().Parameters.Select(p => $"{p.Name}: {p.Type}"));
+            sb.AppendLine($"{indent}    def on_{group.Key}(self{(pars != "" ? ", " + pars : "")}):");
+            var needsFallback = group.All(t => t.Guard != null);
+            foreach (var t in group)
             {
-                sb.AppendLine($"{indent}    def always(self):");
-                sb.AppendLine($"{indent}        return {t.Target}");
-            }
-            else
-            {
-                var pars = string.Join(", ", t.Parameters.Select(p => $"{p.Name}: {p.Type}"));
-                sb.AppendLine($"{indent}    def on_{t.EventName}(self{(pars != "" ? ", " + pars : "")}):");
                 if (t.Body != null)
                     sb.AppendLine($"{indent}        {t.Body.TrimEnd(';')}");
                 if (t.Guard != null)
@@ -140,6 +138,15 @@ public class PythonGenerator : ICodeGenerator
                     sb.AppendLine($"{indent}        return {t.Target}");
                 }
             }
+            if (needsFallback)
+                sb.AppendLine($"{indent}        return None");
+        }
+        // Always transitions
+        foreach (var t in state.Transitions.Where(t => t.IsAlways))
+        {
+            sb.AppendLine();
+            sb.AppendLine($"{indent}    def always(self):");
+            sb.AppendLine($"{indent}        return {t.Target}");
         }
 
         foreach (var timer in state.Timers)

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Optimizer;
+using System.Linq;
 
 namespace BPlusTranspiler.Generators;
 
@@ -279,6 +280,8 @@ public class RustGenerator : ICodeGenerator
         sb.AppendLine();
         sb.AppendLine("use std::fmt;");
         sb.AppendLine();
+        sb.AppendLine("pub fn print<T: fmt::Display>(x: T) { println!(\"{}\", x); }");
+        sb.AppendLine();
 
         foreach (var en in program.Enums)
         {
@@ -372,61 +375,78 @@ public class RustGenerator : ICodeGenerator
             sb.AppendLine($"{ind}    /// {actionName} action");
             sb.AppendLine($"{ind}    fn {actionName}(&mut self) {{");
             if (a.Body != null)
-                sb.AppendLine($"{ind}        // {a.Body}");
+            {
+                foreach (var line in a.Body.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    sb.AppendLine($"{ind}        {TranslateRust(line.TrimEnd(';'))};");
+            }
             sb.AppendLine($"{ind}    }}");
             sb.AppendLine($"{ind}}}");
             sb.AppendLine();
         }
 
-        foreach (var t in state.Transitions)
-            EmitTransitionRust(sb, state, t, ind);
+        // Group transitions by event name
+        foreach (var group in state.Transitions.Where(t => !t.IsAlways).GroupBy(t => t.EventName))
+        {
+            EmitTransitionRustGroup(sb, state, group, ind);
+        }
+        foreach (var t in state.Transitions.Where(t => t.IsAlways))
+        {
+            sb.AppendLine($"{ind}/// Always transition: {state.Name} -> {t.Target}");
+        }
 
         foreach (var ns in state.NestedStates)
             EmitStateRust(sb, ns, 0);
     }
 
-    private void EmitTransitionRust(StringBuilder sb, StateDefNode state, TransitionNode t, string ind)
+    private void EmitTransitionRustGroup(StringBuilder sb, StateDefNode state, IGrouping<string, TransitionNode> group, string ind)
     {
-        if (t.IsAlways)
-        {
-            sb.AppendLine($"{ind}/// Always transition: {state.Name} -> {t.Target}");
-            return;
-        }
+        var first = group.First();
+        var fnName = $"on_{Sanitize(first.EventName)}";
+        var pars = string.Join(", ", first.Parameters.Select(p => $"{p.Name}: {MapToRust(p.Type)}"));
+        var needsFallback = group.All(t => t.Guard != null);
 
-        var fnName = $"on_{Sanitize(t.EventName)}";
-        var pars = string.Join(", ", t.Parameters.Select(p => $"{p.Name}: {MapToRust(p.Type)}"));
-
-        sb.AppendLine($"{ind}/// Transition on {t.EventName}");
-        if (t.HotWeight != null)
-            sb.AppendLine($"{ind}#[hot({t.HotWeight})]");
-        if (t.Predict != null)
-            sb.AppendLine($"{ind}#[predict({t.Predict}, p = {t.PredictProbability})]");
-
+        sb.AppendLine($"{ind}/// Transition on {first.EventName}");
         sb.AppendLine($"{ind}impl {state.Name} {{");
         sb.AppendLine($"{ind}    pub fn {fnName}({(pars == "" ? "mut self" : $"mut self, {pars}")}) -> Result<Box<dyn State>, TransitionError> {{");
-
-        if (t.Guard != null)
-            sb.AppendLine($"{ind}        if {t.Guard} {{");
-
-        if (t.Body != null)
-            sb.AppendLine($"{ind}            // {t.Body}");
-
-        var target = t.Target == "__history__" ? state.Name : t.Target;
-        sb.AppendLine($"{ind}            Ok(Box::new({target} {{");
-        foreach (var v in state.Variables)
-            sb.AppendLine($"{ind}                {v.Name}: self.{v.Name},");
-        sb.AppendLine($"{ind}            }}))");
-
-        if (t.Guard != null)
+        foreach (var t in group)
         {
-            sb.AppendLine($"{ind}        }} else {{");
-            sb.AppendLine($"{ind}            Ok(Box::new(*self))");
-            sb.AppendLine($"{ind}        }}");
+            if (t.Guard != null)
+                sb.AppendLine($"{ind}        if {t.Guard} {{");
+            if (t.Body != null)
+            {
+                foreach (var line in t.Body.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    sb.AppendLine($"{ind}            {TranslateRust(line.TrimEnd(';'))};");
+            }
+            var target = t.Target == "__history__" ? state.Name : t.Target;
+            sb.AppendLine($"{ind}            Ok(Box::new({target} {{");
+            foreach (var v in state.Variables)
+                sb.AppendLine($"{ind}                {v.Name}: self.{v.Name},");
+            sb.AppendLine($"{ind}            }}))");
+            if (t.Guard != null)
+            {
+                sb.AppendLine($"{ind}        }}");
+            }
         }
-
+        if (needsFallback)
+            sb.AppendLine($"{ind}        Err(TransitionError::NoMatch)");
         sb.AppendLine($"{ind}    }}");
         sb.AppendLine($"{ind}}}");
         sb.AppendLine();
+    }
+
+    private static string TranslateRust(string line)
+    {
+        if (line.StartsWith("print(") && line.EndsWith(")"))
+        {
+            var inner = line.Substring(6, line.Length - 7);
+            if (inner.StartsWith("\""))
+            {
+                var content = inner.Substring(1, inner.Length - 2);
+                return $"println!(\"{content}\")";
+            }
+            return $"println!(\"{{\"}}, {inner})";
+        }
+        return line;
     }
 
     private string GenKernels(ProgramNode program)
