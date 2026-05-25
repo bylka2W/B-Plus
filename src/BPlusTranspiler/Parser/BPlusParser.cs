@@ -435,6 +435,11 @@ public partial class BPlusParser
                     throw Err($"Expected transition or var after annotation in state '{state.Name}'");
                 }
             }
+            else if (_src[_pos] == '#')
+            {
+                // Skip precision directives inside state (e.g. #256 for bigfloat)
+                while (_pos < _src.Length && _src[_pos] != '\n') _pos++;
+            }
             else
             {
                 throw Err($"Unexpected in state '{state.Name}': '{PeekWord()}'");
@@ -3324,7 +3329,7 @@ return entries;
         Expect("{");
         SkipWs();
 
-        // Parse steps (supports both "step Name = KernelName" and "stage: StateName")
+        // Parse steps (supports both "step Name = KernelName" and "stage: StateName" and "pass Name()")
         while (_pos < _src.Length && _src[_pos] != '}')
         {
             SkipWs();
@@ -3365,6 +3370,26 @@ return entries;
                 SkipWs();
                 var stateName = ParseWord();
                 p.Steps.Add(new PipelineStep { Name = stateName, KernelName = stateName });
+            }
+            else if (Peek("pass"))
+            {
+                // pass <name>() — simplified step (kernel name = function name)
+                Expect("pass");
+                SkipWs();
+                var funcName = ParseWord();
+                SkipWs();
+                if (_pos < _src.Length && _src[_pos] == '(')
+                {
+                    _pos++;
+                    while (_pos < _src.Length && _src[_pos] != ')') _pos++;
+                    if (_pos < _src.Length) _pos++;
+                }
+                p.Steps.Add(new PipelineStep { Name = funcName, KernelName = funcName });
+            }
+            else
+            {
+                // Skip unknown lines (e.g. queue: compute) to avoid infinite loop
+                while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '}') _pos++;
             }
             SkipWs();
             // Skip semicolons and commas
@@ -3479,8 +3504,14 @@ return entries;
         else if (_pos < _src.Length && _src[_pos] == '[')
         {
             _pos++;
-            Expect("]");
-            name += "[]";
+            int start = _pos;
+            while (_pos < _src.Length && _src[_pos] != ']') _pos++;
+            var inner = _src[start.._pos].Trim();
+            if (_pos < _src.Length) _pos++;
+            if (string.IsNullOrEmpty(inner))
+                name += "[]";
+            else
+                name += $"[{inner}]";
         }
         return name;
     }

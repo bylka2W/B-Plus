@@ -842,6 +842,7 @@ public class RustGenerator : ICodeGenerator
         "f64" or "double" => "f64",
         "bool" => "bool",
         "string" => "String",
+        string t when t.StartsWith("bigfloat") => "f64",
         _ => type
     };
 

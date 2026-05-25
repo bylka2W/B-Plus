@@ -701,6 +701,7 @@ public class BPlusErrorReporter
     private bool IsValidType(string type) => type.ToLower() switch
     {
         "int" or "float" or "double" or "long" or "bool" or "string" or "void" => true,
+        string t when t.StartsWith("bigfloat") => true,
         _ => _definedEnums.Contains(type)
     };
 

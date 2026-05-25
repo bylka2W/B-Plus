@@ -325,6 +325,7 @@ public class CppGenerator : ICodeGenerator
         "int" or "float" or "double" or "long" => "0",
         "bool" => "false",
         "string" => "\"\"",
+        string t when t.StartsWith("bigfloat") => "0.0",
         _ => "{}"
     };
 

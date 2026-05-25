@@ -671,6 +671,7 @@ public class GoGenerator : ICodeGenerator
         "bool" => "bool",
         "string" => "string",
         "void" => "",
+        string t when t.StartsWith("bigfloat") => "float64",
         _ => type
     };
 

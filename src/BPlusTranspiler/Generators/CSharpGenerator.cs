@@ -231,6 +231,7 @@ public class CSharpGenerator : ICodeGenerator
         "int" or "float" or "double" or "long" => "0",
         "bool" => "false",
         "string" => "\"\"",
+        string t when t.StartsWith("bigfloat") => "0m",
         _ => "null"
     };
 
