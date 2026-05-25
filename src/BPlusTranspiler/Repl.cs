@@ -196,6 +196,83 @@ public static class Repl
         return (local, remote, branch);
     }
 
+    static void PressAnyKey()
+    {
+        var msg = "  Press any key to continue...";
+        Console.Write(msg);
+        try { Console.ReadKey(true); } catch { }
+        Console.Write($"\r{new string(' ', msg.Length)}\r");
+    }
+
+    static bool RunCommand(string file, string args, bool silent = false)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(file, args)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+        using var proc = System.Diagnostics.Process.Start(psi);
+        if (proc == null) return false;
+        var output = proc.StandardOutput.ReadToEnd();
+        var error = proc.StandardError.ReadToEnd();
+        proc.WaitForExit(120000);
+        if (!silent && !string.IsNullOrEmpty(output)) Console.Write(output);
+        if (!string.IsNullOrEmpty(error))
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.Error.Write(error);
+            Console.ResetColor();
+        }
+        return proc.ExitCode == 0;
+    }
+
+    static string ReadLineRaw(string prompt)
+    {
+        Console.Write(prompt);
+        var sb = new StringBuilder();
+        while (true)
+        {
+            var ki = Console.ReadKey(true);
+            if (ki.Key == ConsoleKey.Enter)
+            {
+                if (sb.Length == 0 || string.IsNullOrWhiteSpace(sb.ToString()))
+                    continue;
+                Console.WriteLine();
+                return sb.ToString();
+            }
+            if (ki.Key == ConsoleKey.Backspace)
+            {
+                if (sb.Length > 0) { sb.Length--; Console.Write("\b \b"); }
+                continue;
+            }
+            var c = ki.KeyChar;
+            if (ki.Key == ConsoleKey.Z && (ki.Modifiers & ConsoleModifiers.Control) != 0)
+                return "";
+            if (!char.IsControl(c))
+            {
+                sb.Append(c);
+                Console.Write(c);
+            }
+        }
+    }
+
+    static string? ReadLineInteractive(string prompt)
+    {
+        if (!Console.IsInputRedirected)
+        {
+            try { return ReadLineRaw(prompt); }
+            catch { }
+        }
+        Console.Write(prompt);
+        var line = Console.ReadLine();
+        if (line == null) return null;
+        if (string.IsNullOrWhiteSpace(line)) return null;
+        return line;
+    }
+
     public static void Run(string[] args)
     {
         var buffer = new StringBuilder();
@@ -214,15 +291,10 @@ public static class Repl
 
         while (true)
         {
-            Console.Write(promptPrefix);
-            var line = Console.ReadLine();
-
-            if (line == null) break;
+            var line = ReadLineInteractive(promptPrefix);
+            if (line == null) continue;
 
             var trimmed = line.Trim();
-
-            if (string.IsNullOrWhiteSpace(trimmed))
-                continue;
 
             if (trimmed == ".exit")
                 break;
@@ -244,44 +316,58 @@ public static class Repl
 
             if (trimmed == ".update")
             {
-                Console.WriteLine("  Checking for updates... (not implemented in REPL)");
-                Console.WriteLine("  Run 'git pull' in the project directory to update.");
-                continue;
+                var rootDir = Directory.GetCurrentDirectory();
+                var exePath = Path.Combine(rootDir, "bpc.exe");
+                if (!File.Exists(exePath))
+                {
+                    Console.WriteLine("  No standalone bpc.exe found — run from bpc.exe, not dotnet.");
+                    continue;
+                }
+                Console.WriteLine("  Updating B+...");
+                Console.WriteLine("  git pull...");
+                RunCommand("git", "-C \"" + rootDir + "\" pull");
+                Console.WriteLine("  Rebuilding bpc.exe...");
+                var ok = RunCommand("dotnet", "publish src/BPlusTranspiler -c Release -r win-x64 --self-contained -p:PublishSingleFile=true", silent: true);
+                if (!ok)
+                {
+                    Console.Error.WriteLine("  Build failed. Update aborted.");
+                    continue;
+                }
+                Console.WriteLine("  Restarting...");
+                var publishDir = Path.GetFullPath("src/BPlusTranspiler/bin/Release/net8.0/win-x64/publish", rootDir);
+                var psCmd = $"Start-Sleep 2; Copy-Item '{publishDir}\\bpc.exe' '{exePath}' -Force; & '{exePath}' --repl";
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell", "-Command \"" + psCmd + "\"")
+                {
+                    UseShellExecute = false, CreateNoWindow = true
+                });
+                break;
             }
 
             if (trimmed == ".help")
             {
                 foreach (var l in HelpText) Console.WriteLine(l);
-                Console.Write("  Press any key to continue...");
-                try { Console.ReadKey(true); } catch { }
-                Console.WriteLine();
+                PressAnyKey();
                 continue;
             }
 
             if (trimmed == ".help all")
             {
                 foreach (var l in HelpAll) Console.WriteLine(l);
-                Console.Write("  Press any key to continue...");
-                try { Console.ReadKey(true); } catch { }
-                Console.WriteLine();
+                PressAnyKey();
                 continue;
             }
 
             if (trimmed == ".help lang")
             {
                 foreach (var l in HelpLang) Console.WriteLine(l);
-                Console.Write("  Press any key to continue...");
-                try { Console.ReadKey(true); } catch { }
-                Console.WriteLine();
+                PressAnyKey();
                 continue;
             }
 
             if (trimmed == ".help metal")
             {
                 foreach (var l in HelpMetal) Console.WriteLine(l);
-                Console.Write("  Press any key to continue...");
-                try { Console.ReadKey(true); } catch { }
-                Console.WriteLine();
+                PressAnyKey();
                 continue;
             }
 
