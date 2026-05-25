@@ -152,26 +152,48 @@ public static class Repl
         ""
     };
 
-    static string GetGitCommit()
+    static (string local, string remote, string branch) GetGitInfo()
     {
+        var local = "unknown";
+        var remote = "";
+        var branch = "master";
         try
         {
             var psi = new System.Diagnostics.ProcessStartInfo("git", "rev-parse --short HEAD")
             {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                CreateNoWindow = true
+                UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true
+            };
+            using var proc = System.Diagnostics.Process.Start(psi);
+            if (proc != null) { local = proc.StandardOutput.ReadToEnd()?.Trim() ?? "unknown"; proc.WaitForExit(1000); }
+        }
+        catch { }
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("git", "rev-parse --abbrev-ref HEAD")
+            {
+                UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true
+            };
+            using var proc = System.Diagnostics.Process.Start(psi);
+            if (proc != null) { branch = proc.StandardOutput.ReadToEnd()?.Trim() ?? "master"; proc.WaitForExit(1000); }
+        }
+        catch { }
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("git", "ls-remote origin main")
+            {
+                UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true
             };
             using var proc = System.Diagnostics.Process.Start(psi);
             if (proc != null)
             {
-                var hash = proc.StandardOutput.ReadToEnd()?.Trim();
-                proc.WaitForExit(1000);
-                if (!string.IsNullOrEmpty(hash)) return hash;
+                var line = proc.StandardOutput.ReadToEnd()?.Trim();
+                proc.WaitForExit(5000);
+                if (!string.IsNullOrEmpty(line))
+                    remote = line.Split('\t')[0][..7];
             }
         }
         catch { }
-        return "unknown";
+        return (local, remote, branch);
     }
 
     public static void Run(string[] args)
@@ -325,15 +347,18 @@ public static class Repl
 
     static void ShowWelcome()
     {
-        var commit = GetGitCommit();
-        var version = "  B+ Machine Code Optimizer v4.0.0";
+        var (local, remote, branch) = GetGitInfo();
 
         Console.WriteLine(Logo);
-        Console.WriteLine(version);
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"  Commit: {commit}");
-        Console.ResetColor();
-        Console.WriteLine("  Type .help for commands");
+        Console.WriteLine(" B+ Machine Code Optimizer v4.0.0");
+        Console.WriteLine($" Local: {local} ({branch})");
+        if (!string.IsNullOrEmpty(remote) && !string.Equals(local, remote, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($" Remote update available: {remote}");
+            Console.ResetColor();
+        }
+        Console.WriteLine(" Type .help for commands");
     }
 
     static void RunBuffer(StringBuilder buffer, ICodeGenerator[] generators, bool runPython)
