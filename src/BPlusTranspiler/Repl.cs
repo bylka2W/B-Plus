@@ -221,6 +221,9 @@ public static class Repl
 
             var trimmed = line.Trim();
 
+            if (string.IsNullOrWhiteSpace(trimmed))
+                continue;
+
             if (trimmed == ".exit")
                 break;
 
@@ -249,24 +252,36 @@ public static class Repl
             if (trimmed == ".help")
             {
                 foreach (var l in HelpText) Console.WriteLine(l);
+                Console.Write("  Press any key to continue...");
+                try { Console.ReadKey(true); } catch { }
+                Console.WriteLine();
                 continue;
             }
 
             if (trimmed == ".help all")
             {
                 foreach (var l in HelpAll) Console.WriteLine(l);
+                Console.Write("  Press any key to continue...");
+                try { Console.ReadKey(true); } catch { }
+                Console.WriteLine();
                 continue;
             }
 
             if (trimmed == ".help lang")
             {
                 foreach (var l in HelpLang) Console.WriteLine(l);
+                Console.Write("  Press any key to continue...");
+                try { Console.ReadKey(true); } catch { }
+                Console.WriteLine();
                 continue;
             }
 
             if (trimmed == ".help metal")
             {
                 foreach (var l in HelpMetal) Console.WriteLine(l);
+                Console.Write("  Press any key to continue...");
+                try { Console.ReadKey(true); } catch { }
+                Console.WriteLine();
                 continue;
             }
 
@@ -338,6 +353,7 @@ public static class Repl
             }
 
             buffer.AppendLine(line);
+            Console.WriteLine($"  \u21b3 added to buffer (buffer: {buffer.Length} chars)");
         }
 
         Console.WriteLine("Bye!");
