@@ -352,11 +352,12 @@ public static class Repl
         Console.WriteLine(Logo);
         Console.WriteLine(" B+ Machine Code Optimizer v4.0.0");
         Console.WriteLine($" Local: {local} ({branch})");
-        if (!string.IsNullOrEmpty(remote) && !string.Equals(local, remote, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrEmpty(remote))
         {
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($" Remote update available: {remote}");
-            Console.ResetColor();
+            var isNew = !string.Equals(local, remote, StringComparison.OrdinalIgnoreCase);
+            if (isNew) Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($" Remote: {remote}");
+            if (isNew) Console.ResetColor();
         }
         Console.WriteLine(" Type .help for commands");
     }
