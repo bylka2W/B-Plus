@@ -163,7 +163,6 @@ public static class Repl
         };
 
         var promptPrefix = "b+> ";
-        var contPrefix = "  > ";
 
         try { Console.Clear(); } catch { }
         ShowWelcome();
@@ -171,8 +170,7 @@ public static class Repl
 
         while (true)
         {
-            var hasContent = buffer.Length > 0;
-            Console.Write(hasContent ? contPrefix : promptPrefix);
+            Console.Write(promptPrefix);
             var line = Console.ReadLine();
 
             if (line == null) break;
