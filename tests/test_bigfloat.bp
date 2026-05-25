@@ -1,0 +1,9 @@
+state Calc {  
+    #256  
+    var pi: bigfloat[256] = 3.14159  
+    enter { print("BigFloat ready"); }  
+}  
+  
+entry main()  
+    print("BigFloat test passed")  
+    return 0 

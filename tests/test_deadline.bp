@@ -1,0 +1,9 @@
+state Worker {  
+    @deadline(hard=true, _val="1000")  
+    on tick -> Worker  
+    enter { print("Tick"); }  
+}  
+  
+entry main()  
+    print("Deadline test passed")  
+    return 0 

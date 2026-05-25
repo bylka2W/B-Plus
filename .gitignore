@@ -27,6 +27,7 @@ all_out/
 
 # IDE
 .vscode/
+.vs/
 .idea/
 *.swp
 *.swo

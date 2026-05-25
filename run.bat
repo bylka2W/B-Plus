@@ -6,6 +6,10 @@ if not "%1"=="" set "FILE=%1"
 if not exist "%FILE%" (
     if exist "%FILE%.bp" (
         set "FILE=%FILE%.bp"
+    ) else if exist "tests\%FILE%" (
+        set "FILE=tests\%FILE%"
+    ) else if exist "tests\%FILE%.bp" (
+        set "FILE=tests\%FILE%.bp"
     ) else (
         echo File not found: %FILE% ^(or %FILE%.bp^)
         exit /b 1

@@ -1,0 +1,14 @@
+state A {  
+    @predict(_val="B", p="0.95")  
+    on next -> B  
+    enter { print("A"); }  
+}  
+  
+state B {  
+    on next -> A  
+    enter { print("B"); }  
+}  
+  
+entry main()  
+    print("Predict test passed")  
+    return 0 

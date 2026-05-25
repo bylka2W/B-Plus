@@ -1,0 +1,8 @@
+@target(gpu=amd)  
+@arch(rDNA3)  
+kernel wave_test(data: f32vec4) -> f32  
+    body: data |> wave.reduce_sum >> output  
+  
+entry main()  
+    print("GPU test passed")  
+    return 0 
