@@ -240,12 +240,12 @@ public class LlvmGenMetal
                     string escaped = strVal.Replace("\\", "\\5C").Replace("\"", "\\22")
                                            .Replace("\n", "\\0A").Replace("\r", "\\0D")
                                            .Replace("\t", "\\09");
-                    stringConsts.Add((id, c: $"c\"{escaped}\\00\"", len: strVal.Length + 1));
+                    stringConsts.Add((id, $"c\"{escaped}\\00\"", strVal.Length + 1));
                 }
                 else
                 {
                     needsPrintf = true;
-                    stringConsts.Add((id, c: "c\"%d\\0A\\00\"", len: 4));
+                    stringConsts.Add((id, "c\"%d\\0A\\00\"", 4));
                 }
             }
         }

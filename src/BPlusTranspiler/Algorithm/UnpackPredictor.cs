@@ -11,7 +11,6 @@ namespace BPlusTranspiler.Algorithm
         private double[] b1, b2;
         private double lr = 0.01;
         private double lambda = 0.001;
-        private double clip = 1.0;
 
         public UnpackPredictor()
         {

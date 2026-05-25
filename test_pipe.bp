@@ -1,0 +1,18 @@
+pipeline process {
+    stage: step1
+    stage: step2
+}
+
+state Step1 {
+    on done -> Step2
+    enter { print("Step1"); }
+}
+
+state Step2 {
+    on done -> Step1
+    enter { print("Step2"); }
+}
+
+entry main()
+    print("Pipeline test passed")
+    return 0

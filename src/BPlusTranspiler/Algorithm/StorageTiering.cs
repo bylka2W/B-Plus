@@ -40,7 +40,6 @@ public class StorageTiering
         var result = new PlacementResult { Tiers = TierProfile.ToList() };
 
         long ramBytes = GetRamBytes();
-        long nvmeBytes = 2L * 1024 * 1024 * 1024 * 1024;
 
         if (totalDataBytes <= 256 * 1024)
         {

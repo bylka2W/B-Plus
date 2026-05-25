@@ -132,7 +132,7 @@ public enum SpvOp
 
 public class SpvOperand
 {
-    public SpvId Id { get; set; }
+    public SpvId Id { get; set; } = new();
     public string Literal { get; set; } = "";
 }
 
@@ -236,7 +236,7 @@ public class SpvBinaryEmitter
         EmitOp(SpvOp.TypePointer, new[]
         {
             new SpvOperand { Id = id },
-            new SpvOperand { Literal = storageClass.ToString() },
+            new SpvOperand { Literal = storageClass.ToString()! },
             new SpvOperand { Id = pointeeType }
         });
         return id;

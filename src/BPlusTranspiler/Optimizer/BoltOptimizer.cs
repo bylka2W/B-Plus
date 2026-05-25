@@ -21,7 +21,7 @@ public class BoltOptimizer
     {
         var r = new BoltResult { InputBinary = binaryPath };
 
-        string boltPath = FindBolt();
+        string boltPath = FindBolt()!;
         if (boltPath == null)
         {
             r.Error = "BOLT (llvm-bolt) not found. Install LLVM with BOLT or add to PATH.";
@@ -32,7 +32,7 @@ public class BoltOptimizer
         Console.WriteLine($"[BOLT] Found: {boltPath}");
 
         // Find perf2bolt for profile conversion
-        string perf2bolt = FindPerf2Bolt();
+        string perf2bolt = FindPerf2Bolt()!;
 
         // Step 1: collect or use existing profile
         string profDataPath = profileData ?? Path.Combine(_outputDir, "perf_fdata.bin");

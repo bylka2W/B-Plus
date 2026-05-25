@@ -619,7 +619,8 @@ public static class MetalRuntime
         else
         {
             var proc = System.Diagnostics.Process.GetCurrentProcess();
-            proc.ProcessorAffinity = (IntPtr)(1L << core);
+            if (OperatingSystem.IsWindows())
+                proc.ProcessorAffinity = (IntPtr)(1L << core);
         }
     }
 }

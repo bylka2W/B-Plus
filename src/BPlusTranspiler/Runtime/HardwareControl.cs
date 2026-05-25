@@ -60,7 +60,8 @@ public static class HardwareControl
         catch
         {
             var proc = Process.GetCurrentProcess();
-            proc.ProcessorAffinity = new IntPtr(1L << core);
+            if (OperatingSystem.IsWindows())
+                proc.ProcessorAffinity = new IntPtr(1L << core);
             return true;
         }
     }

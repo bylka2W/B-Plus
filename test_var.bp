@@ -1,0 +1,12 @@
+state Counter {
+    var count: int = 0
+    on tick -> Counter {
+        count = count + 1
+        print(count)
+    }
+    enter { print("Counter started"); }
+}
+
+entry main()
+    print("Var test passed")
+    return 0

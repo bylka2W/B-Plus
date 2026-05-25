@@ -282,8 +282,8 @@ public static class DialectBuilder
                             {
                                 EventName = nested.Attrs.GetValueOrDefault("event", ""),
                                 Target = nested.Attrs.GetValueOrDefault("target", ""),
-                                Guard = nested.Attrs.GetValueOrDefault("guard", null),
-                                Body = nested.Attrs.GetValueOrDefault("body", null),
+                                Guard = nested.Attrs.TryGetValue("guard", out var g) ? g : null,
+                                Body = nested.Attrs.TryGetValue("body", out var b) ? b : null,
                                 IsAlways = bool.Parse(nested.Attrs.GetValueOrDefault("is_always", "False")),
                                 IsFallible = bool.Parse(nested.Attrs.GetValueOrDefault("is_fallible", "False"))
                             };

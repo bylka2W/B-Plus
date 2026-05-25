@@ -1,0 +1,9 @@
+parallel {
+    print("Task A")
+    print("Task B")
+    print("Task C")
+}
+
+entry main()
+    print("Parallel test passed")
+    return 0

@@ -42,7 +42,6 @@ public class DataCollector
     private long _lastCollectTime;
 
     // Thermal/latency tracking
-    private double _baselineCyclesPerMs;
     private int _thermalThrottleCount;
 
     private ProgramNode ParseCached(string bpFile)
@@ -244,7 +243,7 @@ public class DataCollector
             {
                 Directory.CreateDirectory(tempDir);
 
-                string annotated = $"@metal {{\n    @tier({(int)config.Tier})\n"
+                string annotated = $"@metal {{\n    @tier({(int)config.Tier!.Value})\n"
                     + (config.Register != null ? $"    @register({config.Register})\n" : "")
                     + (config.Zmm.HasValue ? $"    @zmm({config.Zmm.Value})\n" : "")
                     + (config.CachePin ? "    @cache_pin\n" : "")

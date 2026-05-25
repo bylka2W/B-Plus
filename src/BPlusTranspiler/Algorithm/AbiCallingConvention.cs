@@ -410,7 +410,7 @@ public class PatchList
 
     public List<Patch> Patches { get; set; } = new();
 
-    public void Add(long offset, PatchType type, string symbol = null, long? target = null)
+    public void Add(long offset, PatchType type, string? symbol = null, long? target = null)
     {
         Patches.Add(new Patch { Offset = offset, Type = type, Symbol = symbol, TargetOffset = target });
     }

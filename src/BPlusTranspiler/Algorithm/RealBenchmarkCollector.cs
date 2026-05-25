@@ -64,7 +64,7 @@ public class RealBenchmarkCollector
 
         try
         {
-            string srcWithMetal = $"@metal {{\n    @tier({(int)config.Tier})\n"
+            string srcWithMetal = $"@metal {{\n    @tier({(int)config.Tier!.Value})\n"
                 + (config.Register != null ? $"    @register({config.Register})\n" : "")
                 + (config.Zmm.HasValue ? $"    @zmm({config.Zmm.Value})\n" : "")
                 + (config.CachePin ? "    @cache_pin\n" : "")

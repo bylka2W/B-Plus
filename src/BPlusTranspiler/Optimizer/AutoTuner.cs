@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Text;
 using System.IO;
 using BPlusTranspiler.Ast;
-using BPlusTranspiler.Ast;
 using BPlusTranspiler.Generators;
 using BPlusTranspiler.Parser;
 using BPlusTranspiler.Runtime;
@@ -23,7 +22,6 @@ public class AutoTuneResult
 public class AutoTuner : IDisposable
 {
     private readonly string _bpFile;
-    private NeuralPredictor? _model;
     private readonly string _tempBase;
 
     public AutoTuner(string bpFile)
@@ -183,7 +181,7 @@ public class AutoTuner : IDisposable
 
         try
         {
-            string srcWithMetal = $"@metal {{\n    @tier({(int)config.Tier})\n"
+            string srcWithMetal = $"@metal {{\n    @tier({(int)config.Tier!.Value})\n"
                 + (config.Register != null ? $"    @register({config.Register})\n" : "")
                 + (config.Zmm.HasValue ? $"    @zmm({config.Zmm.Value})\n" : "")
                 + (config.CachePin ? "    @cache_pin\n" : "")

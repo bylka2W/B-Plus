@@ -10,17 +10,17 @@ namespace BPlusTranspiler.Optimizer
     {
         public class PackedRegister
         {
-            public string Register { get; set; }
+            public string Register { get; set; } = "";
             public List<PackedField> Fields { get; set; } = new List<PackedField>();
             public int TotalBits => Fields.Sum(f => f.Bits);
         }
 
         public class PackedField
         {
-            public string Name { get; set; }
+            public string Name { get; set; } = "";
             public int Offset { get; set; }
             public int Bits { get; set; }
-            public string ExtractionPattern { get; set; }
+            public string ExtractionPattern { get; set; } = "";
             public int AccessCycle { get; set; }
             public List<string> DependsOn { get; set; } = new List<string>();
         }
@@ -28,18 +28,18 @@ namespace BPlusTranspiler.Optimizer
         /// <summary>Dependency edge: src variable must be computed before dst.</summary>
         public class DepEdge
         {
-            public string Src { get; set; }
-            public string Dst { get; set; }
+            public string Src { get; set; } = "";
+            public string Dst { get; set; } = "";
             public int Cycle { get; set; }
         }
 
         private Dictionary<string, List<AccessInfo>> accessPatterns = new Dictionary<string, List<AccessInfo>>();
         private List<DepEdge> depGraph = new List<DepEdge>();
-        private UnpackPredictor predictor;
+        private UnpackPredictor? predictor;
 
         public class AccessInfo
         {
-            public string VarName { get; set; }
+            public string VarName { get; set; } = "";
             public int Cycle { get; set; }
             public int BitWidth { get; set; }
         }

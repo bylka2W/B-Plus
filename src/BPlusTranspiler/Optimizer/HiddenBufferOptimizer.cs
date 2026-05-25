@@ -62,7 +62,6 @@ namespace BPlusTranspiler.Optimizer
             bool hasCall = false;
             int totalBytes = 0;
             int jumpCount = 0;
-            int misalignedJumps = 0;
             int maxStoresInRow = 0, maxLoadsInRow = 0;
             int currentStores = 0, currentLoads = 0;
             var allStateNames = new List<string>();

@@ -1,0 +1,16 @@
+context {
+    var app_name: string = "BPlusTest"
+}
+
+state Start {
+    on go -> Next
+    enter { print(app_name); }
+}
+
+state Next {
+    enter { print("Context works"); }
+}
+
+entry main()
+    print("Context test passed")
+    return 0

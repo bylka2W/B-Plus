@@ -1,0 +1,15 @@
+@stream 
+ 
+state Reader { 
+    on data -
+    enter { print("Streaming"); } 
+} 
+ 
+state Process { 
+    on done -
+    enter { print("Processing"); } 
+} 
+ 
+entry main() 
+    print("Stream test") 
+    return 0 

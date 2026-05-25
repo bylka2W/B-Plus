@@ -13,13 +13,13 @@ public class NeuralPredictorUltimate
     private readonly NeuralNetwork _net;
     private readonly NeuralNetwork[] _ensemble;
     private readonly Random _rng;
-    private int _step;
     private double _baseLr = 0.001;
-    private double _maxLr = 0.003;
     private readonly List<double[]> _emaWeights;
     private readonly List<double[]> _emaBiases;
     private double _emaDecay = 0.999;
+#pragma warning disable CS0649
     private bool _useEma;
+#pragma warning restore CS0649
 
     public double TrainR2 { get; private set; }
     public double ValR2 { get; private set; }
@@ -75,8 +75,6 @@ public class NeuralPredictorUltimate
         int n = data.Count;
         int[] foldIndices = StratifiedKFold(n, 5);
         var bestEnsemble = new NeuralNetwork[5];
-
-        double bestValR2 = double.MinValue;
 
         for (int fold = 0; fold < 5; fold++)
         {
@@ -351,7 +349,7 @@ public class NeuralNetwork
 
             for (int batch = 0; batch < trainData.Count; batch += batchSize)
             {
-                double[] gradW = null, gradB = null;
+                double[]? gradW = null, gradB = null;
                 int count = 0;
 
                 for (int k = 0; k < batchSize && batch + k < trainData.Count; k++)
@@ -406,8 +404,8 @@ public class NeuralNetwork
                         }
                         else
                         {
-                            for (int i = 0; i < gradW.Length; i++) gradW[i] += gW[i];
-                            for (int i = 0; i < gradB.Length; i++) gradB[i] += gB[i];
+                            for (int i = 0; i < gradW!.Length; i++) gradW[i] += gW[i];
+                            for (int i = 0; i < gradB!.Length; i++) gradB[i] += gB[i];
                         }
                         count++;
 
@@ -417,8 +415,8 @@ public class NeuralNetwork
 
                 if (count > 0)
                 {
-                    for (int i = 0; i < gradW.Length; i++) gradW[i] /= count;
-                    for (int i = 0; i < gradB.Length; i++) gradB[i] /= count;
+                    for (int i = 0; i < gradW!.Length; i++) gradW[i] /= count;
+                    for (int i = 0; i < gradB!.Length; i++) gradB[i] /= count;
 
                     _step++;
                     double biasCorr1 = 1.0 / (1 - Math.Pow(0.9, _step));
@@ -670,12 +668,12 @@ public class DirectEmissionCollector
 
 public class NeuralPredictor
 {
-    private int[] _layers;
-    private List<double[,]> _w;
-    private List<double[]> _b;
+    private int[] _layers = null!;
+    private List<double[,]> _w = null!;
+    private List<double[]> _b = null!;
     private readonly Random _rng = new(42);
-    private List<double[,]> _adamMw, _adamVw;
-    private List<double[]> _adamMb, _adamVb;
+    private List<double[,]> _adamMw = null!, _adamVw = null!;
+    private List<double[]> _adamMb = null!, _adamVb = null!;
     private int _step;
     private double[] _featureMean = Array.Empty<double>();
     private double[] _featureStd = Array.Empty<double>();

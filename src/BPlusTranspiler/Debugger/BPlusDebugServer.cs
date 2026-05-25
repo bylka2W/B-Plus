@@ -12,8 +12,10 @@ public class BPlusDebugServer
     private readonly HashSet<string> _breakpoints = new();
     private readonly HashSet<string> _watchVars = new();
     private int _historyCount;
+#pragma warning disable CS0649, CS0414
     private int _stepMode;
     private bool _stepOver;
+#pragma warning restore CS0649, CS0414
 
     // Register simulation
     private readonly Dictionary<string, long> _registers = new()

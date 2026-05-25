@@ -9,7 +9,6 @@ public class GraphicsDebugger
     readonly Dictionary<string, List<float>> _watchExpressions = new();
     bool _isPaused;
     string _currentShader = "";
-    int _currentLine;
     int _pixelX, _pixelY;
     int _frameCount;
     bool _stepMode;

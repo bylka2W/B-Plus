@@ -1,0 +1,24 @@
+state Idle {
+    @hot(0.9)
+    on start -> Running
+    @cold(0.01)
+    on error -> Error
+    enter { print("Idle"); }
+}
+
+state Running {
+    @hot(0.85)
+    on tick -> Running
+    @cold(0.05)
+    on stop -> Idle
+    enter { print("Running"); }
+}
+
+state Error {
+    on reset -> Idle
+    enter { print("Error"); }
+}
+
+entry main()
+    print("Hot/Cold test passed")
+    return 0

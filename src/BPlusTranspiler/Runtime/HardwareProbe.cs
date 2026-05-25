@@ -46,8 +46,6 @@ public struct SensorSnapshot
 public static class HardwareProbe
 {
     private static CpuTopology? _cachedTopology;
-    private static long _lastCycles;
-    private static long _lastInstructions;
     private static readonly double _tscFreq;
 
     static HardwareProbe()
