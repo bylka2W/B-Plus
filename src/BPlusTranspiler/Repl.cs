@@ -152,6 +152,8 @@ public static class Repl
         ""
     };
 
+    static readonly string UpdateMsg = "  What's new: REPL mode, .help metal, BigFloat + Async Compute fixes";
+
     public static void Run(string[] args)
     {
         var buffer = new StringBuilder();
@@ -162,7 +164,7 @@ public static class Repl
             new RustGenerator(), new GoGenerator()
         };
 
-        var promptPrefix = "b+> ";
+        var promptPrefix = "B Plus> ";
 
         try { Console.Clear(); } catch { }
         ShowWelcome();
@@ -305,6 +307,9 @@ public static class Repl
     {
         Console.WriteLine(Logo);
         Console.WriteLine("   Machine Code Optimizer v4.0.0 BETA");
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine(UpdateMsg);
+        Console.ResetColor();
         Console.WriteLine("   Type .help for commands");
     }
 
