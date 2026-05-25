@@ -1409,8 +1409,9 @@ catch (ParseException ex)
     return 1;
 }
 
-// Resolve imports — load and merge imported .bp files
+// Resolve imports — load and merge imported .bp files, also save for separate generation
 string inputDir = Path.GetDirectoryName(Path.GetFullPath(input)) ?? ".";
+var importPrograms = new List<(string name, ProgramNode prog)>();
 foreach (var imp in program.Imports)
 {
     string importPath = Path.Combine(inputDir, imp.Path);
@@ -1429,6 +1430,7 @@ foreach (var imp in program.Imports)
             foreach (var p in importProgram.Pipelines) program.Pipelines.Add(p);
             foreach (var en in importProgram.Entries) program.Entries.Add(en);
             foreach (var v in importProgram.VarDecls) program.VarDecls.Add(v);
+            importPrograms.Add((Path.GetFileNameWithoutExtension(imp.Path), importProgram));
         }
         catch (ParseException ex)
         {
@@ -1569,6 +1571,31 @@ Parallel.ForEach(generators, gen =>
 });
 
 Console.WriteLine($"Done. Generated {count} file(s) to {output}");
+
+// Generate separate files for imported modules (so Python etc. can import at runtime)
+int importCount = 0;
+foreach (var (importName, importProgram) in importPrograms)
+{
+    foreach (var gen in generators)
+    {
+        var files = gen.GenerateFiles(importProgram);
+        foreach (var (name, code) in files)
+        {
+            // For Python the file must be named exactly <importName>.py for "from math_lib import *"
+            string outputFile;
+            if (gen is PythonGenerator && name == "generated.py")
+                outputFile = Path.Combine(output, importName + Path.GetExtension(name));
+            else
+                outputFile = Path.Combine(output, importName + "_" + name);
+            lock (lockObj)
+                File.WriteAllText(outputFile, code);
+            Console.WriteLine($"  [{gen.GetLanguageName(),-10}] {outputFile}");
+            importCount++;
+        }
+    }
+}
+if (importCount > 0)
+    Console.WriteLine($"Generated {importCount} import file(s) to {output}");
 return 0;
 
 static string Sanitize(string name) =>
