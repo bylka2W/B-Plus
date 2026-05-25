@@ -152,7 +152,27 @@ public static class Repl
         ""
     };
 
-    static readonly string UpdateMsg = "  What's new: REPL mode, .help metal, BigFloat + Async Compute fixes";
+    static string GetGitCommit()
+    {
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("git", "rev-parse --short HEAD")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                CreateNoWindow = true
+            };
+            using var proc = System.Diagnostics.Process.Start(psi);
+            if (proc != null)
+            {
+                var hash = proc.StandardOutput.ReadToEnd()?.Trim();
+                proc.WaitForExit(1000);
+                if (!string.IsNullOrEmpty(hash)) return hash;
+            }
+        }
+        catch { }
+        return "unknown";
+    }
 
     public static void Run(string[] args)
     {
@@ -305,12 +325,15 @@ public static class Repl
 
     static void ShowWelcome()
     {
+        var commit = GetGitCommit();
+        var version = "  B+ Machine Code Optimizer v4.0.0";
+
         Console.WriteLine(Logo);
-        Console.WriteLine("   Machine Code Optimizer v4.0.0 BETA");
+        Console.WriteLine(version);
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine(UpdateMsg);
+        Console.WriteLine($"  Commit: {commit}");
         Console.ResetColor();
-        Console.WriteLine("   Type .help for commands");
+        Console.WriteLine("  Type .help for commands");
     }
 
     static void RunBuffer(StringBuilder buffer, ICodeGenerator[] generators, bool runPython)
