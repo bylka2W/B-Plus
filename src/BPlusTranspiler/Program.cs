@@ -512,7 +512,7 @@ if (args.Length > 0 && (args[0] == "--visualize" || args[0] == "--vis"))
     return 0;
 }
 
-if (args.Contains("--repl"))
+if (args.Length == 0 || args.Contains("--repl"))
 {
     Repl.Run(args);
     return 0;
