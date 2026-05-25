@@ -74,11 +74,11 @@ public class PythonGenerator : ICodeGenerator
                 {
                     stack.Add("");
                     var kw = trimmed.Split(' ')[0];
-                    var rest = trimmed.Substring(kw.Length).Trim();
+                    var rest = trimmed.Substring(kw.Length).Trim().TrimEnd(';');
                     sb.AppendLine($"{indent}{kw} {rest}:");
                     continue;
                 }
-                sb.AppendLine($"{indent}{line}");
+                sb.AppendLine($"{indent}{line.TrimEnd(';')}");
             }
             sb.AppendLine();
             sb.AppendLine("if __name__ == \"__main__\":");

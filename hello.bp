@@ -1,18 +1,3 @@
-state Red {
-    on timer -> Green
-    enter { print("Red light - STOP"); }
-}
-
-state Green {
-    on timer -> Yellow
-    enter { print("Green light - GO"); }
-}
-
-state Yellow {
-    on timer -> Red
-    enter { print("Yellow light - WAIT"); }
-}
-
-entry main()
-    print("traffic light ready")
-    return 0
+entry main() 
+    print("Hello from B+!") 
+    return 0 
