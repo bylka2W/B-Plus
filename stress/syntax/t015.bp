@@ -1,0 +1,1 @@
+state T15 { var b: bool = (5 == 5); }

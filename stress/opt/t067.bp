@@ -1,0 +1,1 @@
+state PinTest { var fixed x: int = 100; }

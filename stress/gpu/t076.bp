@@ -1,0 +1,1 @@
+compute_kernel MyKernel { void main() {} } state S {}

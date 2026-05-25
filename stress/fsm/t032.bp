@@ -1,0 +1,1 @@
+state A { var active: bool = true; on check [active] -> B } state B {}

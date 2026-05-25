@@ -1,0 +1,1 @@
+state Game { var lives: int = 1; on die [lives <= 1] -> GameOver } state GameOver {}

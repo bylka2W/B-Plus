@@ -1,0 +1,1 @@
+compute_kernel OutBuf { out vec4 fragColor; void main() {} } state S {}

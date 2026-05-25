@@ -1,0 +1,1 @@
+state T23 { var x: int = 4 | 2; }

@@ -1,0 +1,1 @@
+pipeline FSR_Pipeline { upscale_mode = FSR2; } state S {}

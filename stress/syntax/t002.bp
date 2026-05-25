@@ -1,0 +1,1 @@
+state T2 { var f: float = 3.14; }

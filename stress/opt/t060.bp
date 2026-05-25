@@ -1,0 +1,1 @@
+state JmpTest { on e -> Target } state Target {}

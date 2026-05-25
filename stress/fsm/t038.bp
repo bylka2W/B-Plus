@@ -1,0 +1,1 @@
+state Game { var lives: int = 3; on die [lives > 1] -> Game { lives -= 1; } }

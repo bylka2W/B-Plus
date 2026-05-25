@@ -1,0 +1,1 @@
+state A { var local_val: int = 1; on e -> B } state B { var local_val: int = 2; }

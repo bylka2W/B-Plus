@@ -1,0 +1,1 @@
+@hot state PadTest { var x: int = 1; on e -> PadTest }

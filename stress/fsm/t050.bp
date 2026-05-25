@@ -1,0 +1,1 @@
+state Initial { on start -> Ready {} } state Ready {}

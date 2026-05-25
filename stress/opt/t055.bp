@@ -1,0 +1,1 @@
+@hot state A { on e -> B } @cold state B { on e -> A }

@@ -1,0 +1,1 @@
+state Liveness { on e -> Liveness { var x = 1; x = 2; } }

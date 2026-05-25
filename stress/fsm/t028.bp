@@ -1,0 +1,1 @@
+state A { var x: int = 5; on next [x == 5] -> B } state B {}

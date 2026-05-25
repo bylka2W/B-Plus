@@ -1,0 +1,1 @@
+state Uxml { var x: uint = 10; var y: uint = 20; var z = x - y; }

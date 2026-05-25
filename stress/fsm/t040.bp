@@ -1,0 +1,1 @@
+state A { var x: int = 10; on e [x > 5] -> B { if (x == 10) { x = 0; } } } state B {}

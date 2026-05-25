@@ -1,0 +1,1 @@
+compute_kernel DotProd { void main() { vec3 n; float d = dot(n, n); } } state S {}

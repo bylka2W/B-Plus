@@ -1,0 +1,1 @@
+state Sys { on e -> Sys { syscall(1); } }

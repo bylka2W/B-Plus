@@ -1,0 +1,1 @@
+compute_kernel SpirVOut { layout(set=0, binding=0) void main() {} } state S {}

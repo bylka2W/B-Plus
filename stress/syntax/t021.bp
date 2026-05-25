@@ -1,0 +1,1 @@
+state T21 { var x: int = 16 >> 2; }

@@ -1,0 +1,1 @@
+compute_kernel WmmaTest { void main() { wmma_matrix m; wmma_load(m); } } state S {}

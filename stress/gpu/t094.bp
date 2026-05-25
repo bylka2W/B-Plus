@@ -1,0 +1,1 @@
+compute_kernel Norm { void main() { vec3 v; vec3 n = normalize(v); } } state S {}

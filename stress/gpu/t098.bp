@@ -1,0 +1,1 @@
+compute_kernel Fetch { Texture2D t; void main() { vec4 p = texelFetch(t, vec2(10, 10)); } } state S {}

@@ -1,0 +1,1 @@
+compute_kernel BarrierTest { void main() { barrier(); } } state S {}

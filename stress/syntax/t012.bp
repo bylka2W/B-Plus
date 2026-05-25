@@ -1,0 +1,1 @@
+state T12 { var b: bool = true && false; }

@@ -1,0 +1,1 @@
+compute_kernel Matrix4 { void main() { mat4 mvp; } } state S {}
