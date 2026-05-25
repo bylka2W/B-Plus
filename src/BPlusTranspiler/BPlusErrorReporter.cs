@@ -174,7 +174,7 @@ public class BPlusErrorReporter
                     Column = 1,
                     Message = $"Неизвестный тип '{v.Type}'",
                     YouWrote = $"{v.Name}: {v.Type}",
-                    Expected = "int | float | bool | string | double | long",
+                    Expected = "int | float | bool | string | double | long | enum",
                     Why = $"Тип '{v.Type}' не поддерживается генератором кода",
                     Fixes = { $"Замени {v.Type} на int/float/bool/string", $"Добавь тип {v.Type} в codegen" }
                 });
@@ -698,10 +698,10 @@ public class BPlusErrorReporter
         return errors.Count > 0 ? 1 : 0;
     }
 
-    private static bool IsValidType(string type) => type.ToLower() switch
+    private bool IsValidType(string type) => type.ToLower() switch
     {
         "int" or "float" or "double" or "long" or "bool" or "string" or "void" => true,
-        _ => false
+        _ => _definedEnums.Contains(type)
     };
 
     private static int CountTransitions(StateDefNode state)

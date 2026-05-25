@@ -208,6 +208,7 @@ public class ParallelBlockNode
     public List<StateDefNode> States { get; } = new();
     public List<string> SharedVariables { get; } = new();
     public Dictionary<string, HashSet<string>> DepGraph { get; set; } = new();
+    public List<string> BodyLines { get; } = new();
 }
 
 public class NetworkNode

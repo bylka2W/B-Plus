@@ -1409,6 +1409,40 @@ catch (ParseException ex)
     return 1;
 }
 
+// Resolve imports — load and merge imported .bp files
+string inputDir = Path.GetDirectoryName(Path.GetFullPath(input)) ?? ".";
+foreach (var imp in program.Imports)
+{
+    string importPath = Path.Combine(inputDir, imp.Path);
+    if (File.Exists(importPath))
+    {
+        var importSource = File.ReadAllText(importPath);
+        var importParser = new BPlusParser();
+        try
+        {
+            var importProgram = importParser.Parse(importSource);
+            foreach (var s in importProgram.States) program.States.Add(s);
+            foreach (var e in importProgram.Enums) program.Enums.Add(e);
+            foreach (var pb in importProgram.ParallelBlocks) program.ParallelBlocks.Add(pb);
+            foreach (var n in importProgram.Networks) program.Networks.Add(n);
+            foreach (var k in importProgram.Kernels) program.Kernels.Add(k);
+            foreach (var p in importProgram.Pipelines) program.Pipelines.Add(p);
+            foreach (var en in importProgram.Entries) program.Entries.Add(en);
+            foreach (var v in importProgram.VarDecls) program.VarDecls.Add(v);
+        }
+        catch (ParseException ex)
+        {
+            Console.Error.WriteLine($"Error parsing import '{imp.Path}': {ex.Message}");
+            return 1;
+        }
+    }
+    else
+    {
+        Console.Error.WriteLine($"Import not found: {imp.Path}");
+        return 1;
+    }
+}
+
 var generators = new List<ICodeGenerator>
 {
     new PythonGenerator(),

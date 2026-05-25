@@ -742,10 +742,33 @@ public partial class BPlusParser
     private ParallelBlockNode ParseParallel()
     {
         Expect("parallel ");
-        var name = ParseWord();
+        var par = new ParallelBlockNode();
+
+        // Bare parallel { ... } — no name, no machine wrapping
+        if (Peek("{"))
+        {
+            par.Name = "_anonymous";
+            SkipWs();
+            Expect("{");
+            SkipWs();
+            while (_pos < _src.Length && _src[_pos] != '}')
+            {
+                var lineStart = _pos;
+                while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '}')
+                    _pos++;
+                var line = _src[lineStart.._pos].Trim();
+                if (line != "") par.BodyLines.Add(line);
+                if (_pos < _src.Length && _src[_pos] == '\n') _pos++;
+                SkipWs();
+            }
+            Expect("}");
+            return par;
+        }
+
+        // Named parallel: parallel Name { machine Name { ... } }
+        par.Name = ParseWord();
         SkipWs();
         Expect("{");
-        var par = new ParallelBlockNode { Name = name };
         SkipWs();
         while (_pos < _src.Length && _src[_pos] != '}')
         {
@@ -782,7 +805,7 @@ public partial class BPlusParser
             else if (Peek("state ") || Peek("base "))
                 par.States.Add(ParseStateDef());
             else
-                throw Err($"Unexpected in parallel '{name}'");
+                throw Err($"Unexpected in parallel '{par.Name}'");
             SkipWs();
         }
         Expect("}");
@@ -3266,54 +3289,85 @@ return entries;
         p.Annotations.AddRange(annotations);
         p.Name = ParseWord();
         SkipWs();
-        Expect("(");
-        SkipWs();
-        while (_pos < _src.Length && _src[_pos] != ')')
+
+        // Optional parameters: pipeline Name(...)
+        if (_pos < _src.Length && _src[_pos] == '(')
         {
-            p.Parameters.Add(ParseKernelParam());
+            _pos++;
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+            while (_pos < _src.Length && _src[_pos] != ')')
+            {
+                p.Parameters.Add(ParseKernelParam());
+                SkipWs();
+                if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+            }
+            Expect(")");
+            SkipWs();
         }
-        Expect(")");
-        SkipWs();
-        if (_pos < _src.Length && _src[_pos] == '-')
+
+        // Optional return type: -> Type
+        if (_pos < _src.Length && _pos + 1 < _src.Length && _src[_pos] == '-' && _src[_pos + 1] == '>')
         {
-            Expect("->");
+            _pos += 2;
             SkipWs();
             p.ReturnType = ParseBPlusType();
+            SkipWs();
         }
+
+        // Expect '{' for body
+        Expect("{");
         SkipWs();
-        // Parse steps
-        while (_pos < _src.Length && Peek("step"))
+
+        // Parse steps (supports both "step Name = KernelName" and "stage: StateName")
+        while (_pos < _src.Length && _src[_pos] != '}')
         {
-            Expect("step");
             SkipWs();
-            var stepName = ParseWord();
-            SkipWs();
-            Expect("=");
-            SkipWs();
-            var kernelName = ParseWord();
-            SkipWs();
-            var step = new PipelineStep { Name = stepName, KernelName = kernelName };
-            if (_pos < _src.Length && _src[_pos] == '(')
+            if (Peek("step"))
             {
-                _pos++;
+                Expect("step");
                 SkipWs();
-                while (_pos < _src.Length && _src[_pos] != ')')
+                var stepName = ParseWord();
+                SkipWs();
+                Expect("=");
+                SkipWs();
+                var kernelName = ParseWord();
+                SkipWs();
+                var step = new PipelineStep { Name = stepName, KernelName = kernelName };
+                if (_pos < _src.Length && _src[_pos] == '(')
                 {
-                    int argStart = _pos;
-                    while (_pos < _src.Length && _src[_pos] != ',' && _src[_pos] != ')')
-                        _pos++;
-                    var arg = _src[argStart.._pos].Trim();
-                    if (arg != "") step.Args.Add(arg);
+                    _pos++;
                     SkipWs();
-                    if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                    while (_pos < _src.Length && _src[_pos] != ')')
+                    {
+                        int argStart = _pos;
+                        while (_pos < _src.Length && _src[_pos] != ',' && _src[_pos] != ')')
+                            _pos++;
+                        var arg = _src[argStart.._pos].Trim();
+                        if (arg != "") step.Args.Add(arg);
+                        SkipWs();
+                        if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                    }
+                    Expect(")");
                 }
-                Expect(")");
+                p.Steps.Add(step);
             }
-            p.Steps.Add(step);
+            else if (Peek("stage"))
+            {
+                Expect("stage");
+                SkipWs();
+                Expect(":");
+                SkipWs();
+                var stateName = ParseWord();
+                p.Steps.Add(new PipelineStep { Name = stateName, KernelName = stateName });
+            }
+            SkipWs();
+            // Skip semicolons and commas
+            while (_pos < _src.Length && (_src[_pos] == ';' || _src[_pos] == ','))
+                _pos++;
             SkipWs();
         }
+        Expect("}");
+        SkipWs();
         // Telemetry block
         if (Peek("telemetry"))
         {

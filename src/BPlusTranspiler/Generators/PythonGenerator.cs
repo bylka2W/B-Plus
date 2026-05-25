@@ -14,8 +14,7 @@ public class PythonGenerator : ICodeGenerator
         var sb = new StringBuilder();
 
         // Runtime: State base class
-        sb.AppendLine("import enum");
-        sb.AppendLine("from enum import auto");
+        sb.AppendLine("from enum import Enum, auto");
         sb.AppendLine();
         sb.AppendLine();
         sb.AppendLine("class State:");
