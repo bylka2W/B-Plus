@@ -461,7 +461,12 @@ public static class Repl
             Console.WriteLine($" Remote: {remote}");
             if (isNew) Console.ResetColor();
         }
-        Console.WriteLine(" Type .help for commands");
+        Console.WriteLine(" === B+ REPL — standalone bpc.exe ===");
+        Console.WriteLine(" .run       compile & run (Python)");
+        Console.WriteLine(" .metal     compile to native .exe");
+        Console.WriteLine(" .update    git pull + rebuild + restart");
+        Console.WriteLine(" .help      show all commands");
+        Console.WriteLine(" .exit      quit");
     }
 
     static void RunBuffer(StringBuilder buffer, ICodeGenerator[] generators, bool runPython)
