@@ -299,6 +299,8 @@ public static class Repl
         }
 
         Console.WriteLine("Bye!");
+        Console.WriteLine("Press any key to exit...");
+        try { Console.ReadKey(true); } catch { }
     }
 
     static void ShowWelcome()
