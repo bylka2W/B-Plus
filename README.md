@@ -222,6 +222,28 @@ cd "C:\B+ v1.0"
 
 Edit `.bp` files in any editor. Visual Studio has syntax highlighting.
 
+### Standalone `bpc.exe` & REPL
+
+After building (`dotnet publish src/BPlusTranspiler -c Release -r win-x64 --self-contained -p:PublishSingleFile=true`), a standalone **`bpc.exe`** (~30 MB, no .NET required) is available in the repo root. Launch it by double-click or from terminal:
+
+```powershell
+bpc.exe --repl
+# or just:
+bpc.exe
+```
+
+The **REPL mode** opens an interactive prompt `B Plus>`. Commands:
+
+| .command | What it does |
+|:---|:---|
+| `.run`   | Compile buffer and run (Python) |
+| `.metal` | Compile buffer to native .exe |
+| `.update`| `git pull` + rebuild + restart |
+| `.help`  | Show all commands |
+| `.exit`  | Quit REPL |
+
+Inside the REPL, type B+ code directly; it accumulates in a buffer. Then `.run` or `.metal` to execute.
+
 ---
 
 ## 3. CLI Commands
@@ -1444,6 +1466,26 @@ cd "C:\B+ v1.0"
 ```
 
 Редактировать `.bp` файлы можно в любом редакторе. В Visual Studio — подсветка синтаксиса.
+
+### `bpc.exe` и REPL
+
+После сборки (`dotnet publish src/BPlusTranspiler ...`) в корне проекта лежит **`bpc.exe`** (~30 МБ, .NET не нужен). Запускается двойным кликом или из терминала:
+
+```powershell
+bpc.exe --repl     # или просто bpc.exe (откроется REPL)
+```
+
+Интерактивный режим REPL с промптом `B Plus>`:
+
+| .команда  | Что делает |
+|:---|:---|
+| `.run`    | Скомпилировать буфер и запустить (Python) |
+| `.metal`  | Скомпилировать буфер в нативный .exe |
+| `.update` | `git pull` + пересобрать + перезапустить |
+| `.help`   | Показать все команды |
+| `.exit`   | Выйти |
+
+Можно писать B+ код прямо в REPL — он накапливается в буфере. Затем `.run` или `.metal` чтобы выполнить.
 
 ---
 
