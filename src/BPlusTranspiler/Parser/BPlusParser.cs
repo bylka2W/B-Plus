@@ -2802,7 +2802,7 @@ return entries;
                     {
                         var key = ParseWord();
                         SkipWs();
-                        if (_pos < _src.Length && _src[_pos] == ':')
+                        if (_pos < _src.Length && (_src[_pos] == ':' || _src[_pos] == '='))
                         {
                             _pos++;
                             SkipWs();
@@ -3056,6 +3056,12 @@ return entries;
                 break;
             var op = new PipelineOp();
             op.Name = ParseWord();
+            // Support dotted names like mpi.broadcast
+            while (_pos < _src.Length && _src[_pos] == '.')
+            {
+                _pos++;
+                op.Name += "." + ParseWord();
+            }
             SkipWs();
             // Parse optional (args)
             if (_pos < _src.Length && _src[_pos] == '(')

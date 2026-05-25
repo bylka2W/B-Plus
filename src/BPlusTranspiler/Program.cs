@@ -1559,7 +1559,8 @@ Parallel.ForEach(generators, gen =>
     foreach (var (name, code) in files)
     {
         var outputFile = Path.Combine(output, name);
-        File.WriteAllText(outputFile, code);
+        lock (lockObj)
+            File.WriteAllText(outputFile, code);
         Console.WriteLine($"  [{gen.GetLanguageName(),-10}] {outputFile}");
         localCount++;
     }
