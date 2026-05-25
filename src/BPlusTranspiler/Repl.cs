@@ -8,22 +8,34 @@ namespace BPlusTranspiler;
 
 public static class Repl
 {
+    static readonly string Logo = @"
+██████╗      ██████╗ ██╗     ██╗   ██╗███████╗
+██╔══██╗     ██╔══██╗██║     ██║   ██║██╔════╝
+██████╔╝     ██████╔╝██║     ██║   ██║███████╗
+██╔══██╗     ██╔═══╝ ██║     ██║   ██║╚════██║
+██████╔╝     ██║     ███████╗╚██████╔╝███████║
+╚══════╝     ╚═╝     ╚══════╝ ╚═════╝ ╚══════╝
+";
+
     static readonly string[] HelpText =
     {
         "",
         "  .run              Compile buffer and run (Python)",
-        "  .metal            Compile buffer to all outputs (gen/)",
+        "  .metal            Compile buffer to native .exe",
         "  .new <name>       Create new .bp file",
         "  .open <file>      Open existing .bp file into buffer",
         "  .save             Save buffer to current file",
         "  .clear            Clear screen and buffer",
+        "  .version          Show version",
+        "  .update           Check for updates",
         "  .help             This message",
         "  .help all         Show all 40+ optimization flags",
         "  .help lang        Show B+ language quick reference",
+        "  .help metal       Show Metal Stack commands",
         "  .exit             Exit REPL",
         "",
-        "  Type B+ code directly — it accumulates in the buffer.",
-        "  Use .run to parse and execute as Python, or .save to save.",
+        "  Type .run to compile and run the buffer.",
+        "  Write B+ code directly — it accumulates in the buffer.",
         ""
     };
 
@@ -118,6 +130,28 @@ public static class Repl
         ""
     };
 
+    static readonly string[] HelpMetal =
+    {
+        "",
+        "  === METAL STACK ===",
+        "",
+        "  The B+ Metal Stack compiles state machines to native",
+        "  machine code with profile-guided tiering and CPU-level",
+        "  optimizations (prefetch, cache pinning, loop tiling).",
+        "",
+        "  Usage outside REPL:",
+        "    bpc file.bp --metal --tier=L0",
+        "    bpc file.bp --metal --tier=L1 --prefetch --pin-regs=8",
+        "",
+        "  Tiers: L0 (4KB), L1 (32KB), L2 (256KB), L3 (8MB)",
+        "  Flags: --eco, --lock-free, --thread-pool=N, --stream",
+        "         --prefetch, --pin-regs=N, --pgo-collect",
+        "",
+        "  Pipeline: .bp -> LLVM IR -> llc .obj -> lld-link .exe",
+        "  See compile-metal.bat for the full pipeline.",
+        ""
+    };
+
     public static void Run(string[] args)
     {
         var buffer = new StringBuilder();
@@ -128,12 +162,11 @@ public static class Repl
             new RustGenerator(), new GoGenerator()
         };
 
-        var promptPrefix = "B+> ";
+        var promptPrefix = "b+> ";
         var contPrefix = "  > ";
 
         try { Console.Clear(); } catch { }
         ShowWelcome();
-        Console.WriteLine("  Type .help for commands, or write B+ code below.");
         Console.WriteLine();
 
         while (true)
@@ -158,6 +191,19 @@ public static class Repl
                 continue;
             }
 
+            if (trimmed == ".version")
+            {
+                Console.WriteLine("  B+ Machine Code Optimizer v4.0.0 BETA");
+                continue;
+            }
+
+            if (trimmed == ".update")
+            {
+                Console.WriteLine("  Checking for updates... (not implemented in REPL)");
+                Console.WriteLine("  Run 'git pull' in the project directory to update.");
+                continue;
+            }
+
             if (trimmed == ".help")
             {
                 foreach (var l in HelpText) Console.WriteLine(l);
@@ -173,6 +219,12 @@ public static class Repl
             if (trimmed == ".help lang")
             {
                 foreach (var l in HelpLang) Console.WriteLine(l);
+                continue;
+            }
+
+            if (trimmed == ".help metal")
+            {
+                foreach (var l in HelpMetal) Console.WriteLine(l);
                 continue;
             }
 
@@ -251,10 +303,9 @@ public static class Repl
 
     static void ShowWelcome()
     {
-        Console.WriteLine("╔══════════════════════════════════════╗");
-        Console.WriteLine("║     B+ Interactive Console (REPL)    ║");
-        Console.WriteLine("║        bpc --repl v4.0.0             ║");
-        Console.WriteLine("╚══════════════════════════════════════╝");
+        Console.WriteLine(Logo);
+        Console.WriteLine("   Machine Code Optimizer v4.0.0 BETA");
+        Console.WriteLine("   Type .help for commands");
     }
 
     static void RunBuffer(StringBuilder buffer, ICodeGenerator[] generators, bool runPython)
@@ -285,7 +336,7 @@ public static class Repl
                 if (files.TryGetValue("generated.py", out var pyCode))
                 {
                     File.WriteAllText(pyFile, pyCode);
-                    Console.WriteLine($"  Running Python...");
+                    Console.WriteLine("  Running Python...");
                     Console.WriteLine();
 
                     var psi = new System.Diagnostics.ProcessStartInfo("python", $"\"{pyFile}\"")
