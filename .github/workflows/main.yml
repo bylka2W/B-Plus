@@ -1,0 +1,18 @@
+name: Mirror to GitVerse
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Push to GitVerse
+      run: |
+        git remote add gitverse https://${{ secrets.GITVERSE_USER }}:${{ secrets.GITVERSE_TOKEN }}@gitverse.ru/bylka2W/B-Plus.git
+        git push gitverse main --force-with-lease
