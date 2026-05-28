@@ -15,4 +15,4 @@ jobs:
     - name: Push to GitVerse
       run: |
         git remote add gitverse https://${{ secrets.GITVERSE_USER }}:${{ secrets.GITVERSE_TOKEN }}@gitverse.ru/bylka2W/B-Plus.git
-       git push gitverse main --force
+        git push gitverse main --force
