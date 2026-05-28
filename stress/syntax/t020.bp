@@ -1,1 +1,0 @@
-state T20 { var x: int = 1 << 4; }

@@ -1,9 +1,0 @@
-@async_compute  
-pipeline test {  
-    pass step1()  
-    queue: compute  
-}  
-  
-entry main()  
-    print("Async test passed")  
-    return 0 

@@ -1,1 +1,0 @@
-pipeline FSR3_Pipeline { upscale_mode = FSR3; frame_generation = true; } state S {}

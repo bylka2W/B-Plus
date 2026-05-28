@@ -1,3 +1,0 @@
-blockchain Test {
-    consensus: pow
-}

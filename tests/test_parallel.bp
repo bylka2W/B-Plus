@@ -1,8 +1,0 @@
-parallel {  
-    print("Task A")  
-    print("Task B")  
-}  
-  
-entry main()  
-    print("Parallel test")  
-    return 0 

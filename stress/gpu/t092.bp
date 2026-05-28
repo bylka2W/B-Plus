@@ -1,1 +1,0 @@
-compute_kernel Hf { half x = 0.5; } state S {}

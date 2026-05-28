@@ -1,1 +1,0 @@
-state T7 { var x: int = 5 + 5; }

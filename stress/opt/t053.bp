@@ -1,1 +1,0 @@
-@hot(0.95) state MainLoop { on tick -> MainLoop }

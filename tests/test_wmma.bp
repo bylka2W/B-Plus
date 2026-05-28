@@ -1,8 +1,0 @@
-@wmma(layout=row_major)  
-@tensor_core(m=16, n=8, k=16)  
-kernel matmul(A: f16mat[16, 16], B: f16mat[16, 16]) -> f16mat[16, 16]  
-    body: A |> wmma.mma(B) >> output  
-  
-entry main()  
-    print("WMMA test passed")  
-    return 0 

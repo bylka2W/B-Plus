@@ -1,8 +1,0 @@
-@simd_width(256)
-kernel process(src: float[1024]) -> float[1024]
-    touches: reads[src], writes[output]
-    body: src |> mul(2.0) >> output
-
-entry main()
-    print("Kernel test passed")
-    return 0

@@ -1,1 +1,0 @@
-compute_kernel Push { push_constant int id; void main() {} } state S {}

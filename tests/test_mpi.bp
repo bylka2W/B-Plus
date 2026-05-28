@@ -1,9 +1,0 @@
-#mpi_config nodes=4, ppn=16  
-  
-kernel distributed(data: float[1024]) -> float[1024]  
-    touches: reads[data], writes[output]  
-    body: data |> mpi.broadcast("data") |> mpi.reduce("sum") >> output  
-  
-entry main()  
-    print("MPI test compiled")  
-    return 0 

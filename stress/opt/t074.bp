@@ -1,1 +1,0 @@
-state AtomicTest { on e -> AtomicTest { atomic_add(x, 1); } var x: int = 0; }

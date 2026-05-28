@@ -1,9 +1,0 @@
-state Player {
-    var x: int = 10
-    on move -> Player { x = x + 1 }
-    enter { print("Player ready"); }
-}
-
-entry main()
-    print("Metal var test passed")
-    return 0

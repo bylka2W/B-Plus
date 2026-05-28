@@ -1,5 +1,0 @@
-#memory comptime
-
-kernel process(src: Image[1080, 1920]) -> Image[1080, 1920]
-    touches: reads[src], writes[output]
-    body: src |> relu >> output

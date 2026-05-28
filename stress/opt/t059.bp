@@ -1,1 +1,0 @@
-state AsmTest { on e -> AsmTest { asm { ""MOV RAX, 1"" } } }

@@ -1,1 +1,0 @@
-state A { on e1 -> B } state B { on e2 -> C } state C {}

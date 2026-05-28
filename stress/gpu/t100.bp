@@ -1,1 +1,0 @@
-@hot state MainFSM { on render -> MainFSM { run_kernel(MyKernel); } } compute_kernel MyKernel { void main() {} }

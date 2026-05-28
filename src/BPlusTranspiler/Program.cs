@@ -1,4 +1,5 @@
-﻿using System.Text.RegularExpressions;
+﻿using System.Diagnostics;
+using System.Text.RegularExpressions;
 using BPlusTranspiler;
 using BPlusTranspiler.Algorithm;
 using BPlusTranspiler.Ast;
@@ -1449,6 +1450,157 @@ foreach (var imp in program.Imports)
         Console.Error.WriteLine($"Import not found: {imp.Path}");
         return 1;
     }
+}
+
+// --zig flag: bypass multi-generator pipeline, use C# → JSON → Zig DLL → zig build-exe
+if (optFlags.ZigBackend)
+{
+    var json = AstSerializer.Serialize(program);
+    var zigMode = optFlags.Release ? 1 : 0;
+    string zigCode;
+    try
+    {
+        zigCode = BpcBackend.GenerateFromJson(json, zigMode);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Zig backend error: {ex.Message}");
+        return 1;
+    }
+
+    if (optFlags.Release)
+    {
+        // Mode 1: LLVM IR → clang → lld-link
+        var genDir = "gen_metal";
+        Directory.CreateDirectory(genDir);
+        var llFile = Path.Combine(genDir, "kernels_llvm.ll");
+        File.WriteAllText(llFile, zigCode);
+        Console.WriteLine($"Generated {llFile} ({zigCode.Length} bytes)");
+
+        // SPIR-V output (GPU kernel via LLVM bitcode → llvm-spirv)
+        if (optFlags.Spirv)
+        {
+            var llvmBin = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".bplus", "llvm", "bin");
+            var clang = Path.Combine(llvmBin, "clang.exe");
+            if (File.Exists(clang))
+            {
+                var bcFile = Path.Combine(genDir, "kernels_llvm.spv");
+                var bcArgs = $"-c -emit-llvm -target spirv64-unknown-unknown \"{llFile}\" -o \"{bcFile}\"";
+                var sp = Process.Start(clang, bcArgs);
+                sp.WaitForExit();
+                if (sp.ExitCode == 0)
+                {
+                    Console.WriteLine($"Generated {bcFile} (spirv64 bitcode — run llvm-spirv -r for .spv)");
+                }
+                else
+                    Console.Error.WriteLine("SPIR-V skipped (spirv64 target not supported by this clang)");
+            }
+        }
+
+        if (optFlags.Run)
+        {
+            var llvmBin = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".bplus", "llvm", "bin");
+            var lldLink = Path.Combine(llvmBin, "lld-link.exe");
+            var clang = Path.Combine(llvmBin, "clang.exe");
+
+            if (!File.Exists(lldLink))
+            {
+                Console.Error.WriteLine("LLVM not found. Run compile-metal.bat first.");
+                return 1;
+            }
+
+            // Use llc if available (LLVM 18), otherwise clang -c (LLVM 21+)
+            var llc = Path.Combine(llvmBin, "llc.exe");
+            var llvmCompiler = clang;
+            var llvmObjFlags = $"-c \"{llFile}\" -o \"";
+            var legacyFlags = $"-c legacy_stdio.ll -o \"";
+            if (File.Exists(llc))
+            {
+                llvmCompiler = llc;
+                llvmObjFlags = $"-filetype=obj \"{llFile}\" -o \"";
+                legacyFlags = $"-filetype=obj legacy_stdio.ll -o \"";
+            }
+
+            // Compile .ll → .obj
+            var objFile = Path.Combine(genDir, "kernels_llvm.obj");
+            var cc = Process.Start(llvmCompiler, llvmObjFlags + objFile + "\"");
+            cc.WaitForExit();
+            if (cc.ExitCode != 0) { Console.Error.WriteLine("llc failed"); return 1; }
+
+            // Compile legacy_stdio.ll → .obj
+            var legacyObj = Path.Combine(genDir, "legacy_stdio.obj");
+            var lc = Process.Start(llvmCompiler, legacyFlags + legacyObj + "\"");
+            lc.WaitForExit();
+            if (lc.ExitCode != 0) { Console.Error.WriteLine("legacy_stdio.ll compile failed"); return 1; }
+
+            // Link → .exe
+            var exeFile = Path.Combine(genDir, "bplus_llvm_output.exe");
+            var linkArgs = $"\"{objFile}\" \"{legacyObj}\" /OUT:\"{exeFile}\" /NOLOGO /ENTRY:main /SUBSYSTEM:CONSOLE kernel32.lib /NODEFAULTLIB";
+            var ld = Process.Start(lldLink, linkArgs);
+            ld.WaitForExit();
+            if (ld.ExitCode != 0) { Console.Error.WriteLine("lld-link failed"); return 1; }
+
+            Console.WriteLine("LLVM build OK. Running...");
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+            var run = Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c chcp 65001 >nul & \"{exeFile}\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8
+            });
+            var stdout = run.StandardOutput.ReadToEnd();
+            var stderr = run.StandardError.ReadToEnd();
+            run.WaitForExit();
+            if (!string.IsNullOrEmpty(stdout)) Console.WriteLine(stdout);
+            if (!string.IsNullOrEmpty(stderr)) Console.Error.WriteLine(stderr);
+        }
+    }
+    else
+    {
+        // Mode 0: Zig source → zig build-exe → out.exe
+        var outFile = optFlags.Output ?? "output.zig";
+        File.WriteAllText(outFile, zigCode);
+        Console.WriteLine($"Generated {outFile} ({zigCode.Length} bytes)");
+
+        if (optFlags.Run)
+        {
+            var zigPath = Environment.GetEnvironmentVariable("ZIG_PATH")
+                ?? @"C:\tools\zig\zig-windows-x86_64-0.14.0\zig.exe";
+            var build = Process.Start(zigPath, $"build-exe {outFile} --name out");
+            build.WaitForExit();
+            if (build.ExitCode != 0)
+            {
+                Console.Error.WriteLine("zig build-exe failed");
+                return 1;
+            }
+            Console.WriteLine("Zig build OK. Running...");
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+            var run = Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = "/c chcp 65001 >nul & out.exe",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8
+            });
+            var stdout = run.StandardOutput.ReadToEnd();
+            var stderr = run.StandardError.ReadToEnd();
+            run.WaitForExit();
+            if (!string.IsNullOrEmpty(stdout)) Console.WriteLine(stdout);
+            if (!string.IsNullOrEmpty(stderr)) Console.Error.WriteLine(stderr);
+        }
+    }
+    return 0;
 }
 
 var generators = new List<ICodeGenerator>

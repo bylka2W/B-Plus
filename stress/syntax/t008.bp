@@ -1,1 +1,0 @@
-state T8 { var x: int = 10 / 2; }

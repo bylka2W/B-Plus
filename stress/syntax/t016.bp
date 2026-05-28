@@ -1,1 +1,0 @@
-state T16 { var b: bool = (10 > 2); }

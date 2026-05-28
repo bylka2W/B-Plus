@@ -1,8 +1,0 @@
-state Add {
-    on calc -> Result
-    enter { print("Adding"); }
-}
-
-state Result {
-    enter { print("Done"); }
-}

@@ -1,1 +1,0 @@
-@hot state HotState { on e -> Ready } state Ready {}

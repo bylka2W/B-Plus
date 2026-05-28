@@ -1,5 +1,0 @@
-@simd_width(512)
-@simd_unroll(8)
-@simd_gather
-kernel process(src: Image[1080, 1920]) -> Image[1080, 1920]
-    body: src |> relu >> output

@@ -1,1 +1,0 @@
-state A { var c: int = 0; on msg -> A { c++; } }

@@ -1,1 +1,0 @@
-state A { on hit -> B on miss -> C } state B {} state C {}

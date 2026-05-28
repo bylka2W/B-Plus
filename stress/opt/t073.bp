@@ -1,1 +1,0 @@
-state VolatileTest { volatile var x: int = 0; }

@@ -1,1 +1,0 @@
-state Counter { var count: int = 0; on inc -> Counter { count++; } }

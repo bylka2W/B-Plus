@@ -79,6 +79,13 @@ public class OptimizationFlags
     // Analysis
     public bool Check { get; set; }
 
+    // Zig backend
+    public bool ZigBackend { get; set; }
+    public bool Release { get; set; }
+    public string? Output { get; set; }
+    public bool Run { get; set; }
+    public bool Spirv { get; set; }
+
     // Streaming mode (#parser / --stream)
     public bool Stream { get; set; }
 
@@ -310,6 +317,23 @@ public class OptimizationFlags
 
                 case "--cfi":
                     flags.Cfi = true;
+                    break;
+
+                case "--zig":
+                    flags.ZigBackend = true;
+                    break;
+                case "--release":
+                    flags.Release = true;
+                    break;
+                case "--output":
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                        flags.Output = args[++i];
+                    break;
+                case "--run":
+                    flags.Run = true;
+                    break;
+                case "--spirv":
+                    flags.Spirv = true;
                     break;
 
                 case "--check":

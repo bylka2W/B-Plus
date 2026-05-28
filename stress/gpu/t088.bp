@@ -1,1 +1,0 @@
-compute_kernel Rdna3 { target_gpu = amd_rdna3; void main() {} } state S {}

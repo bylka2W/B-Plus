@@ -43,12 +43,16 @@ public class PythonGenerator : ICodeGenerator
             sb.AppendLine();
         }
 
+        var ctxVars = program.Context is { Variables.Count: > 0 }
+            ? program.Context.Variables.Select(v => v.Name).ToHashSet()
+            : new HashSet<string>();
+
         foreach (var par in program.ParallelBlocks)
             foreach (var st in par.States)
-                EmitState(sb, st, 0);
+                EmitState(sb, st, 0, ctxVars);
 
         foreach (var st in program.States)
-            EmitState(sb, st, 0);
+            EmitState(sb, st, 0, ctxVars);
 
         foreach (var entry in program.Entries)
         {
@@ -88,7 +92,19 @@ public class PythonGenerator : ICodeGenerator
         return new Dictionary<string, string> { { "generated" + GetFileExtension(), sb.ToString() } };
     }
 
-    private void EmitState(StringBuilder sb, StateDefNode state, int depth)
+    private bool IsContextVarAssigned(string body, string varName)
+    {
+        if (body == null) return false;
+        return body.Contains(varName + " =") ||
+               body.Contains(varName + " +=") ||
+               body.Contains(varName + "+=") ||
+               body.Contains(varName + " -=") ||
+               body.Contains(varName + "-=") ||
+               body.Contains(varName + "++") ||
+               body.Contains(varName + "--");
+    }
+
+    private void EmitState(StringBuilder sb, StateDefNode state, int depth, HashSet<string> ctxVars)
     {
         var indent = new string(' ', depth * 4);
         var baseCls = state.BaseClass ?? "State";
@@ -122,6 +138,14 @@ public class PythonGenerator : ICodeGenerator
             sb.AppendLine();
             var pars = string.Join(", ", group.First().Parameters.Select(p => $"{p.Name}: {p.Type}"));
             sb.AppendLine($"{indent}    def on_{group.Key}(self{(pars != "" ? ", " + pars : "")}):");
+
+            // Emit 'global' for context variables assigned in this method
+            var assignedCtxVars = ctxVars.Where(v =>
+                group.Any(t => IsContextVarAssigned(t.Body ?? "", v) || IsContextVarAssigned(t.Guard ?? "", v))
+            ).ToList();
+            if (assignedCtxVars.Count > 0)
+                sb.AppendLine($"{indent}        global {string.Join(", ", assignedCtxVars)}");
+
             var needsFallback = group.All(t => t.Guard != null);
             foreach (var t in group)
             {
@@ -166,7 +190,7 @@ public class PythonGenerator : ICodeGenerator
         foreach (var ns in state.NestedStates)
         {
             sb.AppendLine();
-            EmitState(sb, ns, depth + 1);
+            EmitState(sb, ns, depth + 1, ctxVars);
         }
 
         if (state.Variables.Count == 0 && state.Actions.Count == 0 && state.Transitions.Count == 0 && state.NestedStates.Count == 0)

@@ -1,1 +1,0 @@
-state StackTest { fn call(); on e -> StackTest { call(); } }

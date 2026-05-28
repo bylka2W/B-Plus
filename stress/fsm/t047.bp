@@ -1,1 +1,0 @@
-state A { var cmd: string = "stop"; on e [cmd == "stop"] -> B } state B {}

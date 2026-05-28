@@ -1,7 +1,0 @@
-#parser
-state Foo {
-    on bar -> Baz
-}
-state Baz {
-    on qux -> Foo
-}

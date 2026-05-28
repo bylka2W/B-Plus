@@ -5,9 +5,7 @@ namespace BPlusTranspiler.Parser;
 
 public partial class BPlusParser
 {
-    private string _src = "";
-    private int _pos;
-    private int _line;
+    private Lexer _lexer = new();
     private const int MaxNestingDepth = 100;
     private static readonly char[] RtlChars = {
         '\u200E', '\u200F', '\u202A', '\u202B', '\u202C',
@@ -20,26 +18,26 @@ public partial class BPlusParser
         if (source.Length > 0 && source[0] == '\uFEFF')
             source = source[1..];
 
-        _src = StripComments(source);
-        _pos = 0;
-        _line = 1;
+        _lexer.Src = StripComments(source);
+        _lexer.Pos = 0;
+        _lexer.Line = 1;
 
         // RTL override filter (CWE-451)
         foreach (var c in RtlChars)
         {
-            if (_src.Contains(c))
+            if (_lexer.Src.Contains(c))
                 throw new ParseException($"RTL override character U+{(int)c:X4} detected — possible code injection (CWE-451)");
         }
         var program = new ProgramNode();
 
         SkipWs();
-        while (_pos < _src.Length)
+        while (_lexer.Pos < _lexer.Src.Length)
         {
             if (Peek("import "))
             {
                 program.Imports.Add(ParseImport());
             }
-            else if (_src[_pos] == '#')
+            else if (_lexer.Src[_lexer.Pos] == '#')
             {
                 var dir = ParseDirective();
                 program.Directives.Add(dir);
@@ -53,7 +51,7 @@ public partial class BPlusParser
             {
                 program.ExternCppFns.Add(ParseExternCppFn());
             }
-            else if (_src[_pos] == '@')
+            else if (_lexer.Src[_lexer.Pos] == '@')
             {
                 var annotations = ParseAnnotations();
                 SkipWs();
@@ -156,7 +154,7 @@ public partial class BPlusParser
                 }
                 else
                 {
-                    if (_pos < _src.Length && _src[_pos] == '@')
+                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '@')
                     {
                         program.StandaloneAnnotations.AddRange(annotations);
                     }
@@ -227,6 +225,14 @@ public partial class BPlusParser
                 var sk = ParseScientificKernel();
                 if (sk != null) program.ScientificKernels.Add(sk);
             }
+            else if (Peek("struct "))
+            {
+                program.Structs.Add(ParseStruct());
+            }
+            else if (Peek("compute_kernel"))
+            {
+                program.ComputeShaders.Add(ParseGpuKernel());
+            }
             else
             {
                 throw Err($"Unexpected '{PeekWord()}'");
@@ -241,9 +247,9 @@ public partial class BPlusParser
     {
         Expect("import ");
         SkipWs();
-        var m = Regex.Match(_src[_pos..], @"^""([^""]*)""");
+        var m = Regex.Match(_lexer.Src[_lexer.Pos..], @"^""([^""]*)""");
         if (!m.Success) throw Err("Expected string literal after import");
-        _pos += m.Length;
+        _lexer.Pos += m.Length;
         return new ImportNode { Path = m.Groups[1].Value };
     }
 
@@ -254,7 +260,7 @@ public partial class BPlusParser
         Expect("{");
         var ctx = new ContextNode();
         SkipWs();
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             ctx.Variables.Add(ParseVarDecl());
             SkipWs();
@@ -271,14 +277,14 @@ public partial class BPlusParser
         Expect("{");
         var en = new EnumNode { Name = name };
         SkipWs();
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             var member = ParseWord();
             en.Members.Add(member);
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == ',')
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',')
             {
-                _pos++;
+                _lexer.Pos++;
                 SkipWs();
             }
         }
@@ -295,7 +301,7 @@ public partial class BPlusParser
             throw Err($"Maximum nesting depth {MaxNestingDepth} exceeded — possible stack overflow");
 
         var state = new StateDefNode();
-        state.ParseLine = _line;
+        state.ParseLine = _lexer.Line;
         state.Depth = depth;
 
         if (Peek("base "))
@@ -327,9 +333,9 @@ public partial class BPlusParser
 
         // Generic <T>
         SkipWs();
-        if (_pos < _src.Length && _src[_pos] == '<')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '<')
         {
-            _pos++;
+            _lexer.Pos++;
             state.GenericParam = ParseWord();
             SkipWs();
             Expect(">");
@@ -337,9 +343,9 @@ public partial class BPlusParser
 
         // Inheritance : Parent
         SkipWs();
-        if (_pos < _src.Length && _src[_pos] == ':')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ':')
         {
-            _pos++;
+            _lexer.Pos++;
             SkipWs();
             state.BaseClass = ParseWord();
             // Self-inheritance
@@ -354,9 +360,36 @@ public partial class BPlusParser
         Expect("{");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
-            if (Peek("var "))
+            if (Peek("inline ") || Peek("fn "))
+            {
+                bool isInline;
+                if (_lexer.Pos + 7 <= _lexer.Src.Length && _lexer.Src.AsSpan(_lexer.Pos, 7).SequenceEqual("inline "))
+                {
+                    _lexer.Pos += 7;
+                    isInline = true;
+                    // After "inline ", skip "fn " too
+                    SkipWs();
+                    if (_lexer.Pos + 3 <= _lexer.Src.Length && _lexer.Src.AsSpan(_lexer.Pos, 3).SequenceEqual("fn "))
+                        _lexer.Pos += 3;
+                    else if (_lexer.Pos + 2 <= _lexer.Src.Length && _lexer.Src.AsSpan(_lexer.Pos, 2).SequenceEqual("fn"))
+                        _lexer.Pos += 2;
+                }
+                else
+                {
+                    isInline = false;
+                    // Skipping "fn " — Peek("fn ") left _lexer.Pos at "fn "
+                    _lexer.Pos += 3;
+                }
+                state.Functions.Add(ParseFn(isInline));
+            }
+            else if (Peek("volatile ") || Peek("fixed "))
+            {
+                ParseWord();
+                state.Variables.Add(ParseVarDecl());
+            }
+            else if (Peek("var "))
             {
                 state.Variables.Add(ParseVarDecl());
             }
@@ -380,7 +413,7 @@ public partial class BPlusParser
             {
                 state.Transitions.Add(ParseAlways());
             }
-            else if (_src[_pos] == '@')
+            else if (_lexer.Src[_lexer.Pos] == '@')
             {
                 // Parse annotations for next element (@hot, @cold, @fast_path)
                 var annots = ParseAnnotations();
@@ -435,10 +468,10 @@ public partial class BPlusParser
                     throw Err($"Expected transition or var after annotation in state '{state.Name}'");
                 }
             }
-            else if (_src[_pos] == '#')
+            else if (_lexer.Src[_lexer.Pos] == '#')
             {
                 // Skip precision directives inside state (e.g. #256 for bigfloat)
-                while (_pos < _src.Length && _src[_pos] != '\n') _pos++;
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n') _lexer.Pos++;
             }
             else
             {
@@ -483,23 +516,113 @@ public partial class BPlusParser
     private VariableNode ParseVarDecl()
     {
         Expect("var ");
-        var name = ParseWord();
-        SkipWs();
-        Expect(":");
-        SkipWs();
-        var type = ParseType();
+        List<string> mods = new();
+        string name;
+        int saved = _lexer.Pos;
+        var first = ParseWord();
+        if (first == "fixed" || first == "volatile")
+        {
+            mods.Add(first);
+            SkipWs();
+            name = ParseWord();
+        }
+        else
+        {
+            _lexer.Pos = saved;
+            name = ParseWord();
+        }
+        string? type = null;
         string? def = null;
         SkipWs();
-        if (_pos < _src.Length && _src[_pos] == '=')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ':')
         {
-            _pos++;
+            _lexer.Pos++;
             SkipWs();
-            int start = _pos;
-            while (_pos < _src.Length && !char.IsWhiteSpace(_src[_pos]) && _src[_pos] != '{' && _src[_pos] != '}' && _src[_pos] != ',')
-                _pos++;
-            def = _src[start.._pos];
+            type = ParseType();
+            SkipWs();
         }
-        return new VariableNode { Name = name, Type = type, DefaultValue = def };
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '=')
+        {
+            _lexer.Pos++;
+            SkipWs();
+            int start = _lexer.Pos;
+            int depth = 0;
+            while (_lexer.Pos < _lexer.Src.Length)
+            {
+                var c = _lexer.Src[_lexer.Pos];
+                if (c == '(' || c == '[' || c == '{') depth++;
+                else if (c == ')' || c == ']' || c == '}') { if (depth == 0) break; depth--; }
+                else if (c == ';') break;
+                else if (c == '\n' || c == '\r') { if (depth == 0) break; _lexer.Pos++; continue; }
+                else if (depth == 0 && (
+                    (c == 'v' && Peek("var ")) ||
+                    (c == 'o' && Peek("on ")) ||
+                    (c == 'e' && (Peek("enter ") || Peek("exit "))) ||
+                    (c == 's' && Peek("state ")) ||
+                    (c == 'i' && Peek("inline ")) ||
+                    (c == 'f' && Peek("fn ")) ||
+                    (c == 'a' && Peek("always"))
+                )) break;
+                _lexer.Pos++;
+            }
+            def = _lexer.Src[start.._lexer.Pos].Trim();
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ';') _lexer.Pos++;
+        }
+        else
+        {
+            SkipWs();
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ';') _lexer.Pos++;
+        }
+        return new VariableNode { Name = name, Type = type ?? "inferred", DefaultValue = def };
+    }
+
+    private FunctionDecl ParseFn(bool isInline)
+    {
+        var fn = new FunctionDecl { IsInline = isInline };
+        SkipWs();
+        fn.Name = ParseWord();
+        SkipWs();
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '(')
+        {
+            _lexer.Pos++;
+            SkipWs();
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ')')
+            {
+                var pName = ParseWord();
+                SkipWs();
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ':')
+                {
+                    _lexer.Pos++;
+                    SkipWs();
+                    var pType = ParseWord();
+                    fn.Parameters.Add((pName, pType));
+                }
+                else
+                {
+                    fn.Parameters.Add((pName, "inferred"));
+                }
+                SkipWs();
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
+            }
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ')') _lexer.Pos++;
+        }
+        SkipWs();
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ':')
+        {
+            _lexer.Pos++;
+            SkipWs();
+            fn.ReturnType = ParseWord();
+            SkipWs();
+        }
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '{')
+        {
+            fn.Body = ExtractBracedBlock() ?? "";
+        }
+        else if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ';')
+        {
+            _lexer.Pos++;
+        }
+        return fn;
     }
 
     private TransitionNode ParseTransition()
@@ -513,7 +636,7 @@ public partial class BPlusParser
             Expect("always");
             var t = new TransitionNode { EventName = "always", IsAlways = true };
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == '-')
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '-')
             {
                 Expect("->");
                 SkipWs();
@@ -549,11 +672,11 @@ public partial class BPlusParser
             Expect("signal");
             isSignal = true;
             SkipWs();
-            var m = Regex.Match(_src[_pos..], @"^""([^""]*)""");
+            var m = Regex.Match(_lexer.Src[_lexer.Pos..], @"^""([^""]*)""");
             if (m.Success)
             {
                 signalName = m.Groups[1].Value;
-                _pos += m.Length;
+                _lexer.Pos += m.Length;
             }
             else
             {
@@ -563,40 +686,40 @@ public partial class BPlusParser
 
         // Handle unconditional transitions: on [condition] -> Target
         string eventName;
-        if (_pos < _src.Length && _src[_pos] == '[')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '[')
         {
             // Guard-only transition: on [health <= 0] -> Dead
             eventName = "__always__";
         }
-        else if (_pos < _src.Length && _src[_pos] == '\'')
+        else if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '\'')
         {
             // Handle quoted char event names: on 'x' -> Target, on '\n' -> Target
-            _pos++; // skip opening '
-            if (_pos < _src.Length && _src[_pos] != '\'')
+            _lexer.Pos++; // skip opening '
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\'')
             {
-                if (_src[_pos] == '\\' && _pos + 1 < _src.Length)
+                if (_lexer.Src[_lexer.Pos] == '\\' && _lexer.Pos + 1 < _lexer.Src.Length)
                 {
-                    _pos++;
-                    eventName = _src[_pos] switch
+                    _lexer.Pos++;
+                    eventName = _lexer.Src[_lexer.Pos] switch
                     {
                         'n' => "\n",
                         'r' => "\r",
                         't' => "\t",
                         '\\' => "\\",
                         '\'' => "'",
-                        _ => "\\" + _src[_pos]
+                        _ => "\\" + _lexer.Src[_lexer.Pos]
                     };
-                    _pos++;
+                    _lexer.Pos++;
                 }
                 else
                 {
-                    eventName = _src[_pos].ToString();
-                    _pos++;
+                    eventName = _lexer.Src[_lexer.Pos].ToString();
+                    _lexer.Pos++;
                 }
             }
             else
                 eventName = "";
-            if (_pos < _src.Length && _src[_pos] == '\'') _pos++;
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '\'') _lexer.Pos++;
         }
         else
         {
@@ -606,11 +729,11 @@ public partial class BPlusParser
 
         // Parameters ( ... )
         var parameters = new List<ParamNode>();
-        if (_pos < _src.Length && _src[_pos] == '(')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '(')
         {
-            _pos++;
+            _lexer.Pos++;
             SkipWs();
-            while (_pos < _src.Length && _src[_pos] != ')')
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ')')
             {
                 var pName = ParseWord();
                 SkipWs();
@@ -619,9 +742,9 @@ public partial class BPlusParser
                 var pType = ParseType();
                 parameters.Add(new ParamNode { Name = pName, Type = pType });
                 SkipWs();
-                if (_pos < _src.Length && _src[_pos] == ',')
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
                 }
             }
@@ -631,26 +754,26 @@ public partial class BPlusParser
 
         // Guard [ ... ]
         string? guard = null;
-        if (_pos < _src.Length && _src[_pos] == '[')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '[')
         {
-            _pos++;
+            _lexer.Pos++;
             int depth = 1;
-            int start = _pos;
-            while (_pos < _src.Length && depth > 0)
+            int start = _lexer.Pos;
+            while (_lexer.Pos < _lexer.Src.Length && depth > 0)
             {
-                if (_src[_pos] == '[') depth++;
-                else if (_src[_pos] == ']') depth--;
-                if (depth > 0) _pos++;
+                if (_lexer.Src[_lexer.Pos] == '[') depth++;
+                else if (_lexer.Src[_lexer.Pos] == ']') depth--;
+                if (depth > 0) _lexer.Pos++;
             }
-            guard = _src[start.._pos].Trim();
-            _pos++;
+            guard = _lexer.Src[start.._lexer.Pos].Trim();
+            _lexer.Pos++;
             SkipWs();
         }
 
         // -> Target
         string target = "";
 
-        if (_pos < _src.Length && _src[_pos] == '-')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '-')
         {
             Expect("->");
             SkipWs();
@@ -658,19 +781,19 @@ public partial class BPlusParser
             // Handle history keyword
             if (Peek("history"))
             {
-                _pos += 7;
+                _lexer.Pos += 7;
                 target = "__history__";
             }
             else
             {
                 target = ParseWord();
                 SkipWs();
-                if (_pos < _src.Length && _src[_pos] == '<')
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '<')
                 {
-                    int gs = _pos;
-                    while (_pos < _src.Length && _src[_pos] != '>') _pos++;
-                    if (_pos < _src.Length) _pos++;
-                    target = _src[gs.._pos];
+                    int gs = _lexer.Pos;
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '>') _lexer.Pos++;
+                    if (_lexer.Pos < _lexer.Src.Length) _lexer.Pos++;
+                    target = _lexer.Src[gs.._lexer.Pos];
                 }
             }
         }
@@ -678,7 +801,7 @@ public partial class BPlusParser
 
         // Body { ... }
         string? body = null;
-        if (_pos < _src.Length && _src[_pos] == '{')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '{')
         {
             body = ExtractBracedBlock();
         }
@@ -715,13 +838,13 @@ public partial class BPlusParser
         SkipWs();
 
         string? guard = null;
-        if (_pos < _src.Length && _src[_pos] == '[')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '[')
         {
-            _pos++;
-            int start = _pos;
-            while (_pos < _src.Length && _src[_pos] != ']') _pos++;
-            guard = _src[start.._pos].Trim();
-            _pos++;
+            _lexer.Pos++;
+            int start = _lexer.Pos;
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']') _lexer.Pos++;
+            guard = _lexer.Src[start.._lexer.Pos].Trim();
+            _lexer.Pos++;
             SkipWs();
         }
 
@@ -733,8 +856,8 @@ public partial class BPlusParser
 
     private ActionNode ParseAction()
     {
-        var prefix = _pos + 4 <= _src.Length && _src.AsSpan(_pos, 4).SequenceEqual("exit") ? "exit" : "enter";
-        _pos += prefix.Length;
+        var prefix = _lexer.Pos + 4 <= _lexer.Src.Length && _lexer.Src.AsSpan(_lexer.Pos, 4).SequenceEqual("exit") ? "exit" : "enter";
+        _lexer.Pos += prefix.Length;
         SkipWs();
         var body = ExtractBracedBlock();
         return new ActionNode
@@ -756,14 +879,14 @@ public partial class BPlusParser
             SkipWs();
             Expect("{");
             SkipWs();
-            while (_pos < _src.Length && _src[_pos] != '}')
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
             {
-                var lineStart = _pos;
-                while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '}')
-                    _pos++;
-                var line = _src[lineStart.._pos].Trim();
+                var lineStart = _lexer.Pos;
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && _lexer.Src[_lexer.Pos] != '}')
+                    _lexer.Pos++;
+                var line = _lexer.Src[lineStart.._lexer.Pos].Trim();
                 if (line != "") par.BodyLines.Add(line);
-                if (_pos < _src.Length && _src[_pos] == '\n') _pos++;
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '\n') _lexer.Pos++;
                 SkipWs();
             }
             Expect("}");
@@ -775,18 +898,18 @@ public partial class BPlusParser
         SkipWs();
         Expect("{");
         SkipWs();
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             if (Peek("machine "))
             {
-                _pos += 7;
+                _lexer.Pos += 7;
                 SkipWs();
                 var machineName = ParseWord();
                 SkipWs();
                 Expect("{");
                 SkipWs();
                 var machine = new StateDefNode { Name = machineName };
-                while (_pos < _src.Length && _src[_pos] != '}')
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                 {
                     if (Peek("state ") || Peek("base "))
                         machine.NestedStates.Add(ParseStateDef());
@@ -820,28 +943,28 @@ public partial class BPlusParser
     private NetworkNode? ParseNetwork(bool corporatePrefix = false)
     {
         if (!corporatePrefix && Peek("corporate_network"))
-            _pos += 16;
+            _lexer.Pos += 16;
         var name = ParseWord();
         SkipWs();
 
         var network = new NetworkNode { Name = name };
 
-        if (_pos < _src.Length && _src[_pos] == '"')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '"')
         {
-            _pos++;
-            int end = _src.IndexOf('"', _pos);
-            if (end > _pos)
+            _lexer.Pos++;
+            int end = _lexer.Src.IndexOf('"', _lexer.Pos);
+            if (end > _lexer.Pos)
             {
-                network.Description = _src[_pos..end];
-                _pos = end + 1;
+                network.Description = _lexer.Src[_lexer.Pos..end];
+                _lexer.Pos = end + 1;
             }
         }
 
-        while (_pos < _src.Length && _src[_pos] != '{')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '{')
         {
             if (Peek("protocol:"))
             {
-                _pos += 8;
+                _lexer.Pos += 8;
                 SkipWs();
                 var proto = ParseWord();
                 network.Protocol = proto.ToUpper() switch
@@ -857,24 +980,24 @@ public partial class BPlusParser
             }
             else if (Peek("host:"))
             {
-                _pos += 5;
+                _lexer.Pos += 5;
                 SkipWs();
-                var m = Regex.Match(_src[_pos..], @"^""([^""]*)""");
+                var m = Regex.Match(_lexer.Src[_lexer.Pos..], @"^""([^""]*)""");
                 if (m.Success)
                 {
                     network.Host = m.Groups[1].Value;
-                    _pos += m.Length;
+                    _lexer.Pos += m.Length;
                 }
             }
             else if (Peek("port:"))
             {
-                _pos += 5;
+                _lexer.Pos += 5;
                 SkipWs();
                 var portStr = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
                 {
-                    portStr += _src[_pos];
-                    _pos++;
+                    portStr += _lexer.Src[_lexer.Pos];
+                    _lexer.Pos++;
                 }
                 if (int.TryParse(portStr, out var port))
                     network.Port = port;
@@ -882,43 +1005,43 @@ public partial class BPlusParser
             else if (Peek("auto_reconnect"))
             {
                 network.AutoReconnect = true;
-                _pos += 14;
+                _lexer.Pos += 14;
             }
             else if (Peek("timeout:"))
             {
-                _pos += 8;
+                _lexer.Pos += 8;
                 SkipWs();
                 var timeoutStr = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
                 {
-                    timeoutStr += _src[_pos];
-                    _pos++;
+                    timeoutStr += _lexer.Src[_lexer.Pos];
+                    _lexer.Pos++;
                 }
                 if (int.TryParse(timeoutStr, out var t))
                     network.TimeoutMs = t;
             }
             else if (Peek("heartbeat:"))
             {
-                _pos += 10;
+                _lexer.Pos += 10;
                 SkipWs();
                 var hbStr = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
                 {
-                    hbStr += _src[_pos];
-                    _pos++;
+                    hbStr += _lexer.Src[_lexer.Pos];
+                    _lexer.Pos++;
                 }
                 if (int.TryParse(hbStr, out var hb))
                     network.HeartbeatIntervalMs = hb;
             }
             else if (Peek("retries:"))
             {
-                _pos += 7;
+                _lexer.Pos += 7;
                 SkipWs();
                 var retriesStr = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
                 {
-                    retriesStr += _src[_pos];
-                    _pos++;
+                    retriesStr += _lexer.Src[_lexer.Pos];
+                    _lexer.Pos++;
                 }
                 if (int.TryParse(retriesStr, out var r))
                     network.MaxRetries = r;
@@ -926,12 +1049,12 @@ public partial class BPlusParser
             else if (Peek("tls"))
             {
                 network.Security = SecurityLevel.TLS;
-                _pos += 3;
+                _lexer.Pos += 3;
             }
             else if (Peek("encrypted"))
             {
                 network.Security = SecurityLevel.Encrypted;
-                _pos += 9;
+                _lexer.Pos += 9;
             }
             else
             {
@@ -943,7 +1066,7 @@ public partial class BPlusParser
         Expect("{");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             SkipWs();
             if (Peek("crypto:"))
@@ -993,12 +1116,12 @@ public partial class BPlusParser
         Expect("{");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             SkipWs();
             if (Peek("consensus:"))
             {
-                _pos += 9;
+                _lexer.Pos += 9;
                 SkipWs();
                 var c = ParseWord().ToUpper();
                 chain.Consensus = c switch
@@ -1013,7 +1136,7 @@ public partial class BPlusParser
             }
             else if (Peek("wallet:"))
             {
-                _pos += 6;
+                _lexer.Pos += 6;
                 SkipWs();
                 var w = ParseWord().ToUpper();
                 chain.WalletAlgo = w switch
@@ -1026,7 +1149,7 @@ public partial class BPlusParser
             }
             else if (Peek("p2p:"))
             {
-                _pos += 4;
+                _lexer.Pos += 4;
                 SkipWs();
                 var p = ParseWord().ToUpper();
                 chain.P2PMode = p switch
@@ -1039,7 +1162,7 @@ public partial class BPlusParser
             }
             else if (Peek("sharding:"))
             {
-                _pos += 8;
+                _lexer.Pos += 8;
                 SkipWs();
                 var s = ParseWord().ToUpper();
                 chain.Sharding = s switch
@@ -1052,94 +1175,94 @@ public partial class BPlusParser
             }
             else if (Peek("max_peers:"))
             {
-                _pos += 9;
+                _lexer.Pos += 9;
                 SkipWs();
                 var n = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                    n += _src[_pos++];
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                    n += _lexer.Src[_lexer.Pos++];
                 if (int.TryParse(n, out var mp)) chain.MaxPeers = mp;
             }
             else if (Peek("min_validators:"))
             {
-                _pos += 14;
+                _lexer.Pos += 14;
                 SkipWs();
                 var n = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                    n += _src[_pos++];
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                    n += _lexer.Src[_lexer.Pos++];
                 if (int.TryParse(n, out var mv)) chain.MinValidators = mv;
             }
             else if (Peek("block_time:"))
             {
-                _pos += 10;
+                _lexer.Pos += 10;
                 SkipWs();
                 var n = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                    n += _src[_pos++];
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                    n += _lexer.Src[_lexer.Pos++];
                 if (int.TryParse(n, out var bt)) chain.BlockTimeMs = bt;
             }
             else if (Peek("difficulty:"))
             {
-                _pos += 10;
+                _lexer.Pos += 10;
                 SkipWs();
                 var n = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                    n += _src[_pos++];
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                    n += _lexer.Src[_lexer.Pos++];
                 if (int.TryParse(n, out var d)) chain.Difficulty = d;
             }
             else if (Peek("min_stake:"))
             {
-                _pos += 9;
+                _lexer.Pos += 9;
                 SkipWs();
                 var n = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                    n += _src[_pos++];
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                    n += _lexer.Src[_lexer.Pos++];
                 if (long.TryParse(n, out var ms)) chain.MinStake = ms;
             }
             else if (Peek("shard_count:"))
             {
-                _pos += 11;
+                _lexer.Pos += 11;
                 SkipWs();
                 var n = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                    n += _src[_pos++];
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                    n += _lexer.Src[_lexer.Pos++];
                 if (int.TryParse(n, out var sc)) chain.ShardCount = sc;
             }
             else if (Peek("segments:"))
             {
-                _pos += 9;
+                _lexer.Pos += 9;
                 SkipWs();
-                if (_pos < _src.Length && _src[_pos] == '[')
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ']')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                     {
                         SkipWs();
-                        if (_src[_pos] == '{')
+                        if (_lexer.Src[_lexer.Pos] == '{')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var seg = new NetworkSegment();
-                            while (_pos < _src.Length && _src[_pos] != '}')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                             {
                                 if (Peek("name:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     seg.Name = ParseWord();
                                 }
                                 else if (Peek("vlan:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     var n = "";
-                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                                        n += _src[_pos++];
+                                    while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                                        n += _lexer.Src[_lexer.Pos++];
                                     if (int.TryParse(n, out var v)) seg.Vlan = v;
                                 }
                                 else
                                 {
-                                    _pos += ParseWord().Length;
+                                    _lexer.Pos += ParseWord().Length;
                                 }
                                 SkipWs();
                             }
@@ -1147,7 +1270,7 @@ public partial class BPlusParser
                             chain.Segments.Add(seg);
                         }
                         SkipWs();
-                        if (_src[_pos] == ',') _pos++;
+                        if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                         SkipWs();
                     }
                     Expect("]");
@@ -1160,18 +1283,18 @@ public partial class BPlusParser
             }
             else if (Peek("boot_nodes:"))
             {
-                _pos += 10;
+                _lexer.Pos += 10;
                 SkipWs();
-                while (_src[_pos] == '[')
+                while (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
                     var addr = "";
-                    while (_pos < _src.Length && _src[_pos] != ']' && _src[_pos] != ',')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']' && _lexer.Src[_lexer.Pos] != ',')
                     {
-                        addr += _src[_pos++];
+                        addr += _lexer.Src[_lexer.Pos++];
                     }
-                    if (_pos < _src.Length && _src[_pos] == ']') _pos++;
+                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ']') _lexer.Pos++;
                     SkipWs();
                     var parts = addr.Trim().Split(':');
                     if (parts.Length == 2 && int.TryParse(parts[1], out var port))
@@ -1182,7 +1305,7 @@ public partial class BPlusParser
                             Address = parts[0]
                         });
                     }
-                    if (_src[_pos] == ',') _pos++;
+                    if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                     SkipWs();
                 }
             }
@@ -1207,44 +1330,44 @@ public partial class BPlusParser
         SkipWs();
         var entries = new List<LedgerEntry>();
 
-        if (_pos < _src.Length && _src[_pos] == '[')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '[')
         {
-            _pos++;
+            _lexer.Pos++;
             SkipWs();
-            while (_pos < _src.Length && _src[_pos] != ']')
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
             {
                 SkipWs();
-                if (_src[_pos] == '{')
+                if (_lexer.Src[_lexer.Pos] == '{')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
                     var entry = new LedgerEntry();
-                    while (_pos < _src.Length && _src[_pos] != '}')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                     {
                         if (Peek("from:"))
                         {
-                            _pos += 5;
+                            _lexer.Pos += 5;
                             SkipWs();
                             entry.From = ParseWord();
                         }
                         else if (Peek("to:"))
                         {
-                            _pos += 3;
+                            _lexer.Pos += 3;
                             SkipWs();
                             entry.To = ParseWord();
                         }
                         else if (Peek("amount:"))
                         {
-                            _pos += 7;
+                            _lexer.Pos += 7;
                             SkipWs();
                             var n = "";
-                            while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                                n += _src[_pos++];
+                            while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                                n += _lexer.Src[_lexer.Pos++];
                             if (long.TryParse(n, out var amt)) entry.Amount = amt;
                         }
                         else
                         {
-                            _pos += ParseWord().Length;
+                            _lexer.Pos += ParseWord().Length;
                         }
                         SkipWs();
                     }
@@ -1252,7 +1375,7 @@ public partial class BPlusParser
                     entries.Add(entry);
                 }
                 SkipWs();
-                if (_src[_pos] == ',') _pos++;
+                if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                 SkipWs();
             }
             Expect("]");
@@ -1264,9 +1387,9 @@ return entries;
     private GraphicsKernelDecl? ParseGraphicsKernel()
     {
         if (Peek("graphics_kernel"))
-            _pos += 15;
+            _lexer.Pos += 15;
         else if (Peek("@graphics_kernel"))
-            _pos += 16;
+            _lexer.Pos += 16;
 
         SkipWs();
         var name = ParseWord();
@@ -1275,12 +1398,12 @@ return entries;
         Expect("{");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             SkipWs();
             if (Peek("stage:"))
             {
-                _pos += 6;
+                _lexer.Pos += 6;
                 SkipWs();
                 var s = ParseWord().ToLower();
                 gk.Stage = s switch
@@ -1294,7 +1417,7 @@ return entries;
             }
             else if (Peek("threads:"))
             {
-                _pos += 8;
+                _lexer.Pos += 8;
                 SkipWs();
                 var t = ParseWord().Replace("x", ",").Split(',');
                 if (t.Length >= 1 && int.TryParse(t[0], out var x)) gk.ThreadsX = x;
@@ -1303,31 +1426,31 @@ return entries;
             }
             else if (Peek("texture:"))
             {
-                _pos += 8;
+                _lexer.Pos += 8;
                 SkipWs();
-                if (_src[_pos] == '[')
+                if (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ']')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                     {
                         SkipWs();
-                        if (_src[_pos] == '{')
+                        if (_lexer.Src[_lexer.Pos] == '{')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var tex = new TextureDecl();
-                            while (_pos < _src.Length && _src[_pos] != '}')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                             {
                                 if (Peek("name:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     tex.Name = ParseWord();
                                 }
                                 else if (Peek("format:"))
                                 {
-                                    _pos += 7;
+                                    _lexer.Pos += 7;
                                     SkipWs();
                                     var fmtStr = ParseWord().ToUpper();
                                     tex.Format = fmtStr switch
@@ -1343,7 +1466,7 @@ return entries;
                                 }
                                 else
                                 {
-                                    _pos += ParseWord().Length;
+                                    _lexer.Pos += ParseWord().Length;
                                 }
                                 SkipWs();
                             }
@@ -1351,7 +1474,7 @@ return entries;
                             gk.Textures.Add(tex);
                         }
                         SkipWs();
-                        if (_src[_pos] == ',') _pos++;
+                        if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                         SkipWs();
                     }
                     Expect("]");
@@ -1359,40 +1482,40 @@ return entries;
             }
             else if (Peek("buffer:"))
             {
-                _pos += 7;
+                _lexer.Pos += 7;
                 SkipWs();
-                if (_src[_pos] == '[')
+                if (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ']')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                     {
                         SkipWs();
-                        if (_src[_pos] == '{')
+                        if (_lexer.Src[_lexer.Pos] == '{')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var buf = new BufferDecl();
-                            while (_pos < _src.Length && _src[_pos] != '}')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                             {
                                 if (Peek("name:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     buf.Name = ParseWord();
                                 }
                                 else if (Peek("count:"))
                                 {
-                                    _pos += 6;
+                                    _lexer.Pos += 6;
                                     SkipWs();
                                     var n = "";
-                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                                        n += _src[_pos++];
+                                    while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                                        n += _lexer.Src[_lexer.Pos++];
                                     if (int.TryParse(n, out var s)) buf.Count = s;
                                 }
                                 else
                                 {
-                                    _pos += ParseWord().Length;
+                                    _lexer.Pos += ParseWord().Length;
                                 }
                                 SkipWs();
                             }
@@ -1400,7 +1523,7 @@ return entries;
                             gk.Buffers.Add(buf);
                         }
                         SkipWs();
-                        if (_src[_pos] == ',') _pos++;
+                        if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                         SkipWs();
                     }
                     Expect("]");
@@ -1408,37 +1531,37 @@ return entries;
             }
             else if (Peek("sampler:"))
             {
-                _pos += 8;
+                _lexer.Pos += 8;
                 SkipWs();
-                if (_src[_pos] == '[')
+                if (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ']')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                     {
                         SkipWs();
-                        if (_src[_pos] == '{')
+                        if (_lexer.Src[_lexer.Pos] == '{')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var sam = new SamplerDecl();
-                            while (_pos < _src.Length && _src[_pos] != '}')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                             {
                                 if (Peek("name:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     sam.Name = ParseWord();
                                 }
                                 else if (Peek("filter:"))
                                 {
-                                    _pos += 7;
+                                    _lexer.Pos += 7;
                                     SkipWs();
                                     sam.Filter = ParseWord().ToLower();
                                 }
                                 else
                                 {
-                                    _pos += ParseWord().Length;
+                                    _lexer.Pos += ParseWord().Length;
                                 }
                                 SkipWs();
                             }
@@ -1446,7 +1569,7 @@ return entries;
                             gk.Samplers.Add(sam);
                         }
                         SkipWs();
-                        if (_src[_pos] == ',') _pos++;
+                        if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                         SkipWs();
                     }
                     Expect("]");
@@ -1470,9 +1593,9 @@ return entries;
     private ScientificKernelDecl? ParseScientificKernel()
     {
         if (Peek("scientific_kernel"))
-            _pos += 16;
+            _lexer.Pos += 16;
         else if (Peek("@scientific_kernel"))
-            _pos += 17;
+            _lexer.Pos += 17;
 
         SkipWs();
         var name = ParseWord();
@@ -1481,12 +1604,12 @@ return entries;
         Expect("{");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             SkipWs();
             if (Peek("tensor_mode:"))
             {
-                _pos += 11;
+                _lexer.Pos += 11;
                 SkipWs();
                 var mode = ParseWord().ToUpper();
                 sk.TensorMode = mode switch
@@ -1499,28 +1622,28 @@ return entries;
             }
             else if (Peek("autodiff"))
             {
-                _pos += 8;
+                _lexer.Pos += 8;
                 sk.AutoDiff = true;
             }
             else if (Peek("interval:"))
             {
-                _pos += 8;
+                _lexer.Pos += 8;
                 SkipWs();
-                if (_src[_pos] == '[')
+                if (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
                     var lower = "";
-                    while (_pos < _src.Length && (char.IsDigit(_src[_pos]) || _src[_pos] == '.' || _src[_pos] == '-'))
-                        lower += _src[_pos++];
+                    while (_lexer.Pos < _lexer.Src.Length && (char.IsDigit(_lexer.Src[_lexer.Pos]) || _lexer.Src[_lexer.Pos] == '.' || _lexer.Src[_lexer.Pos] == '-'))
+                        lower += _lexer.Src[_lexer.Pos++];
                     SkipWs();
-                    if (_src[_pos] == ',') _pos++;
+                    if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                     SkipWs();
                     var upper = "";
-                    while (_pos < _src.Length && (char.IsDigit(_src[_pos]) || _src[_pos] == '.'))
-                        upper += _src[_pos++];
+                    while (_lexer.Pos < _lexer.Src.Length && (char.IsDigit(_lexer.Src[_lexer.Pos]) || _lexer.Src[_lexer.Pos] == '.'))
+                        upper += _lexer.Src[_lexer.Pos++];
                     SkipWs();
-                    if (_src[_pos] == ']') _pos++;
+                    if (_lexer.Src[_lexer.Pos] == ']') _lexer.Pos++;
                     sk.IntervalConfig = new IntervalArithmetic
                     {
                         Lower = double.TryParse(lower, out var l) ? l : 0,
@@ -1530,37 +1653,37 @@ return entries;
             }
             else if (Peek("matrix:"))
             {
-                _pos += 7;
+                _lexer.Pos += 7;
                 SkipWs();
-                if (_src[_pos] == '[')
+                if (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ']')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                     {
                         SkipWs();
-                        if (_src[_pos] == '{')
+                        if (_lexer.Src[_lexer.Pos] == '{')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var mat = new SparseMatrix();
-                            while (_pos < _src.Length && _src[_pos] != '}')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                             {
                                 if (Peek("name:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     mat.Name = ParseWord();
                                 }
                                 else if (Peek("format:"))
                                 {
-                                    _pos += 7;
+                                    _lexer.Pos += 7;
                                     SkipWs();
                                     mat.Format = ParseWord().ToUpper();
                                 }
                                 else if (Peek("size:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     var s = ParseWord().Replace("x", ",").Split(',');
                                     if (s.Length >= 1 && int.TryParse(s[0], out var r)) mat.Rows = r;
@@ -1568,7 +1691,7 @@ return entries;
                                 }
                                 else
                                 {
-                                    _pos += ParseWord().Length;
+                                    _lexer.Pos += ParseWord().Length;
                                 }
                                 SkipWs();
                             }
@@ -1576,7 +1699,7 @@ return entries;
                             sk.Matrices.Add(mat);
                         }
                         SkipWs();
-                        if (_src[_pos] == ',') _pos++;
+                        if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                         SkipWs();
                     }
                     Expect("]");
@@ -1584,40 +1707,40 @@ return entries;
             }
             else if (Peek("qubit:"))
             {
-                _pos += 6;
+                _lexer.Pos += 6;
                 SkipWs();
-                if (_src[_pos] == '[')
+                if (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ']')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                     {
                         SkipWs();
-                        if (_src[_pos] == '{')
+                        if (_lexer.Src[_lexer.Pos] == '{')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var q = new QubitType();
-                            while (_pos < _src.Length && _src[_pos] != '}')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                             {
                                 if (Peek("name:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     q.Name = ParseWord();
                                 }
                                 else if (Peek("slot:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     var n = "";
-                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                                        n += _src[_pos++];
+                                    while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                                        n += _lexer.Src[_lexer.Pos++];
                                     if (int.TryParse(n, out var s)) q.Slot = s;
                                 }
                                 else
                                 {
-                                    _pos += ParseWord().Length;
+                                    _lexer.Pos += ParseWord().Length;
                                 }
                                 SkipWs();
                             }
@@ -1625,7 +1748,7 @@ return entries;
                             sk.Qubits.Add(q);
                         }
                         SkipWs();
-                        if (_src[_pos] == ',') _pos++;
+                        if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                         SkipWs();
                     }
                     Expect("]");
@@ -1633,33 +1756,33 @@ return entries;
             }
             else if (Peek("tpu:"))
             {
-                _pos += 4;
+                _lexer.Pos += 4;
                 SkipWs();
-                if (_src[_pos] == '{')
+                if (_lexer.Src[_lexer.Pos] == '{')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
                     var tpu = new TPUConfig();
-                    while (_pos < _src.Length && _src[_pos] != '}')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                     {
                         if (Peek("backend:"))
                         {
-                            _pos += 8;
+                            _lexer.Pos += 8;
                             SkipWs();
                             tpu.Backend = ParseWord();
                         }
                         else if (Peek("pod:"))
                         {
-                            _pos += 4;
+                            _lexer.Pos += 4;
                             SkipWs();
                             var n = "";
-                            while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                                n += _src[_pos++];
+                            while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                                n += _lexer.Src[_lexer.Pos++];
                             if (int.TryParse(n, out var p)) tpu.PodSlice = p;
                         }
                         else
                         {
-                            _pos += ParseWord().Length;
+                            _lexer.Pos += ParseWord().Length;
                         }
                         SkipWs();
                     }
@@ -1669,33 +1792,33 @@ return entries;
             }
             else if (Peek("fpga:"))
             {
-                _pos += 5;
+                _lexer.Pos += 5;
                 SkipWs();
-                if (_src[_pos] == '{')
+                if (_lexer.Src[_lexer.Pos] == '{')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
                     var fpga = new FPGAConfig();
-                    while (_pos < _src.Length && _src[_pos] != '}')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                     {
                         if (Peek("lang:"))
                         {
-                            _pos += 5;
+                            _lexer.Pos += 5;
                             SkipWs();
                             fpga.TargetLanguage = ParseWord().ToLower();
                         }
                         else if (Peek("clock:"))
                         {
-                            _pos += 6;
+                            _lexer.Pos += 6;
                             SkipWs();
                             var n = "";
-                            while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                                n += _src[_pos++];
+                            while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                                n += _lexer.Src[_lexer.Pos++];
                             if (int.TryParse(n, out var c)) fpga.ClockMhz = c;
                         }
                         else
                         {
-                            _pos += ParseWord().Length;
+                            _lexer.Pos += ParseWord().Length;
                         }
                         SkipWs();
                     }
@@ -1705,40 +1828,40 @@ return entries;
             }
             else if (Peek("async_queue:"))
             {
-                _pos += 11;
+                _lexer.Pos += 11;
                 SkipWs();
-                if (_src[_pos] == '[')
+                if (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ']')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                     {
                         SkipWs();
-                        if (_src[_pos] == '{')
+                        if (_lexer.Src[_lexer.Pos] == '{')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var q = new AsyncComputeQueue();
-                            while (_pos < _src.Length && _src[_pos] != '}')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                             {
                                 if (Peek("name:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     q.Name = ParseWord();
                                 }
                                 else if (Peek("priority:"))
                                 {
-                                    _pos += 9;
+                                    _lexer.Pos += 9;
                                     SkipWs();
                                     var n = "";
-                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                                        n += _src[_pos++];
+                                    while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                                        n += _lexer.Src[_lexer.Pos++];
                                     if (int.TryParse(n, out var p)) q.Priority = p;
                                 }
                                 else
                                 {
-                                    _pos += ParseWord().Length;
+                                    _lexer.Pos += ParseWord().Length;
                                 }
                                 SkipWs();
                             }
@@ -1746,7 +1869,7 @@ return entries;
                             sk.AsyncQueues.Add(q);
                         }
                         SkipWs();
-                        if (_src[_pos] == ',') _pos++;
+                        if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                         SkipWs();
                     }
                     Expect("]");
@@ -1754,29 +1877,29 @@ return entries;
             }
             else if (Peek("optical_flow:"))
             {
-                _pos += 12;
+                _lexer.Pos += 12;
                 SkipWs();
-                if (_src[_pos] == '{')
+                if (_lexer.Src[_lexer.Pos] == '{')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
                     var of = new OpticalFlowConfig();
-                    while (_pos < _src.Length && _src[_pos] != '}')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                     {
                         if (Peek("hardware"))
                         {
-                            _pos += 8;
+                            _lexer.Pos += 8;
                             of.UseHardware = true;
                         }
                         else if (Peek("algorithm:"))
                         {
-                            _pos += 10;
+                            _lexer.Pos += 10;
                             SkipWs();
                             of.Algorithm = ParseWord();
                         }
                         else
                         {
-                            _pos += ParseWord().Length;
+                            _lexer.Pos += ParseWord().Length;
                         }
                         SkipWs();
                     }
@@ -1786,40 +1909,40 @@ return entries;
             }
             else if (Peek("memory:"))
             {
-                _pos += 7;
+                _lexer.Pos += 7;
                 SkipWs();
-                if (_src[_pos] == '[')
+                if (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ']')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                     {
                         SkipWs();
-                        if (_src[_pos] == '{')
+                        if (_lexer.Src[_lexer.Pos] == '{')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var mem = new UnifiedMemoryBuffer();
-                            while (_pos < _src.Length && _src[_pos] != '}')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                             {
                                 if (Peek("name:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     mem.Name = ParseWord();
                                 }
                                 else if (Peek("size:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     var n = "";
-                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                                        n += _src[_pos++];
+                                    while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                                        n += _lexer.Src[_lexer.Pos++];
                                     if (int.TryParse(n, out var s)) mem.SizeBytes = s;
                                 }
                                 else if (Peek("arch:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     var arch = ParseWord().ToUpper();
                                     mem.Architecture = arch switch
@@ -1832,7 +1955,7 @@ return entries;
                                 }
                                 else
                                 {
-                                    _pos += ParseWord().Length;
+                                    _lexer.Pos += ParseWord().Length;
                                 }
                                 SkipWs();
                             }
@@ -1840,7 +1963,7 @@ return entries;
                             sk.Buffers.Add(mem);
                         }
                         SkipWs();
-                        if (_src[_pos] == ',') _pos++;
+                        if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                         SkipWs();
                     }
                     Expect("]");
@@ -1864,9 +1987,9 @@ return entries;
     private ComputeShaderDecl? ParseComputeShader()
     {
         if (Peek("compute_shader"))
-            _pos += 14;
+            _lexer.Pos += 14;
         else if (Peek("@compute_shader"))
-            _pos += 15;
+            _lexer.Pos += 15;
 
         SkipWs();
         var name = ParseWord();
@@ -1875,12 +1998,12 @@ return entries;
         Expect("{");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             SkipWs();
             if (Peek("threads:"))
             {
-                _pos += 8;
+                _lexer.Pos += 8;
                 SkipWs();
                 var t = ParseWord().Replace("x", ",").Split(',');
                 if (t.Length >= 1 && int.TryParse(t[0], out var x)) cs.ThreadsX = x;
@@ -1889,7 +2012,7 @@ return entries;
             }
             else if (Peek("groups:"))
             {
-                _pos += 7;
+                _lexer.Pos += 7;
                 SkipWs();
                 var t = ParseWord().Replace("x", ",").Split(',');
                 if (t.Length >= 1 && int.TryParse(t[0], out var x)) cs.GroupSizeX = x;
@@ -1898,51 +2021,51 @@ return entries;
             }
             else if (Peek("autodiff"))
             {
-                _pos += 8;
+                _lexer.Pos += 8;
                 cs.AutoDiff = true;
             }
             else if (Peek("register:"))
             {
-                _pos += 9;
+                _lexer.Pos += 9;
                 SkipWs();
-                if (_src[_pos] == '[')
+                if (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ']')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                     {
                         SkipWs();
-                        if (_src[_pos] == '{')
+                        if (_lexer.Src[_lexer.Pos] == '{')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var rb = new ShaderResourceBinding();
-                            while (_pos < _src.Length && _src[_pos] != '}')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                             {
                                 if (Peek("name:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     rb.Name = ParseWord();
                                 }
                                 else if (Peek("register:"))
                                 {
-                                    _pos += 9;
+                                    _lexer.Pos += 9;
                                     SkipWs();
                                     rb.Register = ParseWord();
                                 }
                                 else if (Peek("space:"))
                                 {
-                                    _pos += 6;
+                                    _lexer.Pos += 6;
                                     SkipWs();
                                     var n = "";
-                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                                        n += _src[_pos++];
+                                    while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                                        n += _lexer.Src[_lexer.Pos++];
                                     if (int.TryParse(n, out var s)) rb.Space = s;
                                 }
                                 else if (Peek("dimension:"))
                                 {
-                                    _pos += 10;
+                                    _lexer.Pos += 10;
                                     SkipWs();
                                     var d = ParseWord().ToLower();
                                     rb.Dimension = d switch
@@ -1957,7 +2080,7 @@ return entries;
                                 }
                                 else
                                 {
-                                    _pos += ParseWord().Length;
+                                    _lexer.Pos += ParseWord().Length;
                                 }
                                 SkipWs();
                             }
@@ -1965,7 +2088,7 @@ return entries;
                             cs.Resources.Add(rb);
                         }
                         SkipWs();
-                        if (_src[_pos] == ',') _pos++;
+                        if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                         SkipWs();
                     }
                     Expect("]");
@@ -1986,12 +2109,51 @@ return entries;
         return cs;
     }
 
+    private ComputeShaderDecl? ParseGpuKernel()
+    {
+        Expect("compute_kernel");
+        SkipWs();
+        var name = ParseWord();
+        var cs = new ComputeShaderDecl { Name = name };
+        SkipWs();
+        var body = ExtractBracedBlock();
+        if (body != null)
+            cs.States.Add(new StateDefNode { Name = name + "_body", AsmBlock = body });
+        return cs;
+    }
+
+    private StructDecl ParseStruct()
+    {
+        Expect("struct ");
+        var name = ParseWord();
+        var sd = new StructDecl { Name = name };
+        SkipWs();
+        Expect("{");
+        SkipWs();
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
+        {
+            if (Peek("var "))
+            {
+                sd.Fields.Add(ParseVarDecl());
+            }
+            else
+            {
+                SkipWs();
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '}') break;
+                throw Err($"Unexpected in struct '{name}': '{PeekWord()}'");
+            }
+            SkipWs();
+        }
+        Expect("}");
+        return sd;
+    }
+
     private FragmentShaderDecl? ParseFragmentShader()
     {
         if (Peek("fragment_shader"))
-            _pos += 15;
+            _lexer.Pos += 15;
         else if (Peek("@fragment_shader"))
-            _pos += 16;
+            _lexer.Pos += 16;
 
         SkipWs();
         var name = ParseWord();
@@ -2000,17 +2162,17 @@ return entries;
         Expect("{");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             SkipWs();
             if (Peek("early_depth_stencil"))
             {
-                _pos += 17;
+                _lexer.Pos += 17;
                 fs.EarlyDepthStencil = true;
             }
             else if (Peek("alpha_to_coverage"))
             {
-                _pos += 17;
+                _lexer.Pos += 17;
                 fs.AlphaToCoverage = true;
             }
             else if (Peek("state ") || Peek("base "))
@@ -2031,9 +2193,9 @@ return entries;
     private VertexShaderDecl? ParseVertexShader()
     {
         if (Peek("vertex_shader"))
-            _pos += 13;
+            _lexer.Pos += 13;
         else if (Peek("@vertex_shader"))
-            _pos += 14;
+            _lexer.Pos += 14;
 
         SkipWs();
         var name = ParseWord();
@@ -2042,12 +2204,12 @@ return entries;
         Expect("{");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             SkipWs();
             if (Peek("input_layout:"))
             {
-                _pos += 12;
+                _lexer.Pos += 12;
                 SkipWs();
                 vs.InputLayout = ParseWord();
             }
@@ -2069,9 +2231,9 @@ return entries;
     private RayTracingShaderDecl? ParseRayTracingShader()
     {
         if (Peek("ray_shader"))
-            _pos += 11;
+            _lexer.Pos += 11;
         else if (Peek("@ray_shader"))
-            _pos += 12;
+            _lexer.Pos += 12;
 
         SkipWs();
         var name = ParseWord();
@@ -2080,16 +2242,16 @@ return entries;
         Expect("{");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             SkipWs();
             if (Peek("max_recursion:"))
             {
-                _pos += 14;
+                _lexer.Pos += 14;
                 SkipWs();
                 var n = "";
-                while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                    n += _src[_pos++];
+                while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                    n += _lexer.Src[_lexer.Pos++];
                 if (int.TryParse(n, out var d)) rt.MaxRecursionDepth = d;
             }
             else if (Peek("state ") || Peek("base "))
@@ -2110,9 +2272,9 @@ return entries;
     private LocalGroupDecl? ParseLocalGroup()
     {
         if (Peek("local_group"))
-            _pos += 11;
+            _lexer.Pos += 11;
         else if (Peek("@local_group"))
-            _pos += 12;
+            _lexer.Pos += 12;
 
         SkipWs();
         var name = ParseWord();
@@ -2121,12 +2283,12 @@ return entries;
         Expect("{");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             SkipWs();
             if (Peek("size:"))
             {
-                _pos += 5;
+                _lexer.Pos += 5;
                 SkipWs();
                 var t = ParseWord().Replace("x", ",").Split(',');
                 if (t.Length >= 1 && int.TryParse(t[0], out var x)) lg.Width = x;
@@ -2134,40 +2296,40 @@ return entries;
             }
             else if (Peek("shared:"))
             {
-                _pos += 7;
+                _lexer.Pos += 7;
                 SkipWs();
-                if (_src[_pos] == '[')
+                if (_lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ']')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                     {
                         SkipWs();
-                        if (_src[_pos] == '{')
+                        if (_lexer.Src[_lexer.Pos] == '{')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var sm = new SharedMemoryDecl();
-                            while (_pos < _src.Length && _src[_pos] != '}')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                             {
                                 if (Peek("name:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     sm.Name = ParseWord();
                                 }
                                 else if (Peek("size:"))
                                 {
-                                    _pos += 5;
+                                    _lexer.Pos += 5;
                                     SkipWs();
                                     var n = "";
-                                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
-                                        n += _src[_pos++];
+                                    while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
+                                        n += _lexer.Src[_lexer.Pos++];
                                     if (int.TryParse(n, out var s)) sm.SizeBytes = s;
                                 }
                                 else
                                 {
-                                    _pos += ParseWord().Length;
+                                    _lexer.Pos += ParseWord().Length;
                                 }
                                 SkipWs();
                             }
@@ -2175,7 +2337,7 @@ return entries;
                             lg.SharedVariables.Add(sm);
                         }
                         SkipWs();
-                        if (_src[_pos] == ',') _pos++;
+                        if (_lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
                         SkipWs();
                     }
                     Expect("]");
@@ -2200,18 +2362,18 @@ return entries;
 
         SkipWs();
 
-        if (_pos < _src.Length && _src[_pos] == '{')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '{')
         {
-            _pos++;
+            _lexer.Pos++;
             SkipWs();
 
-            while (_pos < _src.Length && _src[_pos] != '}')
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
             {
                 if (Peek("transport:"))
                 {
-                    _pos += 9;
+                    _lexer.Pos += 9;
                     SkipWs();
-                    var m = Regex.Match(_src[_pos..], @"^(tls[_0-9]+|wireguard)");
+                    var m = Regex.Match(_lexer.Src[_lexer.Pos..], @"^(tls[_0-9]+|wireguard)");
                     if (m.Success)
                     {
                         var val = m.Value.ToLower();
@@ -2220,76 +2382,76 @@ return entries;
                         else if (val.Contains("tls11")) config.Transport = CryptoTransportMode.TLS11;
                         else if (val.Contains("tls10") || val == "tls") config.Transport = CryptoTransportMode.TLS10;
                         else if (val == "wireguard") config.Transport = CryptoTransportMode.WireGuard;
-                        _pos += m.Length;
+                        _lexer.Pos += m.Length;
                     }
                     else if (Peek("tls_1_3"))
                     {
                         config.Transport = CryptoTransportMode.TLS13;
-                        _pos += 7;
+                        _lexer.Pos += 7;
                     }
                 }
                 else if (Peek("session:"))
                 {
-                    _pos += 8;
+                    _lexer.Pos += 8;
                     SkipWs();
                     if (Peek("double_ratchet"))
                     {
                         config.Session = CryptoSessionMode.DoubleRatchet;
-                        _pos += 14;
+                        _lexer.Pos += 14;
                     }
                     else if (Peek("signal"))
                     {
                         config.Session = CryptoSessionMode.Signal;
-                        _pos += 6;
+                        _lexer.Pos += 6;
                     }
                 }
                 else if (Peek("payload:"))
                 {
-                    _pos += 8;
+                    _lexer.Pos += 8;
                     SkipWs();
                     if (Peek("aes_256_gcm"))
                     {
                         config.Payload = CryptoPayloadMode.AES256GCM;
-                        _pos += 10;
+                        _lexer.Pos += 10;
                     }
                     else if (Peek("chacha20_poly1305"))
                     {
                         config.Payload = CryptoPayloadMode.ChaCha20Poly1305;
-                        _pos += 16;
+                        _lexer.Pos += 16;
                     }
                 }
                 else if (Peek("post_quantum:"))
                 {
-                    _pos += 13;
+                    _lexer.Pos += 13;
                     SkipWs();
                     if (Peek("hybrid"))
                     {
                         config.PostQuantum = PostQuantumMode.HybridX25519MLKEM;
-                        _pos += 5;
+                        _lexer.Pos += 5;
                     }
                     else if (Peek("ml_kem_1024"))
                     {
                         config.PostQuantum = PostQuantumMode.MLKEM1024;
-                        _pos += 11;
+                        _lexer.Pos += 11;
                     }
                     else if (Peek("ml_kem_768"))
                     {
                         config.PostQuantum = PostQuantumMode.MLKEM768;
-                        _pos += 9;
+                        _lexer.Pos += 9;
                     }
                 }
                 else if (Peek("key_rotation:"))
                 {
-                    _pos += 13;
+                    _lexer.Pos += 13;
                     SkipWs();
                     if (Peek("every("))
                     {
-                        _pos += 6;
+                        _lexer.Pos += 6;
                         var numStr = "";
-                        while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                        while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
                         {
-                            numStr += _src[_pos];
-                            _pos++;
+                            numStr += _lexer.Src[_lexer.Pos];
+                            _lexer.Pos++;
                         }
                         if (int.TryParse(numStr, out var num))
                         {
@@ -2297,29 +2459,29 @@ return entries;
                             if (Peek("s)"))
                             {
                                 config.KeyRotationSeconds = num;
-                                _pos += 2;
+                                _lexer.Pos += 2;
                             }
                             else if (Peek("mb)"))
                             {
                                 config.KeyRotationBytes = num * 1_000_000;
-                                _pos += 3;
+                                _lexer.Pos += 3;
                             }
                         }
                     }
                 }
                 else if (Peek("ciphers:"))
                 {
-                    _pos += 8;
+                    _lexer.Pos += 8;
                     SkipWs();
-                    if (_src[_pos] == '[')
+                    if (_lexer.Src[_lexer.Pos] == '[')
                     {
-                        _pos++;
-                        while (_pos < _src.Length && _src[_pos] != ']')
+                        _lexer.Pos++;
+                        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                         {
                             var cipher = ParseWord();
                             config.Ciphers.Add(cipher);
                             SkipWs();
-                            if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
                         }
                         Expect("]");
                     }
@@ -2343,33 +2505,33 @@ return entries;
 
         if (Peek("access:"))
         {
-            _pos += 7;
+            _lexer.Pos += 7;
             SkipWs();
         }
 
         if (Peek("zero_trust"))
         {
-            _pos += 10;
+            _lexer.Pos += 10;
             SkipWs();
         }
 
-        if (_pos < _src.Length && _src[_pos] == '{')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '{')
         {
             Expect("{");
             SkipWs();
 
-            while (_pos < _src.Length && _src[_pos] != '}')
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
             {
                 SkipWs();
                 if (Peek("identity:"))
                 {
-                    _pos += 9;
+                    _lexer.Pos += 9;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '\r' && _src[_pos] != ',' && _src[_pos] != '{' && _src[_pos] != '}')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && _lexer.Src[_lexer.Pos] != '\r' && _lexer.Src[_lexer.Pos] != ',' && _lexer.Src[_lexer.Pos] != '{' && _lexer.Src[_lexer.Pos] != '}')
                     {
-                        if (_src[_pos] == '+')
+                        if (_lexer.Src[_lexer.Pos] == '+')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             continue;
                         }
@@ -2387,26 +2549,26 @@ return entries;
                     SkipWs();
                     if (Peek("max("))
                     {
-                        _pos += 4;
+                        _lexer.Pos += 4;
                         var hrs = "";
-                        while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                        while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
                         {
-                            hrs += _src[_pos];
-                            _pos++;
+                            hrs += _lexer.Src[_lexer.Pos];
+                            _lexer.Pos++;
                         }
                         if (int.TryParse(hrs, out var h))
                             config.MaxSessionHours = h;
                         Expect("h)");
-                        _pos += 2;
+                        _lexer.Pos += 2;
                     }
                 }
                 else if (Peek("behavior:") || Peek("anomaly:"))
                 {
-                    _pos += 9;
+                    _lexer.Pos += 9;
                     SkipWs();
                     config.MLAnomalyDetection = Peek("ml_") || Peek("ml_");
-                    if (Peek("ml_")) _pos += 3;
-                    while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '\r' && _src[_pos] != ',' && _src[_pos] != '{' && _src[_pos] != '}')
+                    if (Peek("ml_")) _lexer.Pos += 3;
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && _lexer.Src[_lexer.Pos] != '\r' && _lexer.Src[_lexer.Pos] != ',' && _lexer.Src[_lexer.Pos] != '{' && _lexer.Src[_lexer.Pos] != '}')
                     {
                         ParseWord();
                         SkipWs();
@@ -2424,13 +2586,13 @@ return entries;
                 }
                 else if (Peek("threshold:"))
                 {
-                    _pos += 10;
+                    _lexer.Pos += 10;
                     SkipWs();
                     var th = "";
-                    while (_pos < _src.Length && (char.IsDigit(_src[_pos]) || _src[_pos] == '.'))
+                    while (_lexer.Pos < _lexer.Src.Length && (char.IsDigit(_lexer.Src[_lexer.Pos]) || _lexer.Src[_lexer.Pos] == '.'))
                     {
-                        th += _src[_pos];
-                        _pos++;
+                        th += _lexer.Src[_lexer.Pos];
+                        _lexer.Pos++;
                     }
                     if (double.TryParse(th, out var threshold))
                         config.AnomalyThreshold = threshold;
@@ -2455,68 +2617,68 @@ return entries;
         Expect("[");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != ']')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
         {
             SkipWs();
-            if (_pos >= _src.Length || _src[_pos] == ']') break;
+            if (_lexer.Pos >= _lexer.Src.Length || _lexer.Src[_lexer.Pos] == ']') break;
 
-            if (_src[_pos] == '{')
+            if (_lexer.Src[_lexer.Pos] == '{')
             {
-                _pos++;
+                _lexer.Pos++;
                 SkipWs();
                 var segment = new NetworkSegment();
 
                 int braceDepth = 1;
-                while (_pos < _src.Length && braceDepth > 0)
+                while (_lexer.Pos < _lexer.Src.Length && braceDepth > 0)
                 {
-                    if (_src[_pos] == '{') { braceDepth++; _pos++; }
-                    else if (_src[_pos] == '}') { braceDepth--; if (braceDepth == 0) { _pos++; break; } _pos++; }
+                    if (_lexer.Src[_lexer.Pos] == '{') { braceDepth++; _lexer.Pos++; }
+                    else if (_lexer.Src[_lexer.Pos] == '}') { braceDepth--; if (braceDepth == 0) { _lexer.Pos++; break; } _lexer.Pos++; }
                     else
                     {
                         if (Peek("vlan:"))
                         {
-                            _pos += 5;
+                            _lexer.Pos += 5;
                             SkipWs();
                             var vlan = "";
-                            while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                            while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
                             {
-                                vlan += _src[_pos];
-                                _pos++;
+                                vlan += _lexer.Src[_lexer.Pos];
+                                _lexer.Pos++;
                             }
                             if (int.TryParse(vlan, out var v))
                                 segment.Vlan = v;
                         }
                         else if (Peek("access:"))
                         {
-                            _pos += 7;
+                            _lexer.Pos += 7;
                             SkipWs();
-                            if (_pos < _src.Length && _src[_pos] == '[')
+                            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '[')
                             {
-                                _pos++;
-                                while (_pos < _src.Length && _src[_pos] != ']')
+                                _lexer.Pos++;
+                                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                                 {
                                     var resource = ParseWord();
                                     segment.AllowedResources.Add(resource);
                                     SkipWs();
-                                    if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
                                 }
-                                if (_pos < _src.Length && _src[_pos] == ']') _pos++;
+                                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ']') _lexer.Pos++;
                             }
                         }
                         else if (Peek("isolated"))
                         {
                             segment.Isolated = true;
-                            _pos += 8;
+                            _lexer.Pos += 8;
                         }
                         else if (Peek("name:"))
                         {
-                            _pos += 5;
+                            _lexer.Pos += 5;
                             SkipWs();
                             segment.Name = ParseWord();
                         }
                         else
                         {
-                            _pos++;
+                            _lexer.Pos++;
                         }
                         SkipWs();
                     }
@@ -2531,7 +2693,7 @@ return entries;
                 network.Segments.Add(new NetworkSegment { Name = name, Vlan = network.Segments.Count * 10 + 10 });
             }
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
         }
 
         Expect("]");
@@ -2544,25 +2706,25 @@ return entries;
         Expect("[");
         SkipWs();
 
-        while (_pos < _src.Length && _src[_pos] != ']')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
         {
-            if (_src[_pos] == '{')
+            if (_lexer.Src[_lexer.Pos] == '{')
             {
-                _pos++;
+                _lexer.Pos++;
                 SkipWs();
                 var site = new NetworkSite();
 
-                while (_pos < _src.Length && _src[_pos] != '}')
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
                 {
                     if (Peek("name:"))
                     {
-                        _pos += 5;
+                        _lexer.Pos += 5;
                         SkipWs();
                         site.Name = ParseWord();
                     }
                     else if (Peek("role:"))
                     {
-                        _pos += 5;
+                        _lexer.Pos += 5;
                         SkipWs();
                         var role = ParseWord().ToLower();
                         site.Role = role switch
@@ -2575,13 +2737,13 @@ return entries;
                     }
                     else if (Peek("primary") || Peek("address:"))
                     {
-                        _pos += 8;
+                        _lexer.Pos += 8;
                         SkipWs();
-                        var m = Regex.Match(_src[_pos..], @"^""([^""]*)""");
+                        var m = Regex.Match(_lexer.Src[_lexer.Pos..], @"^""([^""]*)""");
                         if (m.Success)
                         {
                             site.PrimaryAddress = m.Groups[1].Value;
-                            _pos += m.Length;
+                            _lexer.Pos += m.Length;
                         }
                     }
                     else
@@ -2600,7 +2762,7 @@ return entries;
                 network.Sites.Add(new NetworkSite { Name = name, Role = SiteRole.Endpoint });
             }
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
         }
 
         Expect("]");
@@ -2612,63 +2774,63 @@ return entries;
         SkipWs();
         var config = new ResilienceConfig();
 
-        if (_src[_pos] == '{')
+        if (_lexer.Src[_lexer.Pos] == '{')
         {
             Expect("{");
             SkipWs();
 
-            while (_pos < _src.Length && _src[_pos] != '}')
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
             {
                 if (Peek("multipath:"))
                 {
-                    _pos += 9;
+                    _lexer.Pos += 9;
                     SkipWs();
                     if (Peek("active_active"))
                     {
                         config.Multipath = MultipathMode.ActiveActive;
-                        _pos += 12;
+                        _lexer.Pos += 12;
                     }
                     else if (Peek("active_standby"))
                     {
                         config.Multipath = MultipathMode.ActiveStandby;
-                        _pos += 13;
+                        _lexer.Pos += 13;
                     }
                 }
                 else if (Peek("failover:"))
                 {
-                    _pos += 9;
+                    _lexer.Pos += 9;
                     SkipWs();
                     var ms = "";
-                    while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                    while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
                     {
-                        ms += _src[_pos];
-                        _pos++;
+                        ms += _lexer.Src[_lexer.Pos];
+                        _lexer.Pos++;
                     }
                     if (int.TryParse(ms, out var m))
                         config.FailoverMs = m;
-                    if (_pos < _src.Length && _src[_pos] == 'm') _pos++;
+                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == 'm') _lexer.Pos++;
                 }
                 else if (Peek("mesh:") || Peek("nodes:"))
                 {
-                    _pos += 5;
+                    _lexer.Pos += 5;
                     SkipWs();
                     if (Peek("raft"))
                     {
                         config.Consensus = ConsensusProtocol.Raft;
-                        _pos += 4;
+                        _lexer.Pos += 4;
                     }
                     else if (Peek("paxos"))
                     {
                         config.Consensus = ConsensusProtocol.Paxos;
-                        _pos += 5;
+                        _lexer.Pos += 5;
                     }
                     else
                     {
                         var nodes = "";
-                        while (_pos < _src.Length && char.IsDigit(_src[_pos]))
+                        while (_lexer.Pos < _lexer.Src.Length && char.IsDigit(_lexer.Src[_lexer.Pos]))
                         {
-                            nodes += _src[_pos];
-                            _pos++;
+                            nodes += _lexer.Src[_lexer.Pos];
+                            _lexer.Pos++;
                         }
                         if (int.TryParse(nodes, out var n))
                             config.MeshNodes = n;
@@ -2689,8 +2851,8 @@ return entries;
 
     private void SkipToEndOfLine()
     {
-        while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '\r')
-            _pos++;
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && _lexer.Src[_lexer.Pos] != '\r')
+            _lexer.Pos++;
     }
 
     // ════════════════════════════════════════
@@ -2702,13 +2864,13 @@ return entries;
         Expect("#");
         var name = ParseWord();
         // Only skip spaces/tabs, NOT newlines (to avoid consuming next line)
-        while (_pos < _src.Length && (_src[_pos] == ' ' || _src[_pos] == '\t')) _pos++;
+        while (_lexer.Pos < _lexer.Src.Length && (_lexer.Src[_lexer.Pos] == ' ' || _lexer.Src[_lexer.Pos] == '\t')) _lexer.Pos++;
         var value = "";
-        if (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '\r')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && _lexer.Src[_lexer.Pos] != '\r')
         {
-            int start = _pos;
-            while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '\r') _pos++;
-            value = _src[start.._pos].Trim();
+            int start = _lexer.Pos;
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && _lexer.Src[_lexer.Pos] != '\r') _lexer.Pos++;
+            value = _lexer.Src[start.._lexer.Pos].Trim();
         }
         return new Directive { Name = name, Value = value };
     }
@@ -2720,14 +2882,14 @@ return entries;
         Expect("{");
         var decl = new UseCxxDecl();
         SkipWs();
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
-            var m = Regex.Match(_src[_pos..], @"^""([^""]*)""");
+            var m = Regex.Match(_lexer.Src[_lexer.Pos..], @"^""([^""]*)""");
             if (!m.Success) throw Err("Expected string literal in use cxx");
             decl.Headers.Add(m.Groups[1].Value);
-            _pos += m.Length;
+            _lexer.Pos += m.Length;
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
         }
         Expect("}");
         return decl;
@@ -2746,38 +2908,38 @@ return entries;
         SkipWs();
         Expect("(");
         SkipWs();
-        while (_pos < _src.Length && _src[_pos] != ')')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ')')
         {
             var pName = ParseWord();
             SkipWs();
             Expect(":");
             SkipWs();
             // Consume raw C++ type until ',' or ')'
-            int start = _pos;
+            int start = _lexer.Pos;
             int depth = 0;
-            while (_pos < _src.Length)
+            while (_lexer.Pos < _lexer.Src.Length)
             {
-                if (_src[_pos] == '(' || _src[_pos] == '<') depth++;
-                else if (_src[_pos] == ')' && depth == 0) break;
-                else if (_src[_pos] == '>' && depth == 0) break;
-                else if (_src[_pos] == ',' && depth == 0) break;
-                _pos++;
+                if (_lexer.Src[_lexer.Pos] == '(' || _lexer.Src[_lexer.Pos] == '<') depth++;
+                else if (_lexer.Src[_lexer.Pos] == ')' && depth == 0) break;
+                else if (_lexer.Src[_lexer.Pos] == '>' && depth == 0) break;
+                else if (_lexer.Src[_lexer.Pos] == ',' && depth == 0) break;
+                _lexer.Pos++;
             }
-            var rawType = _src[start.._pos].Trim();
+            var rawType = _lexer.Src[start.._lexer.Pos].Trim();
             decl.Parameters.Add(new KernelParam { Name = pName, Type = new SimpleType { Name = rawType } });
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
         }
         Expect(")");
         SkipWs();
-        if (_pos < _src.Length && _src[_pos] == '-')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '-')
         {
             Expect("->");
             SkipWs();
             // Consume rest of return type
-            int start = _pos;
-            while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '\r') _pos++;
-            decl.ReturnType = _src[start.._pos].Trim();
+            int start = _lexer.Pos;
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && _lexer.Src[_lexer.Pos] != '\r') _lexer.Pos++;
+            decl.ReturnType = _lexer.Src[start.._lexer.Pos].Trim();
         }
         return decl;
     }
@@ -2785,19 +2947,19 @@ return entries;
     private List<Annotation> ParseAnnotations()
     {
         var list = new List<Annotation>();
-        while (_pos < _src.Length && _src[_pos] == '@')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '@')
         {
-            _pos++;
+            _lexer.Pos++;
             var a = new Annotation();
             a.Name = ParseWord();
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == '(')
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '(')
             {
-                _pos++;
+                _lexer.Pos++;
                 SkipWs();
-                while (_pos < _src.Length && _src[_pos] != ')')
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ')')
                 {
-                    if (char.IsDigit(_src[_pos]) || _src[_pos] == '-' || _src[_pos] == '.')
+                    if (char.IsDigit(_lexer.Src[_lexer.Pos]) || _lexer.Src[_lexer.Pos] == '-' || _lexer.Src[_lexer.Pos] == '.')
                     {
                         // Positional numeric value: @hot(0.9)
                         var numVal = ParseAnnotationValue();
@@ -2807,25 +2969,25 @@ return entries;
                     {
                         var key = ParseWord();
                         SkipWs();
-                        if (_pos < _src.Length && (_src[_pos] == ':' || _src[_pos] == '='))
+                        if (_lexer.Pos < _lexer.Src.Length && (_lexer.Src[_lexer.Pos] == ':' || _lexer.Src[_lexer.Pos] == '='))
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
                             var val = ParseAnnotationValue();
-                            if (_pos < _src.Length && _src[_pos] == '(')
+                            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '(')
                             {
                                 // Handle nested like `switch_policy: quality_feedback(ssim, 0.92)`
-                                _pos++;
-                                var nestStart = _pos;
+                                _lexer.Pos++;
+                                var nestStart = _lexer.Pos;
                                 int depth = 1;
-                                while (_pos < _src.Length && depth > 0)
+                                while (_lexer.Pos < _lexer.Src.Length && depth > 0)
                                 {
-                                    if (_src[_pos] == '(') depth++;
-                                    else if (_src[_pos] == ')') depth--;
-                                    if (depth > 0) _pos++;
+                                    if (_lexer.Src[_lexer.Pos] == '(') depth++;
+                                    else if (_lexer.Src[_lexer.Pos] == ')') depth--;
+                                    if (depth > 0) _lexer.Pos++;
                                 }
-                                val += "(" + _src[nestStart.._pos] + ")";
-                                _pos++;
+                                val += "(" + _lexer.Src[nestStart.._lexer.Pos] + ")";
+                                _lexer.Pos++;
                             }
                             a.Args[key] = val;
                         }
@@ -2835,7 +2997,7 @@ return entries;
                         }
                     }
                     SkipWs();
-                    if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
                 }
                 Expect(")");
             }
@@ -2856,11 +3018,11 @@ return entries;
         }
         vd.Name = ParseWord();
         SkipWs();
-        if (_pos < _src.Length && _src[_pos] == ':')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ':')
         {
-            _pos++;
+            _lexer.Pos++;
             SkipWs();
-            while (_pos < _src.Length && _src[_pos] == '@')
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '@')
             {
                 var ma = ParseSingleMemoryAnnotation();
                 vd.MemoryAnnotations.Add(ma);
@@ -2869,14 +3031,14 @@ return entries;
             vd.Type = ParseBPlusType();
         }
         SkipWs();
-        if (_pos < _src.Length && _src[_pos] == '=')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '=')
         {
-            _pos++;
+            _lexer.Pos++;
             SkipWs();
-            int start = _pos;
-            while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != ';' && _src[_pos] != '}')
-                _pos++;
-            vd.Init = _src[start.._pos].Trim();
+            int start = _lexer.Pos;
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && _lexer.Src[_lexer.Pos] != ';' && _lexer.Src[_lexer.Pos] != '}')
+                _lexer.Pos++;
+            vd.Init = _lexer.Src[start.._lexer.Pos].Trim();
         }
         return vd;
     }
@@ -2884,22 +3046,22 @@ return entries;
     private MemoryAnnotation ParseSingleMemoryAnnotation()
     {
         var ma = new MemoryAnnotation();
-        if (_pos < _src.Length && _src[_pos] == '@')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '@')
         {
-            _pos++;
+            _lexer.Pos++;
             ma.Name = ParseWord();
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == '(')
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '(')
             {
-                _pos++;
+                _lexer.Pos++;
                 SkipWs();
-                while (_pos < _src.Length && _src[_pos] != ')')
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ')')
                 {
                     var key = ParseWord();
                     SkipWs();
-                    if (_pos < _src.Length && _src[_pos] == ':')
+                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ':')
                     {
-                        _pos++;
+                        _lexer.Pos++;
                         SkipWs();
                         var val = ParseWord();
                         ma.Args[key] = val;
@@ -2909,7 +3071,7 @@ return entries;
                         ma.Args["_val"] = key;
                     }
                     SkipWs();
-                    if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
                 }
                 Expect(")");
             }
@@ -2989,16 +3151,16 @@ return entries;
         SkipWs();
         Expect("(");
         SkipWs();
-        while (_pos < _src.Length && _src[_pos] != ')')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ')')
         {
             k.Parameters.Add(ParseKernelParam());
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
         }
         Expect(")");
         SkipWs();
         // Optional -> Output
-        if (_pos < _src.Length && _src[_pos] == '-')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '-')
         {
             Expect("->");
             SkipWs();
@@ -3024,14 +3186,14 @@ return entries;
     {
         var p = new KernelParam();
         // Handle annotations on params
-        if (_pos < _src.Length && _src[_pos] == '@')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '@')
             ParseAnnotations();
         p.Name = ParseWord();
         SkipWs();
         Expect(":");
         SkipWs();
         // Handle annotations before type name
-        if (_pos < _src.Length && _src[_pos] == '@')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '@')
             ParseAnnotations();
         p.Type = ParseBPlusType();
         return p;
@@ -3052,9 +3214,9 @@ return entries;
             {
                 firstInBlock = false; // first op in inner block: no |> needed
             }
-            else if (_pos < _src.Length && _src[_pos] == '|' && _pos + 1 < _src.Length && _src[_pos + 1] == '>')
+            else if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '|' && _lexer.Pos + 1 < _lexer.Src.Length && _lexer.Src[_lexer.Pos + 1] == '>')
             {
-                _pos += 2; // skip |>
+                _lexer.Pos += 2; // skip |>
                 SkipWs();
             }
             else
@@ -3062,46 +3224,46 @@ return entries;
             var op = new PipelineOp();
             op.Name = ParseWord();
             // Support dotted names like mpi.broadcast
-            while (_pos < _src.Length && _src[_pos] == '.')
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '.')
             {
-                _pos++;
+                _lexer.Pos++;
                 op.Name += "." + ParseWord();
             }
             SkipWs();
             // Parse optional (args)
-            if (_pos < _src.Length && _src[_pos] == '(')
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '(')
             {
-                _pos++;
+                _lexer.Pos++;
                 SkipWs();
-                while (_pos < _src.Length && _src[_pos] != ')')
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ')')
                 {
-                    int argStart = _pos;
-                    while (_pos < _src.Length && _src[_pos] != ',' && _src[_pos] != ')')
-                        _pos++;
-                    var arg = _src[argStart.._pos].Trim();
+                    int argStart = _lexer.Pos;
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ',' && _lexer.Src[_lexer.Pos] != ')')
+                        _lexer.Pos++;
+                    var arg = _lexer.Src[argStart.._lexer.Pos].Trim();
                     if (arg != "") op.Args.Add(arg);
                     SkipWs();
-                    if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
                 }
                 Expect(")");
                 SkipWs();
             }
             // Parse optional { body } block (for if/for/while)
-            if (_pos < _src.Length && _src[_pos] == '{')
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '{')
             {
-                _pos++; SkipWs();
+                _lexer.Pos++; SkipWs();
                 op.NestedBody = ParsePipelineExpr(false); // no source — inherits from outer
                 SkipWs();
                 Expect("}");
                 SkipWs();
                 // Parse optional else { body } for if
-                if (op.Name == "if" && _pos + 3 < _src.Length &&
-                    _src[_pos..(_pos + 4)] == "else")
+                if (op.Name == "if" && _lexer.Pos + 3 < _lexer.Src.Length &&
+                    _lexer.Src[_lexer.Pos..(_lexer.Pos + 4)] == "else")
                 {
-                    _pos += 4; SkipWs();
-                    if (_pos < _src.Length && _src[_pos] == '{')
+                    _lexer.Pos += 4; SkipWs();
+                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '{')
                     {
-                        _pos++; SkipWs();
+                        _lexer.Pos++; SkipWs();
                         op.ElseBody = ParsePipelineExpr(false);
                         SkipWs();
                         Expect("}");
@@ -3113,9 +3275,9 @@ return entries;
             SkipWs();
         }
         SkipWs();
-        if (_pos + 1 < _src.Length && _src[_pos] == '>' && _src[_pos + 1] == '>')
+        if (_lexer.Pos + 1 < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '>' && _lexer.Src[_lexer.Pos + 1] == '>')
         {
-            _pos += 2;
+            _lexer.Pos += 2;
             SkipWs();
             expr.OutputTarget = ParseWord();
         }
@@ -3124,7 +3286,7 @@ return entries;
 
     private void ParseNeedsGivesTouches(KernelDecl k)
     {
-        while (_pos < _src.Length)
+        while (_lexer.Pos < _lexer.Src.Length)
         {
             if (Peek("needs"))
             {
@@ -3132,11 +3294,11 @@ return entries;
                 SkipWs();
                 Expect(":");
                 SkipWs();
-                while (_pos < _src.Length && _src[_pos] != '\n' && !Peek("gives") && !Peek("touches") && !Peek("body"))
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && !Peek("gives") && !Peek("touches") && !Peek("body"))
                 {
-                    int start = _pos;
-                    while (_pos < _src.Length && _src[_pos] != '\n') _pos++;
-                    var line = _src[start.._pos].Trim();
+                    int start = _lexer.Pos;
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n') _lexer.Pos++;
+                    var line = _lexer.Src[start.._lexer.Pos].Trim();
                     if (line != "") k.Needs.Add(line);
                     SkipWs();
                 }
@@ -3147,11 +3309,11 @@ return entries;
                 SkipWs();
                 Expect(":");
                 SkipWs();
-                while (_pos < _src.Length && _src[_pos] != '\n' && !Peek("touches") && !Peek("body") && !Peek("needs"))
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && !Peek("touches") && !Peek("body") && !Peek("needs"))
                 {
-                    int start = _pos;
-                    while (_pos < _src.Length && _src[_pos] != '\n') _pos++;
-                    var line = _src[start.._pos].Trim();
+                    int start = _lexer.Pos;
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n') _lexer.Pos++;
+                    var line = _lexer.Src[start.._lexer.Pos].Trim();
                     if (line != "") k.Gives.Add(line);
                     SkipWs();
                 }
@@ -3163,40 +3325,40 @@ return entries;
                 Expect(":");
                 SkipWs();
                 var t = new TouchesBlock();
-                while (_pos < _src.Length && _src[_pos] != '\n' && !Peek("body") && !Peek("needs") && !Peek("gives"))
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && !Peek("body") && !Peek("needs") && !Peek("gives"))
                 {
                     if (Peek("reads"))
                     {
                         Expect("reads");
                         SkipWs();
-                        if (_pos < _src.Length && _src[_pos] == '[')
+                        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '[')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
-                            while (_pos < _src.Length && _src[_pos] != ']')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                             {
                                 t.Reads.Add(ParseWord());
                                 SkipWs();
-                                if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
                             }
-                            if (_pos < _src.Length) _pos++; // skip ]
+                            if (_lexer.Pos < _lexer.Src.Length) _lexer.Pos++; // skip ]
                         }
                     }
                     else if (Peek("writes"))
                     {
                         Expect("writes");
                         SkipWs();
-                        if (_pos < _src.Length && _src[_pos] == '[')
+                        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '[')
                         {
-                            _pos++;
+                            _lexer.Pos++;
                             SkipWs();
-                            while (_pos < _src.Length && _src[_pos] != ']')
+                            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                             {
                                 t.Writes.Add(ParseWord());
                                 SkipWs();
-                                if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
                             }
-                            if (_pos < _src.Length) _pos++; // skip ]
+                            if (_lexer.Pos < _lexer.Src.Length) _lexer.Pos++; // skip ]
                         }
                     }
                     else if (Peek("dx12"))
@@ -3210,7 +3372,7 @@ return entries;
                     else
                         break;
                     // Consume comma separator between touches entries
-                    if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
                     SkipWs();
                 }
                 k.Touches = t;
@@ -3236,9 +3398,9 @@ return entries;
                 var w = ConsumeUntilOr("]");
                 var img = new ImageType { H = h, W = w };
                 SkipWs();
-                if (_pos < _src.Length && _src[_pos] == ',')
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
                     img.Channels = int.Parse(ParseWord());
                 }
@@ -3249,11 +3411,11 @@ return entries;
             {
                 Expect("[");
                 var cw = new ConvWeightsType();
-                while (_pos < _src.Length && _src[_pos] != ']')
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']')
                 {
                     cw.Dimensions.Add(int.Parse(ParseWord()));
                     SkipWs();
-                    if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                    if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
                 }
                 Expect("]");
                 return cw;
@@ -3280,9 +3442,9 @@ return entries;
             {
                 var st = new SimpleType { Name = name };
                 SkipWs();
-                if (_pos < _src.Length && _src[_pos] == '[')
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '[')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     var size = ConsumeUntilOr("]");
                     Expect("]");
                     return new ArrayType { ElementType = st, Size = size };
@@ -3302,24 +3464,24 @@ return entries;
         SkipWs();
 
         // Optional parameters: pipeline Name(...)
-        if (_pos < _src.Length && _src[_pos] == '(')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '(')
         {
-            _pos++;
+            _lexer.Pos++;
             SkipWs();
-            while (_pos < _src.Length && _src[_pos] != ')')
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ')')
             {
                 p.Parameters.Add(ParseKernelParam());
                 SkipWs();
-                if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
             }
             Expect(")");
             SkipWs();
         }
 
         // Optional return type: -> Type
-        if (_pos < _src.Length && _pos + 1 < _src.Length && _src[_pos] == '-' && _src[_pos + 1] == '>')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Pos + 1 < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '-' && _lexer.Src[_lexer.Pos + 1] == '>')
         {
-            _pos += 2;
+            _lexer.Pos += 2;
             SkipWs();
             p.ReturnType = ParseBPlusType();
             SkipWs();
@@ -3330,7 +3492,7 @@ return entries;
         SkipWs();
 
         // Parse steps (supports both "step Name = KernelName" and "stage: StateName" and "pass Name()")
-        while (_pos < _src.Length && _src[_pos] != '}')
+        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '}')
         {
             SkipWs();
             if (Peek("step"))
@@ -3344,19 +3506,19 @@ return entries;
                 var kernelName = ParseWord();
                 SkipWs();
                 var step = new PipelineStep { Name = stepName, KernelName = kernelName };
-                if (_pos < _src.Length && _src[_pos] == '(')
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '(')
                 {
-                    _pos++;
+                    _lexer.Pos++;
                     SkipWs();
-                    while (_pos < _src.Length && _src[_pos] != ')')
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ')')
                     {
-                        int argStart = _pos;
-                        while (_pos < _src.Length && _src[_pos] != ',' && _src[_pos] != ')')
-                            _pos++;
-                        var arg = _src[argStart.._pos].Trim();
+                        int argStart = _lexer.Pos;
+                        while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ',' && _lexer.Src[_lexer.Pos] != ')')
+                            _lexer.Pos++;
+                        var arg = _lexer.Src[argStart.._lexer.Pos].Trim();
                         if (arg != "") step.Args.Add(arg);
                         SkipWs();
-                        if (_pos < _src.Length && _src[_pos] == ',') { _pos++; SkipWs(); }
+                        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') { _lexer.Pos++; SkipWs(); }
                     }
                     Expect(")");
                 }
@@ -3378,23 +3540,23 @@ return entries;
                 SkipWs();
                 var funcName = ParseWord();
                 SkipWs();
-                if (_pos < _src.Length && _src[_pos] == '(')
+                if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '(')
                 {
-                    _pos++;
-                    while (_pos < _src.Length && _src[_pos] != ')') _pos++;
-                    if (_pos < _src.Length) _pos++;
+                    _lexer.Pos++;
+                    while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ')') _lexer.Pos++;
+                    if (_lexer.Pos < _lexer.Src.Length) _lexer.Pos++;
                 }
                 p.Steps.Add(new PipelineStep { Name = funcName, KernelName = funcName });
             }
             else
             {
                 // Skip unknown lines (e.g. queue: compute) to avoid infinite loop
-                while (_pos < _src.Length && _src[_pos] != '\n' && _src[_pos] != '}') _pos++;
+                while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && _lexer.Src[_lexer.Pos] != '}') _lexer.Pos++;
             }
             SkipWs();
             // Skip semicolons and commas
-            while (_pos < _src.Length && (_src[_pos] == ';' || _src[_pos] == ','))
-                _pos++;
+            while (_lexer.Pos < _lexer.Src.Length && (_lexer.Src[_lexer.Pos] == ';' || _lexer.Src[_lexer.Pos] == ','))
+                _lexer.Pos++;
             SkipWs();
         }
         Expect("}");
@@ -3407,7 +3569,7 @@ return entries;
             Expect(":");
             SkipWs();
             var tb = new TelemetryBlock();
-            while (_pos < _src.Length && _src[_pos] != '\n' && Peek("log"))
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n' && Peek("log"))
             {
                 Expect("log");
                 SkipWs();
@@ -3416,11 +3578,11 @@ return entries;
                 SkipWs();
                 Expect("->");
                 SkipWs();
-                var m = Regex.Match(_src[_pos..], @"^""([^""]*)""");
+                var m = Regex.Match(_lexer.Src[_lexer.Pos..], @"^""([^""]*)""");
                 if (m.Success)
                 {
                     entry.FilePath = m.Groups[1].Value;
-                    _pos += m.Length;
+                    _lexer.Pos += m.Length;
                 }
                 else
                     entry.FilePath = ParseWord();
@@ -3444,28 +3606,28 @@ return entries;
         Expect(")");
         SkipWs();
         // Optional return type
-        if (_pos < _src.Length && _src[_pos] == '-')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '-')
         {
             Expect("->");
             SkipWs();
             e.ReturnType = ParseWord();
         }
         // Body is everything until end or next top-level construct
-        if (_pos < _src.Length && _src[_pos] == '\n')
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '\n')
         {
-            _pos++;
+            _lexer.Pos++;
             SkipWs();
         }
         // Parse body lines
-        while (_pos < _src.Length && !Peek("state ") && !Peek("kernel") && !Peek("pipeline")
+        while (_lexer.Pos < _lexer.Src.Length && !Peek("state ") && !Peek("kernel") && !Peek("pipeline")
                && !Peek("entry") && !Peek("enum ") && !Peek("import ") && !Peek("context")
-               && !Peek("parallel ") && !Peek("use cxx") && !Peek("extern") && _src[_pos] != '#')
+               && !Peek("parallel ") && !Peek("use cxx") && !Peek("extern") && _lexer.Src[_lexer.Pos] != '#')
         {
-            int start = _pos;
-            while (_pos < _src.Length && _src[_pos] != '\n') _pos++;
-            var line = _src[start.._pos].Trim();
+            int start = _lexer.Pos;
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != '\n') _lexer.Pos++;
+            var line = _lexer.Src[start.._lexer.Pos].Trim();
             if (line != "") e.BodyLines.Add(line);
-            if (_pos < _src.Length) _pos++;
+            if (_lexer.Pos < _lexer.Src.Length) _lexer.Pos++;
             SkipWs();
         }
         return e;
@@ -3473,15 +3635,7 @@ return entries;
 
     // --- Helpers ---
 
-    private string ParseWord()
-    {
-        SkipWs();
-        int start = _pos;
-        while (_pos < _src.Length && (char.IsLetterOrDigit(_src[_pos]) || _src[_pos] == '_'))
-            _pos++;
-        if (_pos == start) throw Err($"Expected identifier at position {_pos}");
-        return _src[start.._pos];
-    }
+    private string ParseWord() => _lexer.ParseWord();
 
     private string ParseType()
     {
@@ -3489,25 +3643,25 @@ return entries;
         SkipWs();
 
         // Mojo-style: simd<T, N>
-        if (name.Equals("simd", StringComparison.OrdinalIgnoreCase) && _pos < _src.Length && _src[_pos] == '<')
+        if (name.Equals("simd", StringComparison.OrdinalIgnoreCase) && _lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '<')
         {
-            _pos++;
+            _lexer.Pos++;
             var elemType = ParseWord();
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == ',') _pos++;
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ',') _lexer.Pos++;
             SkipWs();
             var lanes = ParseWord();
             SkipWs();
-            if (_pos < _src.Length && _src[_pos] == '>') _pos++;
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '>') _lexer.Pos++;
             name = $"simd<{elemType},{lanes}>";
         }
-        else if (_pos < _src.Length && _src[_pos] == '[')
+        else if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '[')
         {
-            _pos++;
-            int start = _pos;
-            while (_pos < _src.Length && _src[_pos] != ']') _pos++;
-            var inner = _src[start.._pos].Trim();
-            if (_pos < _src.Length) _pos++;
+            _lexer.Pos++;
+            int start = _lexer.Pos;
+            while (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] != ']') _lexer.Pos++;
+            var inner = _lexer.Src[start.._lexer.Pos].Trim();
+            if (_lexer.Pos < _lexer.Src.Length) _lexer.Pos++;
             if (string.IsNullOrEmpty(inner))
                 name += "[]";
             else
@@ -3516,119 +3670,30 @@ return entries;
         return name;
     }
 
-    private string ConsumeUntilOr(string terminators)
-    {
-        int start = _pos;
-        while (_pos < _src.Length && !terminators.Contains(_src[_pos]))
-            _pos++;
-        return _src[start.._pos].Trim();
-    }
+    private string ConsumeUntilOr(string terminators) => _lexer.ConsumeUntilOr(terminators);
 
-    private string? ExtractBracedBlock()
-    {
-        if (_pos >= _src.Length || _src[_pos] != '{') return null;
-        _pos++;
-        int depth = 1;
-        int start = _pos;
-        while (_pos < _src.Length && depth > 0)
-        {
-            if (_src[_pos] == '{') depth++;
-            else if (_src[_pos] == '}') depth--;
-            if (depth > 0) _pos++;
-        }
-        var body = _src[start.._pos].Trim();
-        _pos++;
-        return body;
-    }
+    private string? ExtractBracedBlock() => _lexer.ExtractBracedBlock();
 
-    private string ParseAnnotationValue()
-    {
-        if (_pos < _src.Length && _src[_pos] == '"')
-        {
-            _pos++;
-            int start = _pos;
-            while (_pos < _src.Length && _src[_pos] != '"')
-                _pos++;
-            var val = _src[start.._pos];
-            _pos++;
-            return val;
-        }
-        if (_pos < _src.Length && (char.IsDigit(_src[_pos]) || (_src[_pos] == '-' && _pos + 1 < _src.Length && char.IsDigit(_src[_pos + 1]))))
-        {
-            int start = _pos;
-            // Handle negative numbers, floats, hex, etc.
-            if (_src[_pos] == '-') _pos++;
-            while (_pos < _src.Length && (char.IsLetterOrDigit(_src[_pos]) || _src[_pos] == '_' || _src[_pos] == '.'))
-                _pos++;
-            return _src[start.._pos];
-        }
-        return ParseWord();
-    }
+    private string ParseAnnotationValue() => _lexer.ParseAnnotationValue();
 
-    private bool Peek(string s)
-    {
-        // NOTE: SkipWs is NOT called here - caller should call SkipWs before Peek if needed
-        if (_pos + s.Length > _src.Length) return false;
-        for (int i = 0; i < s.Length; i++)
-            if (_src[_pos + i] != s[i]) return false;
-        // Make sure we're at a word boundary if s ends with a letter
-        if (char.IsLetterOrDigit(s[^1]))
-        {
-            int next = _pos + s.Length;
-            if (next < _src.Length && (char.IsLetterOrDigit(_src[next]) || _src[next] == '_'))
-                return false;
-        }
-        return true;
-    }
+    private bool Peek(string s) => _lexer.Peek(s);
 
-    private string PeekWord()
-    {
-        SkipWs();
-        int start = _pos;
-        while (_pos < _src.Length && (char.IsLetterOrDigit(_src[_pos]) || _src[_pos] == '_'))
-            _pos++;
-        var word = _src[start.._pos];
-        _pos = start;
-        return word != "" ? word : (_pos < _src.Length ? _src[_pos].ToString() : "(eof)");
-    }
+    private string PeekWord() => _lexer.PeekWord();
 
     private void Expect(string s)
     {
         SkipWs();
-        if (_pos + s.Length > _src.Length || !_src.AsSpan(_pos, s.Length).SequenceEqual(s))
+        if (_lexer.Pos + s.Length > _lexer.Src.Length || !_lexer.Src.AsSpan(_lexer.Pos, s.Length).SequenceEqual(s))
         {
-            int len = Math.Min(10, _src.Length - _pos);
-            throw Err($"Expected '{s}' at position {_pos}, got '{(_pos + len <= _src.Length ? _src.AsSpan(_pos, len).ToString() : _src[_pos..])}'");
+            int len = Math.Min(10, _lexer.Src.Length - _lexer.Pos);
+            throw Err($"Expected '{s}' at position {_lexer.Pos} (srcLen={_lexer.Src.Length}), got '{(_lexer.Pos + len <= _lexer.Src.Length ? _lexer.Src.AsSpan(_lexer.Pos, len).ToString() : _lexer.Src[_lexer.Pos..])}'");
         }
-        _pos += s.Length;
+        _lexer.Pos += s.Length;
     }
 
     private static string PeekN(int n) => ""; // unused overload placeholder
 
-    private bool IsVarDeclStart()
-    {
-        // Check if current position looks like "name: Type" (not state, kernel, etc.)
-        var saved = _pos;
-        try
-        {
-            var word = ParseWord();
-            SkipWs();
-            if (_pos < _src.Length && _src[_pos] == ':')
-            {
-                // Check it's not a state base class like "state Foo : Bar"
-                return word != "state" && word != "base"
-                    && word != "import" && word != "context"
-                    && word != "enum" && word != "parallel"
-                    && word != "kernel" && word != "pipeline"
-                    && word != "entry" && word != "always"
-                    && word != "step" && word != "body"
-                    && word != "needs" && word != "gives" && word != "touches"
-                    && word != "var" && word != "on" && word != "after";
-            }
-            return false;
-        }
-        finally { _pos = saved; }
-    }
+    private bool IsVarDeclStart() => _lexer.IsVarDeclStart();
 
     private static string ReadUntilWsOr(string s, char[] terminators)
     {
@@ -3662,31 +3727,30 @@ return entries;
         }
         
         // Get context: 30 chars before error
-        int ctxStart = Math.Max(0, _pos - 30);
-        int ctxLen = Math.Min(60, _src.Length - ctxStart);
-        var context = _src.Substring(ctxStart, ctxLen).Replace("\n", "\\n").Replace("\r", "");
+        int ctxStart = Math.Max(0, _lexer.Pos - 30);
+        int ctxLen = Math.Min(60, _lexer.Src.Length - ctxStart);
+        var context = _lexer.Src.Substring(ctxStart, ctxLen).Replace("\n", "\\n").Replace("\r", "");
         if (ctxStart > 0) context = "..." + context;
         
         // Calculate column relative to line start
-        int lineStart = _src.LastIndexOf('\n', Math.Max(0, _pos - 1)) + 1;
-        int column = _pos - lineStart + 1;
+        int lineStart = _lexer.Src.LastIndexOf('\n', Math.Max(0, _lexer.Pos - 1)) + 1;
+        int column = _lexer.Pos - lineStart + 1;
         
-        throw new ParseException(msg, _line, column, context, suggestion);
+        throw new ParseException(msg, _lexer.Line, column, context, suggestion);
     }
 
     private static string StripComments(string src)
     {
         src = Regex.Replace(src, @"//.*", "");
-        src = Regex.Replace(src, @"--.*", "");
         return src;
     }
 
     private void SkipWs()
     {
-        while (_pos < _src.Length && char.IsWhiteSpace(_src[_pos]))
+        while (_lexer.Pos < _lexer.Src.Length && char.IsWhiteSpace(_lexer.Src[_lexer.Pos]))
         {
-            if (_src[_pos] == '\n') _line++;
-            _pos++;
+            if (_lexer.Src[_lexer.Pos] == '\n') _lexer.Line++;
+            _lexer.Pos++;
         }
     }
 

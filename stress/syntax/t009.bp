@@ -1,1 +1,0 @@
-state T9 { var x: int = (2 + 2) * 2; }

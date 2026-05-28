@@ -1,7 +1,0 @@
-@corporate_network Test {
-
-    access: zero_trust {
-        session: max(4h)
-        behavior: ml_anomaly_detection
-    }
-}

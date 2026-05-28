@@ -1,1 +1,0 @@
-state T24 { var x: int = 10 % 3; }

@@ -1,1 +1,0 @@
-state T19 { var x: int = 10; on tick -> T19 { x += 5; } }

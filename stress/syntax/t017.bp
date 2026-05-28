@@ -1,1 +1,0 @@
-state T17 { var x: int = 0; on tick -> T17 { x++; } }

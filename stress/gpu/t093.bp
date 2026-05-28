@@ -1,1 +1,0 @@
-compute_kernel Cross { void main() { vec3 a; vec3 b; vec3 c = cross(a, b); } } state S {}

@@ -1,1 +1,0 @@
-compute_kernel RWBuf { RWBuffer<int> data; void main() { data[0] = 42; } } state S {}

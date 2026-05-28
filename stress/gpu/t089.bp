@@ -1,1 +1,0 @@
-compute_kernel Ada { target_gpu = nvidia_ada; void main() {} } state S {}

@@ -1,0 +1,1 @@
+context { var current_rpm: int = 800 var target_gear: int = 1 } state Parking { enter { print("Parking...\\n") } on current_rpm  - } state Drive { enter { print("Drive active!\\n") } } 

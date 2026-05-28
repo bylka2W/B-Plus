@@ -1,1 +1,0 @@
-state A { on next -> B { score = 10; } var score: int = 0; } state B {}

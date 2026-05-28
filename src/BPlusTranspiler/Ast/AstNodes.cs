@@ -47,6 +47,7 @@ public class ProgramNode
     public List<KernelDecl> Kernels { get; } = new();
     public List<PipelineDecl> Pipelines { get; } = new();
     public List<EntryDecl> Entries { get; } = new();
+    public List<StructDecl> Structs { get; } = new();
 
     // v2.3 Memory system
     public MemoryConfig? Memory { get; set; }
@@ -144,6 +145,7 @@ public class StateDefNode
 
     // Inline asm
     public string? AsmBlock { get; set; }
+    public List<FunctionDecl> Functions { get; } = new();
 }
 
 public class TransitionNode
@@ -718,6 +720,21 @@ public class RayTracingShaderDecl
     public int MaxRecursionDepth { get; set; } = 1;
     public List<ShaderResourceBinding> Resources { get; } = new();
     public List<StateDefNode> States { get; } = new();
+}
+
+public class FunctionDecl
+{
+    public string Name { get; set; } = "";
+    public bool IsInline { get; set; }
+    public string Body { get; set; } = "";
+    public string ReturnType { get; set; } = "void";
+    public List<(string Name, string Type)> Parameters { get; } = new();
+}
+
+public class StructDecl
+{
+    public string Name { get; set; } = "";
+    public List<VariableNode> Fields { get; } = new();
 }
 
 public class SharedMemoryDecl

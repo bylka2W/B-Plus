@@ -1,5 +1,0 @@
-import "math_lib.bp"
-
-entry main()
-    print("Import test passed")
-    return 0

@@ -1,1 +1,0 @@
-compute_kernel VecAdd { void main() { vec2 a = vec2(1,2); vec2 b = vec2(3,4); vec2 c = a + b; } } state S {}

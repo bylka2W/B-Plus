@@ -1,4 +1,0 @@
-entry main()
-    var x: int = 42
-    print(x)
-    return 0

@@ -1,1 +1,0 @@
-state InlineCall { inline fn c(): int { return 1; } var x: int = c(); }

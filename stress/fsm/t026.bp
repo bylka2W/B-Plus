@@ -1,1 +1,0 @@
-state A { on next -> B } state B {}

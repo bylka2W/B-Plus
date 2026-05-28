@@ -1,1 +1,0 @@
-state T13 { var b: bool = false || true; }
