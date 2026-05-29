@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using BPlusTranspiler;
 using BPlusTranspiler.Algorithm;
@@ -21,39 +21,56 @@ static void PrintParseError(ParseException ex)
 {
     Console.ForegroundColor = ConsoleColor.Red;
     Console.WriteLine();
-    Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
-    Console.WriteLine("║                    B+ PARSE ERROR                             ║");
-    Console.WriteLine("╠══════════════════════════════════════════════════════════════╣");
-    Console.WriteLine($"║  Line: {ex.Line,-5} Column: {ex.Column,-5}                              ║");
-    Console.WriteLine("╠══════════════════════════════════════════════════════════════╣");
+    Console.WriteLine("�==============================================================�");
+    Console.WriteLine("�                    B+ PARSE ERROR                             �");
+    Console.WriteLine("�==============================================================�");
+    Console.WriteLine($"�  Line: {ex.Line,-5} Column: {ex.Column,-5}                              �");
+    Console.WriteLine("�==============================================================�");
 
     var msg = ex.Message;
     if (msg.Length > 58) msg = msg.Substring(0, 55) + "...";
-    Console.WriteLine($"║  {msg,-60} ║");
+    Console.WriteLine($"�  {msg,-60} �");
 
     if (!string.IsNullOrEmpty(ex.Context))
     {
-        Console.WriteLine("╠══════════════════════════════════════════════════════════════╣");
-        Console.WriteLine("║  Context (near error):                                        ║");
+        Console.WriteLine("�==============================================================�");
+        Console.WriteLine("�  Context (near error):                                        �");
         var ctx = ex.Context;
         if (ctx.Length > 58) ctx = ctx.Substring(0, 55) + "...";
-        Console.WriteLine($"║    {ctx,-58} ║");
+        Console.WriteLine($"�    {ctx,-58} �");
     }
 
     if (!string.IsNullOrEmpty(ex.Suggestion))
     {
-        Console.WriteLine("╠══════════════════════════════════════════════════════════════╣");
-        Console.WriteLine("║  Suggestion:                                                 ║");
+        Console.WriteLine("�==============================================================�");
+        Console.WriteLine("�  Suggestion:                                                 �");
         var sug = ex.Suggestion;
         if (sug.Length > 58) sug = sug.Substring(0, 55) + "...";
-        Console.WriteLine($"║    {sug,-58} ║");
+        Console.WriteLine($"�    {sug,-58} �");
     }
 
-    Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
+    Console.WriteLine("L==============================================================-");
     Console.ResetColor();
     Console.WriteLine();
     Console.WriteLine("  Type 'bpc docs syntax.md' for language reference");
     Console.WriteLine("  Type 'bpc --lsp' to enable IDE support with real-time error highlighting");
+}
+
+.json");
+        if (program != null)
+        {
+            var json = AstSerializer.Serialize(program);
+            File.WriteAllText(dumpPath, json);
+            Console.Error.WriteLine($"AST dump saved to {dumpPath}");
+        }
+        var errPath = Path.Combine(dumpDir, $"{srcName}_{ts}.err");
+        File.WriteAllText(errPath, $"{ex.GetType().FullName}: {ex.Message}\n{ex.StackTrace}");
+        Console.Error.WriteLine($"Error dump saved to {errPath}");
+    }
+    catch
+    {
+        // Silently ignore dump failures
+    }
 }
 
 if (args.Length > 0 && args[0] == "health")
@@ -260,7 +277,7 @@ if (args.Length > 0 && args[0] == "bench")
 // Swift: Whole-Module Optimization (WMO) mode
 if (args.Contains("--wmo"))
 {
-    Console.WriteLine("B+ Whole-Module Optimization (WMO) — Swift-style");
+    Console.WriteLine("B+ Whole-Module Optimization (WMO) � Swift-style");
     Console.WriteLine("  Cross-machine state optimizations across all .bp files.");
     Console.WriteLine();
 
@@ -296,7 +313,7 @@ if (args.Contains("--wmo"))
         }
         catch (ParseException ex)
         {
-            Console.Error.WriteLine($"  ⚠ {bpFile}: parse error — {ex.Message}");
+            Console.Error.WriteLine($"  ? {bpFile}: parse error � {ex.Message}");
         }
     }
 
@@ -316,7 +333,7 @@ if (args.Contains("--wmo"))
     {
         Console.WriteLine($"  Cross-module references ({crossRefs.Count}):");
         foreach (var cr in crossRefs.Take(10))
-            Console.WriteLine($"    • {cr}");
+            Console.WriteLine($"    � {cr}");
     }
 
     Console.WriteLine();
@@ -358,7 +375,7 @@ if (args.Length > 0 && args[0] == "--install-lsp")
     return 0;
 }
 
-// GPU/PGO/C-ABI flags — declared early for watch mode closure
+// GPU/PGO/C-ABI flags � declared early for watch mode closure
 var gpuArch = "auto";
 var pgoCollect = false;
 string? pgoUse = null;
@@ -935,7 +952,7 @@ if (args.Contains("--adaptive"))
         Console.Error.WriteLine("Usage: bpc <input.bp> --adaptive [--target all]");
         return 1;
     }
-    Console.WriteLine("B+ Adaptive Runtime — generating CPU-dispatch code");
+    Console.WriteLine("B+ Adaptive Runtime � generating CPU-dispatch code");
     Console.WriteLine();
 
     var srcAdapt = File.ReadAllText(input);
@@ -963,9 +980,9 @@ if (args.Contains("--adaptive"))
     File.WriteAllText(Path.Combine(outDir, "benchmark_report.txt"), AdaptiveRuntime.GenerateBenchmarkReport(allStates));
 
     Console.WriteLine($"  Generated in {outDir}/");
-    Console.WriteLine("  • bplus_adaptive.h — CPU detection (CPUID) + dispatch table");
-    Console.WriteLine("  • bplus_adaptive.cpp — per-state dispatch + benchmark harness");
-    Console.WriteLine("  • benchmark_report.txt — CPU capability report");
+    Console.WriteLine("  � bplus_adaptive.h � CPU detection (CPUID) + dispatch table");
+    Console.WriteLine("  � bplus_adaptive.cpp � per-state dispatch + benchmark harness");
+    Console.WriteLine("  � benchmark_report.txt � CPU capability report");
     Console.WriteLine();
     Console.WriteLine("Compile with: g++ -O3 -march=native -o benchmark bplus_adaptive.cpp");
     return 0;
@@ -984,7 +1001,7 @@ if (args.Contains("--verify") || args.Contains("--verify-dal-a"))
     else if (args.Contains("--dal-b")) level = SafetyLevel.DAL_B;
     else if (args.Contains("--dal-d")) level = SafetyLevel.DAL_D;
 
-    Console.WriteLine("B+ Formal Verification — DO-178C compliance");
+    Console.WriteLine("B+ Formal Verification � DO-178C compliance");
     Console.WriteLine($"Target Safety Level: {level}");
     Console.WriteLine();
 
@@ -1012,7 +1029,7 @@ if (args.Contains("--math") || args.Contains("--math-intrinsics"))
         return 1;
     }
 
-    Console.WriteLine("B+ Math Intrinsics — AVX-512 matrix/quaternion/trig generation");
+    Console.WriteLine("B+ Math Intrinsics � AVX-512 matrix/quaternion/trig generation");
     Console.WriteLine();
 
     var srcMath = File.ReadAllText(input);
@@ -1030,8 +1047,8 @@ if (args.Contains("--math") || args.Contains("--math-intrinsics"))
     File.WriteAllText(Path.Combine(outDirMath, "bplus_math_ops.cpp"), MathIntrinsics.GenerateMathOpsSource(allStatesMath));
 
     Console.WriteLine($"  Generated in {outDirMath}/");
-    Console.WriteLine("  • bplus_math.h — AVX-512 sin/cos/tan/exp/log, mat4x4, quaternion");
-    Console.WriteLine("  • bplus_math_ops.cpp — per-state math dispatch table");
+    Console.WriteLine("  � bplus_math.h � AVX-512 sin/cos/tan/exp/log, mat4x4, quaternion");
+    Console.WriteLine("  � bplus_math_ops.cpp � per-state math dispatch table");
     Console.WriteLine();
     Console.WriteLine("Compile with: g++ -O3 -mavx512f -mfma -o math_test bplus_math_ops.cpp");
     return 0;
@@ -1253,13 +1270,26 @@ if (args.Contains("--x64") || target is "x64" or "linux" or "macos" or "elf")
     Console.WriteLine($"  Input: {input}");
     Console.WriteLine($"  Format: {(generatePE ? "PE (.exe)" : generateELF ? "ELF (.out)" : generateMachO ? "MachO (.app)" : "PE (.exe)")}");
 
-    var src = File.ReadAllText(input);
-    var x64Parser = new BPlusParser();
-    ProgramNode x64Program;
-    try
-    {
-        x64Program = x64Parser.Parse(src);
-    }
+
+var source = File.ReadAllText(input);
+var parser = new BPlusParser();
+ProgramNode program;
+try
+{
+    program = parser.Parse(source);
+}
+catch (ParseException ex)
+{
+    PrintParseError(ex);
+    DumpCrashDump(null, ex, input);
+    return 1;
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"Fatal: {ex.Message}");
+    DumpCrashDump(null, ex, input);
+    return 1;
+}
     catch (ParseException ex)
     {
         PrintParseError(ex);
@@ -1331,19 +1361,19 @@ if (input == null)
     Console.Error.WriteLine("       bpc debug <file.bp>                  (interactive state machine debugger)");
     Console.Error.WriteLine("       bpc profile <file.bp> [iterations]   (profile transition frequencies)");
     Console.Error.WriteLine("       bpc <input.bp> --metal [--tier=L0] [--fusion] [--register-alloc]  (full metal stack)");
-    Console.Error.WriteLine("       bpc <input.bp> --ai=architect [--ai-dry-run]     (AI architect: PGO→split→sort→inline→NUMA dup)");
+    Console.Error.WriteLine("       bpc <input.bp> --ai=architect [--ai-dry-run]     (AI architect: PGO>split>sort>inline>NUMA dup)");
     Console.Error.WriteLine("       bpc <input.bp> --ai-dry-run                       (AI architect dry-run: profile only, no changes)");
     Console.Error.WriteLine("       bpc <input.bp> --ai                             (AI optimizer for metal config)");
     Console.Error.WriteLine("       bpc <input.bp> --metal --unpack                 (AI register unpack predictor)");
     Console.Error.WriteLine("       bpc <input.bp> --metal --hidden-buffers          (LSD/LFB/TLB/BTB/RSB analysis)");
     Console.Error.WriteLine("       bpc <input.bp> --roofline                       (roofline model: compute vs memory bound)");
-    Console.Error.WriteLine("       bpc --muarch                                 (µarch profile: Agner Fog tables)");
+    Console.Error.WriteLine("       bpc --muarch                                 (�arch profile: Agner Fog tables)");
     Console.Error.WriteLine("       bpc <input.bp> --ilp                            (ILP dependency chain analysis)");
     Console.Error.WriteLine("       bpc <input.bp> --store-fwd                      (store forwarding hazard detection)");
     Console.Error.WriteLine("       bpc <input.bp> --auto-tune [N]                  (auto-tune: AI + real perf counters)");
     Console.Error.WriteLine("       bpc --hardware-probe                        (CPUID + sensor report: freq/temp/power/IPC)");
     Console.Error.WriteLine("       bpc --neuro-schedule                        (AI NeuroScheduler decision)");
-    Console.Error.WriteLine("       bpc --adaptive-loop                         (closed-loop sensor→AI→actuator)");
+    Console.Error.WriteLine("       bpc --adaptive-loop                         (closed-loop sensor>AI>actuator)");
     Console.Error.WriteLine("       bpc <input.bp> --branch-hints               (branch prediction report)");
     Console.Error.WriteLine("       bpc <input.bp> --asm-parse                   (parse inline asm{} blocks)");
     Console.Error.WriteLine("       bpc <input.bp> --micro-op                    (micro-op decode/analysis)");
@@ -1363,28 +1393,28 @@ if (input == null)
     Console.Error.WriteLine("       bpc build [--config bp.toml] [--dry-run]    (build from config)");
     Console.Error.WriteLine("       bpc publish [--runtime linux-x64] [--aot]   (NativeAOT publish)");
     Console.Error.WriteLine();
-    Console.Error.WriteLine("Optimization flags (реалистичные ускорения на state machine):");
-    Console.Error.WriteLine("  --pgo [--pgo-use file]       PGO pipeline: instrument→run→merge→recompile   +15-25%");
+    Console.Error.WriteLine("Optimization flags (������������ ��������� �� state machine):");
+    Console.Error.WriteLine("  --pgo [--pgo-use file]       PGO pipeline: instrument>run>merge>recompile   +15-25%");
     Console.Error.WriteLine("  --bolt [--binary path]       BOLT post-link: reorder code by hot paths    +10-20%");
     Console.Error.WriteLine("  --buffer-counters            Store/Load buffer PMC analysis               (PMC)");
     Console.Error.WriteLine("  --self-contained             Self-contained binary (no .NET runtime)");
     Console.Error.WriteLine("  --aot                        NativeAOT compilation");
-    Console.Error.WriteLine("  --optimize                  Таблица переходов вместо virtual   +10-30%");
-    Console.Error.WriteLine("  --pool                       Пул состояний без new/delete       +20-40%");
-    Console.Error.WriteLine("  --cache-friendly             Упорядоченный layout данных        +10-20%");
-    Console.Error.WriteLine("  --prefetch                   Предзагрузка кэша                  +10-20%");
-    Console.Error.WriteLine("  --branchless                cmov вместо if/else в переходах    +5-15%");
-    Console.Error.WriteLine("  --pack                       Битфилды, упаковка структур        -40% памяти");
-    Console.Error.WriteLine("  --predict                    Предсказание след. состояния       +5-15%");
-    Console.Error.WriteLine("  --eco                        Энергосбережение (узкие SIMD)");
+    Console.Error.WriteLine("  --optimize                  ������� ��������� ������ virtual   +10-30%");
+    Console.Error.WriteLine("  --pool                       ��� ��������� ��� new/delete       +20-40%");
+    Console.Error.WriteLine("  --cache-friendly             ������������� layout ������        +10-20%");
+    Console.Error.WriteLine("  --prefetch                   ������������ ����                  +10-20%");
+    Console.Error.WriteLine("  --branchless                cmov ������ if/else � ���������    +5-15%");
+    Console.Error.WriteLine("  --pack                       ��������, �������� ��������        -40% ������");
+    Console.Error.WriteLine("  --predict                    ������������ ����. ���������       +5-15%");
+    Console.Error.WriteLine("  --eco                        ���������������� (����� SIMD)");
     Console.Error.WriteLine("  --turbo                      --optimize + --pool + --pack       +40-80%");
-    Console.Error.WriteLine("  --turbo-embed                Для embedded (--pack + --eco)");
-    Console.Error.WriteLine("  --vectorize                  Инлайн SIMD (только с числовыми данными)");
-    Console.Error.WriteLine("  --benchmark [iterations]     Сгенерировать бенчмарк");
-    Console.Error.WriteLine("  --check / --analyze          Диагностика 7 категорий");
+    Console.Error.WriteLine("  --turbo-embed                ��� embedded (--pack + --eco)");
+    Console.Error.WriteLine("  --vectorize                  ������ SIMD (������ � ��������� �������)");
+    Console.Error.WriteLine("  --benchmark [iterations]     ������������� ��������");
+    Console.Error.WriteLine("  --check / --analyze          ����������� 7 ���������");
     Console.Error.WriteLine("  --lto <mode>                 Link-Time Optimization thin|full     +10-20%");
-    Console.Error.WriteLine("  --thread-pool <N>            Многопоточная диспетчеризация");
-    Console.Error.WriteLine("  --lock-free                  Безлоковые структуры               +5-10%");
+    Console.Error.WriteLine("  --thread-pool <N>            ������������� ���������������");
+    Console.Error.WriteLine("  --lock-free                  ���������� ���������               +5-10%");
     Console.Error.WriteLine("  --target-arch <arch>         native|zen4|raptor|m1|cortex");
     Console.Error.WriteLine("  --target-os <os>             linux|windows|baremetal");
     Console.Error.WriteLine("  --memory=regions             Region allocator (zero-free transitions)");
@@ -1402,21 +1432,34 @@ if (!File.Exists(input))
     Console.Error.WriteLine($"File not found: {input}");
     return 1;
 }
-
-var source = File.ReadAllText(input);
-var parser = new BPlusParser();
-ProgramNode program;
-try
+static void DumpCrashDump(ProgramNode? program, Exception ex, string input)
 {
-    program = parser.Parse(source);
-}
-catch (ParseException ex)
-{
-    PrintParseError(ex);
-    return 1;
+    try
+    {
+        var dumpDir = "crash_dumps";
+        Directory.CreateDirectory(dumpDir);
+        var ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var srcName = Path.GetFileNameWithoutExtension(input);
+        var dumpPath = Path.Combine(dumpDir, $"{srcName}_{ts}.json");
+        if (program != null)
+        {
+            var json = AstSerializer.Serialize(program);
+            File.WriteAllText(dumpPath, json);
+            Console.Error.WriteLine($"AST dump saved to {dumpPath}");
+        }
+        var errPath = Path.Combine(dumpDir, $"{srcName}_{ts}.err");
+        File.WriteAllText(errPath, $"{ex.GetType().FullName}: {ex.Message}\n{ex.StackTrace}");
+        Console.Error.WriteLine($"Error dump saved to {errPath}");
+    }
+    catch
+    {
+        // Silently ignore dump failures
+    }
 }
 
-// Resolve imports — load and merge imported .bp files, also save for separate generation
+
+
+// Resolve imports � load and merge imported .bp files, also save for separate generation
 string inputDir = Path.GetDirectoryName(Path.GetFullPath(input)) ?? ".";
 var importPrograms = new List<(string name, ProgramNode prog)>();
 foreach (var imp in program.Imports)
@@ -1452,7 +1495,7 @@ foreach (var imp in program.Imports)
     }
 }
 
-// --zig flag: bypass multi-generator pipeline, use C# → JSON → Zig DLL → zig build-exe
+// --zig flag: bypass multi-generator pipeline, use C# > JSON > Zig DLL > zig build-exe
 if (optFlags.ZigBackend)
 {
     var json = AstSerializer.Serialize(program);
@@ -1470,14 +1513,14 @@ if (optFlags.ZigBackend)
 
     if (optFlags.Release)
     {
-        // Mode 1: LLVM IR → clang → lld-link
+        // Mode 1: LLVM IR > clang > lld-link
         var genDir = "gen_metal";
         Directory.CreateDirectory(genDir);
         var llFile = Path.Combine(genDir, "kernels_llvm.ll");
         File.WriteAllText(llFile, zigCode);
         Console.WriteLine($"Generated {llFile} ({zigCode.Length} bytes)");
 
-        // SPIR-V output (GPU kernel via LLVM bitcode → llvm-spirv)
+        // SPIR-V output (GPU kernel via LLVM bitcode > llvm-spirv)
         if (optFlags.Spirv)
         {
             var llvmBin = Path.Combine(
@@ -1492,7 +1535,7 @@ if (optFlags.ZigBackend)
                 sp.WaitForExit();
                 if (sp.ExitCode == 0)
                 {
-                    Console.WriteLine($"Generated {bcFile} (spirv64 bitcode — run llvm-spirv -r for .spv)");
+                    Console.WriteLine($"Generated {bcFile} (spirv64 bitcode � run llvm-spirv -r for .spv)");
                 }
                 else
                     Console.Error.WriteLine("SPIR-V skipped (spirv64 target not supported by this clang)");
@@ -1525,19 +1568,19 @@ if (optFlags.ZigBackend)
                 legacyFlags = $"-filetype=obj legacy_stdio.ll -o \"";
             }
 
-            // Compile .ll → .obj
+            // Compile .ll > .obj
             var objFile = Path.Combine(genDir, "kernels_llvm.obj");
             var cc = Process.Start(llvmCompiler, llvmObjFlags + objFile + "\"");
             cc.WaitForExit();
             if (cc.ExitCode != 0) { Console.Error.WriteLine("llc failed"); return 1; }
 
-            // Compile legacy_stdio.ll → .obj
+            // Compile legacy_stdio.ll > .obj
             var legacyObj = Path.Combine(genDir, "legacy_stdio.obj");
             var lc = Process.Start(llvmCompiler, legacyFlags + legacyObj + "\"");
             lc.WaitForExit();
             if (lc.ExitCode != 0) { Console.Error.WriteLine("legacy_stdio.ll compile failed"); return 1; }
 
-            // Link → .exe
+            // Link > .exe
             var exeFile = Path.Combine(genDir, "bplus_llvm_output.exe");
             var linkArgs = $"\"{objFile}\" \"{legacyObj}\" /OUT:\"{exeFile}\" /NOLOGO /ENTRY:main /SUBSYSTEM:CONSOLE kernel32.lib /NODEFAULTLIB";
             var ld = Process.Start(lldLink, linkArgs);
@@ -1565,7 +1608,7 @@ if (optFlags.ZigBackend)
     }
     else
     {
-        // Mode 0: Zig source → zig build-exe → out.exe
+        // Mode 0: Zig source > zig build-exe > out.exe
         var outFile = optFlags.Output ?? "output.zig";
         File.WriteAllText(outFile, zigCode);
         Console.WriteLine($"Generated {outFile} ({zigCode.Length} bytes)");
@@ -1651,9 +1694,9 @@ if (optFlags.Check || !optFlags.HasAny)
     reporter.RunAll();
     var code = reporter.Report(Console.Out);
 
-    // Run BPlusValidator — 121 checks
+    // Run BPlusValidator � 121 checks
     var valErrors = BPlusValidator.Validate(program, input);
-    if (valErrors.Any(e => e.Severity == "🔴"))
+    if (valErrors.Any(e => e.Severity == "??"))
     {
         Console.Error.WriteLine(BPlusValidator.GenerateReport(valErrors));
         code = 1;
@@ -1826,7 +1869,7 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
                 Interlocked.Add(ref count, localCount);
         });
 
-        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {Path.GetFileName(file)} → {count} file(s) regenerated");
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {Path.GetFileName(file)} > {count} file(s) regenerated");
     }
     catch (ParseException ex)
     {
@@ -1840,7 +1883,7 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
 
 static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool hiddenBuffers, string? tierStr)
 {
-    Console.WriteLine("B+ v4.0.0 BETA Metal — NUMA + µarch + ILP + StoreFwd + AutoTune");
+    Console.WriteLine("B+ v4.0.0 BETA Metal � NUMA + �arch + ILP + StoreFwd + AutoTune");
     Console.WriteLine();
 
     var srcRaw = File.ReadAllText(bpFile);
@@ -1904,7 +1947,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     Console.WriteLine("[Phase 1] Classifying tiers...");
     var tiers = TierClassifier.Classify(program, metalBlocks);
     foreach (var t in tiers)
-        Console.WriteLine($"  {t.StateName,-20} → {t.Section,-20} align {t.Alignment}");
+        Console.WriteLine($"  {t.StateName,-20} > {t.Section,-20} align {t.Alignment}");
     Console.WriteLine();
 
     // Phase 1: Pack code
@@ -1927,7 +1970,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     if (regAlloc)
     {
         foreach (var r in registers)
-            Console.WriteLine($"  {r.Variable,-30} → {r.Register,-6} ({r.Class})");
+            Console.WriteLine($"  {r.Variable,-30} > {r.Register,-6} ({r.Class})");
         Console.WriteLine();
     }
 
@@ -1960,8 +2003,8 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
         Console.WriteLine();
     }
 
-    // Phase 2d: µarch profile verification for fusion pairs
-    Console.WriteLine("[Phase 2d] µarch fusion verification...");
+    // Phase 2d: �arch profile verification for fusion pairs
+    Console.WriteLine("[Phase 2d] �arch fusion verification...");
     string cpuHint = PrefetchInjector.DetectCpu();
     foreach (var mb in metalBlocks)
         foreach (var fp in mb.Config.FusionPairs)
@@ -1969,8 +2012,8 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
             var targetMuarch = mb.Config.MuarchProfile ?? cpuHint;
             bool valid = MicroArchProfiles.IsFusionValid(fp, targetMuarch);
             Console.WriteLine(valid
-                ? $"  ✓ '{fp}' valid on {targetMuarch}"
-                : $"  ⚠ '{fp}' NOT valid on {targetMuarch} — remove or change @muarch");
+                ? $"  ? '{fp}' valid on {targetMuarch}"
+                : $"  ? '{fp}' NOT valid on {targetMuarch} � remove or change @muarch");
         }
     Console.WriteLine();
 
@@ -1979,9 +2022,9 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     var ilpScores = IlpAnalyzer.Analyze(program, tiers);
     foreach (var ilp in ilpScores)
         if (ilp.MaxDependencyChain > 4)
-            Console.WriteLine($"  ⚠ {ilp.StateName}: chain={ilp.MaxDependencyChain} ILP={ilp.Score:F2} — {ilp.Suggestion}");
+            Console.WriteLine($"  ? {ilp.StateName}: chain={ilp.MaxDependencyChain} ILP={ilp.Score:F2} � {ilp.Suggestion}");
         else
-            Console.WriteLine($"  ✓ {ilp.StateName}: chain={ilp.MaxDependencyChain} ILP={ilp.Score:F2}");
+            Console.WriteLine($"  ? {ilp.StateName}: chain={ilp.MaxDependencyChain} ILP={ilp.Score:F2}");
     Console.WriteLine();
 
     // Phase 2: LLVM IR with intrinsics
@@ -2034,7 +2077,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     Console.WriteLine($"  Fits L1: {ws.FitsL1}, Fits L2: {ws.FitsL2}, Fits L3: {ws.FitsL3}");
     Console.WriteLine($"  Recommended tier: {ws.RecommendedTier}");
     if (ws.NeedsTiling)
-        Console.WriteLine($"  ⚠ {ws.Warning}");
+        Console.WriteLine($"  ? {ws.Warning}");
     Console.WriteLine();
 
     // Phase 3c: Perf counters snapshot
@@ -2065,9 +2108,9 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     Console.WriteLine();
 
     // Summary
-    Console.WriteLine("═══════════════════════════════════════");
+    Console.WriteLine("=======================================");
     Console.WriteLine("METAL OPTIMIZATION SUMMARY");
-    Console.WriteLine("═══════════════════════════════════════");
+    Console.WriteLine("=======================================");
     foreach (var t in tiers)
     {
         Console.WriteLine($"  {t.StateName,-16} {t.Section,-24} align {t.Alignment,-4} hot={t.IsHot,-5} gateway={t.NeedsGateway}");
@@ -2113,7 +2156,7 @@ static int RunAI(string bpFile)
     double predictedMs = optimizer.PredictMs(best);
 
     Console.WriteLine($"  Predicted time: {predictedMs:F3} ms");
-    Console.WriteLine($"  Model Val R²: {model.ValR2:F4}");
+    Console.WriteLine($"  Model Val R?: {model.ValR2:F4}");
     Console.WriteLine($"  Tier: {best.Tier}");
     Console.WriteLine($"  Register pin: {best.Register ?? "(none)"}");
     Console.WriteLine($"  ZMM: {best.Zmm?.ToString() ?? "(none)"}");
@@ -2142,8 +2185,8 @@ static int RunAI(string bpFile)
 
     using (var writer = new StreamWriter(outputBp))
     {
-        writer.WriteLine("// B+ v4.0.0 BETA Metal — AI-optimized");
-        writer.WriteLine($"// Predicted time: {predictedMs:F3} ms (R²={model.ValR2:F4})");
+        writer.WriteLine("// B+ v4.0.0 BETA Metal � AI-optimized");
+        writer.WriteLine($"// Predicted time: {predictedMs:F3} ms (R?={model.ValR2:F4})");
         writer.WriteLine();
         writer.WriteLine("@metal {");
         if (best.Tier.HasValue) writer.WriteLine($"    @tier({(int)best.Tier.Value})");
@@ -2202,7 +2245,7 @@ static void InstallLsp()
         name = "bplus-lsp",
         version = "2.5.0GH",
         displayName = "B+ Language Support",
-        description = "B+ state machine language — LSP + syntax highlighting + Snippets",
+        description = "B+ state machine language � LSP + syntax highlighting + Snippets",
         categories = new[] { "Programming Languages" },
         engines = new { vscode = "^1.75.0" },
         activationEvents = new[] { "onLanguage:bp" },
@@ -2389,25 +2432,25 @@ exports.deactivate = deactivate;
         {
             proc.WaitForExit(60000);
             if (proc.ExitCode == 0)
-                Console.WriteLine("  ✓ npm dependency installed.");
+                Console.WriteLine("  ? npm dependency installed.");
             else
-                Console.WriteLine("  ⚠ npm install failed (run manually: cd \"{0}\" && npm install vscode-languageclient)", vscodeDir);
+                Console.WriteLine("  ? npm install failed (run manually: cd \"{0}\" && npm install vscode-languageclient)", vscodeDir);
         }
     }
     catch
     {
-        Console.WriteLine("  ⚠ npm not found. Install manually: cd \"{0}\" && npm install vscode-languageclient", vscodeDir);
+        Console.WriteLine("  ? npm not found. Install manually: cd \"{0}\" && npm install vscode-languageclient", vscodeDir);
     }
 
     Console.WriteLine();
-    Console.WriteLine($"✓ B+ extension installed to: {vscodeDir}");
+    Console.WriteLine($"? B+ extension installed to: {vscodeDir}");
     Console.WriteLine("  Restart VS Code and open a .bp file to activate B+ support.");
     Console.WriteLine();
     Console.WriteLine("  Features:");
-    Console.WriteLine("    • Syntax highlighting (.bp files)");
-    Console.WriteLine("    • LSP: errors, completions, hover info, formatting");
-    Console.WriteLine("    • Code snippets: state, kernel, hot, cold, simd, comptime");
-    Console.WriteLine("    • Auto-closing pairs, bracket matching");
+    Console.WriteLine("    � Syntax highlighting (.bp files)");
+    Console.WriteLine("    � LSP: errors, completions, hover info, formatting");
+    Console.WriteLine("    � Code snippets: state, kernel, hot, cold, simd, comptime");
+    Console.WriteLine("    � Auto-closing pairs, bracket matching");
 }
 
 static string StripComments(string src)
@@ -2592,3 +2635,4 @@ static double RunCacheSimulatorBenchmark()
     var speedup = times[4] / Math.Max(times[0], 0.0001);
     return speedup;
 }
+

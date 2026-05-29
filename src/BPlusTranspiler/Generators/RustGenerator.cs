@@ -275,7 +275,15 @@ public class RustGenerator : ICodeGenerator
     private string GenStates(ProgramNode program)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("#![forbid(unsafe_code)]");
+        if (program.States.Any(s => s.Variables.Any(v => v.IsFastPath)))
+        {
+            sb.AppendLine("#![allow(unsafe_code)]");
+            sb.AppendLine("// fast-path: unsafe raw pointer access for @fast_path variables");
+        }
+        else
+        {
+            sb.AppendLine("#![forbid(unsafe_code)]");
+        }
         sb.AppendLine("#![deny(unused_must_use)]");
         sb.AppendLine();
         sb.AppendLine("use std::fmt;");
@@ -342,6 +350,13 @@ public class RustGenerator : ICodeGenerator
             sb.AppendLine($"{ind}#[repr(C, align(64))]");
         else
             sb.AppendLine($"{ind}#[repr(C)]");
+        var hasFastPath = state.Variables.Any(v => v.IsFastPath);
+        if (hasFastPath)
+        {
+            sb.AppendLine($"{ind}/// Unmanaged fast-path: @fast_path variables accessed via raw pointers");
+            sb.AppendLine($"{ind}#[repr(C, packed)]");
+        }
+
         sb.AppendLine($"{ind}#[derive(Debug)]");
         sb.AppendLine($"{ind}pub struct {state.Name} {{");
 

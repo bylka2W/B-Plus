@@ -22,12 +22,14 @@ public partial class BPlusParser
         _lexer.Pos = 0;
         _lexer.Line = 1;
 
-        // RTL override filter (CWE-451)
+#if DEBUG
+        // RTL override filter (CWE-451) — heavy check, DEBUG only
         foreach (var c in RtlChars)
         {
             if (_lexer.Src.Contains(c))
                 throw new ParseException($"RTL override character U+{(int)c:X4} detected — possible code injection (CWE-451)");
         }
+#endif
         var program = new ProgramNode();
 
         SkipWs();

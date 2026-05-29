@@ -1,0 +1,6 @@
+state A {
+    always -> B
+}
+state B {
+    always -> A
+}

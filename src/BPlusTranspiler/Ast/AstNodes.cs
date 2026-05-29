@@ -79,6 +79,9 @@ public class VariableNode
     public string Name { get; set; } = "";
     public string Type { get; set; } = "";
     public string? DefaultValue { get; set; }
+    private Lazy<string>? _resolvedType;
+    public string ResolvedType => _resolvedType?.Value ?? Type;
+    public void SetInferredType(Func<string> resolver) => _resolvedType = new Lazy<string>(resolver);
     // @fast_path — keep in CPU registers
     public bool IsFastPath { get; set; }
     public bool IsMutable { get; set; } = true;

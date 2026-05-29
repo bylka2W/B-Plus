@@ -1,0 +1,11 @@
+context {
+    var speed: int = 0
+}
+state Low {
+    enter { print("low speed\n") }
+    on [speed > 100] -> High
+}
+state High {
+    enter { print("high speed\n") }
+    on [speed <= 100] -> Low
+}
