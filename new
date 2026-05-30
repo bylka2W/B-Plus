@@ -1,0 +1,27 @@
+@echo off
+title B+ - New State Machine
+
+set "FILE=%~1"
+if "%FILE%"=="" set "FILE=hello.bp"
+
+echo // B+ v4.0.0 State Machine > "%FILE%"
+echo. >> "%FILE%"
+echo context { >> "%FILE%"
+echo     var count: int = 0 >> "%FILE%"
+echo } >> "%FILE%"
+echo. >> "%FILE%"
+echo entry main { >> "%FILE%"
+echo     print("Hello from B+!") >> "%FILE%"
+echo } >> "%FILE%"
+echo. >> "%FILE%"
+echo state Idle { >> "%FILE%"
+echo     on start -> Running >> "%FILE%"
+echo     enter { print("Idle") } >> "%FILE%"
+echo } >> "%FILE%"
+echo. >> "%FILE%"
+echo state Running { >> "%FILE%"
+echo     on stop -> Idle >> "%FILE%"
+echo     enter { count += 1; print("Running: " + count) } >> "%FILE%"
+echo } >> "%FILE%"
+
+echo Created %FILE%

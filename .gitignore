@@ -32,6 +32,17 @@ all_out/
 *.swp
 *.swo
 
+# Debug symbols
+*.pdb
+*.exp
+*.ilk
+
+# Generated zig output
+output.zig
+
+# Crash dumps
+crash_dumps/
+
 # OS
 Thumbs.db
 .DS_Store

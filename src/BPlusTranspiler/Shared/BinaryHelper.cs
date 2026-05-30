@@ -33,7 +33,7 @@ internal static class BinaryHelper
     public static byte[] StructToBytes<T>(ref T value) where T : unmanaged
     {
         var bytes = new byte[Unsafe.SizeOf<T>()];
-        MemoryMarshal.Write(bytes, ref value);
+        MemoryMarshal.Write(bytes, in value);
         return bytes;
     }
 

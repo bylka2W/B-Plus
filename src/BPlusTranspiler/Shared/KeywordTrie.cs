@@ -35,7 +35,6 @@ internal sealed class KeywordTrie
         for (int i = 0; i < input.Length; i++)
         {
             var b = input[i];
-            if (b >= 256) break;
             var next = node.Children[b];
             if (next == null) break;
             node = next;
