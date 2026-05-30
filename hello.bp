@@ -1,43 +1,15 @@
-context {
-    var wheel_speed: int = 90
-    var brake_pressure: int = 40
-    
-    var abs_active: int = 0
-    var total_score: int = 0
+state Red {
+    on timer -> Green
 }
 
-state Init {
-    enter {
-        print("==================================================\\n")
-        print("   ЛИНЕЙНЫЙ ТЕСТ МУЛЬТИ-ПРИНТА B+ v1.0.0 (ФИНАЛ)   \\n")
-        print("==================================================\\n")
-    }
-
-    // Шаг 1: Проверка математики
-    on [wheel_speed * 2 - (brake_pressure + -10) == 150] -> CalculateABS {
-        total_score = 50
-    }
+state Green {
+    on timer -> Yellow
 }
 
-state CalculateABS {
-    // Шаг 2: Выставляем флаги и идем дальше БЕЗ Self-переходов
-    on [wheel_speed > 60] -> Verification {
-        abs_active = 1
-        total_score = total_score + 50 // 50 + 50 = 100
-    }
+state Yellow {
+    on timer -> Red
 }
 
-state Verification {
-    // Шаг 3: Если всё посчитано верно - сразу прыгаем в финал
-    on [total_score == 100] -> SummarySuccess {}
-}
-
-state SummarySuccess {
-    enter {
-        // ЖЕСТКИЙ ТЕСТ: Печатаем сразу ТРИ аргумента за один вызов!
-        print("Статус ABS: %d | Набранные очки: %d | Скорость: %d\\n", abs_active, total_score, wheel_speed)
-        print("--------------------------------------------------\\n")
-        print(" ТЕСТ ПРОЙДЕН: КОРРЕКТНЫЙ ИНЛАЙН В gen_llvm.zig! \\n")
-        print("==================================================\\n")
-    }
+entry main() {
+    print("hello from B+!")
 }

@@ -1198,18 +1198,103 @@ B+ v1.0/
 │       │   └── Platform/            ← AMD/NVIDIA/GCN intrinsics
 │       ├── Generators/             ← code generators
 │       ├── Parser/                 ← parser
+│       │   ├── BPlusParser.cs      ← parser (recursive descent)
+│       │   ├── BPlusLexer.cs       ← lexer
+│       │   └── PanicMode.cs        ← error recovery
 │       ├── Ast/                    ← AST nodes
+│       │   └── AstNodes.cs         ← with Lazy<T> type inference
+│       ├── Shared/                 ← infrastructure & utilities
+│       │   ├── KeywordTrie.cs      ← trie-based keyword matching
+│       │   ├── ImportCycleDetector.cs ← circular import detection
+│       │   ├── BinaryHelper.cs     ← BinaryPrimitives endian-safe I/O
+│       │   ├── SimdHelper.cs       ← Vector<byte> SIMD checks
+│       │   ├── AstSerializer.cs    ← AST → JSON (crash dumps)
+│       │   ├── StringPool.cs       ← string interning
+│       │   └── SymbolTable.cs      ← symbol resolution
 │       ├── Runtime/                ← runtime
-│       └── Program.cs              ← CLI entry point
+│       └── Program.cs              ← CLI entry point + crash dump handler
 │   └── vs-extension/                  ← Visual Studio extension
 │       └── BPlusLanguage/            ← VSIX проект
+├── benchmarks/                     ← BenchmarkDotNet benchmarks
+│   ├── Benchmark.csproj
+│   └── Benchmark.cs
 ├── examples/                       ← B+ code examples
 └── bench_*.bp                      ← benchmarks
 ```
 
 ---
 
-## Testing
+## 14. Infrastructure & Utilities
+
+### 14.1 KeywordTrie — Trie-based Keyword Matching
+
+Fast keyword lookup using a trie data structure. Used internally by the lexer for efficient keyword detection (matches longest keyword, checks word boundaries).
+
+```cs
+var trie = KeywordTrie.CreateDefault();
+trie.Add("state");
+var match = trie.Match(input, out int consumed);
+```
+
+### 14.2 Panic Mode — Error Recovery
+
+When the parser encounters a syntax error, PanicMode skips to the next sync token (`state`, `on`, `enter`, `exit`, `var`, `fn`, `import`, `}`, etc.) at the same brace depth, allowing continued parsing of subsequent code.
+
+```cs
+var panic = new PanicMode(lexer);
+bool recovered = panic.TryRecover();
+```
+
+### 14.3 Lazy&lt;T&gt; — Deferred Type Inference
+
+VariableNode supports lazy type resolution. When a variable has type `"inferred"`, the actual type is computed on first access via `VariableNode.ResolvedType`.
+
+```cs
+var varNode = new VariableNode { Type = "inferred" };
+varNode.SetInferredType(() => InferTypeFromContext(varNode));
+string resolved = varNode.ResolvedType; // computed once, cached
+```
+
+### 14.4 Crash Dumps — AST → JSON on Exception
+
+When an unhandled exception occurs during compilation, the compiler saves:
+- `crash_dumps/{source}_{timestamp}.json` — AST serialized as JSON
+- `crash_dumps/{source}_{timestamp}.err` — exception type, message, stack trace
+
+Enabled in the main parse block and the Zig/LLVM backend.
+
+### 14.5 #if DEBUG — Heavy Checks in Debug Only
+
+Expensive validation (e.g., RTL override character scan) is wrapped in `#if DEBUG` and skipped in Release builds for maximum performance.
+
+### 14.6 ImportCycleDetector — Circular Import Detection
+
+DFS-based cycle detection for the import system. Validates that imported files form a Directed Acyclic Graph (DAG) and can be topologically sorted.
+
+```cs
+ImportCycleDetector.Validate(program.Imports, resolver);
+var sorted = ImportCycleDetector.TopologicalSort(program.Imports, resolver);
+```
+
+### 14.7 BenchmarkDotNet — Performance Benchmarks
+
+A standalone benchmark project in `benchmarks/` using BenchmarkDotNet. Measures parsing and serialization throughput.
+
+```bash
+dotnet run --project benchmarks --configuration Release
+```
+
+### 14.8 SimdHelper — Vector&lt;byte&gt; SIMD Checks
+
+Fast byte scanning using `System.Numerics.Vector<byte>`. Provides `ContainsAnyByte()` and `IndexOfAny()` with SIMD acceleration and scalar fallback.
+
+### 14.9 BinaryHelper — BinaryPrimitives Endian I/O
+
+Endian-safe binary reading/writing using `System.Buffers.Binary.BinaryPrimitives`. Supports `ReadUInt16/32/64LE`, `WriteUInt16/32/64LE`, and `StructToBytes<T>()` / `BytesToStruct<T>()` for unmanaged types.
+
+### 14.10 unmanaged + unsafe Code Generation
+
+Rust generator emits `#![allow(unsafe_code)]` and `#[repr(C, packed)]` when `@fast_path` variables are detected, enabling raw pointer access for zero-overhead data passing. C/C++ generators emit `UNSAFE_BPLUS` pool sections and alignment pragmas.
 
 ```bash
 # All tests
@@ -2208,9 +2293,24 @@ B+ v1.0/
 │       │   └── Platform/            ← AMD/NVIDIA/GCN intrinsics
 │       ├── Generators/             ← генераторы кода
 │       ├── Parser/                 ← парсер
+│       │   ├── BPlusParser.cs      ← рекурсивный спуск
+│       │   ├── BPlusLexer.cs       ← лексер
+│       │   └── PanicMode.cs        ← восстановление после ошибок
 │       ├── Ast/                    ← AST узлы
+│       │   └── AstNodes.cs         ← с Lazy<T> для вывода типов
+│       ├── Shared/                 ← инфраструктура
+│       │   ├── KeywordTrie.cs      ← trie-поиск ключевых слов
+│       │   ├── ImportCycleDetector.cs ← детектор циклических импортов
+│       │   ├── BinaryHelper.cs     ← BinaryPrimitives endian-safe I/O
+│       │   ├── SimdHelper.cs       ← Vector<byte> SIMD проверки
+│       │   ├── AstSerializer.cs    ← AST → JSON (crash dumps)
+│       │   ├── StringPool.cs       ← интернирование строк
+│       │   └── SymbolTable.cs      ← таблица символов
 │       ├── Runtime/                ← runtime
-│       └── Program.cs              ← точка входа CLI
+│       └── Program.cs              ← точка входа CLI + crash dump handler
+├── benchmarks/                     ← BenchmarkDotNet бенчмарки
+│   ├── Benchmark.csproj
+│   └── Benchmark.cs
 ├── examples/                       ← примеры B+ кода
 └── bench_*.bp                      ← бенчмарки
 ```

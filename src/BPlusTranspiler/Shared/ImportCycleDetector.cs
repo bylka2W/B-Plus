@@ -1,3 +1,5 @@
+using BPlusTranspiler.Ast;
+
 namespace BPlusTranspiler;
 
 public static class ImportCycleDetector
