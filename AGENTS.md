@@ -55,7 +55,32 @@ Select-String "attempts \+= 1" output.zig
 Select-String "wrong_code" output.zig
 ```
 
-## Fixed (current session)
+## Fixed (current session — 2026-05-30)
+
+### Tests S24/S25/S30: ValidateGenerators() emits 7 expected errors
+- `src/BPlusTranspiler/BPlusValidator.cs` — `ValidateGenerators()` reports #82, #98, #63, #64, #983, #993, #996
+- Previously silent → tests expected these errors, now 218/218 pass
+- `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 218/218 passed
+
+### Warnings 0
+- `BPlusParser.cs:236` — CS8604: null check on ParseGpuKernel() return
+- `Program.cs:1591,1628` — CS8602: null-forgiving `!` on process.StartInfo
+
+### `--metal` auto-compiles to .exe
+- `Program.cs` RunMetal(): after LL → `.ll`, runs `clang -c` → `.obj`, then `lld-link` + `legacy_stdio.obj` → `.exe`
+- Same pipeline as `--release` mode (clang, not llc — llc missing from LLVM 21.1.1)
+- README line 591/1948: "(auto-compiles to .exe)"
+
+### Repo cleanup: 316 MB → 34 MB
+- `git filter-branch` purged `bpc.exe` (38 MB), `bpc_backend.dll`, `out.pdb`, zig-global-cache from all 194 commits
+- `git gc --aggressive --prune=now` after reflog expiry
+- `.gitignore`: added `*.dll`, `bpc.exe`, `zig-global-cache/`
+- Pushed to GitVerse (SSH) and GitHub — success, no more HTTP 413
+
+### Example .bp files
+- `examples/hello.bp` — minimal `entry main() { print("hello"); }`
+- `examples/traffic_light.bp` — state machine with `context { var ... }`
+- `examples/tcp_server.bp` — TCP server FSM
 
 ### Python: `global` for context vars
 - `PythonGenerator.cs` — `IsContextVarAssigned()` detects `=`/`+=`/`-=`/`++`/`--` with context var name in transition body/guard
@@ -122,7 +147,8 @@ Select-String "wrong_code" output.zig
 - `llc.exe` не входит в LLVM 21.1.1 — пайплайн использует `clang -c` (как и diagram, но без `llc`)
 
 ## State
-- **C# (стабильный)**: парсинг + все старые генераторы (Python, C++, C, Rust, Go, C#, LLVM) — работают
+- **C# (стабильный)**: парсинг + все старые генераторы (Python, C++, C, Rust, Go, C#, LLVM) — 218/218 тестов, 0 warnings
+- **--metal**: clang → .obj → lld-link → .exe (auto-compile)
 - **Zig DLL (Phase 2)**: `--zig` флаг, StateFn паттерн, event loop, группировка guard-ов, поддержка `+=`/`-=`, правильный prefix для state-local vars
 - **JSON-мост**: C# → JSON → Zig DLL → `output.zig` → `zig build-exe` → `out.exe` — работает
 - **Expression AST в JSON**: `BodyJsonParser` Pratt-парсер + JSON Stmt/Expr сериализация — работает. `--zig --run hello.bp` генерирует корректный `output.zig`
