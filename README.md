@@ -264,6 +264,13 @@ bpc input.bp --target python   # Python code
 bpc input.bp --target llvm     # LLVM IR
 bpc input.bp --target wasm     # WebAssembly
 
+# Shorthand flags (also --csharp/--cs/--go/--rust)
+bpc input.bp --cpp             # C++ (shortcut)
+bpc input.bp --csharp          # C# (shortcut)
+bpc input.bp --go              # Go (shortcut)
+bpc input.bp --python          # Python (shortcut)
+bpc input.bp --rust            # Rust (shortcut)
+
 # Shader targets
 bpc input.bp --target dxil     # DirectX HLSL (DXIL)
 bpc input.bp --target spirv    # Vulkan GLSL (SPIR-V)
@@ -580,7 +587,7 @@ Full set of optimizations for native code generation.
 ### 7.1 Metal Commands
 
 ```bash
-# Full metal stack
+# Full metal stack (auto-compiles to .exe)
 bpc input.bp --metal
 
 # With tier selection
@@ -1592,6 +1599,13 @@ bpc input.bp --target python   # Python код
 bpc input.bp --target llvm     # LLVM IR
 bpc input.bp --target wasm     # WebAssembly
 
+# Сокращённые флаги (также --csharp/--cs/--go/--rust)
+bpc input.bp --cpp             # C++ (сокращение)
+bpc input.bp --csharp          # C# (сокращение)
+bpc input.bp --go              # Go (сокращение)
+bpc input.bp --python          # Python (сокращение)
+bpc input.bp --rust            # Rust (сокращение)
+
 # Целевые шейдеры
 bpc input.bp --target dxil     # DirectX HLSL (DXIL)
 bpc input.bp --target spirv    # Vulkan GLSL (SPIR-V)
@@ -1930,7 +1944,7 @@ kernel render(src: Image) -> Image
 ### 7.1 Команды Metal
 
 ```bash
-# Полный metal stack
+# Полный metal stack (авто-компиляция в .exe)
 bpc input.bp --metal
 
 # С выбором tier

@@ -9,9 +9,25 @@ public class PythonGenerator : ICodeGenerator
     public string GetFileExtension() => ".py";
     public string GetLanguageName() => "Python";
 
+    private static HashSet<string> CollectAllEvents(ProgramNode program)
+    {
+        var events = new HashSet<string>();
+        void Walk(StateDefNode s)
+        {
+            foreach (var t in s.Transitions)
+                if (!t.IsAlways) events.Add(t.EventName);
+            foreach (var ns in s.NestedStates) Walk(ns);
+        }
+        foreach (var st in program.States) Walk(st);
+        foreach (var par in program.ParallelBlocks)
+            foreach (var st in par.States) Walk(st);
+        return events;
+    }
+
     public Dictionary<string, string> GenerateFiles(ProgramNode program)
     {
         var sb = new StringBuilder();
+        var allEvents = CollectAllEvents(program);
 
         // Runtime: State base class
         sb.AppendLine("from enum import Enum, auto");
@@ -21,6 +37,8 @@ public class PythonGenerator : ICodeGenerator
         sb.AppendLine("    def enter(self): pass");
         sb.AppendLine("    def exit(self): pass");
         sb.AppendLine("    def always(self): return None");
+        sb.AppendLine("    def handle_event(self, event_name):");
+        sb.AppendLine("        return None");
         sb.AppendLine();
 
         foreach (var imp in program.Imports)
@@ -84,9 +102,106 @@ public class PythonGenerator : ICodeGenerator
                 }
                 sb.AppendLine($"{indent}{line.TrimEnd(';')}");
             }
-            sb.AppendLine();
-            sb.AppendLine("if __name__ == \"__main__\":");
-            sb.AppendLine($"    {entry.Name}()");
+            // State machine event loop
+            if (allEvents.Count > 0)
+            {
+                var firstState = program.States.Count > 0
+                    ? program.States[0].Name
+                    : (program.ParallelBlocks.Count > 0 && program.ParallelBlocks[0].States.Count > 0
+                        ? program.ParallelBlocks[0].States[0].Name : null);
+                if (firstState != null)
+                {
+                    bool hasTimer = allEvents.Contains("timer");
+                    bool hasNetwork = allEvents.Any(e => e.StartsWith("tcp_") || e.StartsWith("udp_"));
+                    sb.AppendLine();
+                    sb.AppendLine("    # State machine runtime (multi-source event loop)");
+                    sb.AppendLine("    import threading");
+                    sb.AppendLine("    import sys");
+                    sb.AppendLine("    from queue import Queue, Empty");
+                    sb.AppendLine();
+                    sb.AppendLine("    _queue = Queue()");
+                    sb.AppendLine("    _stop = threading.Event()");
+                    sb.AppendLine();
+                    sb.AppendLine("    def _stdin_source():");
+                    sb.AppendLine("        while not _stop.is_set():");
+                    sb.AppendLine("            line = sys.stdin.readline()");
+                    sb.AppendLine("            if not line:");
+                    sb.AppendLine("                break");
+                    sb.AppendLine("            event = line.strip()");
+                    sb.AppendLine("            _queue.put(event)");
+                    sb.AppendLine("            if event == \"exit\":");
+                    sb.AppendLine("                break");
+                    sb.AppendLine("        _stop.set()");
+                    sb.AppendLine();
+                    sb.AppendLine("    threading.Thread(target=_stdin_source, daemon=True).start()");
+                    if (hasTimer)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("    # Timer event source (fires 'timer' every 1s)");
+                        sb.AppendLine("    def _timer_source():");
+                        sb.AppendLine("        while not _stop.is_set():");
+                        sb.AppendLine("            _stop.wait(1.0)");
+                        sb.AppendLine("            if not _stop.is_set():");
+                        sb.AppendLine("                _queue.put(\"timer\")");
+                        sb.AppendLine();
+                        sb.AppendLine("    threading.Thread(target=_timer_source, daemon=True).start()");
+                    }
+                    if (hasNetwork)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("    # TCP server (port 8080)");
+                        sb.AppendLine("    def _tcp_source():");
+                        sb.AppendLine("        try:");
+                        sb.AppendLine("            import socket");
+                        sb.AppendLine("            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)");
+                        sb.AppendLine("            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)");
+                        sb.AppendLine("            sock.bind(('0.0.0.0', 8080))");
+                        sb.AppendLine("            sock.listen(5)");
+                        sb.AppendLine("            sock.settimeout(0.5)");
+                        sb.AppendLine("            while not _stop.is_set():");
+                        sb.AppendLine("                try:");
+                        sb.AppendLine("                    conn, addr = sock.accept()");
+                        sb.AppendLine("                    _queue.put(\"tcp_connect\")");
+                        sb.AppendLine("                    data = conn.recv(4096)");
+                        sb.AppendLine("                    if data:");
+                        sb.AppendLine("                        _queue.put(\"tcp_data\")");
+                        sb.AppendLine("                    conn.close()");
+                        sb.AppendLine("                    _queue.put(\"tcp_disconnected\")");
+                        sb.AppendLine("                except socket.timeout:");
+                        sb.AppendLine("                    pass");
+                        sb.AppendLine("        except:");
+                        sb.AppendLine("            pass");
+                        sb.AppendLine();
+                        sb.AppendLine("    threading.Thread(target=_tcp_source, daemon=True).start()");
+                    }
+                    sb.AppendLine();
+                    sb.AppendLine($"    current_state = {firstState}()");
+                    sb.AppendLine("    current_state.enter()");
+                    sb.AppendLine("    try:");
+                    sb.AppendLine("        while not _stop.is_set():");
+                    sb.AppendLine("            try:");
+                    sb.AppendLine("                event = _queue.get(timeout=0.2)");
+                    sb.AppendLine("                if event == \"exit\":");
+                    sb.AppendLine("                    current_state.exit()");
+                    sb.AppendLine("                    break");
+                    sb.AppendLine("                next_state = current_state.handle_event(event)");
+                    sb.AppendLine("                if next_state is not None:");
+                    sb.AppendLine("                    current_state.exit()");
+                    sb.AppendLine("                    current_state = next_state");
+                    sb.AppendLine("                    current_state.enter()");
+                    sb.AppendLine("            except Empty:");
+                    sb.AppendLine("                pass");
+                    sb.AppendLine("    except (EOFError, KeyboardInterrupt):");
+                    sb.AppendLine("        current_state.exit()");
+                    sb.AppendLine("        pass");
+                }
+            }
+            if (entry.Name == "main")
+            {
+                sb.AppendLine();
+                sb.AppendLine("if __name__ == \"__main__\":");
+                sb.AppendLine($"    {entry.Name}()");
+            }
         }
 
         return new Dictionary<string, string> { { "generated" + GetFileExtension(), sb.ToString() } };
@@ -154,11 +269,11 @@ public class PythonGenerator : ICodeGenerator
                 if (t.Guard != null)
                 {
                     sb.AppendLine($"{indent}        if {t.Guard}:");
-                    sb.AppendLine($"{indent}            return {t.Target}");
+                    sb.AppendLine($"{indent}            return {t.Target}()");
                 }
                 else
                 {
-                    sb.AppendLine($"{indent}        return {t.Target}");
+                    sb.AppendLine($"{indent}        return {t.Target}()");
                 }
             }
             if (needsFallback)
@@ -169,7 +284,30 @@ public class PythonGenerator : ICodeGenerator
         {
             sb.AppendLine();
             sb.AppendLine($"{indent}    def always(self):");
-            sb.AppendLine($"{indent}        return {t.Target}");
+            sb.AppendLine($"{indent}        return {t.Target}()");
+        }
+
+        // Runtime event dispatch
+        var eventNames = state.Transitions.Where(t => !t.IsAlways).Select(t => t.EventName).Distinct().ToList();
+        if (eventNames.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"{indent}    def handle_event(self, event_name):");
+            foreach (var ev in eventNames)
+            {
+                var methodParams = state.Transitions.First(t => t.EventName == ev).Parameters;
+                if (methodParams.Count > 0)
+                {
+                    sb.AppendLine($"{indent}        if event_name == \"{ev}\":");
+                    sb.AppendLine($"{indent}            return self.on_{ev}({string.Join(", ", methodParams.Select(p => p.Name))})");
+                }
+                else
+                {
+                    sb.AppendLine($"{indent}        if event_name == \"{ev}\":");
+                    sb.AppendLine($"{indent}            return self.on_{ev}()");
+                }
+            }
+            sb.AppendLine($"{indent}        return None");
         }
 
         foreach (var timer in state.Timers)

@@ -260,6 +260,90 @@ public class RustGenerator : ICodeGenerator
         foreach (var entry in program.Entries)
             sb.AppendLine(EmitEntryRust(entry));
 
+        // Collect all events for multi-source event loop
+        var allEvents = new HashSet<string>();
+        void CollectEvents(StateDefNode s)
+        {
+            foreach (var t in s.Transitions)
+                if (!t.IsAlways) allEvents.Add(t.EventName);
+            foreach (var ns in s.NestedStates) CollectEvents(ns);
+        }
+        foreach (var st in program.States) CollectEvents(st);
+        foreach (var par in program.ParallelBlocks)
+            foreach (var st in par.States) CollectEvents(st);
+
+        // Runtime event loop: add fn main() with multi-source event loop
+        bool hasEventStates = allEvents.Count > 0;
+        bool hasEntryMain = program.Entries.Any(e => e.Name == "main");
+        if (hasEventStates && program.States.Count > 0 && !hasEntryMain)
+        {
+            bool hasTimer = allEvents.Contains("timer");
+            bool hasNetwork = allEvents.Any(e => e.StartsWith("tcp_") || e.StartsWith("udp_"));
+            var firstState = program.States[0].Name;
+            sb.AppendLine("fn main() {");
+            sb.AppendLine("    use std::sync::mpsc;");
+            sb.AppendLine("    use std::thread;");
+            sb.AppendLine("    use std::time::Duration;");
+            sb.AppendLine("    use std::io::{self, BufRead, Read};");
+            sb.AppendLine();
+            sb.AppendLine("    let (tx, rx) = mpsc::channel::<String>();");
+            sb.AppendLine();
+            sb.AppendLine("    // Stdin reader");
+            sb.AppendLine("    let tx_stdin = tx.clone();");
+            sb.AppendLine("    thread::spawn(move || {");
+            sb.AppendLine("        let stdin = io::stdin();");
+            sb.AppendLine("        for line in stdin.lock().lines() {");
+            sb.AppendLine("            if let Ok(event) = line {");
+            sb.AppendLine("                let event = event.trim().to_string();");
+            sb.AppendLine("                if tx_stdin.send(event.clone()).is_err() { break; }");
+            sb.AppendLine("                if event == \"exit\" { break; }");
+            sb.AppendLine("            }");
+            sb.AppendLine("        }");
+            sb.AppendLine("    });");
+            if (hasTimer)
+            {
+                sb.AppendLine();
+                sb.AppendLine("    // Timer (fires 'timer' every 1s)");
+                sb.AppendLine("    let tx_timer = tx.clone();");
+                sb.AppendLine("    thread::spawn(move || {");
+                sb.AppendLine("        loop {");
+                sb.AppendLine("            thread::sleep(Duration::from_secs(1));");
+                sb.AppendLine("            if tx_timer.send(\"timer\".to_string()).is_err() { break; }");
+                sb.AppendLine("        }");
+                sb.AppendLine("    });");
+            }
+            if (hasNetwork)
+            {
+                sb.AppendLine();
+                sb.AppendLine("    // TCP server on port 8080");
+                sb.AppendLine("    let tx_tcp = tx.clone();");
+                sb.AppendLine("    thread::spawn(move || {");
+                sb.AppendLine("        use std::net::TcpListener;");
+                sb.AppendLine("        if let Ok(listener) = TcpListener::bind(\"0.0.0.0:8080\") {");
+                sb.AppendLine("            for stream in listener.incoming() {");
+                sb.AppendLine("                if let Ok(mut _stream) = stream {");
+                sb.AppendLine("                    let _ = tx_tcp.send(\"tcp_connect\".to_string());");
+                sb.AppendLine("                    let mut buf = [0u8; 4096];");
+                sb.AppendLine("                    if let Ok(n) = _stream.read(&mut buf) {");
+                sb.AppendLine("                        if n > 0 { let _ = tx_tcp.send(\"tcp_data\".to_string()); }");
+                sb.AppendLine("                    }");
+                sb.AppendLine("                    let _ = tx_tcp.send(\"tcp_disconnected\".to_string());");
+                sb.AppendLine("                }");
+                sb.AppendLine("            }");
+                sb.AppendLine("        }");
+                sb.AppendLine("    });");
+            }
+            sb.AppendLine();
+            sb.AppendLine("    let mut current: Box<dyn State> = Box::new(" + firstState + " {});");
+            sb.AppendLine("    for event in rx {");
+            sb.AppendLine("        if event == \"exit\" { break; }");
+            sb.AppendLine("        if let Some(next) = current.handle_event(&event) {");
+            sb.AppendLine("            current = next;");
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+        }
+
         return sb.ToString();
     }
 
@@ -306,6 +390,8 @@ public class RustGenerator : ICodeGenerator
         sb.AppendLine("    /// Transition to the next state.");
         sb.AppendLine("    /// #[no_panic]: guaranteed not to panic.");
         sb.AppendLine("    fn transition(self: Box<Self>) -> Box<dyn State>;");
+        sb.AppendLine("    /// Handle a named event, return next state or None.");
+        sb.AppendLine("    fn handle_event(self: Box<Self>, event: &str) -> Option<Box<dyn State>>;");
         sb.AppendLine("}");
         sb.AppendLine();
 
@@ -380,6 +466,28 @@ public class RustGenerator : ICodeGenerator
         sb.AppendLine($"{ind}    fn transition(self: Box<Self>) -> Box<dyn State> {{");
         sb.AppendLine($"{ind}        Box::new(*self)");
         sb.AppendLine($"{ind}    }}");
+        // handle_event — dispatch by event name
+        var stateEventNames = state.Transitions.Where(t => !t.IsAlways).Select(t => t.EventName).Distinct().ToList();
+        if (stateEventNames.Count > 0)
+        {
+            sb.AppendLine($"{ind}    fn handle_event(self: Box<Self>, event: &str) -> Option<Box<dyn State>> {{");
+            sb.AppendLine($"{ind}        let s = *self;");
+            foreach (var ev in stateEventNames)
+            {
+                var fnName = $"on_{Sanitize(ev)}";
+                var t = state.Transitions.First(tr => tr.EventName == ev);
+                var pars = string.Join(", ", Enumerable.Repeat("Default::default()", t.Parameters.Count));
+                sb.AppendLine($"{ind}        if event == \"{ev}\" {{ return s.{fnName}({pars}).ok() }}");
+            }
+            sb.AppendLine($"{ind}        None");
+            sb.AppendLine($"{ind}    }}");
+        }
+        else
+        {
+            sb.AppendLine($"{ind}    fn handle_event(self: Box<Self>, _event: &str) -> Option<Box<dyn State>> {{");
+            sb.AppendLine($"{ind}        None");
+            sb.AppendLine($"{ind}    }}");
+        }
         sb.AppendLine($"{ind}}}");
         sb.AppendLine();
 
@@ -1103,4 +1211,5 @@ public class RustGenerator : ICodeGenerator
         ShardingType.StateSharding => "ShardingType::StateSharding",
         _ => "ShardingType::None"
     };
+
 }

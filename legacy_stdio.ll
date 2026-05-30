@@ -1,4 +1,4 @@
-﻿; legacy_stdio.ll тАФ Minimal stdio via kernel32 (no CRT needed)
+; legacy_stdio.ll — Minimal stdio via kernel32 (no CRT needed)
 ; B+ v4.0.0 BETA
 
 declare dllimport ptr @GetStdHandle(i32)

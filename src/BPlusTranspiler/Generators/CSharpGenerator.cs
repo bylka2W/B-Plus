@@ -12,6 +12,8 @@ public class CSharpGenerator : ICodeGenerator
     {
         var sb = new StringBuilder();
         sb.AppendLine("using System;");
+        sb.AppendLine("using System.Collections.Concurrent;");
+        sb.AppendLine("using System.Threading.Tasks;");
         sb.AppendLine();
         sb.AppendLine("namespace BPlusGenerated");
         sb.AppendLine("{");
@@ -20,6 +22,7 @@ public class CSharpGenerator : ICodeGenerator
         sb.AppendLine("        public virtual void Enter() {}");
         sb.AppendLine("        public virtual void Exit() {}");
         sb.AppendLine("        public virtual State Always() => null;");
+        sb.AppendLine("        public virtual State HandleEvent(string eventName) => null;");
         sb.AppendLine("        public static void print(object s) => Console.WriteLine(s);");
 
         // Collect all unique event names across all states
@@ -71,7 +74,8 @@ public class CSharpGenerator : ICodeGenerator
             sb.AppendLine("    class Program");
             sb.AppendLine("    {");
             var retType = entry.ReturnType ?? "int";
-            sb.AppendLine($"        static {retType} Main(string[] args)");
+            var entryFuncName = entry.Name == "main" ? "Main" : entry.Name;
+            sb.AppendLine($"        static {retType} {entryFuncName}(string[] args)");
             sb.AppendLine("        {");
             var stack = new List<string>();
             foreach (var line in entry.BodyLines)
@@ -106,6 +110,79 @@ public class CSharpGenerator : ICodeGenerator
                 sb.AppendLine($"{indent}{csharp};");
             }
             while (stack.Count > 0) { sb.AppendLine("            }"); stack.RemoveAt(stack.Count - 1); }
+
+            // State machine event loop
+            if (allEvents.Count > 0)
+            {
+                var firstState = program.States.Count > 0
+                    ? program.States[0].Name
+                    : (program.ParallelBlocks.Count > 0 && program.ParallelBlocks[0].States.Count > 0
+                        ? program.ParallelBlocks[0].States[0].Name : null);
+                if (firstState != null)
+                {
+                    bool hasTimer = allEvents.Contains("timer");
+                    bool hasNetwork = allEvents.Any(e => e.StartsWith("tcp_") || e.StartsWith("udp_"));
+                    sb.AppendLine();
+                    sb.AppendLine("            // State machine runtime (multi-source event loop)");
+                    sb.AppendLine("            var eventQueue = new BlockingCollection<string>();");
+                    sb.AppendLine();
+                    sb.AppendLine("            // Stdin reader");
+                    sb.AppendLine("            Task.Run(() =>");
+                    sb.AppendLine("            {");
+                    sb.AppendLine("                string line;");
+                    sb.AppendLine("                while ((line = Console.ReadLine()) != null)");
+                    sb.AppendLine("                {");
+                    sb.AppendLine("                    eventQueue.Add(line.Trim());");
+                    sb.AppendLine("                    if (line.Trim() == \"exit\") break;");
+                    sb.AppendLine("                }");
+                    sb.AppendLine("            });");
+                    if (hasTimer)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("            // Timer (fires 'timer' every 1s)");
+                        sb.AppendLine("            Task.Run(() =>");
+                        sb.AppendLine("            {");
+                        sb.AppendLine("                while (true)");
+                        sb.AppendLine("                {");
+                        sb.AppendLine("                    Thread.Sleep(1000);");
+                        sb.AppendLine("                    eventQueue.Add(\"timer\");");
+                        sb.AppendLine("                }");
+                        sb.AppendLine("            });");
+                    }
+                    if (hasNetwork)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("            // TCP server on port 8080");
+                        sb.AppendLine("            Task.Run(() =>");
+                        sb.AppendLine("            {");
+                        sb.AppendLine("                try");
+                        sb.AppendLine("                {");
+                        sb.AppendLine("                    var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, 8080);");
+                        sb.AppendLine("                    listener.Start();");
+                        sb.AppendLine("                    while (true)");
+                        sb.AppendLine("                    {");
+                        sb.AppendLine("                        using var client = listener.AcceptTcpClient();");
+                        sb.AppendLine("                        eventQueue.Add(\"tcp_connect\");");
+                        sb.AppendLine("                        var buffer = new byte[4096];");
+                        sb.AppendLine("                        int n = client.GetStream().Read(buffer, 0, buffer.Length);");
+                        sb.AppendLine("                        if (n > 0) eventQueue.Add(\"tcp_data\");");
+                        sb.AppendLine("                        eventQueue.Add(\"tcp_disconnected\");");
+                        sb.AppendLine("                    }");
+                        sb.AppendLine("                }");
+                        sb.AppendLine("                catch { }");
+                        sb.AppendLine("            });");
+                    }
+                    sb.AppendLine();
+                    sb.AppendLine($"            State current = new {firstState}();");
+                    sb.AppendLine("            foreach (var eventName in eventQueue.GetConsumingEnumerable())");
+                    sb.AppendLine("            {");
+                    sb.AppendLine("                if (eventName == \"exit\") break;");
+                    sb.AppendLine("                State next = current.HandleEvent(eventName);");
+                    sb.AppendLine("                if (next != null) current = next;");
+                    sb.AppendLine("            }");
+                }
+            }
+
             sb.AppendLine("        }");
             sb.AppendLine("    }");
         }
@@ -192,6 +269,25 @@ public class CSharpGenerator : ICodeGenerator
             }
             if (needsFallback)
                 sb.AppendLine($"{ind}        return null;");
+            sb.AppendLine($"{ind}    }}");
+        }
+
+        // Runtime event dispatch
+        var stateEventNames = state.Transitions.Where(t => !t.IsAlways).Select(t => t.EventName).Distinct().ToList();
+        if (stateEventNames.Count > 0)
+        {
+            sb.AppendLine($"{ind}    public override State HandleEvent(string eventName)");
+            sb.AppendLine($"{ind}    {{");
+            foreach (var ev in stateEventNames)
+            {
+                var pascalEv = ToPascal(ev);
+                var methodParams = state.Transitions.First(t => t.EventName == ev).Parameters;
+                if (methodParams.Count > 0)
+                    sb.AppendLine($"{ind}        if (eventName == \"{ev}\") return On{pascalEv}({string.Join(", ", methodParams.Select(p => $"default({p.Type})"))});");
+                else
+                    sb.AppendLine($"{ind}        if (eventName == \"{ev}\") return On{pascalEv}();");
+            }
+            sb.AppendLine($"{ind}        return null;");
             sb.AppendLine($"{ind}    }}");
         }
 

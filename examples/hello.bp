@@ -1,0 +1,15 @@
+state Red {
+    on timer -> Green
+}
+
+state Green {
+    on timer -> Yellow
+}
+
+state Yellow {
+    on timer -> Red
+}
+
+entry main() {
+    print("hello from B+!")
+}

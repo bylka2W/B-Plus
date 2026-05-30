@@ -233,7 +233,8 @@ public partial class BPlusParser
             }
             else if (Peek("compute_kernel"))
             {
-                program.ComputeShaders.Add(ParseGpuKernel());
+                var gk = ParseGpuKernel();
+                if (gk != null) program.ComputeShaders.Add(gk);
             }
             else
             {

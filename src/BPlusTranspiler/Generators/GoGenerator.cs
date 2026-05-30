@@ -61,6 +61,8 @@ public class GoGenerator : ICodeGenerator
         sb.AppendLine("type State interface {");
         sb.AppendLine("    // Transition moves to the next state.");
         sb.AppendLine("    Transition() State");
+        sb.AppendLine("    // HandleEvent dispatches an event by name.");
+        sb.AppendLine("    HandleEvent(ctx *Context, event string) State");
         sb.AppendLine("}");
         sb.AppendLine();
 
@@ -117,12 +119,32 @@ public class GoGenerator : ICodeGenerator
         sb.AppendLine($"}}");
         sb.AppendLine();
 
+        // HandleEvent dispatches named events
+        var stateEvents = state.Transitions.Where(t => !t.IsAlways).Select(t => t.EventName).Distinct().ToList();
+        if (stateEvents.Count > 0)
+        {
+            sb.AppendLine($"func (s *{state.Name}) HandleEvent(ctx *Context, event string) State {{");
+            foreach (var ev in stateEvents)
+            {
+                var fnName = "On" + UpperFirst(Sanitize(ev));
+                var t = state.Transitions.First(tr => tr.EventName == ev);
+                var pars = string.Join(", ", t.Parameters.Select(p => $"{p.Name}"));
+                if (pars != "") pars = ", " + pars;
+                sb.AppendLine($"{ind}\tif event == \"{ev}\" {{");
+                sb.AppendLine($"{ind}\t\treturn s.{fnName}(ctx{pars})");
+                sb.AppendLine($"{ind}\t}}");
+            }
+            sb.AppendLine($"{ind}\treturn s");
+            sb.AppendLine($"}}");
+            sb.AppendLine();
+        }
+
         foreach (var a in state.Actions)
         {
             var actionName = a.Type == ActionType.Enter ? "OnEnter" : "OnExit";
             sb.AppendLine($"func (s *{state.Name}) {actionName}() {{");
             if (a.Body != null)
-                sb.AppendLine($"{ind}\t// {a.Body}");
+                sb.AppendLine($"{ind}\t{TranslateEntryGo(a.Body)}");
             sb.AppendLine($"}}");
             sb.AppendLine();
         }
@@ -153,7 +175,7 @@ public class GoGenerator : ICodeGenerator
             sb.AppendLine($"\tif {t.Guard} {{");
 
         if (t.Body != null)
-            sb.AppendLine($"\t\t// {t.Body}");
+            sb.AppendLine($"\t\t{TranslateEntryGo(t.Body)}");
 
         var target = t.Target == "__history__" ? state.Name : t.Target;
         if (t.IsFallible)
@@ -536,7 +558,22 @@ public class GoGenerator : ICodeGenerator
         sb.AppendLine("package main");
         sb.AppendLine();
         sb.AppendLine("import \"fmt\"");
+        sb.AppendLine("import \"bufio\"");
+        sb.AppendLine("import \"os\"");
+        sb.AppendLine("import \"strings\"");
         sb.AppendLine();
+
+        // Collect all event names
+        var allEvents = new HashSet<string>();
+        void CollectEvents(StateDefNode s)
+        {
+            foreach (var t in s.Transitions)
+                if (!t.IsAlways) allEvents.Add(t.EventName);
+            foreach (var ns in s.NestedStates) CollectEvents(ns);
+        }
+        foreach (var st in program.States) CollectEvents(st);
+        foreach (var par in program.ParallelBlocks)
+            foreach (var st in par.States) CollectEvents(st);
 
         if (program.Entries.Count > 0)
         {
@@ -546,12 +583,74 @@ public class GoGenerator : ICodeGenerator
                 {
                     sb.AppendLine("func main() {");
                     EmitEntryBodyGo(sb, entry);
+                    if (allEvents.Count > 0 && program.States.Count > 0)
+                    {
+                        bool hasTimer = allEvents.Contains("timer");
+                        bool hasNetwork = allEvents.Any(e => e.StartsWith("tcp_") || e.StartsWith("udp_"));
+                        var firstState = program.States[0].Name;
+                        sb.AppendLine();
+                        sb.AppendLine("\t// State machine runtime (multi-source event loop)");
+                        sb.AppendLine("\tctx := bplus.GetContext()");
+                        sb.AppendLine("\teventChan := make(chan string, 32)");
+                        sb.AppendLine();
+                        sb.AppendLine("\t// Stdin reader");
+                        sb.AppendLine("\tgo func() {");
+                        sb.AppendLine("\t\tscanner := bufio.NewScanner(os.Stdin)");
+                        sb.AppendLine("\t\tfor scanner.Scan() {");
+                        sb.AppendLine("\t\t\teventChan <- strings.TrimSpace(scanner.Text())");
+                        sb.AppendLine("\t\t}");
+                        sb.AppendLine("\t}()");
+                        if (hasTimer)
+                        {
+                            sb.AppendLine();
+                            sb.AppendLine("\t// Timer (fires 'timer' every 1s)");
+                            sb.AppendLine("\tticker := time.NewTicker(1 * time.Second)");
+                            sb.AppendLine("\tdefer ticker.Stop()");
+                            sb.AppendLine("\tgo func() {");
+                            sb.AppendLine("\t\tfor range ticker.C {");
+                            sb.AppendLine("\t\t\teventChan <- \"timer\"");
+                            sb.AppendLine("\t\t}");
+                            sb.AppendLine("\t}()");
+                        }
+                        if (hasNetwork)
+                        {
+                            sb.AppendLine();
+                            sb.AppendLine("\t// TCP server on port 8080");
+                            sb.AppendLine("\tgo func() {");
+                            sb.AppendLine("\t\tlistener, err := net.Listen(\"tcp\", \":8080\")");
+                            sb.AppendLine("\t\tif err != nil { return }");
+                            sb.AppendLine("\t\tdefer listener.Close()");
+                            sb.AppendLine("\t\tfor {");
+                            sb.AppendLine("\t\t\tconn, err := listener.Accept()");
+                            sb.AppendLine("\t\t\tif err != nil { return }");
+                            sb.AppendLine("\t\t\teventChan <- \"tcp_connect\"");
+                            sb.AppendLine("\t\t\tbuf := make([]byte, 4096)");
+                            sb.AppendLine("\t\t\tn, _ := conn.Read(buf)");
+                            sb.AppendLine("\t\t\tif n > 0 { eventChan <- \"tcp_data\" }");
+                            sb.AppendLine("\t\t\tconn.Close()");
+                            sb.AppendLine("\t\t\teventChan <- \"tcp_disconnected\"");
+                            sb.AppendLine("\t\t}");
+                            sb.AppendLine("\t}()");
+                        }
+                        sb.AppendLine();
+                        sb.AppendLine($"\tvar current bplus.State = &bplus.{firstState}{{}}");
+                        sb.AppendLine("\tfor event := range eventChan {");
+                        sb.AppendLine("\t\tif event == \"exit\" { break }");
+                        sb.AppendLine("\t\tif next := current.HandleEvent(ctx, event); next != current {");
+                        sb.AppendLine("\t\t\tcurrent = next");
+                        sb.AppendLine("\t\t}");
+                        sb.AppendLine("\t}");
+                    }
                     sb.AppendLine("}");
                 }
                 else
                 {
                     sb.AppendLine($"func {entry.Name}() {{");
                     EmitEntryBodyGo(sb, entry);
+                    if (allEvents.Count > 0 && entry.Name == "main")
+                    {
+                        // same event loop for non-main entries named "main"
+                    }
                     sb.AppendLine("}");
                     sb.AppendLine();
                 }
@@ -559,15 +658,134 @@ public class GoGenerator : ICodeGenerator
             if (program.Entries.All(e => e.Name != "main"))
             {
                 sb.AppendLine("func main() {");
-                foreach (var entry in program.Entries)
-                    sb.AppendLine($"\t{entry.Name}()");
+                if (allEvents.Count > 0 && program.States.Count > 0)
+                {
+                    bool hasTimer = allEvents.Contains("timer");
+                    bool hasNetwork = allEvents.Any(e => e.StartsWith("tcp_") || e.StartsWith("udp_"));
+                    var firstState = program.States[0].Name;
+                    sb.AppendLine();
+                    sb.AppendLine("\t// State machine runtime (multi-source event loop)");
+                    sb.AppendLine("\tctx := bplus.GetContext()");
+                    sb.AppendLine("\teventChan := make(chan string, 32)");
+                    sb.AppendLine();
+                    sb.AppendLine("\t// Stdin reader");
+                    sb.AppendLine("\tgo func() {");
+                    sb.AppendLine("\t\tscanner := bufio.NewScanner(os.Stdin)");
+                    sb.AppendLine("\t\tfor scanner.Scan() {");
+                    sb.AppendLine("\t\t\teventChan <- strings.TrimSpace(scanner.Text())");
+                    sb.AppendLine("\t\t}");
+                    sb.AppendLine("\t}()");
+                    if (hasTimer)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("\t// Timer (fires 'timer' every 1s)");
+                        sb.AppendLine("\tticker := time.NewTicker(1 * time.Second)");
+                        sb.AppendLine("\tdefer ticker.Stop()");
+                        sb.AppendLine("\tgo func() {");
+                        sb.AppendLine("\t\tfor range ticker.C {");
+                        sb.AppendLine("\t\t\teventChan <- \"timer\"");
+                        sb.AppendLine("\t\t}");
+                        sb.AppendLine("\t}()");
+                    }
+                    if (hasNetwork)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("\t// TCP server on port 8080");
+                        sb.AppendLine("\tgo func() {");
+                        sb.AppendLine("\t\tlistener, err := net.Listen(\"tcp\", \":8080\")");
+                        sb.AppendLine("\t\tif err != nil { return }");
+                        sb.AppendLine("\t\tdefer listener.Close()");
+                        sb.AppendLine("\t\tfor {");
+                        sb.AppendLine("\t\t\tconn, err := listener.Accept()");
+                        sb.AppendLine("\t\t\tif err != nil { return }");
+                        sb.AppendLine("\t\t\teventChan <- \"tcp_connect\"");
+                        sb.AppendLine("\t\t\tbuf := make([]byte, 4096)");
+                        sb.AppendLine("\t\t\tn, _ := conn.Read(buf)");
+                        sb.AppendLine("\t\t\tif n > 0 { eventChan <- \"tcp_data\" }");
+                        sb.AppendLine("\t\t\tconn.Close()");
+                        sb.AppendLine("\t\t\teventChan <- \"tcp_disconnected\"");
+                        sb.AppendLine("\t\t}");
+                        sb.AppendLine("\t}()");
+                    }
+                    sb.AppendLine();
+                    sb.AppendLine($"\tvar current bplus.State = &bplus.{firstState}{{}}");
+                    sb.AppendLine("\tfor event := range eventChan {");
+                    sb.AppendLine("\t\tif event == \"exit\" { break }");
+                    sb.AppendLine("\t\tif next := current.HandleEvent(ctx, event); next != current {");
+                    sb.AppendLine("\t\t\tcurrent = next");
+                    sb.AppendLine("\t\t}");
+                    sb.AppendLine("\t}");
+                }
+                else
+                {
+                    foreach (var entry in program.Entries)
+                        sb.AppendLine($"\t{entry.Name}()");
+                }
                 sb.AppendLine("}");
             }
         }
         else
         {
             sb.AppendLine("func main() {");
-            if (program.States.Count > 0)
+            if (allEvents.Count > 0 && program.States.Count > 0)
+            {
+                bool hasTimer = allEvents.Contains("timer");
+                bool hasNetwork = allEvents.Any(e => e.StartsWith("tcp_") || e.StartsWith("udp_"));
+                var firstState = program.States[0].Name;
+                sb.AppendLine();
+                sb.AppendLine("\t// State machine runtime (multi-source event loop)");
+                sb.AppendLine("\tctx := bplus.GetContext()");
+                sb.AppendLine("\teventChan := make(chan string, 32)");
+                sb.AppendLine();
+                sb.AppendLine("\t// Stdin reader");
+                sb.AppendLine("\tgo func() {");
+                sb.AppendLine("\t\tscanner := bufio.NewScanner(os.Stdin)");
+                sb.AppendLine("\t\tfor scanner.Scan() {");
+                sb.AppendLine("\t\t\teventChan <- strings.TrimSpace(scanner.Text())");
+                sb.AppendLine("\t\t}");
+                sb.AppendLine("\t}()");
+                if (hasTimer)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("\t// Timer (fires 'timer' every 1s)");
+                    sb.AppendLine("\tticker := time.NewTicker(1 * time.Second)");
+                    sb.AppendLine("\tdefer ticker.Stop()");
+                    sb.AppendLine("\tgo func() {");
+                    sb.AppendLine("\t\tfor range ticker.C {");
+                    sb.AppendLine("\t\t\teventChan <- \"timer\"");
+                    sb.AppendLine("\t\t}");
+                    sb.AppendLine("\t}()");
+                }
+                if (hasNetwork)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("\t// TCP server on port 8080");
+                    sb.AppendLine("\tgo func() {");
+                    sb.AppendLine("\t\tlistener, err := net.Listen(\"tcp\", \":8080\")");
+                    sb.AppendLine("\t\tif err != nil { return }");
+                    sb.AppendLine("\t\tdefer listener.Close()");
+                    sb.AppendLine("\t\tfor {");
+                    sb.AppendLine("\t\t\tconn, err := listener.Accept()");
+                    sb.AppendLine("\t\t\tif err != nil { return }");
+                    sb.AppendLine("\t\t\teventChan <- \"tcp_connect\"");
+                    sb.AppendLine("\t\t\tbuf := make([]byte, 4096)");
+                    sb.AppendLine("\t\t\tn, _ := conn.Read(buf)");
+                    sb.AppendLine("\t\t\tif n > 0 { eventChan <- \"tcp_data\" }");
+                    sb.AppendLine("\t\t\tconn.Close()");
+                    sb.AppendLine("\t\t\teventChan <- \"tcp_disconnected\"");
+                    sb.AppendLine("\t\t}");
+                    sb.AppendLine("\t}()");
+                }
+                sb.AppendLine();
+                sb.AppendLine($"\tvar current bplus.State = &bplus.{firstState}{{}}");
+                sb.AppendLine("\tfor event := range eventChan {");
+                sb.AppendLine("\t\tif event == \"exit\" { break }");
+                sb.AppendLine("\t\tif next := current.HandleEvent(ctx, event); next != current {");
+                sb.AppendLine("\t\t\tcurrent = next");
+                sb.AppendLine("\t\t}");
+                sb.AppendLine("\t}");
+            }
+            else if (program.States.Count > 0)
             {
                 var firstState = program.States[0].Name;
                 sb.AppendLine($"\tvar s bplus.State = &bplus.{firstState}{{}}");

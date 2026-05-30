@@ -60,7 +60,31 @@ public class CppGenerator : ICodeGenerator
         sb.AppendLine("#define defer(cleanup) auto _bplus_defer = _bplus_rollback = [&]() { cleanup };");
         sb.AppendLine();
 
+        // Collect all event names for base class
+        var allEvents = new HashSet<string>();
+        void CollectEvents(StateDefNode s)
+        {
+            foreach (var t in s.Transitions)
+                if (!t.IsAlways) allEvents.Add(t.EventName);
+            foreach (var ns in s.NestedStates) CollectEvents(ns);
+        }
+        foreach (var st in program.States) CollectEvents(st);
+        foreach (var par in program.ParallelBlocks)
+            foreach (var st in par.States) CollectEvents(st);
+
         sb.AppendLine("namespace bplus {");
+        sb.AppendLine();
+        sb.AppendLine("// Runtime State base class");
+        sb.AppendLine("struct State {");
+        sb.AppendLine("    virtual ~State() = default;");
+        sb.AppendLine("    virtual State* handleEvent(const std::string& eventName) { return nullptr; }");
+        sb.AppendLine("    virtual State* always() { return nullptr; }");
+        sb.AppendLine("    virtual void enter() {}");
+        sb.AppendLine("    virtual void exit() {}");
+        foreach (var ev in allEvents.OrderBy(e => e))
+            sb.AppendLine($"    virtual State* on_{ev}() {{ return nullptr; }}");
+        sb.AppendLine("};");
+        sb.AppendLine();
 
         foreach (var par in program.ParallelBlocks)
             foreach (var st in par.States)
@@ -78,6 +102,8 @@ public class CppGenerator : ICodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("#include \"states.h\"");
         sb.AppendLine("#include <new>");
+        sb.AppendLine("#include <string>");
+        sb.AppendLine("#include <iostream>");
         if (HasFallibleTransitions(program))
         {
             sb.AppendLine("#include <expected>");
@@ -102,6 +128,148 @@ public class CppGenerator : ICodeGenerator
             EmitStateImpl(sb, st, 1);
 
         sb.AppendLine("} // namespace bplus");
+
+        // Collect all event names for main()
+        var allEvents = new HashSet<string>();
+        void CollectEvents(StateDefNode s)
+        {
+            foreach (var t in s.Transitions)
+                if (!t.IsAlways) allEvents.Add(t.EventName);
+            foreach (var ns in s.NestedStates) CollectEvents(ns);
+        }
+        foreach (var st in program.States) CollectEvents(st);
+        foreach (var par in program.ParallelBlocks)
+            foreach (var st in par.States) CollectEvents(st);
+
+        // Entry point: main() with multi-source event loop
+        if (allEvents.Count > 0 && program.States.Count > 0)
+        {
+            bool hasTimer = allEvents.Contains("timer");
+            bool hasNetwork = allEvents.Any(e => e.StartsWith("tcp_") || e.StartsWith("udp_"));
+            var firstState = program.States[0].Name;
+            sb.AppendLine();
+            sb.AppendLine("#include <thread>");
+            sb.AppendLine("#include <queue>");
+            sb.AppendLine("#include <mutex>");
+            sb.AppendLine("#include <condition_variable>");
+            sb.AppendLine("#include <chrono>");
+            if (hasNetwork)
+            {
+                sb.AppendLine("#ifdef _WIN32");
+                sb.AppendLine("#include <winsock2.h>");
+                sb.AppendLine("#pragma comment(lib, \"ws2_32.lib\")");
+                sb.AppendLine("#else");
+                sb.AppendLine("#include <sys/socket.h>");
+                sb.AppendLine("#include <netinet/in.h>");
+                sb.AppendLine("#include <unistd.h>");
+                sb.AppendLine("#endif");
+            }
+            sb.AppendLine();
+            sb.AppendLine("int main() {");
+            // Emit entry body (if entry named "main" exists)
+            foreach (var entry in program.Entries)
+            {
+                if (entry.Name == "main")
+                {
+                    foreach (var line in entry.BodyLines)
+                    {
+                        var trimmed = line.TrimStart();
+                        if (trimmed.StartsWith("$$")) { sb.AppendLine($"    {trimmed[2..]}"); continue; }
+                        if (trimmed == "end") continue;
+                        sb.AppendLine($"    {TranslateBPlusToCpp(trimmed)};");
+                    }
+                }
+            }
+            sb.AppendLine("    using namespace bplus;");
+            sb.AppendLine("    std::queue<std::string> eventQueue;");
+            sb.AppendLine("    std::mutex queueMutex;");
+            sb.AppendLine("    std::condition_variable queueCV;");
+            sb.AppendLine();
+            sb.AppendLine("    // Stdin reader");
+            sb.AppendLine("    std::thread stdinThread([] {");
+            sb.AppendLine("        std::string line;");
+            sb.AppendLine("        while (std::getline(std::cin, line)) {");
+            sb.AppendLine("            { std::lock_guard<std::mutex> lock(queueMutex); eventQueue.push(line); }");
+            sb.AppendLine("            queueCV.notify_one();");
+            sb.AppendLine("        }");
+            sb.AppendLine("    });");
+            sb.AppendLine("    stdinThread.detach();");
+            if (hasTimer)
+            {
+                sb.AppendLine();
+                sb.AppendLine("    // Timer (fires 'timer' every 1s)");
+                sb.AppendLine("    std::thread timerThread([] {");
+                sb.AppendLine("        while (true) {");
+                sb.AppendLine("            std::this_thread::sleep_for(std::chrono::seconds(1));");
+                sb.AppendLine("            { std::lock_guard<std::mutex> lock(queueMutex); eventQueue.push(\"timer\"); }");
+                sb.AppendLine("            queueCV.notify_one();");
+                sb.AppendLine("        }");
+                sb.AppendLine("    });");
+                sb.AppendLine("    timerThread.detach();");
+            }
+            if (hasNetwork)
+            {
+                sb.AppendLine();
+                sb.AppendLine("    // TCP server on port 8080");
+                sb.AppendLine("    std::thread tcpThread([] {");
+                sb.AppendLine("#ifdef _WIN32");
+                sb.AppendLine("        WSADATA wsa; WSAStartup(MAKEWORD(2,2), &wsa);");
+                sb.AppendLine("        SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);");
+                sb.AppendLine("        sockaddr_in addr = {}; addr.sin_family = AF_INET; addr.sin_port = htons(8080); addr.sin_addr.s_addr = INADDR_ANY;");
+                sb.AppendLine("        bind(sock, (sockaddr*)&addr, sizeof(addr));");
+                sb.AppendLine("        listen(sock, 5);");
+                sb.AppendLine("        while (true) {");
+                sb.AppendLine("            SOCKET client = accept(sock, NULL, NULL);");
+                sb.AppendLine("            if (client == INVALID_SOCKET) break;");
+                sb.AppendLine("            { std::lock_guard<std::mutex> lock(queueMutex); eventQueue.push(\"tcp_connect\"); }");
+                sb.AppendLine("            queueCV.notify_one();");
+                sb.AppendLine("            char buf[4096]; int n = recv(client, buf, sizeof(buf), 0);");
+                sb.AppendLine("            if (n > 0) { std::lock_guard<std::mutex> lock(queueMutex); eventQueue.push(\"tcp_data\"); queueCV.notify_one(); }");
+                sb.AppendLine("            closesocket(client);");
+                sb.AppendLine("            { std::lock_guard<std::mutex> lock(queueMutex); eventQueue.push(\"tcp_disconnected\"); }");
+                sb.AppendLine("            queueCV.notify_one();");
+                sb.AppendLine("        }");
+                sb.AppendLine("        closesocket(sock); WSACleanup();");
+                sb.AppendLine("#else");
+                sb.AppendLine("        int sock = socket(AF_INET, SOCK_STREAM, 0);");
+                sb.AppendLine("        sockaddr_in addr = {}; addr.sin_family = AF_INET; addr.sin_port = htons(8080); addr.sin_addr.s_addr = INADDR_ANY;");
+                sb.AppendLine("        bind(sock, (sockaddr*)&addr, sizeof(addr));");
+                sb.AppendLine("        listen(sock, 5);");
+                sb.AppendLine("        while (true) {");
+                sb.AppendLine("            int client = accept(sock, NULL, NULL);");
+                sb.AppendLine("            if (client < 0) break;");
+                sb.AppendLine("            { std::lock_guard<std::mutex> lock(queueMutex); eventQueue.push(\"tcp_connect\"); queueCV.notify_one(); }");
+                sb.AppendLine("            char buf[4096]; int n = read(client, buf, sizeof(buf));");
+                sb.AppendLine("            if (n > 0) { std::lock_guard<std::mutex> lock(queueMutex); eventQueue.push(\"tcp_data\"); queueCV.notify_one(); }");
+                sb.AppendLine("            close(client);");
+                sb.AppendLine("            { std::lock_guard<std::mutex> lock(queueMutex); eventQueue.push(\"tcp_disconnected\"); queueCV.notify_one(); }");
+                sb.AppendLine("        }");
+                sb.AppendLine("        close(sock);");
+                sb.AppendLine("#endif");
+                sb.AppendLine("    });");
+                sb.AppendLine("    tcpThread.detach();");
+            }
+            sb.AppendLine();
+            sb.AppendLine($"    State* current = new {firstState}();");
+            sb.AppendLine("    while (true) {");
+            sb.AppendLine("        std::string event;");
+            sb.AppendLine("        {");
+            sb.AppendLine("            std::unique_lock<std::mutex> lock(queueMutex);");
+            sb.AppendLine("            queueCV.wait(lock, [&]{ return !eventQueue.empty(); });");
+            sb.AppendLine("            event = eventQueue.front(); eventQueue.pop();");
+            sb.AppendLine("        }");
+            sb.AppendLine("        if (event == \"exit\") break;");
+            sb.AppendLine("        State* next = current->handleEvent(event);");
+            sb.AppendLine("        if (next != nullptr && next != current) {");
+            sb.AppendLine("            delete current;");
+            sb.AppendLine("            current = next;");
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+            sb.AppendLine("    delete current;");
+            sb.AppendLine("    return 0;");
+            sb.AppendLine("}");
+        }
+
         return sb.ToString();
     }
 
@@ -303,6 +471,17 @@ public class CppGenerator : ICodeGenerator
             sb.AppendLine($"{ind}}}");
         }
 
+        // Runtime event dispatch
+        var stateEventNames = state.Transitions.Where(t => !t.IsAlways).Select(t => t.EventName).Distinct().ToList();
+        if (stateEventNames.Count > 0)
+        {
+            sb.AppendLine($"{ind}State* {state.Name}::handleEvent(const std::string& eventName) {{");
+            foreach (var ev in stateEventNames)
+                sb.AppendLine($"{ind}    if (eventName == \"{ev}\") return on_{ev}();");
+            sb.AppendLine($"{ind}    return nullptr;");
+            sb.AppendLine($"{ind}}}");
+        }
+
         foreach (var ns in state.NestedStates)
             EmitStateImpl(sb, ns, depth + 1);
     }
@@ -336,4 +515,16 @@ public class CppGenerator : ICodeGenerator
         ArrayType a => $"{MapToCppType(a.ElementType)}*",
         _ => "void*"
     };
+
+    private static string TranslateBPlusToCpp(string line)
+    {
+        if (line.StartsWith("print(") && line.EndsWith(")"))
+        {
+            var inner = line.Substring(6, line.Length - 7);
+            return $"std::cout << {inner} << std::endl";
+        }
+        if (line.StartsWith("return "))
+            return line;
+        return line;
+    }
 }

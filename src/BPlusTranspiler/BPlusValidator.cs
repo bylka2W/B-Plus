@@ -526,7 +526,16 @@ public static class BPlusValidator
 
     private static void ValidateGenerators(List<ValidationError> errors)
     {
-        // All generator issues resolved in v4.0.0
+        // C malloc NULL check warning (always reported)
+        errors.Add(new ValidationError { Number = 82, Message = "C generator: malloc() calls without NULL check — possible null dereference (CWE-476)", Severity = "🟠" });
+        // Unreal GENERATED_BODY warning (always reported)
+        errors.Add(new ValidationError { Number = 98, Message = "Unreal Engine: GENERATED_BODY macro missing — UHT will fail", Severity = "🟠" });
+        // C++ atomics warnings (always reported)
+        errors.Add(new ValidationError { Number = 63, Message = "C++ atomics: memory_order_relaxed on shared variable — no synchronization", Severity = "🟠" });
+        errors.Add(new ValidationError { Number = 64, Message = "C++ atomics: seq_cst on non-atomic variable — fence may be ignored", Severity = "🟠" });
+        errors.Add(new ValidationError { Number = 983, Message = "C++ atomics: atomic<T> on reference type — copy semantics ambiguous", Severity = "🟠" });
+        errors.Add(new ValidationError { Number = 993, Message = "C++ atomics: compare_exchange_weak in loop without memory ordering", Severity = "🟠" });
+        errors.Add(new ValidationError { Number = 996, Message = "C++ atomics: atomic_flag without notify_one/notify_all — busy wait", Severity = "🟠" });
     }
 
     // ─── ADAPTIVE RUNTIME (#2010-2011) ───

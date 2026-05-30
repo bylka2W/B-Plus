@@ -1,0 +1,25 @@
+// TCP server state machine
+context {
+    var connections: int = 0
+}
+
+state Listening {
+    on tcp_connection -> Connected
+    enter { print("listening on port 8080...") }
+}
+
+state Connected {
+    on tcp_data -> Processing
+    on tcp_close -> Listening
+    enter { connections = connections + 1 }
+    exit { connections = connections - 1 }
+}
+
+state Processing {
+    on tcp_data -> Processing
+    on tcp_done -> Connected
+}
+
+entry main() {
+    print("TCP server started")
+}

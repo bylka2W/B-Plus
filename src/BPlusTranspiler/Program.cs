@@ -575,6 +575,18 @@ for (int i = 0; i < args.Length; i++)
         target = "linux";
     else if (args[i] == "--macos" || args[i] == "--darwin" || args[i] == "--mac")
         target = "macos";
+    else if (args[i] == "--python" || args[i] == "--py")
+        target = "python";
+    else if (args[i] == "--csharp" || args[i] == "--cs")
+        target = "C#";
+    else if (args[i] == "--cpp" || args[i] == "--cxx")
+        target = "C++";
+    else if (args[i] == "--c")
+        target = "c";
+    else if (args[i] == "--rust" || args[i] == "--rs")
+        target = "rust";
+    else if (args[i] == "--go")
+        target = "go";
     // Skip flag values consumed by OptimizationFlags
     else if (args[i] is "--thread-pool" or "--prefetch" or "--pool" or "--memory"
              or "--eco" or "--target-arch" or "--target-os"
@@ -1588,9 +1600,9 @@ if (optFlags.ZigBackend)
                 StandardOutputEncoding = System.Text.Encoding.UTF8,
                 StandardErrorEncoding = System.Text.Encoding.UTF8
             });
-            var stdout = run.StandardOutput.ReadToEnd();
-            var stderr = run.StandardError.ReadToEnd();
-            run.WaitForExit();
+            var stdout = run!.StandardOutput.ReadToEnd();
+            var stderr = run!.StandardError.ReadToEnd();
+            run!.WaitForExit();
             if (!string.IsNullOrEmpty(stdout)) Console.WriteLine(stdout);
             if (!string.IsNullOrEmpty(stderr)) Console.Error.WriteLine(stderr);
         }
@@ -1625,9 +1637,9 @@ if (optFlags.ZigBackend)
                 StandardOutputEncoding = System.Text.Encoding.UTF8,
                 StandardErrorEncoding = System.Text.Encoding.UTF8
             });
-            var stdout = run.StandardOutput.ReadToEnd();
-            var stderr = run.StandardError.ReadToEnd();
-            run.WaitForExit();
+            var stdout = run!.StandardOutput.ReadToEnd();
+            var stderr = run!.StandardError.ReadToEnd();
+            run!.WaitForExit();
             if (!string.IsNullOrEmpty(stdout)) Console.WriteLine(stdout);
             if (!string.IsNullOrEmpty(stderr)) Console.Error.WriteLine(stderr);
         }
@@ -1728,6 +1740,13 @@ if (target != "all" && target != "cpp_opt" && target != "llvm" && target != "was
     && target != "arm64" && target != "ios" && target != "android" && target != "bridge" && target != "bridges"
     && target != "dxil" && target != "hlsl" && target != "spirv" && target != "vulkan" && target != "glsl")
 {
+    // Normalize target aliases
+    target = target.ToLowerInvariant() switch
+    {
+        "csharp" or "cs" or "c#" => "C#",
+        "cpp" or "c++" => "C++",
+        _ => target
+    };
     generators = generators.Where(g =>
         g.GetLanguageName().Equals(target, StringComparison.OrdinalIgnoreCase) ||
         g.GetFileExtension().Equals("." + target, StringComparison.OrdinalIgnoreCase)
@@ -2107,10 +2126,54 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     Console.WriteLine($"  Total registers assigned: {registers.Count}");
     Console.WriteLine($"  Prefetch sites: {prefetchSites.Count}");
     Console.WriteLine();
+
+    // Auto-compile .ll → .obj → .exe
+    var llvmBin = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".bplus", "llvm", "bin");
+    var clang = Path.Combine(llvmBin, "clang.exe");
+    var lldLink = Path.Combine(llvmBin, "lld-link.exe");
+    bool compiled = false;
+
+    if (File.Exists(clang))
+    {
+        var objFile = Path.Combine(outputDir, "kernels_metal.obj");
+        var cc = Process.Start(clang, $"-c \"{llvmPath}\" -o \"{objFile}\"");
+        cc.WaitForExit();
+        if (cc.ExitCode == 0)
+        {
+            Console.WriteLine($"  Compiled: {objFile}");
+
+            var legacyLl = "legacy_stdio.ll";
+            if (File.Exists(legacyLl))
+            {
+                var legacyObj = Path.Combine(outputDir, "legacy_stdio.obj");
+                var lc = Process.Start(clang, $"-c \"{legacyLl}\" -o \"{legacyObj}\"");
+                lc.WaitForExit();
+                if (lc.ExitCode == 0 && File.Exists(lldLink))
+                {
+                    var exeFile = Path.Combine(outputDir, "bplus_metal_output.exe");
+                    var ld = Process.Start(lldLink, $"\"{objFile}\" \"{legacyObj}\" /OUT:\"{exeFile}\" /NOLOGO /ENTRY:main /SUBSYSTEM:CONSOLE kernel32.lib /NODEFAULTLIB");
+                    ld.WaitForExit();
+                    if (ld.ExitCode == 0)
+                    {
+                        Console.WriteLine($"  Linked: {exeFile}");
+                        compiled = true;
+                    }
+                }
+            }
+        }
+    }
+
     Console.WriteLine($"All files in {outputDir}/");
-    Console.WriteLine("Done. Compile with:");
-    Console.WriteLine($"  llc -filetype=obj {llvmPath}");
-    Console.WriteLine($"  ld -T {ldPath} -o output.elf *.o");
+    if (compiled)
+        Console.WriteLine($"Done. Binary: {outputDir}/bplus_metal_output.exe");
+    else
+    {
+        Console.WriteLine("Done. Compile with:");
+        Console.WriteLine($"  clang -c {llvmPath}");
+        Console.WriteLine($"  lld-link kernels_metal.obj legacy_stdio.obj /OUT:bplus_metal_output.exe /ENTRY:main /SUBSYSTEM:CONSOLE kernel32.lib /NODEFAULTLIB");
+    }
     return 0;
 }
 
