@@ -2,9 +2,9 @@
 
 **Machine Code Optimizer** — compiler for state machines from B+ directly to native x64 code.
 
-[![GitHub Repo](https://img.shields.io/badge/GitHub-CapGames221/B--Plus-blue?logo=github)](https://github.com/CapGames221/B-Plus)
-[![Stars](https://img.shields.io/github/stars/CapGames221/B--Plus?style=flat&logo=github)](https://github.com/CapGames221/B-Plus/stargazers)
-[![Issues](https://img.shields.io/github/issues/CapGames221/B--Plus)](https://github.com/CapGames221/B-Plus/issues)
+[![GitHub Repo](https://img.shields.io/badge/GitHub-bylka2W/B--Plus-blue?logo=github)](https://github.com/bylka2W/B-Plus)
+[![Stars](https://img.shields.io/github/stars/bylka2W/B--Plus?style=flat&logo=github)](https://github.com/bylka2W/B-Plus/stargazers)
+[![Issues](https://img.shields.io/github/issues/bylka2W/B--Plus)](https://github.com/bylka2W/B-Plus/issues)
 
 ---
 
@@ -264,6 +264,11 @@ bpc input.bp --target python   # Python code
 bpc input.bp --target llvm     # LLVM IR
 bpc input.bp --target wasm     # WebAssembly
 
+# Zig & LLVM-native backends
+bpc input.bp --zig             # Zig backend (StateFn pattern) → output.zig
+bpc input.bp --zig --run       # Zig → build → run
+bpc input.bp --zig --release   # Zig → LLVM IR → clang -c → lld-link → .exe
+
 # Shorthand flags (also --csharp/--cs/--go/--rust)
 bpc input.bp --cpp             # C++ (shortcut)
 bpc input.bp --csharp          # C# (shortcut)
@@ -279,9 +284,20 @@ bpc input.bp --target spirv    # Vulkan GLSL (SPIR-V)
 ### 3.2 LSP (Language Server Protocol)
 
 ```bash
-bpc --lsp                  # start LSP server
+bpc --lsp                  # start LSP server (TCP port 5000)
 bpc --install-lsp          # install LSP for VS Code
 ```
+
+Сервер слушает **TCP port 5000** (loopback). JSON-RPC через Content-Length заголовки (LSP-протокол).
+- `initialize` → отдаёт capabilities (completion, definition, hover, formatting, diagnostics)
+- `textDocument/didOpen` / `didChange` → парсит .bp, шлёт диагностику
+- `textDocument/completion` → подсказки: ключевые слова, стейты, переменные, события
+- `textDocument/definition` → go-to-definition для стейтов
+- `textDocument/hover` → документация по стейту/ключевому слову
+- `textDocument/formatting` → автоформатирование
+- `shutdown` → завершает сессию, `exit` → закрывает соединение
+
+Visual Studio Code extension auto-installs with `--install-lsp`.
 
 ### 3.3 Debugging and Analysis
 
@@ -306,10 +322,12 @@ bpc docs file.bp --output ./docs  # generate documentation
 bpc build --config bp.toml
 bpc build --config bp.toml --dry-run
 
-# Publish
+# Publish (dotnet publish via auto-discovered .csproj)
 bpc publish --runtime linux-x64
 bpc publish --runtime linux-x64 --aot
 ```
+
+`publish` ищет `.csproj` от корня репозитория (5 уровней вверх от бинарника) и запускает `dotnet publish` с ожиданием завершения до 5 минут. Больше не крашится на `Process.Start`.
 
 ### 3.6 Utilities
 
@@ -453,6 +471,15 @@ Link-Time Optimization. +10-20% but longer compilation.
 
 **`--pgo`**
 Profile-Guided Optimization. +15-25% on real workload patterns.
+
+Full pipeline:
+1. **Instrument**: генерирует `.ll` → C wrapper с `-fprofile-instr-generate` → instrumented `.exe`
+2. **Collect**: 10+ запусков instrumented binary, сбор `.profraw` файлов
+3. **Merge**: `llvm-profdata merge` → `.profdata`
+4. **Recompile**: instrumented `.ll` с `-fprofile-instr-use=` → optimized `.exe`
+5. **Benchmark**: сравнивает instrumented vs optimized (speedup factor)
+
+Требует `clang.exe` (LLVM 21) в `%USERPROFILE%\.bplus\llvm\bin\` или PATH.
 
 **`--bolt`**
 Facebook BOLT: post-link optimizer. +10-20% on large programs.
@@ -1194,38 +1221,44 @@ B+ v1.0/
 ├── README.md
 ├── LICENSE
 ├── src/
-│   └── BPlusTranspiler/           ← compiler
-│       ├── Algorithm/              ← MPI/cluster, distributed computing
-│       ├── Debugger/               ← graphics debugger integration
-│       ├── Optimizer/              ← BigFloat, optimizations
-│       ├── Shader/                  ← FSR/upscaling pipeline
-│       │   ├── Types/              ← FP16/BF16, vector/matrix types
-│       │   ├── Upscaling/           ← EASU, RCAS, TAA, framegen
-│       │   ├── Emit/                ← SPIR-V binary emitter
-│       │   └── Platform/            ← AMD/NVIDIA/GCN intrinsics
-│       ├── Generators/             ← code generators
-│       ├── Parser/                 ← parser
-│       │   ├── BPlusParser.cs      ← parser (recursive descent)
-│       │   ├── BPlusLexer.cs       ← lexer
-│       │   └── PanicMode.cs        ← error recovery
-│       ├── Ast/                    ← AST nodes
-│       │   └── AstNodes.cs         ← with Lazy<T> type inference
-│       ├── Shared/                 ← infrastructure & utilities
-│       │   ├── KeywordTrie.cs      ← trie-based keyword matching
-│       │   ├── ImportCycleDetector.cs ← circular import detection
-│       │   ├── BinaryHelper.cs     ← BinaryPrimitives endian-safe I/O
-│       │   ├── SimdHelper.cs       ← Vector<byte> SIMD checks
-│       │   ├── AstSerializer.cs    ← AST → JSON (crash dumps)
-│       │   ├── StringPool.cs       ← string interning
-│       │   └── SymbolTable.cs      ← symbol resolution
-│       ├── Runtime/                ← runtime
-│       └── Program.cs              ← CLI entry point + crash dump handler
+│   ├── BPlusTranspiler/           ← compiler
+│   │   ├── Algorithm/              ← MPI/cluster, distributed computing
+│   │   ├── Debugger/               ← graphics debugger integration
+│   │   ├── Optimizer/              ← BigFloat, optimizations, PGO pipeline
+│   │   ├── Lsp/                    ← LSP server (TCP port 5000)
+│   │   ├── Shader/                  ← FSR/upscaling pipeline
+│   │   │   ├── Types/              ← FP16/BF16, vector/matrix types
+│   │   │   ├── Upscaling/           ← EASU, RCAS, TAA, framegen
+│   │   │   ├── Emit/                ← SPIR-V binary emitter
+│   │   │   └── Platform/            ← AMD/NVIDIA/GCN intrinsics
+│   │   ├── Generators/             ← code generators (C++, C#, Python, LLVM, Zig, …)
+│   │   ├── Parser/                 ← parser
+│   │   │   ├── BPlusParser.cs      ← parser (recursive descent)
+│   │   │   ├── BPlusLexer.cs       ← lexer
+│   │   │   └── PanicMode.cs        ← error recovery
+│   │   ├── Ast/                    ← AST nodes
+│   │   │   └── AstNodes.cs         ← with Lazy<T> type inference
+│   │   ├── Shared/                 ← infrastructure & utilities
+│   │   │   ├── KeywordTrie.cs      ← trie-based keyword matching
+│   │   │   ├── ImportCycleDetector.cs ← circular import detection
+│   │   │   ├── BinaryHelper.cs     ← BinaryPrimitives endian-safe I/O
+│   │   │   ├── SimdHelper.cs       ← Vector<byte> SIMD checks
+│   │   │   ├── AstSerializer.cs    ← AST → JSON (crash dumps)
+│   │   │   ├── StringPool.cs       ← string interning
+│   │   │   └── SymbolTable.cs      ← symbol resolution
+│   │   ├── Runtime/                ← runtime
+│   │   └── Program.cs              ← CLI entry point + crash dump handler
+│   ├── BPlusLsp/                   ← standalone LSP host (references BPlusTranspiler)
+│   ├── zig-bpc/                    ← Zig transpiler (DLL, output.zig, LLVM IR gen)
 │   └── vs-extension/                  ← Visual Studio extension
 │       └── BPlusLanguage/            ← VSIX проект
 ├── benchmarks/                     ← BenchmarkDotNet benchmarks
 │   ├── Benchmark.csproj
 │   └── Benchmark.cs
 ├── examples/                       ← B+ code examples
+│   ├── hello.bp
+│   ├── traffic_light.bp
+│   └── tcp_server.bp
 └── bench_*.bp                      ← benchmarks
 ```
 
@@ -1599,6 +1632,11 @@ bpc input.bp --target python   # Python код
 bpc input.bp --target llvm     # LLVM IR
 bpc input.bp --target wasm     # WebAssembly
 
+# Zig и LLVM-native бэкенды
+bpc input.bp --zig             # Zig бэкенд (StateFn паттерн) → output.zig
+bpc input.bp --zig --run       # Zig → сборка → запуск
+bpc input.bp --zig --release   # Zig → LLVM IR → clang -c → lld-link → .exe
+
 # Сокращённые флаги (также --csharp/--cs/--go/--rust)
 bpc input.bp --cpp             # C++ (сокращение)
 bpc input.bp --csharp          # C# (сокращение)
@@ -1614,9 +1652,20 @@ bpc input.bp --target spirv    # Vulkan GLSL (SPIR-V)
 ### 3.2 LSP (Language Server Protocol)
 
 ```bash
-bpc --lsp                  # запустить LSP сервер
+bpc --lsp                  # запустить LSP сервер (TCP порт 5000)
 bpc --install-lsp          # установить LSP для VS Code
 ```
+
+Сервер слушает **TCP port 5000** (loopback). JSON-RPC через Content-Length заголовки.
+- `initialize` → capabilities (completion, definition, hover, formatting, diagnostics)
+- `textDocument/didOpen` / `didChange` → парсит .bp, шлёт диагностику
+- `textDocument/completion` → подсказки: ключевые слова, стейты, переменные, события
+- `textDocument/definition` → переход к определению стейта
+- `textDocument/hover` → документация по стейту/ключу
+- `textDocument/formatting` → автоформатирование
+- `shutdown` → завершение, `exit` → закрытие
+
+Visual Studio Code расширение устанавливается через `--install-lsp`.
 
 ### 3.3 Отладка и анализ
 
@@ -1641,10 +1690,12 @@ bpc docs file.bp --output ./docs  # сгенерировать документ�
 bpc build --config bp.toml
 bpc build --config bp.toml --dry-run
 
-# Публикация
+# Публикация (dotnet publish через авто-поиск .csproj)
 bpc publish --runtime linux-x64
 bpc publish --runtime linux-x64 --aot
 ```
+
+`publish` ищет `.csproj` от корня репозитория (5 уровней вверх от бинарника). `WaitForExit(300000)`, никаких `Process.Start` крашей.
 
 ### 3.6 Утилиты
 
@@ -1788,6 +1839,15 @@ Link-Time Optimization. +10-20% но дольше компиляция.
 
 **`--pgo`**
 Profile-Guided Optimization. +15-25% на реальных workload patterns.
+
+Полный пайплайн:
+1. **Instrument**: `.ll` → C wrapper с `-fprofile-instr-generate` → instrumented `.exe`
+2. **Collect**: 10+ запусков, сбор `.profraw` файлов
+3. **Merge**: `llvm-profdata merge` → `.profdata`
+4. **Recompile**: `-fprofile-instr-use=` → optimized `.exe`
+5. **Benchmark**: instrumented vs optimized (speedup factor)
+
+Требует `clang.exe` (LLVM 21) в `%USERPROFILE%\.bplus\llvm\bin\`.
 
 **`--bolt`**
 Facebook BOLT: post-link optimizer. +10-20% на large programs.
@@ -2296,36 +2356,42 @@ B+ v1.0/
 ├── README.md
 ├── LICENSE
 ├── src/
-│   └── BPlusTranspiler/           ← компилятор
-│       ├── Algorithm/              ← MPI/кластер, распределённые вычисления
-│       ├── Debugger/               ← интеграция графического отладчика
-│       ├── Optimizer/              ← BigFloat, оптимизации
-│       ├── Shader/                  ← FSR/upscaling pipeline
-│       │   ├── Types/              ← FP16/BF16, vector/matrix types
-│       │   ├── Upscaling/           ← EASU, RCAS, TAA, framegen
-│       │   ├── Emit/                ← SPIR-V binary emitter
-│       │   └── Platform/            ← AMD/NVIDIA/GCN intrinsics
-│       ├── Generators/             ← генераторы кода
-│       ├── Parser/                 ← парсер
-│       │   ├── BPlusParser.cs      ← рекурсивный спуск
-│       │   ├── BPlusLexer.cs       ← лексер
-│       │   └── PanicMode.cs        ← восстановление после ошибок
-│       ├── Ast/                    ← AST узлы
-│       │   └── AstNodes.cs         ← с Lazy<T> для вывода типов
-│       ├── Shared/                 ← инфраструктура
-│       │   ├── KeywordTrie.cs      ← trie-поиск ключевых слов
-│       │   ├── ImportCycleDetector.cs ← детектор циклических импортов
-│       │   ├── BinaryHelper.cs     ← BinaryPrimitives endian-safe I/O
-│       │   ├── SimdHelper.cs       ← Vector<byte> SIMD проверки
-│       │   ├── AstSerializer.cs    ← AST → JSON (crash dumps)
-│       │   ├── StringPool.cs       ← интернирование строк
-│       │   └── SymbolTable.cs      ← таблица символов
-│       ├── Runtime/                ← runtime
-│       └── Program.cs              ← точка входа CLI + crash dump handler
+│   ├── BPlusTranspiler/           ← компилятор
+│   │   ├── Algorithm/              ← MPI/кластер, распределённые вычисления
+│   │   ├── Debugger/               ← интеграция графического отладчика
+│   │   ├── Optimizer/              ← BigFloat, оптимизации, PGO пайплайн
+│   │   ├── Lsp/                    ← LSP сервер (TCP порт 5000)
+│   │   ├── Shader/                  ← FSR/upscaling pipeline
+│   │   │   ├── Types/              ← FP16/BF16, vector/matrix types
+│   │   │   ├── Upscaling/           ← EASU, RCAS, TAA, framegen
+│   │   │   ├── Emit/                ← SPIR-V binary emitter
+│   │   │   └── Platform/            ← AMD/NVIDIA/GCN intrinsics
+│   │   ├── Generators/             ← генераторы кода (C++, C#, Python, LLVM, Zig, …)
+│   │   ├── Parser/                 ← парсер
+│   │   │   ├── BPlusParser.cs      ← рекурсивный спуск
+│   │   │   ├── BPlusLexer.cs       ← лексер
+│   │   │   └── PanicMode.cs        ← восстановление после ошибок
+│   │   ├── Ast/                    ← AST узлы
+│   │   │   └── AstNodes.cs         ← с Lazy<T> для вывода типов
+│   │   ├── Shared/                 ← инфраструктура
+│   │   │   ├── KeywordTrie.cs      ← trie-поиск ключевых слов
+│   │   │   ├── ImportCycleDetector.cs ← детектор циклических импортов
+│   │   │   ├── BinaryHelper.cs     ← BinaryPrimitives endian-safe I/O
+│   │   │   ├── SimdHelper.cs       ← Vector<byte> SIMD проверки
+│   │   │   ├── AstSerializer.cs    ← AST → JSON (crash dumps)
+│   │   │   ├── StringPool.cs       ← интернирование строк
+│   │   │   └── SymbolTable.cs      ← таблица символов
+│   │   ├── Runtime/                ← runtime
+│   │   └── Program.cs              ← точка входа CLI + crash dump handler
+│   ├── BPlusLsp/                   ← standalone LSP хост (ссылается на BPlusTranspiler)
+│   ├── zig-bpc/                    ← Zig транспилятор (DLL, output.zig, LLVM IR gen)
 ├── benchmarks/                     ← BenchmarkDotNet бенчмарки
 │   ├── Benchmark.csproj
 │   └── Benchmark.cs
 ├── examples/                       ← примеры B+ кода
+│   ├── hello.bp
+│   ├── traffic_light.bp
+│   └── tcp_server.bp
 └── bench_*.bp                      ← бенчмарки
 ```
 
