@@ -430,16 +430,17 @@ if (args.Length > 0 && args[0] == "watch")
 
 if (args.Length > 0 && args[0] == "format")
 {
-    var fmtInput = args.Length > 1 ? args[1] : null;
+    var fmtInput = args.Length > 1 && !args[1].StartsWith("-") ? args[1]
+        : args.Length > 2 ? args[2] : null;
     if (fmtInput == null || !File.Exists(fmtInput))
     {
-        Console.Error.WriteLine("Usage: bpc format <input.bp>");
+        Console.Error.WriteLine("Usage: bpc format <input.bp> [--check]");
         return 1;
     }
     var fmtCheckOnly = args.Contains("--check");
 
     var fmtSrc = File.ReadAllText(fmtInput);
-    var fmtFormatted = BPlusLspServer.FormatCode(fmtSrc);
+    var fmtFormatted = BPlusFormatter.Format(fmtSrc);
 
     if (fmtCheckOnly)
     {
