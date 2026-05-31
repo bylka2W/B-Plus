@@ -16,7 +16,8 @@ public static class BPlusFormatter
 
     public static bool IsFormatted(string source)
     {
-        return Format(source.TrimEnd()) == source.TrimEnd() + "\n";
+        var norm = source.Replace("\r\n", "\n").TrimEnd();
+        return Format(norm).TrimEnd() == norm;
     }
 
     // Convert any one-line state/context blocks into multi-line
@@ -45,7 +46,6 @@ public static class BPlusFormatter
             // Newline
             if (pos < src.Length && src[pos] == '\n')
             {
-                sb.Append('\n');
                 pos++;
                 continue;
             }
