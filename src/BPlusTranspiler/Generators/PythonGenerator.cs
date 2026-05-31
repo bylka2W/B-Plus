@@ -49,7 +49,7 @@ public class PythonGenerator : ICodeGenerator
         {
             sb.AppendLine("# Context");
             foreach (var v in program.Context.Variables)
-                sb.AppendLine($"{v.Name}: {MapToPyType(v.Type)} = {v.DefaultValue ?? DefaultLiteral(v.Type)}");
+                sb.AppendLine($"{v.Name}: {MapToPyType(v.Type)} = {NormalizePyLiteral(v.DefaultValue ?? DefaultLiteral(v.Type))}");
             sb.AppendLine();
         }
 
@@ -227,13 +227,13 @@ public class PythonGenerator : ICodeGenerator
 
         foreach (var v in state.Variables)
         {
-            var def = v.DefaultValue ?? DefaultLiteral(v.Type);
+            var def = NormalizePyLiteral(v.DefaultValue ?? DefaultLiteral(v.Type));
             sb.AppendLine($"{indent}    {v.Name}: {MapToPyType(v.Type)} = {def}");
         }
 
         if (state.Variables.Count > 0)
         {
-            var initParams = string.Join(", ", state.Variables.Select(v => $"{v.Name}: {MapToPyType(v.Type)} = {v.DefaultValue ?? DefaultLiteral(v.Type)}"));
+            var initParams = string.Join(", ", state.Variables.Select(v => $"{v.Name}: {MapToPyType(v.Type)} = {NormalizePyLiteral(v.DefaultValue ?? DefaultLiteral(v.Type))}"));
             sb.AppendLine();
             sb.AppendLine($"{indent}    def __init__(self, {initParams}):");
             foreach (var v in state.Variables)
@@ -345,6 +345,13 @@ public class PythonGenerator : ICodeGenerator
         string t when t.StartsWith("bigfloat") => "0.0",
         _ => "None"
     };
+
+    private static string NormalizePyLiteral(string lit)
+    {
+        if (lit == "true") return "True";
+        if (lit == "false") return "False";
+        return lit;
+    }
 
     private static string MapToPyType(string type)
     {

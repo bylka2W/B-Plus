@@ -351,14 +351,13 @@ if (args.Length > 0 && (args[0] == "debug" || args[0] == "dbg"))
     {
         var src = File.ReadAllText(dbgInput);
         var prog = new BPlusParser().Parse(src);
-        new BPlusDebugServer(prog).Run();
+        return BPlusInteractiveDebugger.Run(prog, dbgInput);
     }
     catch (ParseException ex)
     {
         PrintParseError(ex);
         return 1;
     }
-    return 0;
 }
 
 if (args.Length > 0 && args[0] == "--lsp")
