@@ -1,4 +1,6 @@
-﻿using System.Text;
+﻿using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -10,38 +12,145 @@ namespace BPlusTranspiler.Lsp;
 public partial class BPlusLspServer
 {
     private readonly Dictionary<string, DocState> _docs = new();
-    private bool _shutdown;
+    private volatile bool _shutdown;
 
     public void Run()
     {
-        var stdin = Console.OpenStandardInput();
-        var buffer = new byte[1024 * 64];
+        var port = 5000;
+        var listener = new TcpListener(IPAddress.Loopback, port);
+        listener.Start();
+        Console.Error.WriteLine($"LSP server listening on port {port}");
+
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            _shutdown = true;
+            try { listener.Stop(); } catch { }
+        };
 
         while (!_shutdown)
         {
-            var json = ReadMessage(stdin, buffer);
-            if (json == null) break;
-            HandleMessage(json, Console.OpenStandardOutput());
+            TcpClient? client = null;
+            try
+            {
+                client = listener.AcceptTcpClient();
+                client.ReceiveTimeout = 1000;
+                Console.Error.WriteLine("LSP: client connected");
+                HandleClient(client);
+            }
+            catch (ObjectDisposedException) { break; }
+            catch (SocketException) when (_shutdown) { break; }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"LSP error: {ex.Message}");
+                client?.Close();
+            }
+        }
+
+        listener.Stop();
+        Console.Error.WriteLine("LSP server stopped");
+    }
+
+    private void HandleClient(TcpClient client)
+    {
+        using (client)
+        using (var stream = client.GetStream())
+        {
+            var buffer = new byte[1024 * 64];
+            var localShutdown = false;
+
+            while (!_shutdown && !localShutdown)
+            {
+                var json = ReadMessage(stream, buffer);
+                if (json == null) break;
+
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                var method = root.TryGetProperty("method", out var m) ? m.GetString() : null;
+                var id = root.TryGetProperty("id", out var i) ? i : default;
+
+                switch (method)
+                {
+                    case "initialize":
+                        Send(stream, id, new
+                        {
+                            capabilities = new
+                            {
+                                textDocumentSync = new { openClose = true, change = 1 },
+                                completionProvider = new { triggerCharacters = new[] { ".", ":", " " } },
+                                definitionProvider = true,
+                                hoverProvider = true,
+                                documentFormattingProvider = true,
+                            },
+                            serverInfo = new { name = "bpc-lsp", version = "4.0.0" }
+                        });
+                        break;
+
+                    case "initialized":
+                        break;
+
+                    case "textDocument/didOpen":
+                        HandleOpen(root, stream);
+                        break;
+
+                    case "textDocument/didChange":
+                        HandleChange(root, stream);
+                        break;
+
+                    case "textDocument/completion":
+                        HandleCompletion(root, stream, id);
+                        break;
+
+                    case "textDocument/definition":
+                        HandleDefinition(root, stream, id);
+                        break;
+
+                    case "textDocument/hover":
+                        HandleHover(root, stream, id);
+                        break;
+
+                    case "textDocument/formatting":
+                        HandleFormatting(root, stream, id);
+                        break;
+
+                    case "shutdown":
+                        Send(stream, id, null);
+                        localShutdown = true;
+                        _shutdown = true;
+                        break;
+
+                    case "exit":
+                        localShutdown = true;
+                        _shutdown = true;
+                        break;
+
+                    default:
+                        if (id.ValueKind != JsonValueKind.Undefined)
+                            Send(stream, id, null);
+                        break;
+                }
+            }
         }
     }
 
-    private string? ReadMessage(Stream stdin, byte[] buffer)
+    private static string? ReadMessage(Stream stream, byte[] buffer)
     {
         string? header = null;
         while (true)
         {
-            header = ReadLine(stdin, buffer);
+            header = ReadLine(stream, buffer);
             if (header == null) return null;
             if (!header.StartsWith("Content-Length: ")) continue;
             if (!int.TryParse(header.AsSpan("Content-Length: ".Length), out var len)) continue;
 
-            if (ReadLine(stdin, buffer) == null) return null;
+            if (ReadLine(stream, buffer) == null) return null;
 
             var body = new byte[len];
             var offset = 0;
             while (offset < len)
             {
-                var read = stdin.Read(body, offset, len - offset);
+                var read = stream.Read(body, offset, len - offset);
                 if (read == 0) return null;
                 offset += read;
             }
@@ -49,12 +158,12 @@ public partial class BPlusLspServer
         }
     }
 
-    private static string? ReadLine(Stream stdin, byte[] buffer)
+    private static string? ReadLine(Stream stream, byte[] buffer)
     {
         using var ms = new MemoryStream();
         while (true)
         {
-            var b = stdin.ReadByte();
+            var b = stream.ReadByte();
             if (b == -1) return ms.Length > 0 ? Encoding.UTF8.GetString(ms.ToArray()) : null;
             if (b == '\r') continue;
             if (b == '\n') break;
@@ -63,100 +172,24 @@ public partial class BPlusLspServer
         return Encoding.UTF8.GetString(ms.ToArray());
     }
 
-    private void HandleMessage(string json, Stream stdout)
+    private void HandleOpen(JsonElement root, Stream stream)
     {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        var method = root.TryGetProperty("method", out var m) ? m.GetString() : null;
-        var id = root.TryGetProperty("id", out var i) ? i : default;
-        var @params = root.TryGetProperty("params", out var p) ? p : default;
-
-        switch (method)
-        {
-            case "initialize":
-                Send(stdout, id, new
-                {
-                    capabilities = new
-                    {
-                        textDocumentSync = new { openClose = true, change = 1 },
-                        completionProvider = new { triggerCharacters = new[] { ".", ":", " " } },
-                        definitionProvider = true,
-                        hoverProvider = true,
-                        documentFormattingProvider = true,
-                        semanticTokensProvider = new
-                        {
-                            full = new { delta = false },
-                            legend = new
-                            {
-                                tokenTypes = new[] { "keyword", "type", "variable", "property", "function", "string", "number", "comment" },
-                                tokenModifiers = Array.Empty<string>()
-                            }
-                        }
-                    },
-                    serverInfo = new { name = "bpc-lsp", version = "2.5.0GH" }
-                });
-                break;
-
-            case "textDocument/didOpen":
-                HandleOpen(@params, stdout);
-                break;
-
-            case "textDocument/didChange":
-                HandleChange(@params, stdout);
-                break;
-
-            case "textDocument/completion":
-                HandleCompletion(@params, stdout, id);
-                break;
-
-            case "textDocument/definition":
-                HandleDefinition(@params, stdout, id);
-                break;
-
-            case "textDocument/hover":
-                HandleHover(@params, stdout, id);
-                break;
-
-            case "textDocument/formatting":
-                HandleFormatting(@params, stdout, id);
-                break;
-
-            case "textDocument/semanticTokens/full":
-                HandleSemanticTokens(@params, stdout, id);
-                break;
-
-            case "shutdown":
-                _shutdown = true;
-                Send(stdout, id, null);
-                break;
-
-            case "exit":
-                _shutdown = true;
-                break;
-
-            default:
-                if (id.ValueKind != JsonValueKind.Undefined) Send(stdout, id, null);
-                break;
-        }
-    }
-
-    private void HandleOpen(JsonElement @params, Stream stdout)
-    {
+        var @params = root.GetProperty("params");
         var td = @params.GetProperty("textDocument");
         var uri = td.GetProperty("uri").GetString()!;
         var text = td.GetProperty("text").GetString()!;
-        ParseAndPublish(uri, text, stdout);
+        ParseAndPublish(uri, text, stream);
     }
 
-    private void HandleChange(JsonElement @params, Stream stdout)
+    private void HandleChange(JsonElement root, Stream stream)
     {
+        var @params = root.GetProperty("params");
         var uri = @params.GetProperty("textDocument").GetProperty("uri").GetString()!;
         var text = @params.GetProperty("contentChanges")[0].GetProperty("text").GetString()!;
-        ParseAndPublish(uri, text, stdout);
+        ParseAndPublish(uri, text, stream);
     }
 
-    private void ParseAndPublish(string uri, string text, Stream stdout)
+    private void ParseAndPublish(string uri, string text, Stream stream)
     {
         var diags = new List<LspDiagnostic>();
         ProgramNode? ast = null;
@@ -175,7 +208,7 @@ public partial class BPlusLspServer
         }
 
         _docs[uri] = new DocState { Text = text, Ast = ast, Diagnostics = diags };
-        Notify(stdout, "textDocument/publishDiagnostics", new { uri, diagnostics = diags });
+        Notify(stream, "textDocument/publishDiagnostics", new { uri, diagnostics = diags });
     }
 
     private static LspDiagnostic MakeDiagnostic(string message)
@@ -195,12 +228,13 @@ public partial class BPlusLspServer
         };
     }
 
-    private void HandleCompletion(JsonElement @params, Stream stdout, JsonElement id)
+    private void HandleCompletion(JsonElement root, Stream stream, JsonElement id)
     {
+        var @params = root.GetProperty("params");
         var uri = @params.GetProperty("textDocument").GetProperty("uri").GetString()!;
         if (!_docs.TryGetValue(uri, out var doc) || doc.Ast == null)
         {
-            Send(stdout, id, new { isIncomplete = false, items = Array.Empty<object>() });
+            Send(stream, id, new { isIncomplete = false, items = Array.Empty<object>() });
             return;
         }
 
@@ -252,33 +286,34 @@ public partial class BPlusLspServer
         foreach (var pb in doc.Ast.ParallelBlocks)
             AddEvents(pb.States);
 
-        Send(stdout, id, new { isIncomplete = false, items });
+        Send(stream, id, new { isIncomplete = false, items });
     }
 
-    private void HandleDefinition(JsonElement @params, Stream stdout, JsonElement id)
+    private void HandleDefinition(JsonElement root, Stream stream, JsonElement id)
     {
+        var @params = root.GetProperty("params");
         var uri = @params.GetProperty("textDocument").GetProperty("uri").GetString()!;
         if (!_docs.TryGetValue(uri, out var doc) || doc.Ast == null || doc.Text == null)
         {
-            Send(stdout, id, null); return;
+            Send(stream, id, null); return;
         }
 
         var pos = @params.GetProperty("position");
         var word = GetWordAt(doc.Text, pos.GetProperty("line").GetInt32(), pos.GetProperty("character").GetInt32());
-        if (string.IsNullOrEmpty(word)) { Send(stdout, id, null); return; }
+        if (string.IsNullOrEmpty(word)) { Send(stream, id, null); return; }
 
         var pattern = $@"\bstate\s+{Regex.Escape(word)}\b";
         var match = Regex.Match(doc.Text, pattern);
         if (!match.Success)
         {
-            Send(stdout, id, null); return;
+            Send(stream, id, null); return;
         }
 
         var line = doc.Text[..match.Index].Count(c => c == '\n');
         var colInLine = match.Index - doc.Text[..match.Index].LastIndexOf('\n') - 1;
         var col = colInLine < 0 ? match.Value.IndexOf(word) : colInLine + match.Value.IndexOf(word);
 
-        Send(stdout, id, new
+        Send(stream, id, new
         {
             uri,
             range = new LspRange
@@ -289,17 +324,18 @@ public partial class BPlusLspServer
         });
     }
 
-    private void HandleHover(JsonElement @params, Stream stdout, JsonElement id)
+    private void HandleHover(JsonElement root, Stream stream, JsonElement id)
     {
+        var @params = root.GetProperty("params");
         var uri = @params.GetProperty("textDocument").GetProperty("uri").GetString()!;
         if (!_docs.TryGetValue(uri, out var doc) || doc.Ast == null || doc.Text == null)
         {
-            Send(stdout, id, null); return;
+            Send(stream, id, null); return;
         }
 
         var pos = @params.GetProperty("position");
         var word = GetWordAt(doc.Text, pos.GetProperty("line").GetInt32(), pos.GetProperty("character").GetInt32());
-        if (string.IsNullOrEmpty(word)) { Send(stdout, id, null); return; }
+        if (string.IsNullOrEmpty(word)) { Send(stream, id, null); return; }
 
         string? detail = null;
 
@@ -358,22 +394,23 @@ public partial class BPlusLspServer
         }
 
         if (detail != null)
-            Send(stdout, id, new { contents = new { kind = "markdown", value = detail } });
+            Send(stream, id, new { contents = new { kind = "markdown", value = detail } });
         else
-            Send(stdout, id, null);
+            Send(stream, id, null);
     }
 
-    private void HandleFormatting(JsonElement @params, Stream stdout, JsonElement id)
+    private void HandleFormatting(JsonElement root, Stream stream, JsonElement id)
     {
+        var @params = root.GetProperty("params");
         var uri = @params.GetProperty("textDocument").GetProperty("uri").GetString()!;
         if (!_docs.TryGetValue(uri, out var doc) || doc.Text == null)
         {
-            Send(stdout, id, Array.Empty<object>()); return;
+            Send(stream, id, Array.Empty<object>()); return;
         }
 
         var formatted = FormatCode(doc.Text);
         var lines = doc.Text.Count(c => c == '\n') + 1;
-        Send(stdout, id, new[]
+        Send(stream, id, new[]
         {
             new
             {
@@ -385,59 +422,6 @@ public partial class BPlusLspServer
                 newText = formatted
             }
         });
-    }
-
-    private void HandleSemanticTokens(JsonElement @params, Stream stdout, JsonElement id)
-    {
-        var uri = @params.GetProperty("textDocument").GetProperty("uri").GetString()!;
-        if (!_docs.TryGetValue(uri, out var doc) || doc.Text == null)
-        {
-            Send(stdout, id, new { data = Array.Empty<int>() }); return;
-        }
-
-        var data = new List<int>();
-        var lines = doc.Text.Split('\n');
-        var prevLine = 0;
-        var prevCol = 0;
-
-        for (var l = 0; l < lines.Length; l++)
-        {
-            foreach (Match m in TokenRegex().Matches(lines[l]))
-            {
-                var deltaLine = l - prevLine;
-                var deltaCol = deltaLine == 0 ? m.Index - prevCol : m.Index;
-                data.Add(deltaLine);
-                data.Add(deltaCol);
-                data.Add(m.Length);
-                data.Add(TokenType(m.Value));
-                data.Add(0);
-                prevLine = l;
-                prevCol = m.Index + m.Length;
-            }
-        }
-
-        Send(stdout, id, new { data });
-    }
-
-    private static int TokenType(string w) => w switch
-    {
-        "state" or "base" or "var" or "on" or "after" or "enter" or "exit"
-            or "always" or "async" or "import" or "context" or "enum" or "parallel" => 0,
-        "int" or "float" or "string" or "bool" or "void" or "double" or "long" => 1,
-        "true" or "false" => 6,
-        _ when char.IsUpper(w[0]) => 1,
-        _ => 3
-    };
-
-    private static string GetWordAt(string text, int line, int col)
-    {
-        var lines = text.Split('\n');
-        if (line >= lines.Length) return "";
-        var l = lines[line];
-        if (col > l.Length) return "";
-        var start = col; while (start > 0 && char.IsLetterOrDigit(l[start - 1])) start--;
-        var end = col; while (end < l.Length && char.IsLetterOrDigit(l[end])) end++;
-        return start < end ? l[start..end] : "";
     }
 
     internal static string FormatCode(string code)
@@ -468,25 +452,36 @@ public partial class BPlusLspServer
         return sb.ToString();
     }
 
-    private void Send(Stream stdout, JsonElement id, object? result)
+    private static string GetWordAt(string text, int line, int col)
+    {
+        var lines = text.Split('\n');
+        if (line >= lines.Length) return "";
+        var l = lines[line];
+        if (col > l.Length) return "";
+        var start = col; while (start > 0 && char.IsLetterOrDigit(l[start - 1])) start--;
+        var end = col; while (end < l.Length && char.IsLetterOrDigit(l[end])) end++;
+        return start < end ? l[start..end] : "";
+    }
+
+    private void Send(Stream stream, JsonElement id, object? result)
     {
         var json = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result }, JsonOpts);
-        Write(stdout, json);
+        Write(stream, json);
     }
 
-    private void Notify(Stream stdout, string method, object? @params)
+    private void Notify(Stream stream, string method, object? @params)
     {
         var json = JsonSerializer.Serialize(new { jsonrpc = "2.0", method, @params }, JsonOpts);
-        Write(stdout, json);
+        Write(stream, json);
     }
 
-    private static void Write(Stream stdout, string json)
+    private static void Write(Stream stream, string json)
     {
         var bytes = Encoding.UTF8.GetBytes(json);
         var header = Encoding.UTF8.GetBytes($"Content-Length: {bytes.Length}\r\n\r\n");
-        stdout.Write(header, 0, header.Length);
-        stdout.Write(bytes, 0, bytes.Length);
-        stdout.Flush();
+        stream.Write(header, 0, header.Length);
+        stream.Write(bytes, 0, bytes.Length);
+        stream.Flush();
     }
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -494,9 +489,6 @@ public partial class BPlusLspServer
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
-
-    [GeneratedRegex(@"\b(state|base|var|on|after|enter|exit|always|async|import|context|enum|parallel|int|float|string|bool|void|double|long|true|false|[A-Z]\w*|\w+)\b")]
-    private static partial Regex TokenRegex();
 
     private class DocState
     {

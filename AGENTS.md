@@ -82,6 +82,15 @@ Select-String "wrong_code" output.zig
 - `examples/traffic_light.bp` — state machine with `context { var ... }`
 - `examples/tcp_server.bp` — TCP server FSM
 
+### Bugfix: `--pgo` no longer tries to execute Makefile as binary
+- `PgoPipeline.cs` `CompileWithPgo()` — when clang not found, instead of returning Makefile path (→ `Process.Start` on Makefile → Win32Exception), now tries `make -f Makefile`; throws `InvalidOperationException` with instructions if make also fails
+
+### Bugfix: `publish` WorkingDirectory corrected (off-by-one `..`)
+- `Program.cs:126` — `..\..\..\BPlusTranspiler` → `..\..\..\..\BPlusTranspiler` to reach `src/BPlusTranspiler/` from `bin/Debug/net8.0/`
+
+### Bugfix: `--lsp` responds to Ctrl+C
+- `BPlusLspServer.cs:Run()` — added `Console.CancelKeyPress` handler that sets `_shutdown = true`, breaking the read loop instead of hanging forever
+
 ### Python: `global` for context vars
 - `PythonGenerator.cs` — `IsContextVarAssigned()` detects `=`/`+=`/`-=`/`++`/`--` with context var name in transition body/guard
 - Emits `global var1, var2` before assignments in state methods

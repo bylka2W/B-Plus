@@ -1,7 +1,7 @@
-using BPlusTranspiler.Ast;
 using BPlusTranspiler.Generators;
 using BPlusTranspiler.Parser;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace BPlusTranspiler.Optimizer;
 
@@ -16,7 +16,7 @@ public class PgoPipeline
     public PgoPipeline(string bpFile, bool collect = true, string? pgoUsePath = null)
     {
         _bpFile = bpFile;
-        _outputDir = Path.Combine(Path.GetDirectoryName(bpFile) ?? ".", "gen_pgo");
+        _outputDir = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(bpFile) ?? ".", "gen_pgo"));
         _pgoUsePath = pgoUsePath;
         _collect = collect;
     }
@@ -40,21 +40,16 @@ public class PgoPipeline
 
     private string Phase1_Instrument(PgoResult r)
     {
-        Console.WriteLine("[PGO] Phase 1: Instrumenting LLVM IR with PGO counters...");
+        Console.WriteLine("[PGO] Phase 1: Generating instrumented binary via C wrapper...");
         var src = File.ReadAllText(_bpFile);
         var program = new BPlusParser().Parse(src);
 
-        string? profdataPath = null;
-        if (_pgoUsePath != null && File.Exists(_pgoUsePath))
-        {
-            profdataPath = _pgoUsePath;
-            Console.WriteLine($"[PGO] Using existing profile: {profdataPath}");
-        }
-
-        string? instrumentedIr = null;
+        // Generate .ll WITHOUT instrumentation intrinsics (pgoCollect: false)
+        // then wrap with a C file that uses -fprofile-instr-generate.
+        string? irPath = null;
         foreach (var gen in new ICodeGenerator[]
         {
-            new LlvmGenerator("native", "auto", pgoCollect: true, pgoUse: profdataPath, ltoMode: null, cAbi: false)
+            new LlvmGenerator("native", "auto", pgoCollect: false, pgoUse: null, ltoMode: null, cAbi: false)
         })
         {
             var files = gen.GenerateFiles(program);
@@ -62,18 +57,85 @@ public class PgoPipeline
             {
                 if (name.EndsWith(".ll"))
                 {
-                    var outPath = Path.Combine(_outputDir, name);
-                    File.WriteAllText(outPath, code);
-                    instrumentedIr = outPath;
-                    Console.WriteLine($"[PGO] Generated instrumented IR: {outPath}");
+                    irPath = Path.Combine(_outputDir, name);
+                    File.WriteAllText(irPath, code);
+                    Console.WriteLine($"[PGO] Generated IR: {irPath}");
                 }
             }
         }
 
-        string binaryPath = CompileWithPgo(instrumentedIr!, profdataPath, forInstrumentation: true);
+        string binaryPath = CompileInstrumented(irPath!);
         r.InstrumentedBinaryPath = binaryPath;
         Console.WriteLine($"[PGO] Instrumented binary: {binaryPath}");
         return binaryPath;
+    }
+
+    private string CompileInstrumented(string irPath)
+    {
+        string? clang = FindClang();
+        if (clang == null) throw new InvalidOperationException("clang not found");
+
+        string objPath = Path.Combine(_outputDir, "kernels.o");
+        string wrapperC = Path.Combine(_outputDir, "_pgo_main.c");
+        string binaryPath = Path.Combine(_outputDir, "bpc_instrumented.exe");
+
+        string irCode = File.ReadAllText(irPath);
+        bool hasEntry = irCode.Contains("@main(");
+        if (!hasEntry)
+        {
+            Console.WriteLine("[PGO] No @main in IR — compiling directly");
+            return CompileWithPgo(irPath, null, forInstrumentation: true);
+        }
+
+        // Rename main -> __bpc_main so wrapper C can provide the real main
+        irCode = Regex.Replace(irCode, @"define\s+i32\s+@main\s*\(", "define i32 @__bpc_main(");
+        File.WriteAllText(irPath, irCode);
+
+        var ccArgs = new ProcessStartInfo(clang, $"-c -O3 \"{irPath}\" -o \"{objPath}\"")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        using (var p1 = Process.Start(ccArgs))
+        {
+            p1?.WaitForExit(60000);
+        }
+
+        if (!File.Exists(objPath))
+        {
+            Console.WriteLine("[PGO] .ll → .obj failed — falling back to direct compilation");
+            irCode = irCode.Replace("__bpc_main", "main");
+            File.WriteAllText(irPath, irCode);
+            return CompileWithPgo(irPath, null, forInstrumentation: true);
+        }
+
+        File.WriteAllText(wrapperC, "int __bpc_main(void); int main(void) { return __bpc_main(); }");
+
+        string rtLib = FindProfileRt() ?? "";
+        string extraLib = File.Exists(rtLib) ? $"\"{rtLib}\"" : "";
+        var clArgs = new ProcessStartInfo(clang,
+            $"-fprofile-instr-generate -fcoverage-mapping -O3 \"{wrapperC}\" \"{objPath}\" {extraLib} -o \"{binaryPath}\"")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        using (var p2 = Process.Start(clArgs))
+        {
+            p2?.WaitForExit(120000);
+        }
+
+        if (File.Exists(binaryPath))
+        {
+            Console.WriteLine($"[PGO] Compiled: {binaryPath}");
+            return binaryPath;
+        }
+
+        Console.WriteLine("[PGO] Wrapper compilation failed — falling back");
+        irCode = irCode.Replace("__bpc_main", "main");
+        File.WriteAllText(irPath, irCode);
+        return CompileWithPgo(irPath, null, forInstrumentation: true);
     }
 
     private void Phase2_Collect(string binaryPath, int warmup, int measure, PgoResult r)
@@ -125,14 +187,15 @@ public class PgoPipeline
         string mergedProfdata = Path.Combine(_outputDir, "merged.profdata");
 
         string? profdataTool = FindProfdata();
-        if (profdataTool == null || !new FileInfo(FindInPath(profdataTool)).Exists)
+        if (profdataTool == null)
         {
-            Console.WriteLine("[PGO] llvm-profdata not found — using first profile");
+            Console.WriteLine("[PGO] llvm-profdata not found — using first profile raw");
             File.Copy(_profileFiles[0], mergedProfraw, overwrite: true);
+            r.MergedProfilePath = mergedProfraw;
         }
         else
         {
-            var args = "merge -output=" + mergedProfraw + " " + string.Join(" ", _profileFiles.Select(Path.GetFileName));
+            var args = "merge --output=\"" + mergedProfdata + "\" " + string.Join(" ", _profileFiles.Select(Path.GetFileName));
             var psi = new ProcessStartInfo(profdataTool, args)
             {
                 WorkingDirectory = _outputDir,
@@ -143,22 +206,11 @@ public class PgoPipeline
             using var proc = Process.Start(psi);
             proc?.WaitForExit(60000);
 
-            if (File.Exists(mergedProfraw))
-            {
-                var convPsi = new ProcessStartInfo(profdataTool, $"convert -output={mergedProfdata} {Path.GetFileName(mergedProfraw)}")
-                {
-                    WorkingDirectory = _outputDir,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
-                using var conv = Process.Start(convPsi);
-                conv?.WaitForExit(30000);
-            }
+            r.MergedProfilePath = File.Exists(mergedProfdata) ? mergedProfdata : null;
         }
 
-        r.MergedProfilePath = File.Exists(mergedProfdata) ? mergedProfdata : mergedProfraw;
-        Console.WriteLine($"[PGO] Merged profile: {r.MergedProfilePath} ({new FileInfo(r.MergedProfilePath).Length / 1024.0:F1} KB)");
+        if (r.MergedProfilePath != null && File.Exists(r.MergedProfilePath))
+            Console.WriteLine($"[PGO] Merged profile: {r.MergedProfilePath} ({new FileInfo(r.MergedProfilePath!).Length / 1024.0:F1} KB)");
     }
 
     private void Phase4_Recompile(PgoResult r)
@@ -211,10 +263,30 @@ public class PgoPipeline
         string? clang = FindClang();
         if (clang == null)
         {
-            Console.WriteLine("[PGO] clang not found — generating Makefile");
+            Console.WriteLine("[PGO] clang not found — trying make on generated Makefile");
             string mkPath = Path.Combine(_outputDir, "Makefile");
             File.WriteAllText(mkPath, GenerateMakefile(irPath, profdata, forInstrumentation));
-            return mkPath;
+            try
+            {
+                using var make = Process.Start(new ProcessStartInfo("make", $"-C \"{_outputDir}\" -f Makefile {(forInstrumentation ? "instrument" : "binary")}")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                });
+                if (make != null)
+                {
+                    make.WaitForExit(120000);
+                    if (make.ExitCode == 0)
+                    {
+                        string makeOut = Path.Combine(_outputDir, (forInstrumentation ? "bpc_instrumented" : "bpc_optimized") + ".exe");
+                        if (File.Exists(makeOut)) return makeOut;
+                    }
+                }
+            }
+            catch { }
+            Console.Error.WriteLine("[PGO] clang and make not found — PGO unavailable. Install LLVM or run Makefile at " + mkPath);
+            return "";
         }
 
         var args = new List<string>();
@@ -222,6 +294,8 @@ public class PgoPipeline
         {
             args.Add("-fprofile-instr-generate");
             args.Add("-fcoverage-mapping");
+            var rt = FindProfileRt();
+            if (rt != null) args.Add(rt);
         }
         else if (profdata != null && File.Exists(profdata))
         {
@@ -229,21 +303,22 @@ public class PgoPipeline
             args.Add("-fprofile-sample-accurate");
         }
 
-        args.AddRange(new[] { "-O3", "-flto=thin" });
+        args.AddRange(new[] { "-O3" });
         if (irPath != null && File.Exists(irPath)) args.Add(irPath);
-        args.AddRange(new[] { "-o", Path.Combine(_outputDir, forInstrumentation ? "bpc_instrumented" : "bpc_optimized") });
+        args.AddRange(new[] { "-o", Path.Combine(_outputDir, (forInstrumentation ? "bpc_instrumented" : "bpc_optimized") + ".exe") });
 
-        var psi = new ProcessStartInfo(clang, args)
+        var psi = new ProcessStartInfo(clang)
         {
             WorkingDirectory = _outputDir,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+        foreach (var a in args) psi.ArgumentList.Add(a);
         using var proc = Process.Start(psi);
         proc?.WaitForExit(120000);
 
-        string outBinary = Path.Combine(_outputDir, forInstrumentation ? "bpc_instrumented" : "bpc_optimized");
+        string outBinary = Path.Combine(_outputDir, (forInstrumentation ? "bpc_instrumented" : "bpc_optimized") + ".exe");
         if (File.Exists(outBinary)) Console.WriteLine($"[PGO] Compiled: {outBinary}");
         return outBinary;
     }
@@ -268,6 +343,7 @@ binary:
         var psi = new ProcessStartInfo(binary)
         {
             UseShellExecute = false,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             WorkingDirectory = _outputDir
@@ -275,6 +351,8 @@ binary:
         foreach (var kv in env) psi.Environment[kv.Key] = kv.Value;
         using var proc = Process.Start(psi);
         if (proc == null) return false;
+        proc.StandardInput.WriteLine("exit");
+        proc.StandardInput.Flush();
         proc.WaitForExit(timeout);
         return proc.ExitCode == 0;
     }
@@ -286,8 +364,15 @@ binary:
         for (int i = 0; i < runs; i++)
         {
             var sw = Stopwatch.StartNew();
-            var psi = new ProcessStartInfo(binaryPath, _bpFile) { UseShellExecute = false };
+            var psi = new ProcessStartInfo(binaryPath, _bpFile)
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
             using var p = Process.Start(psi);
+            if (p != null) { p.StandardInput.WriteLine("exit"); p.StandardInput.Flush(); }
             p?.WaitForExit(10000);
             sw.Stop();
             times.Add(sw.Elapsed.TotalMilliseconds);
@@ -298,8 +383,20 @@ binary:
 
     private string? FindClang()
     {
-        string[] paths = { "clang", "clang-18", "clang-17", "/usr/bin/clang", @"C:\Program Files\LLVM\bin\clang.exe" };
-        foreach (var tool in paths) { var full = FindInPath(tool); if (new FileInfo(full).Exists) return tool; }
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string[] paths =
+        {
+            Path.Combine(userProfile, ".bplus", "llvm", "bin", "clang.exe"),
+            "clang.exe", "clang",
+            @"C:\Program Files\LLVM\bin\clang.exe",
+        };
+        foreach (var tool in paths)
+            if (File.Exists(tool)) return tool;
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+        {
+            var f = Path.Combine(dir, "clang.exe");
+            if (File.Exists(f)) return f;
+        }
         var psi = new ProcessStartInfo("where", "clang") { UseShellExecute = false, RedirectStandardOutput = true };
         using var proc = Process.Start(psi);
         return proc?.StandardOutput.ReadLine();
@@ -307,9 +404,31 @@ binary:
 
     private string? FindProfdata()
     {
-        string[] paths = { "llvm-profdata", "llvm-profdata-18", "/usr/bin/llvm-profdata", @"C:\Program Files\LLVM\bin\llvm-profdata.exe" };
-        foreach (var p in paths) { var full = FindInPath(p); if (new FileInfo(full).Exists) return p; }
+        string[] paths =
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bplus", "llvm", "bin", "llvm-profdata.exe"),
+            "llvm-profdata", "llvm-profdata-18",
+            "/usr/bin/llvm-profdata",
+            @"C:\Program Files\LLVM\bin\llvm-profdata.exe"
+        };
+        foreach (var p in paths) { if (File.Exists(p)) return p; }
         return null;
+    }
+
+    private string? FindProfileRt()
+    {
+        var clangDir = Path.GetDirectoryName(FindClang());
+        if (clangDir == null) return null;
+        var llvmRoot = Path.GetDirectoryName(clangDir);
+        if (llvmRoot == null) return null;
+        var libDir = Path.Combine(llvmRoot, "lib", "clang");
+        if (!Directory.Exists(libDir)) return null;
+        var verDirs = Directory.GetDirectories(libDir);
+        if (verDirs.Length == 0) return null;
+        var winDir = Path.Combine(verDirs[^1], "lib", "windows");
+        if (!Directory.Exists(winDir)) return null;
+        var rt = Directory.GetFiles(winDir, "clang_rt.profile-*.lib").FirstOrDefault();
+        return rt;
     }
 
     private string FindInPath(string name)

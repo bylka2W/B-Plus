@@ -113,30 +113,20 @@ if (args.Length > 0 && args[0] == "build")
 
 if (args.Length > 0 && args[0] == "publish")
 {
-    var runtime = "linux-x64";
-    var publishAot = false;
-    for (int i = 1; i < args.Length; i++)
+    var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var csproj = Directory.GetFiles(root, "*.csproj", SearchOption.AllDirectories).FirstOrDefault()
+        ?? throw new FileNotFoundException("BPlusTranspiler.csproj not found");
+    var psi = new ProcessStartInfo("dotnet", $"publish \"{csproj}\" -c Release --self-contained -p:PublishSingleFile=true")
     {
-        if (args[i] == "--runtime" && i + 1 < args.Length) runtime = args[++i];
-        else if (args[i] == "--aot") publishAot = true;
-    }
-    Console.WriteLine($"Publishing bpc for {runtime} (AOT={publishAot})...");
-    var psi = new System.Diagnostics.ProcessStartInfo("dotnet", $"publish -c Release -r {runtime} --self-contained{(publishAot ? " -p:PublishAot=true" : "")} --no-build")
-    {
-        WorkingDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "BPlusTranspiler")),
         UseShellExecute = false,
         RedirectStandardOutput = true,
         RedirectStandardError = true
     };
-    using var proc = System.Diagnostics.Process.Start(psi);
-    if (proc == null) { Console.Error.WriteLine("Failed to start dotnet"); return 1; }
-    Console.WriteLine(proc.StandardOutput.ReadToEnd());
-    Console.WriteLine(proc.StandardError.ReadToEnd());
+    using var proc = Process.Start(psi);
+    if (proc == null) return 1;
     proc.WaitForExit(300000);
-    if (proc.ExitCode == 0)
-        Console.WriteLine($"Published: release/{runtime}/bpc");
-    else
-        Console.Error.WriteLine($"Publish failed: exit {proc.ExitCode}");
+    Console.Write(proc.StandardOutput.ReadToEnd());
+    if (proc.ExitCode != 0) Console.Error.Write(proc.StandardError.ReadToEnd());
     return proc.ExitCode;
 }
 

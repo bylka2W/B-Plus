@@ -109,14 +109,16 @@ public class LlvmGenerator : ICodeGenerator
 
     void EmitModuleFooter(LlvmIrBuilder ll, List<string> kernelNames)
     {
-        // PGO profile name globals (one per kernel)
+        // PGO: profile name globals + counter arrays (one per instrumented function)
         if (_pgoCollect)
         {
-            foreach (var kn in kernelNames)
+            var allNames = new List<string>(kernelNames) { "main" };
+            foreach (var fn in allNames)
             {
-                var nameStr = kn + "\0";
+                var nameStr = fn + "\0";
                 var len = nameStr.Length;
-                ll.RawLine($"@__profn_{kn} = private constant [{len} x i8] c\"{nameStr}\"");
+                ll.RawLine($"@__profn_{fn} = private constant [{len} x i8] c\"{nameStr}\"");
+                ll.RawLine($"@__profc_{fn} = private global [1 x i64] zeroinitializer");
             }
         }
 
@@ -940,7 +942,20 @@ public class LlvmGenerator : ICodeGenerator
 
     void EmitEntry(LlvmIrBuilder ll, EntryDecl e)
     {
-        ll.Line($"define i32 @main() {{ entry: ret i32 0 }}");
+        if (_pgoCollect)
+        {
+            ll.Line("define i32 @main() {");
+            ll.Indent();
+            ll.Line("entry:");
+            ll.Line($"  call void @llvm.instrprof.increment(ptr @__profn_main, i64 {HashPGO("main")}, i32 1, i32 0)");
+            ll.Line("  ret i32 0");
+            ll.Dedent();
+            ll.Line("}");
+        }
+        else
+        {
+            ll.Line($"define i32 @main() {{ entry: ret i32 0 }}");
+        }
         ll.Line("");
     }
 
