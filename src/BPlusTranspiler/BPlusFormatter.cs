@@ -8,6 +8,7 @@ public static class BPlusFormatter
     public static string Format(string source)
     {
         source = source.Replace("\r\n", "\n");
+        source = source.Replace("\r", "\n");
         source = Unpack(source);
         source = Reindent(source);
         source = CollapseBlankLines(source);
@@ -230,11 +231,12 @@ public static class BPlusFormatter
             {
                 string cur = sb.ToString();
                 if (!cur.EndsWith("\n\n"))
-                    sb.AppendLine();
+                    sb.Append('\n');
             }
 
             sb.Append(' ', ld * 4);
-            sb.AppendLine(t);
+            sb.Append(t);
+            sb.Append('\n');
 
             if (!isComment)
                 depth += opens - closes;
