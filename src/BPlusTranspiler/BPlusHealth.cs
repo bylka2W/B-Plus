@@ -9,41 +9,44 @@ public static class BPlusHealth
     {
         var files = new List<string>();
 
-        if (input != null && File.Exists(input))
+        // Normalise path to full path if given
+        string? dir = null;
+        if (input != null)
         {
-            files.Add(input);
-        }
-        else if (input != null && Directory.Exists(input))
-        {
-            files.AddRange(Directory.GetFiles(input, "*.bp", SearchOption.AllDirectories));
-        }
-        else if (input == null)
-        {
-            if (File.Exists("bp.toml"))
+            var full = Path.GetFullPath(input);
+            if (File.Exists(full))
             {
-                var cfg = BPlusBuild.LoadConfig("bp.toml");
-                if (cfg != null)
+                files.Add(full);
+            }
+            else if (Directory.Exists(full))
+            {
+                dir = full;
+            }
+            else
+            {
+                // Maybe relative to cwd
+                var cwdFull = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), input));
+                if (Directory.Exists(cwdFull))
+                    dir = cwdFull;
+                else if (File.Exists(cwdFull))
+                    files.Add(cwdFull);
+                else
                 {
-                    foreach (var src in cfg.Source)
-                    {
-                        if (Directory.Exists(src))
-                            files.AddRange(Directory.GetFiles(src, "*.bp", SearchOption.AllDirectories));
-                        else if (File.Exists(src))
-                            files.Add(src);
-                    }
+                    Console.Error.WriteLine($"Файл или папка не найдены: {input}");
+                    return 1;
                 }
             }
-            if (files.Count == 0 && Directory.Exists("src"))
-                files.AddRange(Directory.GetFiles("src", "*.bp", SearchOption.AllDirectories));
-            if (files.Count == 0 && Directory.Exists("examples"))
-                files.AddRange(Directory.GetFiles("examples", "*.bp", SearchOption.AllDirectories));
-            if (files.Count == 0)
-                files.AddRange(Directory.GetFiles(".", "*.bp", SearchOption.AllDirectories));
         }
         else
         {
-            Console.Error.WriteLine($"Файл или директория не найдены: {input}");
-            return 1;
+            dir = Directory.GetCurrentDirectory();
+        }
+
+        if (dir != null)
+        {
+            files.AddRange(Directory.GetFiles(dir, "*.bp", SearchOption.AllDirectories));
+            if (files.Count == 0 && dir != Directory.GetCurrentDirectory())
+                files.AddRange(Directory.GetFiles(Directory.GetCurrentDirectory(), "*.bp", SearchOption.AllDirectories));
         }
 
         if (files.Count == 0)

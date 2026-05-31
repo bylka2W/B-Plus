@@ -1424,6 +1424,12 @@ if (input == null)
     return 1;
 }
 
+if (Directory.Exists(input))
+{
+    // Directory given without a command — run health analysis
+    return BPlusHealth.Run(input, OptimizationFlags.Parse(args.Skip(1).ToArray()));
+}
+
 if (!File.Exists(input))
 {
     Console.Error.WriteLine($"File not found: {input}");
