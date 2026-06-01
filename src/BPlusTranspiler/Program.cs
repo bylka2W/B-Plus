@@ -474,15 +474,8 @@ if (args.Length > 0 && args[0] == "docs")
     {
         var docsSrc = File.ReadAllText(docsInput);
         var docsProg = new BPlusParser().Parse(docsSrc);
-        Directory.CreateDirectory(docsOutput);
         var title = Path.GetFileNameWithoutExtension(docsInput);
-        foreach (var (name, code) in BPlusDocGenerator.GenerateFiles(docsProg, title))
-        {
-            var path = Path.Combine(docsOutput, name);
-            File.WriteAllText(path, code);
-            Console.WriteLine($"  [docs] {path}");
-        }
-        Console.WriteLine($"Done. Generated documentation in {docsOutput}/");
+        BPlusDocGenerator.Generate(docsProg, docsOutput, title);
     }
     catch (ParseException ex)
     {
