@@ -257,9 +257,6 @@ public class RustGenerator : ICodeGenerator
         sb.AppendLine("}");
         sb.AppendLine();
 
-        foreach (var entry in program.Entries)
-            sb.AppendLine(EmitEntryRust(entry));
-
         // Collect all events for multi-source event loop
         var allEvents = new HashSet<string>();
         void CollectEvents(StateDefNode s)
@@ -272,15 +269,26 @@ public class RustGenerator : ICodeGenerator
         foreach (var par in program.ParallelBlocks)
             foreach (var st in par.States) CollectEvents(st);
 
-        // Runtime event loop: add fn main() with multi-source event loop
         bool hasEventStates = allEvents.Count > 0;
         bool hasEntryMain = program.Entries.Any(e => e.Name == "main");
-        if (hasEventStates && program.States.Count > 0 && !hasEntryMain)
+
+        // Emit non-main entries normally
+        foreach (var entry in program.Entries.Where(e => e.Name != "main"))
+            sb.AppendLine(EmitEntryRust(entry));
+
+        if (hasEventStates && program.States.Count > 0)
         {
+            // Main with event loop: emit entry body (if main exists) before the loop
+            var mainEntry = program.Entries.FirstOrDefault(e => e.Name == "main");
             bool hasTimer = allEvents.Contains("timer");
             bool hasNetwork = allEvents.Any(e => e.StartsWith("tcp_") || e.StartsWith("udp_"));
             var firstState = program.States[0].Name;
+
             sb.AppendLine("fn main() {");
+            if (mainEntry != null)
+            {
+                EmitEntryBodyRust(sb, mainEntry, 1);
+            }
             sb.AppendLine("    use std::sync::mpsc;");
             sb.AppendLine("    use std::thread;");
             sb.AppendLine("    use std::time::Duration;");
@@ -342,6 +350,12 @@ public class RustGenerator : ICodeGenerator
             sb.AppendLine("        }");
             sb.AppendLine("    }");
             sb.AppendLine("}");
+        }
+        else
+        {
+            // No state machine events: emit entries normally
+            foreach (var entry in program.Entries.Where(e => e.Name == "main"))
+                sb.AppendLine(EmitEntryRust(entry));
         }
 
         return sb.ToString();
@@ -876,46 +890,46 @@ public class RustGenerator : ICodeGenerator
         return sb.ToString();
     }
 
+    private void EmitEntryBodyRust(StringBuilder sb, EntryDecl entry, int depth)
+    {
+        var stack = new List<string>();
+        var indentBase = new string(' ', depth * 4);
+        foreach (var line in entry.BodyLines)
+        {
+            var trimmed = line.TrimStart();
+            if (trimmed == "{" || trimmed == "}") continue;
+            if (trimmed == "end")
+            {
+                if (stack.Count > 0) { stack.RemoveAt(stack.Count - 1); sb.AppendLine($"{indentBase}{new string(' ', stack.Count * 4)}}}"); }
+                continue;
+            }
+            var indent = indentBase + new string(' ', stack.Count * 4);
+            if (trimmed.StartsWith("$$"))
+            {
+                sb.AppendLine($"{indent}{trimmed[2..]}");
+                continue;
+            }
+            if (trimmed.StartsWith("while ") || trimmed.StartsWith("if ") || trimmed.StartsWith("for "))
+            {
+                stack.Add("");
+                var parts = trimmed.Split(' ');
+                var kw = parts[0];
+                var rest = string.Join(" ", parts.Skip(1));
+                sb.AppendLine($"{indent}{kw} {rest} {{");
+                continue;
+            }
+            sb.AppendLine($"{indent}{TranslateEntryRust(trimmed)};");
+        }
+        while (stack.Count > 0) { sb.AppendLine($"{indentBase}{new string(' ', (stack.Count - 1) * 4)}}}"); stack.RemoveAt(stack.Count - 1); }
+    }
+
     private string EmitEntryRust(EntryDecl entry)
     {
         var retType = entry.ReturnType ?? "()";
         var sb = new StringBuilder();
         sb.AppendLine($"/// Entry: {entry.Name}");
         sb.AppendLine($"pub fn {entry.Name}() -> {MapToRust(retType)} {{");
-        if (entry.BodyLines.Count > 0)
-        {
-            var stack = new List<string>();
-            foreach (var line in entry.BodyLines)
-            {
-                var trimmed = line.TrimStart();
-                var indent = new string(' ', 4 + stack.Count * 4);
-                if (trimmed.StartsWith("$$"))
-                {
-                    sb.AppendLine($"{indent}{trimmed[2..]}");
-                    continue;
-                }
-                if (trimmed == "end")
-                {
-                    if (stack.Count > 0) { stack.RemoveAt(stack.Count - 1); sb.AppendLine($"{indent[..^4]}}}"); }
-                    continue;
-                }
-                if (trimmed.StartsWith("while ") || trimmed.StartsWith("if ") || trimmed.StartsWith("for "))
-                {
-                    stack.Add("");
-                    var parts = trimmed.Split(' ');
-                    var kw = parts[0];
-                    var rest = string.Join(" ", parts.Skip(1));
-                    sb.AppendLine($"{indent}{kw} {rest} {{");
-                    continue;
-                }
-                sb.AppendLine($"{indent}{TranslateEntryRust(trimmed)};");
-            }
-            while (stack.Count > 0) { sb.AppendLine("    }"); stack.RemoveAt(stack.Count - 1); }
-        }
-        else
-        {
-            sb.AppendLine($"    // entry point");
-        }
+        EmitEntryBodyRust(sb, entry, 1);
         sb.AppendLine($"}}");
         sb.AppendLine();
         return sb.ToString();

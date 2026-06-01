@@ -81,6 +81,7 @@ public class PythonGenerator : ICodeGenerator
             foreach (var line in entry.BodyLines)
             {
                 var trimmed = line.TrimStart();
+                if (trimmed == "{" || trimmed == "}") continue; // skip B+ braces
                 var indent = new string(' ', 4 + stack.Count * 4);
                 if (trimmed.StartsWith("$$"))
                 {
