@@ -98,18 +98,9 @@ pub const Parser = struct {
         _ = try p.expect(.rparen);
         const name = p.tokenText(nameTok);
         var body = std.ArrayList(ast.Stmt).init(p.allocator);
-        while (p.pos < p.tokens.len) {
-            const tt = p.peek();
-            if (tt == .eof) break;
-            switch (tt) {
-                .keyword_print => try body.append(try p.parsePrint()),
-                .keyword_return => try body.append(try p.parseReturn()),
-                .keyword_state, .keyword_compute_kernel, .keyword_struct, .keyword_fn, .keyword_inline => break,
-                else => {
-                    const s = try p.parseExprStmt();
-                    if (s.expr != null or s.assign_name.len > 0) try body.append(s);
-                },
-            }
+        if (p.peek() == .lbrace) {
+            const content = try p.extractBracedContent();
+            body = p.parseBodyStmtsFromSource(content);
         }
         return ast.EntryDecl{ .name = name, .body = body };
     }

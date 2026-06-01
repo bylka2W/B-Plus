@@ -16,26 +16,10 @@ pub const Generator = struct {
         try g.write("const std = @import(\"std\");\n\n");
 
         // B+ Context struct — global state
-        const has_context = prog.context_vars.items.len > 0;
-        _ = has_context;
-        try g.write("const BPlusContext = struct {\n");
-        for (prog.context_vars.items) |v| {
-            try g.write("    ");
-            try g.write(v.name);
-            try g.write(": ");
-            try g.write(g.mapType(v.var_type));
-            if (v.init) |init_expr| {
-                try g.write(" = ");
-                try g.genExpr(init_expr);
-            }
-            try g.write(",\n");
-        }
-        // State-local vars
-        for (prog.states.items) |st| {
-            for (st.vars.items) |v| {
+        if (prog.context_vars.items.len > 0 or prog.states.items.len > 0 or prog.entry != null) {
+            try g.write("const BPlusContext = struct {\n");
+            for (prog.context_vars.items) |v| {
                 try g.write("    ");
-                try g.write(st.name);
-                try g.write("_");
                 try g.write(v.name);
                 try g.write(": ");
                 try g.write(g.mapType(v.var_type));
@@ -45,14 +29,33 @@ pub const Generator = struct {
                 }
                 try g.write(",\n");
             }
-        }
-        try g.write("    current_state: StateFn = ");
-        try g.writeStateFnName(prog);
-        try g.write(",\n");
-        try g.write("};\n\n");
+            // State-local vars
+            for (prog.states.items) |st| {
+                for (st.vars.items) |v| {
+                    try g.write("    ");
+                    try g.write(st.name);
+                    try g.write("_");
+                    try g.write(v.name);
+                    try g.write(": ");
+                    try g.write(g.mapType(v.var_type));
+                    if (v.init) |init_expr| {
+                        try g.write(" = ");
+                        try g.genExpr(init_expr);
+                    }
+                    try g.write(",\n");
+                }
+            }
+            if (prog.states.items.len > 0) {
+                try g.write("    current_state: StateFn = ");
+                try g.writeStateFnName(prog);
+                try g.write(",\n");
+            }
+            try g.write("};\n\n");
 
-        // StateFn type
-        try g.write("const StateFn = *const fn (ctx: *BPlusContext, event: []const u8) void;\n\n");
+            if (prog.states.items.len > 0) {
+                try g.write("const StateFn = *const fn (ctx: *BPlusContext, event: []const u8) void;\n\n");
+            }
+        }
 
         // State handler functions
         for (prog.states.items) |st| {
@@ -62,7 +65,9 @@ pub const Generator = struct {
 
         // Main entry point
         try g.write("pub fn main() !void {\n");
-        try g.write("    var ctx = BPlusContext{};\n");
+        if (prog.states.items.len > 0 or prog.context_vars.items.len > 0 or prog.entry != null) {
+            try g.write("    var ctx = BPlusContext{};\n");
+        }
         // Initialize state-local vars from defaults
         for (prog.states.items) |st| {
             for (st.vars.items) |v| {
@@ -77,7 +82,15 @@ pub const Generator = struct {
                 }
             }
         }
-        try g.write("    ctx.current_state(&ctx, \"enter\");\n");
+        // Emit entry body (if any)
+        if (prog.entry) |entry| {
+            for (entry.body.items) |stmt| {
+                try g.genStmtInState(stmt, 1);
+            }
+        }
+        if (prog.states.items.len > 0) {
+            try g.write("    ctx.current_state(&ctx, \"enter\");\n");
+        }
         try g.write("}\n");
 
         return g.buf.items;
@@ -85,11 +98,10 @@ pub const Generator = struct {
 
     fn writeStateFnName(g: *Generator, prog: ast.Program) !void {
         const base = if (prog.start_state.len > 0) prog.start_state
-            else if (prog.entry) |_| "main_entry"
             else if (prog.states.items.len > 0) prog.states.items[0].name
             else "_start";
         try g.write(base);
-        if (!std.mem.eql(u8, base, "_start") and !std.mem.eql(u8, base, "main_entry")) {
+        if (!std.mem.eql(u8, base, "_start")) {
             try g.write("_enter");
         }
     }

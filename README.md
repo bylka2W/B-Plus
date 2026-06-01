@@ -1,4 +1,4 @@
-# B+ v4.0.0 BETA
+# B+ v4.1.0 BETA
 
 **Machine Code Optimizer** — compiler for state machines from B+ directly to native x64 code.
 
@@ -1372,7 +1372,7 @@ MIT License — use freely, edit, sell.
 
 ---
 
-# B+ v4.0.0 BETA
+# B+ v4.1.0 BETA
 
 **Machine Code Optimizer** — компилятор конечных автоматов из B+ напрямую в нативный x64 код.
 

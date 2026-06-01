@@ -1508,7 +1508,7 @@ if (optFlags.ZigBackend)
         return 1;
     }
 
-    if (optFlags.Release)
+        if (optFlags.Release)
     {
         // Mode 1: LLVM IR → clang → lld-link
         var genDir = "gen_metal";
@@ -1539,68 +1539,79 @@ if (optFlags.ZigBackend)
             }
         }
 
-        if (optFlags.Run)
+        // Always compile .ll → .exe for --release (not just --run)
+        var llvmBin2 = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".bplus", "llvm", "bin");
+        var lldLink2 = Path.Combine(llvmBin2, "lld-link.exe");
+        var clang2 = Path.Combine(llvmBin2, "clang.exe");
+
+        if (File.Exists(lldLink2))
         {
-            var llvmBin = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".bplus", "llvm", "bin");
-            var lldLink = Path.Combine(llvmBin, "lld-link.exe");
-            var clang = Path.Combine(llvmBin, "clang.exe");
-
-            if (!File.Exists(lldLink))
-            {
-                Console.Error.WriteLine("LLVM not found. Run compile-metal.bat first.");
-                return 1;
-            }
-
             // Use llc if available (LLVM 18), otherwise clang -c (LLVM 21+)
-            var llc = Path.Combine(llvmBin, "llc.exe");
-            var llvmCompiler = clang;
-            var llvmObjFlags = $"-c \"{llFile}\" -o \"";
-            var legacyFlags = $"-c legacy_stdio.ll -o \"";
-            if (File.Exists(llc))
+            var llc2 = Path.Combine(llvmBin2, "llc.exe");
+            var llvmCompiler2 = clang2;
+            var llvmObjFlags2 = $"-c -Wno-override-module \"{llFile}\" -o \"";
+            var legacyFlags2 = $"-c -Wno-override-module legacy_stdio.ll -o \"";
+            if (File.Exists(llc2))
             {
-                llvmCompiler = llc;
-                llvmObjFlags = $"-filetype=obj \"{llFile}\" -o \"";
-                legacyFlags = $"-filetype=obj legacy_stdio.ll -o \"";
+                llvmCompiler2 = llc2;
+                llvmObjFlags2 = $"-filetype=obj \"{llFile}\" -o \"";
+                legacyFlags2 = $"-filetype=obj legacy_stdio.ll -o \"";
             }
 
             // Compile .ll → .obj
-            var objFile = Path.Combine(genDir, "kernels_llvm.obj");
-            var cc = Process.Start(llvmCompiler, llvmObjFlags + objFile + "\"");
-            cc.WaitForExit();
-            if (cc.ExitCode != 0) { Console.Error.WriteLine("llc failed"); return 1; }
+            var objFile2 = Path.Combine(genDir, "kernels_llvm.obj");
+            var cc2 = Process.Start(llvmCompiler2, llvmObjFlags2 + objFile2 + "\"");
+            cc2.WaitForExit();
+            if (cc2.ExitCode == 0)
+            {
+                // Compile legacy_stdio.ll → .obj (if it exists)
+                var legacyObj2 = Path.Combine(genDir, "legacy_stdio.obj");
+                var lc2 = Process.Start(llvmCompiler2, legacyFlags2 + legacyObj2 + "\"");
+                lc2.WaitForExit();
+                if (lc2.ExitCode != 0) Console.Error.WriteLine("legacy_stdio.ll compile failed (continuing)");
 
-            // Compile legacy_stdio.ll → .obj
-            var legacyObj = Path.Combine(genDir, "legacy_stdio.obj");
-            var lc = Process.Start(llvmCompiler, legacyFlags + legacyObj + "\"");
-            lc.WaitForExit();
-            if (lc.ExitCode != 0) { Console.Error.WriteLine("legacy_stdio.ll compile failed"); return 1; }
+                // Link → .exe
+                var exeFile2 = Path.Combine(genDir, "bplus_llvm_output.exe");
+                var linkArgs2 = $"\"{objFile2}\" \"{legacyObj2}\" /OUT:\"{exeFile2}\" /NOLOGO /ENTRY:main /SUBSYSTEM:CONSOLE kernel32.lib /NODEFAULTLIB";
+                var ld2 = Process.Start(lldLink2, linkArgs2);
+                ld2.WaitForExit();
+                if (ld2.ExitCode == 0)
+                {
+                    Console.WriteLine($"Compiled {exeFile2}");
+                }
+                else
+                    Console.Error.WriteLine("lld-link failed");
+            }
+            else
+                Console.Error.WriteLine("compile .ll → .obj failed (try --run for details)");
+        }
 
-            // Link → .exe
-            var exeFile = Path.Combine(genDir, "bplus_llvm_output.exe");
-            var linkArgs = $"\"{objFile}\" \"{legacyObj}\" /OUT:\"{exeFile}\" /NOLOGO /ENTRY:main /SUBSYSTEM:CONSOLE kernel32.lib /NODEFAULTLIB";
-            var ld = Process.Start(lldLink, linkArgs);
-            ld.WaitForExit();
-            if (ld.ExitCode != 0) { Console.Error.WriteLine("lld-link failed"); return 1; }
-
-            Console.WriteLine("LLVM build OK. Running...");
+        if (optFlags.Run)
+        {
+            var exeFile3 = Path.Combine(genDir, "bplus_llvm_output.exe");
+            if (!File.Exists(exeFile3))
+            {
+                Console.Error.WriteLine("No .exe found — compile step may have failed earlier.");
+                return 1;
+            }
             Console.OutputEncoding = System.Text.Encoding.UTF8;
-            var run = Process.Start(new ProcessStartInfo
+            var run3 = Process.Start(new ProcessStartInfo
             {
                 FileName = "cmd.exe",
-                Arguments = $"/c chcp 65001 >nul & \"{exeFile}\"",
+                Arguments = $"/c chcp 65001 >nul & \"{exeFile3}\"",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 StandardOutputEncoding = System.Text.Encoding.UTF8,
                 StandardErrorEncoding = System.Text.Encoding.UTF8
             });
-            var stdout = run!.StandardOutput.ReadToEnd();
-            var stderr = run!.StandardError.ReadToEnd();
-            run!.WaitForExit();
-            if (!string.IsNullOrEmpty(stdout)) Console.WriteLine(stdout);
-            if (!string.IsNullOrEmpty(stderr)) Console.Error.WriteLine(stderr);
+            var stdout3 = run3!.StandardOutput.ReadToEnd();
+            var stderr3 = run3!.StandardError.ReadToEnd();
+            run3!.WaitForExit();
+            if (!string.IsNullOrEmpty(stdout3)) Console.WriteLine(stdout3);
+            if (!string.IsNullOrEmpty(stderr3)) Console.Error.WriteLine(stderr3);
         }
     }
     else
@@ -1801,10 +1812,120 @@ foreach (var (importName, importProgram) in importPrograms)
 }
 if (importCount > 0)
     Console.WriteLine($"Generated {importCount} import file(s) to {output}");
+
+// Auto-compile wasm .ll → .wasm
+if (target is "wasm" or "all")
+{
+    var llFile = Path.Combine(output, "kernels.ll");
+    if (File.Exists(llFile))
+    {
+        var clang = FindTool(new[] { "clang.exe", "emcc.bat", "emcc" });
+        if (clang != null)
+        {
+            var wasmObj = Path.Combine(output, "kernels_wasm.o");
+            var cc = Process.Start(clang, $"--target=wasm32 -c -Wno-override-module \"{llFile}\" -o \"{wasmObj}\"");
+            cc.WaitForExit();
+            if (cc.ExitCode == 0)
+            {
+                var wasmLd = FindTool(new[] { "wasm-ld.exe", "wasm-ld" });
+                if (wasmLd != null)
+                {
+                    var wasmOut = Path.Combine(output, "output.wasm");
+                    var ld = Process.Start(wasmLd, $"\"{wasmObj}\" -o \"{wasmOut}\" --no-entry --export-all");
+                    ld.WaitForExit();
+                    if (ld.ExitCode == 0)
+                        Console.WriteLine($"Compiled {wasmOut}");
+                    else
+                        Console.Error.WriteLine("wasm-ld failed");
+                }
+                else
+                    Console.Error.WriteLine("wasm-ld not found — install LLVM with wasm target");
+            }
+            else
+                Console.Error.WriteLine("clang wasm compile failed");
+        }
+        else
+            Console.Error.WriteLine("clang not found — install LLVM to compile wasm");
+    }
+}
+
+// Auto-compile spirv .comp → .spv
+if (target is "spirv" or "vulkan" or "glsl" or "all")
+{
+    var compFile = Path.Combine(output, "shaders.comp");
+    if (File.Exists(compFile))
+    {
+        var glslang = FindTool(new[] { "glslangValidator.exe", "glslangValidator" });
+        if (glslang == null)
+        {
+            // Extract embedded glslangValidator.exe to %LOCALAPPDATA%/bplus/tools/
+            var toolsDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "bplus", "tools");
+            Directory.CreateDirectory(toolsDir);
+            glslang = Path.Combine(toolsDir, "glslangValidator.exe");
+            if (!File.Exists(glslang))
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                var resName = asm.GetManifestResourceNames().FirstOrDefault(n => n.Contains("glslangValidator"));
+                if (resName != null)
+                {
+                    using var stream = asm.GetManifestResourceStream(resName);
+                    if (stream != null)
+                    {
+                        using var fs = new FileStream(glslang, FileMode.Create, FileAccess.Write);
+                        stream.CopyTo(fs);
+                        Console.WriteLine($"Extracted glslangValidator.exe to {glslang}");
+                    }
+                }
+            }
+        }
+        if (glslang != null && File.Exists(glslang))
+        {
+            var spvFile = Path.Combine(output, "shaders.spv");
+            var p = Process.Start(glslang, $"-V \"{compFile}\" -o \"{spvFile}\"");
+            p.WaitForExit();
+            if (p.ExitCode == 0)
+                Console.WriteLine($"Compiled {spvFile}");
+            else
+                Console.Error.WriteLine("glslangValidator failed");
+        }
+        else
+            Console.WriteLine("glslangValidator not found — install Vulkan SDK or run compile_spirv.bat manually");
+    }
+}
+
 return 0;
 
 static string Sanitize(string name) =>
     string.Join("_", name.Split(System.IO.Path.GetInvalidFileNameChars()));
+
+static string? FindTool(string[] candidates)
+{
+    var llvmBin = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".bplus", "llvm", "bin");
+    var vulkanBin = Environment.GetEnvironmentVariable("VULKAN_SDK");
+    foreach (var c in candidates)
+    {
+        // Check LLVM bin dir
+        var inLlvm = Path.Combine(llvmBin, c);
+        if (File.Exists(inLlvm)) return inLlvm;
+        // Check Vulkan SDK bin dir
+        if (vulkanBin != null)
+        {
+            var inVulkan = Path.Combine(vulkanBin, "bin", c);
+            if (File.Exists(inVulkan)) return inVulkan;
+        }
+        // Check PATH
+        try { var which = Process.Start("where", c); if (which != null) { which.WaitForExit(3000); if (which.ExitCode == 0) { foreach (var line in which.StandardOutput.ReadToEnd().Split('\n', '\r', StringSplitOptions.RemoveEmptyEntries)) { var t = line.Trim(); if (File.Exists(t)) return t; } } } } catch { }
+        // Check cwd
+        if (File.Exists(c)) return Path.GetFullPath(c);
+    }
+    return null;
+}
+
+
 
 static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
 {
@@ -2134,7 +2255,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     if (File.Exists(clang))
     {
         var objFile = Path.Combine(outputDir, "kernels_metal.obj");
-        var cc = Process.Start(clang, $"-c \"{llvmPath}\" -o \"{objFile}\"");
+        var cc = Process.Start(clang, $"-c -Wno-override-module \"{llvmPath}\" -o \"{objFile}\"");
         cc.WaitForExit();
         if (cc.ExitCode == 0)
         {
@@ -2144,7 +2265,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
             if (File.Exists(legacyLl))
             {
                 var legacyObj = Path.Combine(outputDir, "legacy_stdio.obj");
-                var lc = Process.Start(clang, $"-c \"{legacyLl}\" -o \"{legacyObj}\"");
+                var lc = Process.Start(clang, $"-c -Wno-override-module \"{legacyLl}\" -o \"{legacyObj}\"");
                 lc.WaitForExit();
                 if (lc.ExitCode == 0 && File.Exists(lldLink))
                 {

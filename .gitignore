@@ -1,6 +1,7 @@
 # Compiled output
 *.bin
 *.obj
+!src/BPlusTranspiler/glslangValidator.exe
 *.exe
 *.wasm
 *.dll
