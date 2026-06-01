@@ -15,7 +15,7 @@ public static class BPlusDocGenerator
 
         Directory.CreateDirectory(output);
         var path = Path.Combine(output, "README.md");
-        File.WriteAllText(path, md);
+        File.WriteAllText(path, md, new UTF8Encoding(false));
         Console.WriteLine($"  [docs] {path}");
     }
 
@@ -61,7 +61,7 @@ public static class BPlusDocGenerator
                 // Transitions
                 if (s.Transitions.Count > 0)
                 {
-                    sb.AppendLine("**Переходы**:");
+                    sb.AppendLine("**Transitions**:");
                     foreach (var t in s.Transitions)
                     {
                         var ev = t.IsAlways ? "`always`" : t.IsEnterAuto ? "`enter`" : $"`{t.EventName}`";
@@ -77,7 +77,7 @@ public static class BPlusDocGenerator
                 var withGuard = s.Transitions.Where(t => t.Guard != null).ToList();
                 if (withGuard.Count > 0)
                 {
-                    sb.AppendLine("**Гарды**:");
+                    sb.AppendLine("**Guards**:");
                     foreach (var t in withGuard)
                         sb.AppendLine($"- `[{t.Guard}]` → `{t.Target}`");
                     sb.AppendLine();
@@ -86,7 +86,7 @@ public static class BPlusDocGenerator
                 // Variables
                 if (s.Variables.Count > 0)
                 {
-                    sb.AppendLine("**Переменные**:");
+                    sb.AppendLine("**Variables**:");
                     foreach (var v in s.Variables)
                     {
                         sb.Append($"- `{v.Name}`: `{v.Type}`");
@@ -99,7 +99,7 @@ public static class BPlusDocGenerator
                 // Timers
                 if (s.Timers.Count > 0)
                 {
-                    sb.AppendLine("**Таймеры**:");
+                    sb.AppendLine("**Timers**:");
                     foreach (var t in s.Timers)
                     {
                         sb.Append($"- After `{t.Duration}`");

@@ -458,9 +458,12 @@ if (args.Length > 0 && args[0] == "format")
     return 0;
 }
 
-if (args.Length > 0 && args[0] == "docs")
+if (args.Length > 0 && (args[0] == "docs" || (args[0].EndsWith(".bp") && args.Length > 1 && args[1] == "docs")))
 {
-    var docsInput = args.Length > 1 ? args[1] : null;
+    // Support both: bpc docs file.bp  and  bpc file.bp docs
+    string? docsInput;
+    if (args[0] == "docs") { docsInput = args.Length > 1 ? args[1] : null; }
+    else { docsInput = args[0]; }
     if (docsInput == null || !File.Exists(docsInput))
     {
         Console.Error.WriteLine("Usage: bpc docs <input.bp> [--output ./dir]");
