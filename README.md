@@ -335,6 +335,7 @@ bpc publish --runtime linux-x64 --aot
 bpc health [dir] [flags]        # project health analysis
 bpc diff <a.bp> <b.bp>          # semantic diff (also: bpc a.bp b.bp diff)
 bpc bench <file.bp> [--iter N] # benchmark performance (default 100K)
+bpc profile <file.bp> [runs]   # transition profile (default 1000)
 bpc watch <dir> [--target ...]  # watch mode — auto-rebuild
 ```
 

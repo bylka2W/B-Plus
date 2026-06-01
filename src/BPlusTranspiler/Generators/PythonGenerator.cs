@@ -72,6 +72,8 @@ public class PythonGenerator : ICodeGenerator
         foreach (var st in program.States)
             EmitState(sb, st, 0, ctxVars);
 
+        bool hasMain = false;
+
         foreach (var entry in program.Entries)
         {
             sb.AppendLine();
@@ -106,95 +108,10 @@ public class PythonGenerator : ICodeGenerator
             // State machine event loop
             if (allEvents.Count > 0)
             {
-                var firstState = program.States.Count > 0
-                    ? program.States[0].Name
-                    : (program.ParallelBlocks.Count > 0 && program.ParallelBlocks[0].States.Count > 0
-                        ? program.ParallelBlocks[0].States[0].Name : null);
+                var firstState = GetFirstStateName(program);
                 if (firstState != null)
                 {
-                    bool hasTimer = allEvents.Contains("timer");
-                    bool hasNetwork = allEvents.Any(e => e.StartsWith("tcp_") || e.StartsWith("udp_"));
-                    sb.AppendLine();
-                    sb.AppendLine("    # State machine runtime (multi-source event loop)");
-                    sb.AppendLine("    import threading");
-                    sb.AppendLine("    import sys");
-                    sb.AppendLine("    from queue import Queue, Empty");
-                    sb.AppendLine();
-                    sb.AppendLine("    _queue = Queue()");
-                    sb.AppendLine("    _stop = threading.Event()");
-                    sb.AppendLine();
-                    sb.AppendLine("    def _stdin_source():");
-                    sb.AppendLine("        while not _stop.is_set():");
-                    sb.AppendLine("            line = sys.stdin.readline()");
-                    sb.AppendLine("            if not line:");
-                    sb.AppendLine("                break");
-                    sb.AppendLine("            event = line.strip()");
-                    sb.AppendLine("            _queue.put(event)");
-                    sb.AppendLine("            if event == \"exit\":");
-                    sb.AppendLine("                break");
-                    sb.AppendLine("        _stop.set()");
-                    sb.AppendLine();
-                    sb.AppendLine("    threading.Thread(target=_stdin_source, daemon=True).start()");
-                    if (hasTimer)
-                    {
-                        sb.AppendLine();
-                        sb.AppendLine("    # Timer event source (fires 'timer' every 1s)");
-                        sb.AppendLine("    def _timer_source():");
-                        sb.AppendLine("        while not _stop.is_set():");
-                        sb.AppendLine("            _stop.wait(1.0)");
-                        sb.AppendLine("            if not _stop.is_set():");
-                        sb.AppendLine("                _queue.put(\"timer\")");
-                        sb.AppendLine();
-                        sb.AppendLine("    threading.Thread(target=_timer_source, daemon=True).start()");
-                    }
-                    if (hasNetwork)
-                    {
-                        sb.AppendLine();
-                        sb.AppendLine("    # TCP server (port 8080)");
-                        sb.AppendLine("    def _tcp_source():");
-                        sb.AppendLine("        try:");
-                        sb.AppendLine("            import socket");
-                        sb.AppendLine("            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)");
-                        sb.AppendLine("            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)");
-                        sb.AppendLine("            sock.bind(('0.0.0.0', 8080))");
-                        sb.AppendLine("            sock.listen(5)");
-                        sb.AppendLine("            sock.settimeout(0.5)");
-                        sb.AppendLine("            while not _stop.is_set():");
-                        sb.AppendLine("                try:");
-                        sb.AppendLine("                    conn, addr = sock.accept()");
-                        sb.AppendLine("                    _queue.put(\"tcp_connect\")");
-                        sb.AppendLine("                    data = conn.recv(4096)");
-                        sb.AppendLine("                    if data:");
-                        sb.AppendLine("                        _queue.put(\"tcp_data\")");
-                        sb.AppendLine("                    conn.close()");
-                        sb.AppendLine("                    _queue.put(\"tcp_disconnected\")");
-                        sb.AppendLine("                except socket.timeout:");
-                        sb.AppendLine("                    pass");
-                        sb.AppendLine("        except:");
-                        sb.AppendLine("            pass");
-                        sb.AppendLine();
-                        sb.AppendLine("    threading.Thread(target=_tcp_source, daemon=True).start()");
-                    }
-                    sb.AppendLine();
-                    sb.AppendLine($"    current_state = {firstState}()");
-                    sb.AppendLine("    current_state.enter()");
-                    sb.AppendLine("    try:");
-                    sb.AppendLine("        while not _stop.is_set():");
-                    sb.AppendLine("            try:");
-                    sb.AppendLine("                event = _queue.get(timeout=0.2)");
-                    sb.AppendLine("                if event == \"exit\":");
-                    sb.AppendLine("                    current_state.exit()");
-                    sb.AppendLine("                    break");
-                    sb.AppendLine("                next_state = current_state.handle_event(event)");
-                    sb.AppendLine("                if next_state is not None:");
-                    sb.AppendLine("                    current_state.exit()");
-                    sb.AppendLine("                    current_state = next_state");
-                    sb.AppendLine("                    current_state.enter()");
-                    sb.AppendLine("            except Empty:");
-                    sb.AppendLine("                pass");
-                    sb.AppendLine("    except (EOFError, KeyboardInterrupt):");
-                    sb.AppendLine("        current_state.exit()");
-                    sb.AppendLine("        pass");
+                    EmitEventLoop(sb, allEvents, firstState ?? "");
                 }
             }
             if (entry.Name == "main")
@@ -202,6 +119,23 @@ public class PythonGenerator : ICodeGenerator
                 sb.AppendLine();
                 sb.AppendLine("if __name__ == \"__main__\":");
                 sb.AppendLine($"    {entry.Name}()");
+                hasMain = true;
+            }
+        }
+
+        // Auto-generate main() if none exists
+        if (!hasMain && allEvents.Count > 0)
+        {
+            var firstState = GetFirstStateName(program);
+            if (firstState != null)
+            {
+                sb.AppendLine();
+                sb.AppendLine();
+                sb.AppendLine("def main():");
+                EmitEventLoop(sb, allEvents, firstState ?? "");
+                sb.AppendLine();
+                sb.AppendLine("if __name__ == \"__main__\":");
+                sb.AppendLine("    main()");
             }
         }
 
@@ -359,5 +293,101 @@ public class PythonGenerator : ICodeGenerator
         var lower = type.ToLower();
         if (lower.StartsWith("bigfloat")) return "float";
         return type;
+    }
+
+    static string? GetFirstStateName(ProgramNode program)
+    {
+        if (program.States.Count > 0)
+            return program.States[0].Name;
+        if (program.ParallelBlocks.Count > 0 && program.ParallelBlocks[0].States.Count > 0)
+            return program.ParallelBlocks[0].States[0].Name;
+        return null;
+    }
+
+    static void EmitEventLoop(StringBuilder sb, HashSet<string> events, string firstState)
+    {
+        bool hasTimer = events.Contains("timer");
+        bool hasNetwork = events.Any(e => e.StartsWith("tcp_") || e.StartsWith("udp_"));
+        // Use 4-space indent (1 level inside def)
+        sb.AppendLine("    # State machine runtime (multi-source event loop)");
+        sb.AppendLine("    import threading");
+        sb.AppendLine("    import sys");
+        sb.AppendLine("    from queue import Queue, Empty");
+        sb.AppendLine();
+        sb.AppendLine("    _queue = Queue()");
+        sb.AppendLine("    _stop = threading.Event()");
+        sb.AppendLine();
+        sb.AppendLine("    def _stdin_source():");
+        sb.AppendLine("        while not _stop.is_set():");
+        sb.AppendLine("            line = sys.stdin.readline()");
+        sb.AppendLine("            if not line:");
+        sb.AppendLine("                break");
+        sb.AppendLine("            event = line.strip()");
+        sb.AppendLine("            _queue.put(event)");
+        sb.AppendLine("            if event == \"exit\":");
+        sb.AppendLine("                break");
+        sb.AppendLine("        _stop.set()");
+        sb.AppendLine();
+        sb.AppendLine("    threading.Thread(target=_stdin_source, daemon=True).start()");
+        if (hasTimer)
+        {
+            sb.AppendLine();
+            sb.AppendLine("    # Timer event source (fires 'timer' every 1s)");
+            sb.AppendLine("    def _timer_source():");
+            sb.AppendLine("        while not _stop.is_set():");
+            sb.AppendLine("            _stop.wait(1.0)");
+            sb.AppendLine("            if not _stop.is_set():");
+            sb.AppendLine("                _queue.put(\"timer\")");
+            sb.AppendLine();
+            sb.AppendLine("    threading.Thread(target=_timer_source, daemon=True).start()");
+        }
+        if (hasNetwork)
+        {
+            sb.AppendLine();
+            sb.AppendLine("    # TCP server (port 8080)");
+            sb.AppendLine("    def _tcp_source():");
+            sb.AppendLine("        try:");
+            sb.AppendLine("            import socket");
+            sb.AppendLine("            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)");
+            sb.AppendLine("            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)");
+            sb.AppendLine("            sock.bind(('0.0.0.0', 8080))");
+            sb.AppendLine("            sock.listen(5)");
+            sb.AppendLine("            sock.settimeout(0.5)");
+            sb.AppendLine("            while not _stop.is_set():");
+            sb.AppendLine("                try:");
+            sb.AppendLine("                    conn, addr = sock.accept()");
+            sb.AppendLine("                    _queue.put(\"tcp_connect\")");
+            sb.AppendLine("                    data = conn.recv(4096)");
+            sb.AppendLine("                    if data:");
+            sb.AppendLine("                        _queue.put(\"tcp_data\")");
+            sb.AppendLine("                    conn.close()");
+            sb.AppendLine("                    _queue.put(\"tcp_disconnected\")");
+            sb.AppendLine("                except socket.timeout:");
+            sb.AppendLine("                    pass");
+            sb.AppendLine("        except:");
+            sb.AppendLine("            pass");
+            sb.AppendLine();
+            sb.AppendLine("    threading.Thread(target=_tcp_source, daemon=True).start()");
+        }
+        sb.AppendLine();
+        sb.AppendLine($"    current_state = {firstState}()");
+        sb.AppendLine("    current_state.enter()");
+        sb.AppendLine("    try:");
+        sb.AppendLine("        while not _stop.is_set():");
+        sb.AppendLine("            try:");
+        sb.AppendLine("                event = _queue.get(timeout=0.2)");
+        sb.AppendLine("                if event == \"exit\":");
+        sb.AppendLine("                    current_state.exit()");
+        sb.AppendLine("                    break");
+        sb.AppendLine("                next_state = current_state.handle_event(event)");
+        sb.AppendLine("                if next_state is not None:");
+        sb.AppendLine("                    current_state.exit()");
+        sb.AppendLine("                    current_state = next_state");
+        sb.AppendLine("                    current_state.enter()");
+        sb.AppendLine("            except Empty:");
+        sb.AppendLine("                pass");
+        sb.AppendLine("    except (EOFError, KeyboardInterrupt):");
+        sb.AppendLine("        current_state.exit()");
+        sb.AppendLine("        pass");
     }
 }

@@ -89,6 +89,29 @@ if (args.Length > 0 && args[0] == "health")
     return BPlusHealth.Run(healthInput, healthFlags);
 }
 
+// Support: bpc profile file.bp 1000  or  bpc file.bp profile 1000
+int profIdx = -1;
+for (int i = 0; i < args.Length; i++)
+    if (args[i] == "profile") { profIdx = i; break; }
+if (profIdx >= 0)
+{
+    string? profFile = null;
+    int profRuns = 1000;
+    for (int i = 0; i < args.Length; i++)
+    {
+        if ((args[i].EndsWith(".bp") || args[i].EndsWith(".bplus")) && File.Exists(args[i]))
+            profFile = args[i];
+        if (int.TryParse(args[i], out var n) && n > 0)
+            profRuns = n;
+    }
+    if (profFile == null)
+    {
+        Console.Error.WriteLine("Usage: bpc profile <file.bp> [runs]");
+        return 1;
+    }
+    return BPlusProfileRunner.Run(profFile, profRuns);
+}
+
 // Support: bpc bench file.bp  or  bpc file.bp bench
 int benchIdx = -1;
 for (int i = 0; i < args.Length; i++)

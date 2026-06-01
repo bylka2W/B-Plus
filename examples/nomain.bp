@@ -1,0 +1,11 @@
+﻿context {
+    var counter: int = 0
+}
+
+state Idle {
+    on timer -> Active
+}
+
+state Active {
+    on timer -> Idle
+}
