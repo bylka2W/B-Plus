@@ -89,6 +89,28 @@ if (args.Length > 0 && args[0] == "health")
     return BPlusHealth.Run(healthInput, healthFlags);
 }
 
+// Support: bpc bench file.bp  or  bpc file.bp bench
+int benchIdx = -1;
+for (int i = 0; i < args.Length; i++)
+    if (args[i] == "bench") { benchIdx = i; break; }
+if (benchIdx >= 0)
+{
+    string? benchFile = null;
+    int benchIter = 100000;
+    for (int i = 0; i < args.Length; i++)
+    {
+        if ((args[i].EndsWith(".bp") || args[i].EndsWith(".bplus")) && File.Exists(args[i]))
+            benchFile = args[i];
+        if (args[i] == "--iter" && i + 1 < args.Length) int.TryParse(args[++i], out benchIter);
+    }
+    if (benchFile == null)
+    {
+        Console.Error.WriteLine("Usage: bpc bench <file.bp> [--iter N]");
+        return 1;
+    }
+    return BPlusBenchRunner.Run(benchFile, benchIter);
+}
+
 // Support: bpc diff a.bp b.bp  or  bpc a.bp b.bp diff  or  bpc a.bp diff b.bp
 int diffIdx = -1;
 for (int i = 0; i < args.Length; i++)
