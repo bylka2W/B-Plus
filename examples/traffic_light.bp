@@ -1,0 +1,26 @@
+// Traffic light with context vars and guards
+
+context {
+    var cars_waiting: int = 0
+    var pedestrian_waiting: bool = false
+}
+
+state Red {
+    on timer -> Green
+    enter { print("Red → Green") }
+}
+
+state Green {
+    on timer -> Yellow
+    enter { print("Green → Yellow") }
+}
+
+state Yellow {
+    on timer -> Red
+    enter { print("Yellow → Red") }
+    exit { cars_waiting = 0; pedestrian_waiting = false }
+}
+
+entry main() {
+    print("Traffic light started")
+}
