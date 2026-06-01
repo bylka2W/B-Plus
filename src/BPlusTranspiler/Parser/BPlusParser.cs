@@ -103,6 +103,16 @@ public partial class BPlusParser
                     var gk = ParseGraphicsKernel();
                     if (gk != null) program.GraphicsKernels.Add(gk);
                 }
+                else if (annotations.Any(a => a.Name == "compute_kernel"))
+                {
+                    var gk = ParseGpuKernel();
+                    if (gk != null) program.ComputeShaders.Add(gk);
+                }
+                else if (annotations.Any(a => a.Name == "scientific_kernel"))
+                {
+                    var sk = ParseScientificKernel();
+                    if (sk != null) program.ScientificKernels.Add(sk);
+                }
                 else if (annotations.Any(a => a.Name == "blockchain"))
                 {
                     var chain = ParseBlockchain();
@@ -164,6 +174,10 @@ public partial class BPlusParser
                     {
                         var network = ParseNetwork(corporatePrefix: true);
                         if (network != null) program.Networks.Add(network);
+                    }
+                    else if (_lexer.Pos >= _lexer.Src.Length)
+                    {
+                        program.StandaloneAnnotations.AddRange(annotations);
                     }
                     else
                     {
@@ -1596,9 +1610,9 @@ return entries;
     private ScientificKernelDecl? ParseScientificKernel()
     {
         if (Peek("scientific_kernel"))
-            _lexer.Pos += 16;
-        else if (Peek("@scientific_kernel"))
             _lexer.Pos += 17;
+        else if (Peek("@scientific_kernel"))
+            _lexer.Pos += 18;
 
         SkipWs();
         var name = ParseWord();
@@ -1612,7 +1626,7 @@ return entries;
             SkipWs();
             if (Peek("tensor_mode:"))
             {
-                _lexer.Pos += 11;
+                _lexer.Pos += 12;
                 SkipWs();
                 var mode = ParseWord().ToUpper();
                 sk.TensorMode = mode switch
@@ -1630,7 +1644,7 @@ return entries;
             }
             else if (Peek("interval:"))
             {
-                _lexer.Pos += 8;
+                _lexer.Pos += 9;
                 SkipWs();
                 if (_lexer.Src[_lexer.Pos] == '[')
                 {
@@ -2114,7 +2128,10 @@ return entries;
 
     private ComputeShaderDecl? ParseGpuKernel()
     {
-        Expect("compute_kernel");
+        if (Peek("compute_kernel"))
+            _lexer.Pos += 14;
+        else if (Peek("@compute_kernel"))
+            _lexer.Pos += 15;
         SkipWs();
         var name = ParseWord();
         var cs = new ComputeShaderDecl { Name = name };
