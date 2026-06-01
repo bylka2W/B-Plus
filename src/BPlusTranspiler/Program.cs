@@ -89,14 +89,27 @@ if (args.Length > 0 && args[0] == "health")
     return BPlusHealth.Run(healthInput, healthFlags);
 }
 
-if (args.Length > 0 && args[0] == "diff")
+// Support: bpc diff a.bp b.bp  or  bpc a.bp b.bp diff  or  bpc a.bp diff b.bp
+int diffIdx = -1;
+for (int i = 0; i < args.Length; i++)
+    if (args[i] == "diff") { diffIdx = i; break; }
+if (diffIdx >= 0)
 {
-    if (args.Length < 3)
+    string? a = null, b = null;
+    foreach (var arg in args)
     {
-        Console.Error.WriteLine("Usage: bpc diff <file_a.bp> <file_b.bp>");
+        if (arg.EndsWith(".bp") || arg.EndsWith(".bplus"))
+        {
+            if (a == null) a = arg;
+            else if (b == null) b = arg;
+        }
+    }
+    if (a == null || b == null)
+    {
+        Console.Error.WriteLine("Usage: bpc diff <old.bp> <new.bp>");
         return 1;
     }
-    return BPlusDiff.Run(args[1], args[2]);
+    return BPlusDiff.Run(a, b);
 }
 
 if (args.Length > 0 && args[0] == "build")
