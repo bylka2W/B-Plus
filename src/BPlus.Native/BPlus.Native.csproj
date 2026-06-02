@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>BPlus.Native</RootNamespace>
+    <AssemblyName>BPlus.Native</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\BPlus.Core\BPlus.Core.csproj" />
+    <ProjectReference Include="..\BPlus.Targets\BPlus.Targets.csproj" />
+    <ProjectReference Include="..\BPlus.Tooling\BPlus.Tooling.csproj" />
+  </ItemGroup>
+</Project>

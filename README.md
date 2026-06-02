@@ -336,6 +336,21 @@ bpc health [dir] [flags]        # project health analysis
 bpc diff <a.bp> <b.bp>          # semantic diff (also: bpc a.bp b.bp diff)
 bpc bench <file.bp> [--iter N] # benchmark performance (default 100K)
 bpc profile <file.bp> [runs]   # transition profile (default 1000)
+
+## Project Structure
+```
+BPlus.sln
+├── BPlus.Core/        — AST, Parser, Shared utilities
+├── BPlus.Targets/     — Code generators (Python, C++, C#, Go, Rust, ...)
+├── BPlus.Runtime/     — Runtime support (hardware probe, adaptive)
+├── BPlus.Native/      — Native compilation (metal, PGO, LLVM)
+├── BPlus.Shader/      — GPU shaders (GLSL, HLSL, SPIR-V)
+├── BPlus.Tooling/     — Dev tools (diff, bench, profile, docs)
+├── BPlus.Lsp/         — Language Server Protocol
+├── BPlus.Debugger/    — Debug Adapter Protocol
+└── BPlus.Cli/         — Entry point (bpc)
+```
+Build: `dotnet build BPlus.sln`
 bpc watch <dir> [--target ...]  # watch mode — auto-rebuild
 ```
 

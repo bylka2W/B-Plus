@@ -1,7 +1,8 @@
 # Session Summary
 
-## Compile targets
-- `dotnet run --project src\BPlusTranspiler -- hello.bp` — transpile hello.bp
+## Compile targets (multi-module)
+- `dotnet build BPlus.sln` — build all projects
+- `dotnet run --project src\BPlus.Cli -- hello.bp` — transpile hello.bp (entry point)
 - `compile-metal.bat` — full LLVM→.exe pipeline (llc → lld-link)
 - `src\zig-bpc\bpc-zig.exe hello.bp` — Zig transpiler (hello.bp → output.zig)
 - `zig build-obj output.zig` — output.zig → output.obj
@@ -38,7 +39,7 @@
 `hello.bp` → BPlusTranspiler (LlvmGenMetal.cs) → `gen_metal/kernels_metal.ll` → llc → `.obj` → lld-link + legacy_stdio.obj → `gen_metal/bplus_metal_output.exe`
 
 ## Profile
-- `dotnet run --project src\BPlusTranspiler -- profile examples\traffic_light.bp 1000` — transition profiling
+- `dotnet run --project src\BPlus.Cli -- profile examples\traffic_light.bp 1000` — transition profiling
 
 ## Test commands
 ```powershell
