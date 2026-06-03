@@ -1,0 +1,2 @@
+state Idle { on go -> Running }
+state Running { on stop -> Idle }

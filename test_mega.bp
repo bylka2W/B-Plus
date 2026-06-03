@@ -1,0 +1,60 @@
+enum Direction { Up, Down, Left, Right }
+
+context {
+    var max_hp: int = 100
+    var debug_mode: bool = false
+    var player_name: string = "hero"
+}
+
+@simd_width(512)
+@simd_unroll(8)
+@simd_gather
+kernel process_image(src: Image[1080, 1920]) -> Image[2160, 3840]
+    touches: reads[src], writes[output]
+    body: src |> relu |> shuffle >> output
+
+pipeline image_pipeline {
+    stage: grayscale
+    stage: contrast
+    stage: sharpen
+}
+
+state Idle {
+    var hp: int = max_hp
+    var dir: Direction = Up
+    @hot(0.9)
+    on start -> Running
+    enter { }
+    @cold(0.01)
+    on error -> Dead
+    enter { }
+    on move -> Idle { dir = Left }
+}
+
+state Running {
+    var speed: int = 10
+    var pos: int = 0
+    @hot(0.7)
+    on hit -> Running { hp = hp - 5; speed = speed + 1 }
+    on hit [hp <= 0] -> Dead
+    @hot(0.2)
+    on heal -> Running { hp = hp + 10 }
+    on stop -> Idle
+    on jump [speed >= 5] -> Running { pos = pos + speed }
+    enter { speed = 10 }
+    exit { speed = 0 }
+}
+
+state Dead {
+    on restart -> Idle
+    enter { hp = max_hp }
+}
+
+parallel {
+    update_ai()
+    update_physics()
+    update_render()
+}
+
+entry main() {
+}

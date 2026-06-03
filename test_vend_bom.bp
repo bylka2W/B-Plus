@@ -1,0 +1,4 @@
+﻿context { var x: int = 5 }
+state Idle { on go -> Running }
+state Running { on stop -> Idle }
+entry main() { }

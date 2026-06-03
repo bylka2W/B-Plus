@@ -1,0 +1,2 @@
+﻿state Idle { on go -> Idle }
+entry main() { }

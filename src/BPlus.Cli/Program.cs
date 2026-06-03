@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 using BPlus.Core;
 using BPlus.Core.Algorithm;
@@ -12,6 +13,15 @@ using BPlus.Runtime;
 using BPlus.Targets.Generators;
 using BPlus.Targets.Plugins;
 using BPlus.Tooling;
+
+// Read a .bp source file, stripping BOM if present
+static string ReadSourceFile(string path)
+{
+    var bytes = File.ReadAllBytes(path);
+    if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+        return Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
+    return Encoding.UTF8.GetString(bytes);
+}
 
 static void PrintParseError(ParseException ex)
 {
@@ -258,7 +268,7 @@ if (args.Length > 0 && args[0] == "bench")
 
     try
     {
-        var benchSrc = File.ReadAllText(benchInput);
+        var benchSrc = ReadSourceFile(benchInput);
         var benchProg = new BPlusParser().Parse(benchSrc);
         if (benchOptFlags.HasAny && (benchOptFlags.Optimize || benchOptFlags.DeadElim || benchOptFlags.ConstFold || benchOptFlags.Dedup))
             benchProg = BPlusOptimizer.Optimize(benchProg);
@@ -334,7 +344,7 @@ if (args.Contains("--wmo"))
     {
         try
         {
-            var wmoSrc = File.ReadAllText(bpFile);
+            var wmoSrc = ReadSourceFile(bpFile);
             var wmoProg = new BPlusParser().Parse(wmoSrc);
 
             void Collect(StateDefNode s) { allStates.Add(s); allTransitions.AddRange(s.Transitions); foreach (var ns in s.NestedStates) Collect(ns); }
@@ -380,7 +390,7 @@ if (args.Length > 0 && (args[0] == "debug" || args[0] == "dbg"))
     }
     try
     {
-        var src = File.ReadAllText(dbgInput);
+        var src = ReadSourceFile(dbgInput);
         var prog = new BPlusParser().Parse(src);
         return BPlusInteractiveDebugger.Run(prog, dbgInput);
     }
@@ -470,7 +480,7 @@ if (args.Length > 0 && args[0] == "format")
     }
     var fmtCheckOnly = args.Contains("--check");
 
-    var fmtSrc = File.ReadAllText(fmtInput);
+    var fmtSrc = ReadSourceFile(fmtInput);
     var fmtFormatted = BPlusFormatter.Format(fmtSrc);
 
     if (fmtCheckOnly)
@@ -506,7 +516,7 @@ if (args.Length > 0 && (args[0] == "docs" || (args[0].EndsWith(".bp") && args.Le
 
     try
     {
-        var docsSrc = File.ReadAllText(docsInput);
+        var docsSrc = ReadSourceFile(docsInput);
         var docsProg = new BPlusParser().Parse(docsSrc);
         var title = Path.GetFileNameWithoutExtension(docsInput);
         BPlusDocGenerator.Generate(docsProg, docsOutput, title);
@@ -531,7 +541,7 @@ if (args.Length > 0 && (args[0] == "--visualize" || args[0] == "--vis"))
     for (int i = 2; i < args.Length; i++)
         if (args[i] == "--output" && i + 1 < args.Length) visOutput = args[++i];
 
-    var visSrc = File.ReadAllText(visInput);
+    var visSrc = ReadSourceFile(visInput);
     var visParser = new BPlusParser();
     try
     {
@@ -725,7 +735,7 @@ if (args.Any(a => a == "--ai=architect"))
         Console.Error.WriteLine("Usage: bpc <input.bp> --ai=architect [--ai-dry-run]");
         return 1;
     }
-    string archSrc = File.ReadAllText(input);
+    string archSrc = ReadSourceFile(input);
     var archParser = new BPlusParser();
     var archProg = archParser.Parse(archSrc);
     bool dryRun = args.Contains("--ai-dry-run");
@@ -741,7 +751,7 @@ if (args.Contains("--ai-dry-run") && !args.Any(a => a == "--ai=architect"))
         Console.Error.WriteLine("Usage: bpc <input.bp> --ai-dry-run");
         return 1;
     }
-    string drySrc = File.ReadAllText(input);
+    string drySrc = ReadSourceFile(input);
     var dryParser = new BPlusParser();
     var dryProg = dryParser.Parse(drySrc);
     var dryProfiles = AiArchitect.ProfileTransitions(dryProg);
@@ -774,7 +784,7 @@ if (args.Contains("--ilp"))
         Console.Error.WriteLine("Usage: bpc <input.bp> --ilp");
         return 1;
     }
-    var srcIlp = File.ReadAllText(input);
+    var srcIlp = ReadSourceFile(input);
     var parserIlp = new BPlusParser();
     var progIlp = parserIlp.Parse(srcIlp);
     var ilpScores = IlpAnalyzer.Analyze(progIlp);
@@ -789,7 +799,7 @@ if (args.Contains("--store-fwd"))
         Console.Error.WriteLine("Usage: bpc <input.bp> --store-fwd");
         return 1;
     }
-    var srcSf = File.ReadAllText(input);
+    var srcSf = ReadSourceFile(input);
     var parserSf = new BPlusParser();
     var progSf = parserSf.Parse(srcSf);
     var sfIssues = StoreForwardGuard.Analyze(progSf);
@@ -827,7 +837,7 @@ if (args.Contains("--roofline"))
         Console.Error.WriteLine("Usage: bpc <input.bp> --roofline");
         return 1;
     }
-    var srcR = File.ReadAllText(input);
+    var srcR = ReadSourceFile(input);
     var parserR = new BPlusParser();
     var programR = parserR.Parse(srcR);
     var roofResult = RooflineAnalyzer.Analyze(programR);
@@ -927,7 +937,7 @@ if (args.Contains("--l3-heap"))
     Console.WriteLine($"  Heap size: {heapSize / (1024*1024)} MB");
     Console.WriteLine($"  NUMA node: {(numaNode >= 0 ? numaNode.ToString() : "auto")}");
 
-    var srcL3 = File.ReadAllText(input);
+    var srcL3 = ReadSourceFile(input);
     var l3Parser = new BPlusParser();
     var l3Program = l3Parser.Parse(srcL3);
 
@@ -992,7 +1002,7 @@ if (args.Contains("--adaptive"))
     Console.WriteLine("B+ Adaptive Runtime — generating CPU-dispatch code");
     Console.WriteLine();
 
-    var srcAdapt = File.ReadAllText(input);
+    var srcAdapt = ReadSourceFile(input);
     var parserAdapt = new BPlusParser();
     var programAdapt = parserAdapt.Parse(srcAdapt);
 
@@ -1042,7 +1052,7 @@ if (args.Contains("--verify") || args.Contains("--verify-dal-a"))
     Console.WriteLine($"Target Safety Level: {level}");
     Console.WriteLine();
 
-    var srcVer = File.ReadAllText(input);
+    var srcVer = ReadSourceFile(input);
     var parserVer = new BPlusParser();
     var programVer = parserVer.Parse(srcVer);
     var verifier = new FormalVerifier(programVer);
@@ -1069,7 +1079,7 @@ if (args.Contains("--math") || args.Contains("--math-intrinsics"))
     Console.WriteLine("B+ Math Intrinsics — AVX-512 matrix/quaternion/trig generation");
     Console.WriteLine();
 
-    var srcMath = File.ReadAllText(input);
+    var srcMath = ReadSourceFile(input);
     var parserMath = new BPlusParser();
     var programMath = parserMath.Parse(srcMath);
 
@@ -1175,7 +1185,7 @@ if (args.Contains("--branch-hints"))
         Console.Error.WriteLine("Usage: bpc <input.bp> --branch-hints");
         return 1;
     }
-    var bhSrc = File.ReadAllText(input);
+    var bhSrc = ReadSourceFile(input);
     var bhParser = new BPlusParser();
     var bhProg = bhParser.Parse(bhSrc);
     foreach (var state in bhProg.States)
@@ -1194,7 +1204,7 @@ if (args.Contains("--asm-parse"))
         Console.Error.WriteLine("Usage: bpc <input.bp> --asm-parse");
         return 1;
     }
-    var apSrc = File.ReadAllText(input);
+    var apSrc = ReadSourceFile(input);
     var apParser = new BPlusParser();
     var apProg = apParser.Parse(apSrc);
     foreach (var state in apProg.States)
@@ -1219,7 +1229,7 @@ if (args.Contains("--micro-op"))
         Console.Error.WriteLine("Usage: bpc <input.bp> --micro-op");
         return 1;
     }
-    var moSrc = File.ReadAllText(input);
+    var moSrc = ReadSourceFile(input);
     var moParser = new BPlusParser();
     var moProg = moParser.Parse(moSrc);
     foreach (var state in moProg.States)
@@ -1277,7 +1287,7 @@ if (args.Contains("--timing"))
         if (args[i] == "--deadline-us" && i + 1 < args.Length && long.TryParse(args[++i], out var dl))
             deadlineUs = dl;
 
-    var tmSrc = File.ReadAllText(input);
+    var tmSrc = ReadSourceFile(input);
     var tmParser = new BPlusParser();
     var tmProg = tmParser.Parse(tmSrc);
     var engine = new TimingEngine();
@@ -1307,7 +1317,7 @@ if (args.Contains("--x64") || target is "x64" or "linux" or "macos" or "elf")
     Console.WriteLine($"  Input: {input}");
     Console.WriteLine($"  Format: {(generatePE ? "PE (.exe)" : generateELF ? "ELF (.out)" : generateMachO ? "MachO (.app)" : "PE (.exe)")}");
 
-    var src = File.ReadAllText(input);
+    var src = ReadSourceFile(input);
     var x64Parser = new BPlusParser();
     ProgramNode x64Program;
     try
@@ -1463,7 +1473,7 @@ if (!File.Exists(input))
     return 1;
 }
 
-var source = File.ReadAllText(input);
+var source = ReadSourceFile(input);
 var parser = new BPlusParser();
 ProgramNode program;
 try
@@ -1491,7 +1501,7 @@ foreach (var imp in program.Imports)
     string importPath = Path.Combine(inputDir, imp.Path);
     if (File.Exists(importPath))
     {
-        var importSource = File.ReadAllText(importPath);
+        var importSource = ReadSourceFile(importPath);
         var importParser = new BPlusParser();
         try
         {
@@ -1522,6 +1532,8 @@ foreach (var imp in program.Imports)
 // --zig flag: bypass multi-generator pipeline, use C# → JSON → Zig DLL → zig build-exe
 if (optFlags.ZigBackend)
 {
+    if (program.Entries.Count == 0)
+        program.Entries.Add(new EntryDecl { Name = "main" });
     var json = AstSerializer.Serialize(program);
     var zigMode = optFlags.Release ? 1 : 0;
     string zigCode;
@@ -1960,7 +1972,7 @@ static void OnFileChanged(string file, List<string> genArgs, bool cAbi)
     {
         // Debounce: wait a bit for file to be fully written
         Thread.Sleep(100);
-        var src = File.ReadAllText(file);
+        var src = ReadSourceFile(file);
         var parser = new BPlusParser();
         var program = parser.Parse(src);
 
@@ -2038,7 +2050,7 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
     Console.WriteLine("B+ v4.0.0 BETA Metal — NUMA + µarch + ILP + StoreFwd + AutoTune");
     Console.WriteLine();
 
-    var srcRaw = File.ReadAllText(bpFile);
+    var srcRaw = ReadSourceFile(bpFile);
     var src = StripComments(srcRaw);
 
     // Strip @metal { ... } blocks before passing to BPlusParser
@@ -2056,6 +2068,13 @@ static int RunMetal(string bpFile, bool fusion, bool regAlloc, bool unpack, bool
             metalBlocks.Add(new MetalBlock { Config = new MetalConfig { Enabled = true, Tier = tier } });
         else
             metalBlocks[0].Config.Tier = tier;
+    }
+
+    // Auto-generate entry main() if missing (required for linking)
+    if (program.Entries.Count == 0)
+    {
+        program.Entries.Add(new EntryDecl { Name = "main" });
+        Console.WriteLine("  No entry point found — auto-generated empty entry main()");
     }
 
     Console.WriteLine($"Found {program.States.Count} states, {metalBlocks.Count} metal block(s).");
@@ -2371,7 +2390,7 @@ static int RunAI(string bpFile)
     Console.WriteLine();
     Console.WriteLine("Generating metal-annotated output...");
 
-    string src = File.ReadAllText(bpFile);
+    string src = ReadSourceFile(bpFile);
     var metalParser = new MetalParser();
     var blocks = metalParser.ParseMetalBlocks(src);
 
@@ -2702,7 +2721,7 @@ static void RunAlgorithmBenchmark(string? inputFile)
     if (File.Exists(bpFile))
     {
         Console.WriteLine($"Reading {bpFile}...");
-        var bpCode = File.ReadAllText(bpFile);
+        var bpCode = ReadSourceFile(bpFile);
         Console.WriteLine($"  B+ code: {bpCode.Length} chars");
 
         var parser = new BPlusParser();

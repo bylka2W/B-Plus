@@ -1,11 +1,9 @@
 state Idle {
     on start -> Running
-    enter { }
 }
 
 state Running {
     on stop -> Idle
-    enter { }
 }
 
 entry main() {

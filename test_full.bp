@@ -1,0 +1,31 @@
+context { var max_hp: int = 100 }
+
+state Idle {
+    var hp: int = max_hp
+    @hot(0.9)
+    on start -> Running
+    enter { }
+    @cold(0.01)
+    on error -> Dead
+    enter { }
+}
+
+state Running {
+    var speed: int = 10
+    @hot(0.7)
+    on hit -> Running { hp = hp - 5 }
+    on hit [hp <= 0] -> Dead
+    @hot(0.2)
+    on heal -> Running { hp = hp + 10 }
+    on stop -> Idle
+    enter { speed = 10 }
+    exit { speed = 0 }
+}
+
+state Dead {
+    on restart -> Idle
+    enter { hp = max_hp }
+}
+
+entry main() {
+}

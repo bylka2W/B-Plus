@@ -1,0 +1,3 @@
+state Parking { enter { print("A") } on current_rpm 1200 -> Drive }
+state Drive { enter { print("B") } }
+entry main() { }

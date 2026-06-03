@@ -647,6 +647,11 @@ bpc input.bp --metal --unpack
 bpc input.bp --metal --hidden-buffers
 ```
 
+> **Notes:**
+> - If the `.bp` file has no `entry main() { }`, an empty one is auto-generated so linking succeeds.
+> - Files created with PowerShell `Out-File` may contain a UTF-8 BOM (byte order mark). The parser strips it automatically.
+> - In PowerShell, pass the `--metal` flag after `--` separator: `dotnet run --project src\BPlus.Cli -- --metal input.bp`. The trailing backslash (`--metal\`) is **not required** — use `--metal` (no backslash).
+
 ### 7.2 Optimization Modules (30+)
 
 **Core Compilation:**

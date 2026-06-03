@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -66,11 +66,8 @@ public class ExecutableMemory
 public class PEBuilder
 {
     private const ushort MachineX64 = 0x8664;
-    private const ushort MagicPE64 = 0x20b;
+    private const ushort MagicPE32p = 0x20b;
     private const ushort SubsystemConsole = 3;
-    private const uint BaseOfCode = 0x400000;
-    private const uint SizeOfCode = 0x10000;
-    private const uint SizeOfHeaders = 0x200;
 
     public class PEFile
     {
@@ -81,126 +78,114 @@ public class PEBuilder
 
     public PEFile Build(byte[] code, byte[]? data = null, byte[]? rsrc = null)
     {
+        uint fileAlign = 0x200;
+        int codeRounded = (int)((uint)(code.Length + fileAlign - 1) & ~(fileAlign - 1));
+        int dataRounded = data != null ? (int)((uint)(data.Length + fileAlign - 1) & ~(fileAlign - 1)) : 0;
+        uint numSections = 2;
+        uint optHdrSize = 240;
+
+        // Total header size including section headers, file-aligned
+        uint hdrRaw = 0x40 + 4 + 20 + optHdrSize + 16 * 8 + numSections * 40;
+        uint hdrSize = (hdrRaw + fileAlign - 1) & ~(fileAlign - 1);
+
+        uint textRva = 0x1000;
+        uint dataRva = textRva + (uint)codeRounded;
+
         var pe = new List<byte>();
 
-        int codeSize = (code.Length + 0xFFF) & ~0xFFF;
-        int dataSize = data != null ? (data.Length + 0xFFF) & ~0xFFF : 0;
-        int totalSize = 0x1000 + codeSize + dataSize;
+        // ── DOS Header (64 bytes) ──
+        var dos = new byte[0x40];
+        dos[0] = 0x4D; dos[1] = 0x5A;
+        BitConverter.GetBytes(0x40u).CopyTo(dos, 0x3C);
+        pe.AddRange(dos);
 
-        var dosHeader = new byte[0x80];
-        dosHeader[0] = 0x4D; dosHeader[1] = 0x5A;
-        Array.Copy(BitConverter.GetBytes(0x80), 0, dosHeader, 0x3C, 4);
-        pe.AddRange(dosHeader);
-
+        // ── PE Signature ──
         pe.AddRange(new byte[] { 0x50, 0x45, 0x00, 0x00 });
+
+        // ── COFF Header (20 bytes) ──
         pe.AddRange(BitConverter.GetBytes(MachineX64));
-        pe.AddRange(BitConverter.GetBytes((ushort)1));
-        pe.AddRange(new byte[] { 0, 0 });
-        pe.AddRange(BitConverter.GetBytes((ushort)0));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((ushort)0xF0));
-        pe.AddRange(BitConverter.GetBytes((ushort)0));
+        pe.AddRange(BitConverter.GetBytes((ushort)numSections));
+        pe.AddRange(new byte[4]);                               // TimeDateStamp
+        pe.AddRange(new byte[4]);                               // PointerToSymbolTable
+        pe.AddRange(new byte[4]);                               // NumberOfSymbols
+        pe.AddRange(BitConverter.GetBytes(optHdrSize));
+        pe.AddRange(BitConverter.GetBytes((ushort)0x22));
 
-        int sections = 2 + (data != null ? 1 : 0);
-        int optHeaderSize = 0xF0;
-        int fileHeaderSize = 20 + sections * 40;
+        // ── Optional Header PE32+ (240 bytes) ──
+        pe.AddRange(BitConverter.GetBytes(MagicPE32p));
+        pe.AddRange(new byte[2]);                               // Linker version
+        pe.AddRange(BitConverter.GetBytes((uint)codeRounded));  // SizeOfCode
+        pe.AddRange(BitConverter.GetBytes((uint)(dataRounded > 0 ? dataRounded : 0)));
+        pe.AddRange(new byte[4]);                               // SizeOfUninitializedData
+        pe.AddRange(BitConverter.GetBytes(textRva));           // AddressOfEntryPoint
+        pe.AddRange(BitConverter.GetBytes(textRva));           // BaseOfCode
+        pe.AddRange(BitConverter.GetBytes(0x140000000UL));     // ImageBase
+        pe.AddRange(BitConverter.GetBytes(0x1000u));            // SectionAlignment
+        pe.AddRange(BitConverter.GetBytes(fileAlign));         // FileAlignment
+        pe.AddRange(BitConverter.GetBytes((ushort)6));          // MajorOSVersion
+        pe.AddRange(new byte[2]);                               // MinorOSVersion
+        pe.AddRange(new byte[2]);                               // MajorImageVersion
+        pe.AddRange(new byte[2]);                               // MinorImageVersion
+        pe.AddRange(BitConverter.GetBytes((ushort)6));          // MajorSubsystemVersion
+        pe.AddRange(new byte[2]);                               // MinorSubsystemVersion
+        pe.AddRange(new byte[4]);                               // Win32VersionValue
+        uint sizeOfImage = hdrSize + (uint)codeRounded + (uint)dataRounded;
+        pe.AddRange(BitConverter.GetBytes(sizeOfImage));       // SizeOfImage
+        pe.AddRange(BitConverter.GetBytes(hdrSize));           // SizeOfHeaders
+        pe.AddRange(new byte[4]);                               // CheckSum
+        pe.AddRange(BitConverter.GetBytes(SubsystemConsole));
+        pe.AddRange(BitConverter.GetBytes((ushort)0x8160));
+        pe.AddRange(BitConverter.GetBytes(0x100000UL));         // SizeOfStackReserve
+        pe.AddRange(BitConverter.GetBytes(0x1000UL));           // SizeOfStackCommit
+        pe.AddRange(BitConverter.GetBytes(0x100000UL));         // SizeOfHeapReserve
+        pe.AddRange(BitConverter.GetBytes(0x1000UL));           // SizeOfHeapCommit
+        pe.AddRange(new byte[4]);                               // LoaderFlags
+        pe.AddRange(BitConverter.GetBytes(16u));                // NumberOfRvaAndSizes
+        for (int i = 0; i < 16; i++) pe.AddRange(new byte[8]); // Data directories
 
-        pe.AddRange(BitConverter.GetBytes((uint)0x00000101));
-        pe.AddRange(BitConverter.GetBytes((uint)0x400000));
-        pe.AddRange(BitConverter.GetBytes((uint)0x1000));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((uint)0x200));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((uint)0x140000));
-        pe.AddRange(BitConverter.GetBytes((long)0));
-        pe.AddRange(BitConverter.GetBytes(0L));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes((uint)0x10000));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((ushort)SubsystemConsole));
-        pe.AddRange(BitConverter.GetBytes((ushort)0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((ushort)0));
-        pe.AddRange(BitConverter.GetBytes((ushort)0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes((uint)0x100000));
-        pe.AddRange(BitConverter.GetBytes((uint)0x1000));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((uint)0));
-        pe.AddRange(BitConverter.GetBytes((ushort)0));
-        pe.AddRange(BitConverter.GetBytes((ushort)0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes(0));
-        pe.AddRange(BitConverter.GetBytes((uint)16));
-
-        long headerSize = 0x80 + fileHeaderSize + optHeaderSize;
-        while (pe.Count < headerSize) pe.Add(0);
-
-        long textVA = 0x1000;
-        long textFileOff = pe.Count;
-
+        // ── Section headers ──
+        // .text
         var textSec = new byte[40];
-        byte[] name = Encoding.ASCII.GetBytes(".text");
-        Array.Copy(name, 0, textSec, 0, name.Length);
-        Array.Copy(BitConverter.GetBytes(code.Length), 0, textSec, 8, 4);
-        Array.Copy(BitConverter.GetBytes((uint)textVA), 0, textSec, 12, 4);
-        Array.Copy(BitConverter.GetBytes((uint)textFileOff), 0, textSec, 16, 4);
-        Array.Copy(BitConverter.GetBytes((uint)code.Length), 0, textSec, 20, 4);
-        Array.Copy(BitConverter.GetBytes(0), 0, textSec, 24, 4);
-        Array.Copy(BitConverter.GetBytes(0), 0, textSec, 28, 4);
-        Array.Copy(BitConverter.GetBytes(0), 0, textSec, 32, 4);
-        Array.Copy(BitConverter.GetBytes(0x60000020), 0, textSec, 36, 4);
+        Encoding.ASCII.GetBytes(".text\0\0\0").CopyTo(textSec, 0);
+        BitConverter.GetBytes((uint)code.Length).CopyTo(textSec, 8);   // VirtualSize
+        BitConverter.GetBytes((uint)textRva).CopyTo(textSec, 12);       // VirtualAddress
+        BitConverter.GetBytes((uint)codeRounded).CopyTo(textSec, 16);  // SizeOfRawData
+        BitConverter.GetBytes((uint)hdrSize).CopyTo(textSec, 20);       // PointerToRawData
+        BitConverter.GetBytes(0x60000020u).CopyTo(textSec, 36);        // CODE | EXECUTE | READ
         pe.AddRange(textSec);
 
-        long dataVA = textVA + codeSize;
-        long dataFileOff = textFileOff + codeSize;
-
+        // .data
         var dataSec = new byte[40];
-        byte[] dname = Encoding.ASCII.GetBytes(".data");
-        Array.Copy(dname, 0, dataSec, 0, dname.Length);
-        Array.Copy(BitConverter.GetBytes(data != null ? data.Length : 0), 0, dataSec, 8, 4);
-        Array.Copy(BitConverter.GetBytes((uint)dataVA), 0, dataSec, 12, 4);
-        Array.Copy(BitConverter.GetBytes((uint)dataFileOff), 0, dataSec, 16, 4);
-        Array.Copy(BitConverter.GetBytes(data != null ? data.Length : 0), 0, dataSec, 20, 4);
-        Array.Copy(BitConverter.GetBytes(0), 0, dataSec, 24, 4);
-        Array.Copy(BitConverter.GetBytes(0), 0, dataSec, 28, 4);
-        Array.Copy(BitConverter.GetBytes(0), 0, dataSec, 32, 4);
-        Array.Copy(BitConverter.GetBytes(0xC0000040), 0, dataSec, 36, 4);
+        Encoding.ASCII.GetBytes(".data\0\0\0").CopyTo(dataSec, 0);
+        BitConverter.GetBytes((uint)(data?.Length ?? 0)).CopyTo(dataSec, 8);
+        BitConverter.GetBytes((uint)dataRva).CopyTo(dataSec, 12);
+        BitConverter.GetBytes((uint)dataRounded).CopyTo(dataSec, 16);
+        BitConverter.GetBytes((uint)(hdrSize + (uint)codeRounded)).CopyTo(dataSec, 20);
+        BitConverter.GetBytes(0xC0000040u).CopyTo(dataSec, 36);        // DATA | RW
         pe.AddRange(dataSec);
 
-        while (pe.Count < textFileOff) pe.Add(0);
-        pe.AddRange(code);
-        while (pe.Count < dataFileOff) pe.Add(0);
-        if (data != null) pe.AddRange(data);
+        // ── Pad to hdrSize ──
+        while (pe.Count < hdrSize) pe.Add(0);
 
-        return new PEFile { Data = pe.ToArray(), EntryPoint = textVA };
+        // ── Write .text ──
+        pe.AddRange(code);
+        while (pe.Count < hdrSize + (uint)codeRounded) pe.Add(0);
+
+        // ── Write .data ──
+        if (data != null)
+        {
+            while (pe.Count < hdrSize + (uint)codeRounded) pe.Add(0);
+            pe.AddRange(data);
+        }
+
+        return new PEFile { Data = pe.ToArray(), EntryPoint = textRva };
     }
 
     public void WriteFile(PEFile pe, string path)
     {
         File.WriteAllBytes(path, pe.Data);
         pe.Path = path;
-    }
+}
 }
 
 public class JITCompiler
