@@ -1333,7 +1333,8 @@ if (args.Contains("--x64") || target is "x64" or "linux" or "macos" or "elf")
     Directory.CreateDirectory(output);
 
     var gen = new BPlus.Targets.Generators.X64CodeGen();
-    byte[] machineCode = gen.Generate(x64Program);
+    var x64Result = gen.Generate(x64Program);
+    byte[] machineCode = x64Result.Code;
 
     var exeName = Path.GetFileNameWithoutExtension(input);
     string exePath;
@@ -1374,7 +1375,9 @@ if (args.Contains("--x64") || target is "x64" or "linux" or "macos" or "elf")
     else
     {
         var peBuilder = new BPlus.Core.Algorithm.PEBuilder();
-        var peFile = peBuilder.Build(machineCode);
+        var peFile = peBuilder.Build(machineCode,
+            importDirRva: x64Result.ImportDirRva,
+            importDirSize: x64Result.IdatSize);
         exePath = Path.Combine(output, exeName + ".exe");
         peBuilder.WriteFile(peFile, exePath);
         Console.WriteLine($"  Generated: {machineCode.Length} bytes of x64 code");

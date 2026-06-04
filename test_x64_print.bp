@@ -1,0 +1,13 @@
+state Idle {
+    on start -> Running
+    enter { print("Entered Idle") }
+}
+
+state Running {
+    on stop -> Idle
+    enter { print("Entered Running") }
+}
+
+entry main() {
+    print("B+ x64 Test - Started")
+}

@@ -76,109 +76,149 @@ public class PEBuilder
         public string Path { get; set; } = "";
     }
 
-    public PEFile Build(byte[] code, byte[]? data = null, byte[]? rsrc = null)
+    public PEFile Build(byte[] code, byte[]? data = null, byte[]? rsrc = null,
+        int importDirRva = 0, int importDirSize = 0)
     {
         uint fileAlign = 0x200;
-        int codeRounded = (int)((uint)(code.Length + fileAlign - 1) & ~(fileAlign - 1));
-        int dataRounded = data != null ? (int)((uint)(data.Length + fileAlign - 1) & ~(fileAlign - 1)) : 0;
-        uint numSections = 2;
-        uint optHdrSize = 240;
+        uint sectAlign = 0x1000;
+        int codeRnd = (code.Length + (int)fileAlign - 1) & ~((int)fileAlign - 1);
+        int dataRnd = data != null ? (data.Length + (int)fileAlign - 1) & ~((int)fileAlign - 1) : 0;
+        int numSections = data != null ? 2 : 1;
+        ushort optHdrSize = 240;
+        ulong imageBase = 0x140000000;
+        uint entryRva = 0x1000;
 
-        // Total header size including section headers, file-aligned
-        uint hdrRaw = 0x40 + 4 + 20 + optHdrSize + 16 * 8 + numSections * 40;
+        // Pre-compute header size with file alignment
+        uint hdrRaw = (uint)(0x40 + 4 + 20 + optHdrSize + 16 * 8 + (uint)numSections * 40);
         uint hdrSize = (hdrRaw + fileAlign - 1) & ~(fileAlign - 1);
 
-        uint textRva = 0x1000;
-        uint dataRva = textRva + (uint)codeRounded;
+        uint textRva = entryRva;
+        uint textFileOff = hdrSize;
+        uint codeRvaRnd = (uint)((code.Length + (int)sectAlign - 1) & ~((int)sectAlign - 1));
+        uint dataRva = data != null ? textRva + codeRvaRnd : 0;
 
-        var pe = new List<byte>();
+        uint sizeOfImage = data != null
+            ? (dataRva + (uint)data.Length + sectAlign - 1) & ~(sectAlign - 1)
+            : (textRva + codeRvaRnd + sectAlign - 1) & ~(sectAlign - 1);
+
+        var ms = new MemoryStream();
+        var bw = new BinaryWriter(ms);
 
         // ── DOS Header (64 bytes) ──
-        var dos = new byte[0x40];
-        dos[0] = 0x4D; dos[1] = 0x5A;
-        BitConverter.GetBytes(0x40u).CopyTo(dos, 0x3C);
-        pe.AddRange(dos);
+        bw.Write(new byte[0x40]);             // zeros
+        ms.Seek(0, SeekOrigin.Begin);
+        bw.Write((byte)0x4D); bw.Write((byte)0x5A);  // MZ
+        ms.Seek(0x3C, SeekOrigin.Begin);
+        bw.Write(0x40u);                      // e_lfanew
+        ms.Seek(0x40, SeekOrigin.Begin);
 
         // ── PE Signature ──
-        pe.AddRange(new byte[] { 0x50, 0x45, 0x00, 0x00 });
+        bw.Write("PE\0\0"u8);
 
         // ── COFF Header (20 bytes) ──
-        pe.AddRange(BitConverter.GetBytes(MachineX64));
-        pe.AddRange(BitConverter.GetBytes((ushort)numSections));
-        pe.AddRange(new byte[4]);                               // TimeDateStamp
-        pe.AddRange(new byte[4]);                               // PointerToSymbolTable
-        pe.AddRange(new byte[4]);                               // NumberOfSymbols
-        pe.AddRange(BitConverter.GetBytes(optHdrSize));
-        pe.AddRange(BitConverter.GetBytes((ushort)0x22));
+        bw.Write(MachineX64);
+        bw.Write((ushort)numSections);
+        bw.Write(0u);                         // TimeDateStamp
+        bw.Write(0u);                         // PointerToSymbolTable
+        bw.Write(0u);                         // NumberOfSymbols
+        bw.Write(optHdrSize);
+        bw.Write((ushort)0x22);               // Characteristics
 
         // ── Optional Header PE32+ (240 bytes) ──
-        pe.AddRange(BitConverter.GetBytes(MagicPE32p));
-        pe.AddRange(new byte[2]);                               // Linker version
-        pe.AddRange(BitConverter.GetBytes((uint)codeRounded));  // SizeOfCode
-        pe.AddRange(BitConverter.GetBytes((uint)(dataRounded > 0 ? dataRounded : 0)));
-        pe.AddRange(new byte[4]);                               // SizeOfUninitializedData
-        pe.AddRange(BitConverter.GetBytes(textRva));           // AddressOfEntryPoint
-        pe.AddRange(BitConverter.GetBytes(textRva));           // BaseOfCode
-        pe.AddRange(BitConverter.GetBytes(0x140000000UL));     // ImageBase
-        pe.AddRange(BitConverter.GetBytes(0x1000u));            // SectionAlignment
-        pe.AddRange(BitConverter.GetBytes(fileAlign));         // FileAlignment
-        pe.AddRange(BitConverter.GetBytes((ushort)6));          // MajorOSVersion
-        pe.AddRange(new byte[2]);                               // MinorOSVersion
-        pe.AddRange(new byte[2]);                               // MajorImageVersion
-        pe.AddRange(new byte[2]);                               // MinorImageVersion
-        pe.AddRange(BitConverter.GetBytes((ushort)6));          // MajorSubsystemVersion
-        pe.AddRange(new byte[2]);                               // MinorSubsystemVersion
-        pe.AddRange(new byte[4]);                               // Win32VersionValue
-        uint sizeOfImage = hdrSize + (uint)codeRounded + (uint)dataRounded;
-        pe.AddRange(BitConverter.GetBytes(sizeOfImage));       // SizeOfImage
-        pe.AddRange(BitConverter.GetBytes(hdrSize));           // SizeOfHeaders
-        pe.AddRange(new byte[4]);                               // CheckSum
-        pe.AddRange(BitConverter.GetBytes(SubsystemConsole));
-        pe.AddRange(BitConverter.GetBytes((ushort)0x8160));
-        pe.AddRange(BitConverter.GetBytes(0x100000UL));         // SizeOfStackReserve
-        pe.AddRange(BitConverter.GetBytes(0x1000UL));           // SizeOfStackCommit
-        pe.AddRange(BitConverter.GetBytes(0x100000UL));         // SizeOfHeapReserve
-        pe.AddRange(BitConverter.GetBytes(0x1000UL));           // SizeOfHeapCommit
-        pe.AddRange(new byte[4]);                               // LoaderFlags
-        pe.AddRange(BitConverter.GetBytes(16u));                // NumberOfRvaAndSizes
-        for (int i = 0; i < 16; i++) pe.AddRange(new byte[8]); // Data directories
+        bw.Write(MagicPE32p);
+        bw.Write((byte)0); bw.Write((byte)0); // Linker version
+        bw.Write((uint)codeRnd);              // SizeOfCode
+        bw.Write(data != null ? (uint)dataRnd : 0u);
+        bw.Write(0u);                         // SizeOfUninitializedData
+        bw.Write(entryRva);                   // AddressOfEntryPoint
+        bw.Write(0x1000u);                    // BaseOfCode
+        bw.Write(imageBase);                  // ImageBase
+        bw.Write(sectAlign);                  // SectionAlignment
+        bw.Write(fileAlign);                  // FileAlignment
+        bw.Write((ushort)6);                  // MajorOSVersion
+        bw.Write((ushort)0);                  // MinorOSVersion
+        bw.Write((ushort)0);                  // MajorImageVersion
+        bw.Write((ushort)0);                  // MinorImageVersion
+        bw.Write((ushort)6);                  // MajorSubsystemVersion
+        bw.Write((ushort)0);                  // MinorSubsystemVersion
+        bw.Write(0u);                         // Win32VersionValue
+        bw.Write(sizeOfImage);                // SizeOfImage
+        bw.Write(hdrSize);                    // SizeOfHeaders
+        bw.Write(0u);                         // CheckSum
+        bw.Write(SubsystemConsole);
+        bw.Write((ushort)0x8160);             // DllCharacteristics
+        bw.Write(0x100000UL);                 // SizeOfStackReserve
+        bw.Write(0x1000UL);                   // SizeOfStackCommit
+        bw.Write(0x100000UL);                 // SizeOfHeapReserve
+        bw.Write(0x1000UL);                   // SizeOfHeapCommit
+        bw.Write(0u);                         // LoaderFlags
+        bw.Write(16u);                        // NumberOfRvaAndSizes
+        // Data directories (8 bytes each: RVA + Size)
+        for (int i = 0; i < 16; i++)
+        {
+            if (i == 1) // IMAGE_DIRECTORY_ENTRY_IMPORT
+            {
+                bw.Write(importDirRva > 0 ? (uint)(textRva + importDirRva) : 0u);
+                bw.Write(importDirSize > 0 ? (uint)importDirSize : 0u);
+            }
+            else
+            {
+                bw.Write(0L);
+            }
+        }
 
         // ── Section headers ──
         // .text
-        var textSec = new byte[40];
-        Encoding.ASCII.GetBytes(".text\0\0\0").CopyTo(textSec, 0);
-        BitConverter.GetBytes((uint)code.Length).CopyTo(textSec, 8);   // VirtualSize
-        BitConverter.GetBytes((uint)textRva).CopyTo(textSec, 12);       // VirtualAddress
-        BitConverter.GetBytes((uint)codeRounded).CopyTo(textSec, 16);  // SizeOfRawData
-        BitConverter.GetBytes((uint)hdrSize).CopyTo(textSec, 20);       // PointerToRawData
-        BitConverter.GetBytes(0x60000020u).CopyTo(textSec, 36);        // CODE | EXECUTE | READ
-        pe.AddRange(textSec);
+        bw.Write(".text\0\0\0"u8);            // Name
+        bw.Write((uint)code.Length);           // VirtualSize
+        bw.Write(textRva);                     // VirtualAddress
+        bw.Write((uint)codeRnd);               // SizeOfRawData
+        bw.Write(textFileOff);                 // PointerToRawData
+        bw.Write(0u);                          // PointerToRelocations
+        bw.Write(0u);                          // PointerToLineNumbers
+        bw.Write((ushort)0);                   // NumberOfRelocations
+        bw.Write((ushort)0);                   // NumberOfLinenumbers
+        bw.Write(0xE0000020u);                 // Characteristics (code+execute+read+write for IAT)
 
-        // .data
-        var dataSec = new byte[40];
-        Encoding.ASCII.GetBytes(".data\0\0\0").CopyTo(dataSec, 0);
-        BitConverter.GetBytes((uint)(data?.Length ?? 0)).CopyTo(dataSec, 8);
-        BitConverter.GetBytes((uint)dataRva).CopyTo(dataSec, 12);
-        BitConverter.GetBytes((uint)dataRounded).CopyTo(dataSec, 16);
-        BitConverter.GetBytes((uint)(hdrSize + (uint)codeRounded)).CopyTo(dataSec, 20);
-        BitConverter.GetBytes(0xC0000040u).CopyTo(dataSec, 36);        // DATA | RW
-        pe.AddRange(dataSec);
+        uint dataFileOff = data != null ? textFileOff + (uint)codeRnd : 0;
 
-        // ── Pad to hdrSize ──
-        while (pe.Count < hdrSize) pe.Add(0);
-
-        // ── Write .text ──
-        pe.AddRange(code);
-        while (pe.Count < hdrSize + (uint)codeRounded) pe.Add(0);
-
-        // ── Write .data ──
         if (data != null)
         {
-            while (pe.Count < hdrSize + (uint)codeRounded) pe.Add(0);
-            pe.AddRange(data);
+            bw.Write(".data\0\0\0"u8);        // Name
+            bw.Write((uint)data.Length);       // VirtualSize
+            bw.Write(dataRva);                 // VirtualAddress
+            bw.Write((uint)dataRnd);           // SizeOfRawData
+            bw.Write(dataFileOff);             // PointerToRawData
+            bw.Write(0u);                      // PointerToRelocations
+            bw.Write(0u);                      // PointerToLineNumbers
+            bw.Write((ushort)0);               // NumberOfRelocations
+            bw.Write((ushort)0);               // NumberOfLinenumbers
+            bw.Write(0xC0000040u);             // Characteristics
         }
 
-        return new PEFile { Data = pe.ToArray(), EntryPoint = textRva };
+        // ── Pad to hdrSize ──
+        while (ms.Position < hdrSize)
+            bw.Write((byte)0);
+
+        // ── .text code ──
+        bw.Write(code);
+        while (ms.Position < textFileOff + (uint)codeRnd)
+            bw.Write((byte)0);
+
+        // ── .data ──
+        if (data != null)
+        {
+            while (ms.Position < dataFileOff)
+                bw.Write((byte)0);
+            bw.Write(data);
+            while (ms.Position < dataFileOff + (uint)dataRnd)
+                bw.Write((byte)0);
+        }
+
+        bw.Flush();
+        var pe = ms.ToArray();
+
+        return new PEFile { Data = pe, EntryPoint = textRva };
     }
 
     public void WriteFile(PEFile pe, string path)

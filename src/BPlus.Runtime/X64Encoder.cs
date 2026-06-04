@@ -48,20 +48,23 @@ public static class X64Encoder
                 int reg = operands[0].Reg;
                 int baseReg = operands[1].BaseReg;
                 if (reg < 0 || reg > 15 || baseReg < 0 || baseReg > 15) throw new ArgumentException("Invalid registers");
-                bool hasIndex = operands[1].IndexReg >= 0;
-                int scale = operands[1].Scale;
-                int disp = operands[1].Disp;
-
-                int rexB = (baseReg >> 3) & 1;
-                int rexR = (reg >> 3) & 1;
-                int rexX = hasIndex ? (operands[1].IndexReg >> 3) & 1 : 0;
-                bytes.Add((byte)(0x48 + rexB + (rexR << 2) + (rexX << 1))); // REX.W
-                bytes.Add(0x8B);
-                byte modrm = (byte)(0x04 | ((reg & 7) << 3) | (baseReg & 7)); // mod=00, rm=100 (SIB)
-                bytes.Add(modrm);
-                byte sib = (byte)(((scale & 3) << 6) | ((operands[1].IndexReg >= 0 ? operands[1].IndexReg : 4) & 7) | ((baseReg & 7) << 3));
-                bytes.Add(sib);
-                AddDisplacement(bytes, disp);
+                if (baseReg == 255) // RIP-relative
+                {
+                    int disp = operands[1].Disp;
+                    bytes.Add((byte)(0x48 + ((reg >> 3) & 1)));
+                    bytes.Add(0x8B);
+                    bytes.Add((byte)(0x05 + ((reg & 7) << 3)));
+                    bytes.AddRange(BitConverter.GetBytes(disp));
+                }
+                else
+                {
+                    int disp = operands[1].Disp;
+                    int rexB = (baseReg >> 3) & 1;
+                    int rexR = (reg >> 3) & 1;
+                    bytes.Add((byte)(0x48 + rexB + (rexR << 2)));
+                    bytes.Add(0x8B);
+                    EncodeModrmSib(bytes, reg, baseReg, disp);
+                }
                 break;
             }
 
@@ -74,13 +77,9 @@ public static class X64Encoder
                 int disp = operands[0].Disp;
                 int rexB = (baseReg >> 3) & 1;
                 int rexR = (src >> 3) & 1;
-                bytes.Add((byte)(0x48 + rexB + (rexR << 2))); // REX.W + REX.B + REX.R
+                bytes.Add((byte)(0x48 + rexB + (rexR << 2)));
                 bytes.Add(0x89);
-                byte modrm = (byte)(0x04 + ((src & 7) << 3) + (baseReg & 7)); // mod=00, rm=100 (SIB)
-                bytes.Add(modrm);
-                byte sib = (byte)((4 << 3) | (baseReg & 7)); // scale=01, index=r12, base
-                bytes.Add(sib);
-                AddDisplacement(bytes, disp);
+                EncodeModrmSib(bytes, src, baseReg, disp);
                 break;
             }
 
@@ -412,16 +411,73 @@ public static class X64Encoder
             {
                 int dst = operands[0].Reg;
                 int baseReg = operands[1].BaseReg;
-                int disp = operands[1].Disp;
-                int rexB = (baseReg >> 3) & 1;
                 int rexR = (dst >> 3) & 1;
-                bytes.Add((byte)(0x48 + rexB + (rexR << 2)));
-                bytes.Add(0x8D);
-                byte modrm = (byte)(0x04 + ((dst & 7) << 3) + (baseReg & 7));
-                bytes.Add(modrm);
-                byte sib = (byte)((4 << 3) | (baseReg & 7));
-                bytes.Add(sib);
-                AddDisplacement(bytes, disp);
+
+                if (baseReg == 255) // RIP-relative
+                {
+                    int disp = operands[1].Disp;
+                    bytes.Add((byte)(0x48 + (rexR << 2)));
+                    bytes.Add(0x8D);
+                    bytes.Add((byte)(0x05 + ((dst & 7) << 3)));
+                    bytes.AddRange(BitConverter.GetBytes(disp));
+                }
+                else
+                {
+                    int disp = operands[1].Disp;
+                    int rexB = (baseReg >> 3) & 1;
+                    bytes.Add((byte)(0x48 + rexB + (rexR << 2)));
+                    bytes.Add(0x8D);
+                    EncodeModrmSib(bytes, dst, baseReg, disp);
+                }
+                break;
+            }
+
+            case OpCode.MOVZX_R64_MEM8:
+            {
+                // movzx r64, byte [mem]
+                int dst = operands[0].Reg;
+                int baseReg = operands[1].BaseReg;
+                int disp = operands[1].Disp;
+                int rexR = (dst >> 3) & 1;
+
+                if (baseReg == 255) // RIP-relative
+                {
+                    bytes.Add((byte)(0x48 + (rexR << 2)));
+                    bytes.Add(0x0F);
+                    bytes.Add(0xB6);
+                    bytes.Add((byte)(0x05 + ((dst & 7) << 3)));
+                    bytes.AddRange(BitConverter.GetBytes(disp));
+                }
+                else
+                {
+                    int rexB = (baseReg >> 3) & 1;
+                    bytes.Add((byte)(0x48 + rexB + (rexR << 2)));
+                    bytes.Add(0x0F);
+                    bytes.Add(0xB6);
+                    EncodeModrmSib(bytes, dst, baseReg, disp);
+                }
+                break;
+            }
+
+            case OpCode.CALL_RIPDISP:
+            {
+                // call [rip+disp32] — FF 15 rel32
+                int disp = (int)operands[0].Imm32;
+                bytes.Add(0xFF);
+                bytes.Add(0x15);
+                bytes.AddRange(BitConverter.GetBytes(disp));
+                break;
+            }
+
+            case OpCode.MOV_R64_MEM_RIP:
+            {
+                // mov r64, [rip+disp32] — 48 8B 05 rel32 (or 8B 05 for 32-bit)
+                int reg = operands[0].Reg;
+                int disp = (int)operands[1].Imm32;
+                bytes.Add((byte)(0x48 + ((reg >> 3) & 1))); // REX.W
+                bytes.Add(0x8B);
+                bytes.Add((byte)(0x05 + ((reg & 7) << 3))); // mod=00, rm=101
+                bytes.AddRange(BitConverter.GetBytes(disp));
                 break;
             }
 
@@ -432,22 +488,59 @@ public static class X64Encoder
         return bytes.ToArray();
     }
 
+    private static void EncodeModrmSib(List<byte> bytes, int reg, int baseReg, int disp)
+    {
+        // Encodes [baseReg + disp] addressing into modrm + optional SIB + displacement
+        // reg = register in the "reg" field of modrm
+        // baseReg = base register for memory address (0-15)
+        // disp = displacement value
+
+        // hasDisp tracks whether displacement is 8-bit or 32-bit (0=none, 1=8bit, 2=32bit)
+        int dispMode;
+        if (disp == 0 && baseReg != Reg.RBP && baseReg != Reg.R13)
+            dispMode = 0;
+        else if (disp >= -128 && disp <= 127)
+            dispMode = 1;
+        else
+            dispMode = 2;
+
+        // mod field in ModRM: 0=no disp, 1=disp8, 2=disp32
+        int mod = dispMode;
+
+        if (baseReg == Reg.RSP || baseReg == Reg.R12)
+        {
+            // rm=100 signals SIB
+            bytes.Add((byte)((mod << 6) | ((reg & 7) << 3) | 4));
+            // SIB: scale=0, index=4(no index), base=baseReg
+            bytes.Add((byte)((0 << 6) | (4 << 3) | (baseReg & 7)));
+        }
+        else
+        {
+            // rm = baseReg (no SIB needed)
+            bytes.Add((byte)((mod << 6) | ((reg & 7) << 3) | (baseReg & 7)));
+        }
+
+        // Displacement bytes
+        if (dispMode == 1)
+            bytes.Add((byte)(sbyte)disp);
+        else if (dispMode == 2)
+            bytes.AddRange(BitConverter.GetBytes(disp));
+        // dispMode == 0: no displacement (except RBP/R13 which use mod=01 disp8=0)
+    }
+
     private static void AddDisplacement(List<byte> bytes, int disp)
     {
+        // Legacy: just emit modrm/SIB + disp
+        // This should not be called directly; use EncodeModrmSib instead.
         if (disp == 0)
         {
-            bytes.Add(0);
-            bytes.Add(0);
-            bytes.Add(0);
         }
         else if (disp >= -128 && disp <= 127)
         {
-            bytes.Add(0x40);
             bytes.Add((byte)disp);
         }
         else
         {
-            bytes.Add(0x80);
             bytes.AddRange(BitConverter.GetBytes(disp));
         }
     }
@@ -610,6 +703,9 @@ public enum OpCode
     SHIFT_LEFT,
     SHIFT_RIGHT,
     LEA_R64_MEM,
+    MOVZX_R64_MEM8,
+    CALL_RIPDISP,
+    MOV_R64_MEM_RIP,
 }
 
 public struct Operand
