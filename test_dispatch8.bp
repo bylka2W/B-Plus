@@ -1,0 +1,15 @@
+state Start {
+    var buf: ptr
+    var val: int = 0
+    on alloc -> Start {
+        buf = 42;
+        val = buf;
+        print("A")
+    }
+    on read -> Start {
+        buf = 0;
+        print("R")
+    }
+    enter { print("S") }
+}
+entry main() { print("GO") }

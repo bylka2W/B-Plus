@@ -1,0 +1,10 @@
+state Start {
+    on a -> Start {
+        print("A")
+    }
+    on b -> Start {
+        print("B")
+    }
+    enter { print("S") }
+}
+entry main() { print("GO") }

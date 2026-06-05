@@ -1,0 +1,11 @@
+state Menu {
+    on start -> Playing
+    enter { print("=== MENU ===") }
+}
+state Playing {
+    on hit -> Menu
+    enter { print("Playing...") }
+}
+entry main() {
+    print("Game started")
+}

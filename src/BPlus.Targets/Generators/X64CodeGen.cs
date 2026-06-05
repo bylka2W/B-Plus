@@ -25,6 +25,7 @@ public class X64CodeGen
     private ProgramNode _program = new();
     private List<string> _stateNames = new();
     private List<ContextVarInfo> _ctxVars = new();
+    private Dictionary<string, List<StateVarInfo>> _stateVars = new();
     private int _stackFrameSize;
 
     // Stack frame offsets (from RBP, negative downward)
@@ -38,11 +39,14 @@ public class X64CodeGen
     private int _offBuf;
     private int _offCtxVarStart;
 
-    private static readonly string[] ImportFns = { "GetStdHandle", "WriteConsoleA", "ReadFile", "ExitProcess" };
+    private static readonly string[] ImportFns = { "GetStdHandle", "WriteFile", "ReadFile", "ExitProcess", "GetProcessHeap", "HeapAlloc", "HeapFree" };
     private const int IdxGetStdHandle = 0;
-    private const int IdxWriteConsoleA = 1;
+    private const int IdxWriteFile = 1;
     private const int IdxReadFile = 2;
     private const int IdxExitProcess = 3;
+    private const int IdxGetProcessHeap = 4;
+    private const int IdxHeapAlloc = 5;
+    private const int IdxHeapFree = 6;
     private const int StdInputHandle = -10;
     private const int StdOutputHandle = -11;
     private const int BufSize = 256;
@@ -79,8 +83,8 @@ public class X64CodeGen
         int off = -8;
         _offHStdIn   = off; off -= 8;
         _offHStdOut  = off; off -= 8;
-        _offCharsRead   = off; off -= 4;
-        _offCharsWritten = off; off -= 4;
+        _offCharsRead   = off; off -= 8;  // 8 bytes to match QWORD loads
+        _offCharsWritten = off; off -= 8; // 8 bytes to match QWORD loads
         _offCurState = off; off -= 8;
         _offCursor   = off; off -= 8;   // current read cursor in buffer
         _offRemaining = off; off -= 8;  // remaining bytes in buffer
@@ -88,6 +92,18 @@ public class X64CodeGen
         _offCtxVarStart = off;
         foreach (var _ in _ctxVars)
             off -= 8;
+        // State variables (after context vars)
+        _stateVars.Clear();
+        foreach (var state in _program.States)
+        {
+            var svList = new List<StateVarInfo>();
+            foreach (var v in state.Variables)
+            {
+                svList.Add(new StateVarInfo { Name = v.Name, Type = v.Type, DefaultValue = v.DefaultValue ?? "0", StackOffset = off });
+                off -= 8;
+            }
+            _stateVars[state.Name] = svList;
+        }
         // Input buffer at the bottom
         _offBuf = off - BufSize; off -= BufSize;
         _stackFrameSize = (-off + 0xF) & ~0xF;
@@ -116,6 +132,17 @@ public class X64CodeGen
             off -= 8;
         }
 
+        // Init all state variables with default values
+        foreach (var svList in _stateVars.Values)
+        {
+            foreach (var sv in svList)
+            {
+                long val = ParseNumber(sv.DefaultValue);
+                Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(val));
+                Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, sv.StackOffset), R(Reg.RAX));
+            }
+        }
+
         // Set current_state = 0
         Emit(OpCode.XOR_R64_R64, R(Reg.RAX), R(Reg.RAX));
         Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, _offCurState), R(Reg.RAX));
@@ -127,6 +154,21 @@ public class X64CodeGen
         // GetStdHandle(STD_OUTPUT_HANDLE)
         EmitWin32Call(IdxGetStdHandle, StdOutputHandle);
         Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, _offHStdOut), R(Reg.RAX));
+
+        // Emit entry main() body (first entry only)
+        if (_program.Entries.Count > 0)
+        {
+            var entry = _program.Entries[0];
+            if (entry.BodyLines.Count > 0)
+            {
+                var lines = entry.BodyLines
+                    .Select(l => l.Trim().TrimStart('{').TrimEnd('}').Trim())
+                    .Where(l => l.Length > 0);
+                EmitAction(string.Join("; ", lines));
+            }
+            else if (!string.IsNullOrEmpty(entry.Body))
+                EmitAction(entry.Body);
+        }
 
         // Call initial state enter (only if states exist)
         if (_program.States.Count > 0)
@@ -144,7 +186,7 @@ public class X64CodeGen
             _labels["en_" + i] = _code.Count;
             var state = _program.States[i];
             foreach (var act in state.Actions.Where(a => a.Type == ActionType.Enter))
-                EmitAction(act.Body);
+                EmitAction(act.Body, state.Name);
             Emit(OpCode.RET);
         }
     }
@@ -165,14 +207,18 @@ public class X64CodeGen
         EmitIatCall(IdxReadFile);
         Emit(OpCode.ADD_R64_IMM32, R(Reg.RSP), ImmU32(40));
 
-        // If ReadFile failed (EOF/error), exit
+        // If ReadFile failed, exit
         Emit(OpCode.TEST_R64_R64, R(Reg.RAX), R(Reg.RAX));
         EmitCondLongJmp(OpCode.JE_REL32, "exit_process");
 
-        // Initialize cursor = 0, remaining = charsRead
-        Emit(OpCode.XOR_R64_R64, R(Reg.RAX), R(Reg.RAX));
-        Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, _offCursor), R(Reg.RAX));
-        Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, _offCharsRead));
+        // Load charsRead as 32-bit (zero-extends to 64), check for EOF
+        Emit(OpCode.MOV_R32_MEM, R(Reg.RAX), Mem(Reg.RBP, _offCharsRead));
+        Emit(OpCode.TEST_R64_R64, R(Reg.RAX), R(Reg.RAX));
+        EmitCondLongJmp(OpCode.JE_REL32, "exit_process");
+
+        // Initialize cursor = 0, remaining = charsRead (RAX already zero-extended)
+        Emit(OpCode.XOR_R64_R64, R(Reg.RCX), R(Reg.RCX));
+        Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, _offCursor), R(Reg.RCX));
         Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, _offRemaining), R(Reg.RAX));
 
         // ── Re-dispatch entry: skip ReadFile, process remaining buffer ──
@@ -204,6 +250,16 @@ public class X64CodeGen
         _labels[exCe] = _code.Count;
         Emit(OpCode.TEST_R64_R64, R(Reg.RBX), R(Reg.RBX));
         EmitShortJmp(OpCode.JNE_REL8, "no_exit");
+        // Skip trailing whitespace before checking terminator
+        EmitShortJmp(OpCode.JMP_REL8, "ex_chk_term");
+        _labels["ex_skip_ws"] = _code.Count;
+        Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));
+        Emit(OpCode.MOVZX_R64_MEM8, R(Reg.RAX), Mem(Reg.RDI, 0));
+        _labels["ex_chk_term"] = _code.Count;
+        Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x20));
+        EmitCondLongJmp(OpCode.JE_REL32, "ex_skip_ws");
+        Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x09));
+        EmitCondLongJmp(OpCode.JE_REL32, "ex_skip_ws");
         Emit(OpCode.TEST_R64_R64, R(Reg.RAX), R(Reg.RAX));
         EmitCondLongJmp(OpCode.JE_REL32, "exit_process");
         Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x0A));
@@ -273,11 +329,12 @@ public class X64CodeGen
         Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));  // skip \r
         Emit(OpCode.ADD_R64_IMM32, R(Reg.RCX), ImmU32(0xFFFFFFFF));
         EmitShortJmp(OpCode.JE_REL8, advDone);               // RCX hit 0
-        Emit(OpCode.CMP_R64_IMM8, Mem(Reg.RDI, 0), ImmU32(0x0A));
+        Emit(OpCode.MOVZX_R64_MEM8, R(Reg.RAX), Mem(Reg.RDI, 0));  // load next byte
+        Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x0A));
         EmitShortJmp(OpCode.JNE_REL8, advDone);              // not CRLF → done
-        // fall through to adv_found to handle \n after \r
         Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));  // skip \n in CRLF
         Emit(OpCode.ADD_R64_IMM32, R(Reg.RCX), ImmU32(0xFFFFFFFF));
+        EmitShortJmp(OpCode.JMP_REL8, advDone);              // done (skip advFound INC)
 
         _labels[advFound] = _code.Count;
         Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));  // skip terminator
@@ -308,92 +365,121 @@ public class X64CodeGen
 
     private void EmitStateDispatch(StateDefNode state, int si)
     {
-        // Always/auto transitions (no event name) execute unconditionally
+        // Always/auto transitions (no event name)
         foreach (var t in state.Transitions)
         {
             if (string.IsNullOrEmpty(t.EventName) && !t.IsAlways)
                 continue;
             if (t.IsAlways && string.IsNullOrEmpty(t.EventName))
             {
+                if (string.IsNullOrEmpty(t.Guard))
+                {
+                    // Unconditional always — always fires, no event-driven dispatch needed
+                    if (!string.IsNullOrEmpty(t.Body))
+                        EmitAction(t.Body, state.Name);
+                    ChangeToState(t.Target, si);
+                    return;
+                }
+                // Guarded always — if guard fails, fall through to event-driven dispatch
                 EmitGuardSkip(t.Guard, si, -1);
                 if (!string.IsNullOrEmpty(t.Body))
-                    EmitAction(t.Body);
-                ChangeToState(t.Target);
-                return;
+                    EmitAction(t.Body, state.Name);
+                ChangeToState(t.Target, si);
+                _labels[$"sk_{si}_{-1}"] = _code.Count;
             }
         }
 
-        // Event-driven transitions
-        var trans = state.Transitions
+        // Group event-driven transitions by event name
+        var eventGroups = state.Transitions
             .Where(t => !string.IsNullOrEmpty(t.EventName))
+            .GroupBy(t => t.EventName)
             .ToList();
 
-        for (int ti = 0; ti < trans.Count; ti++)
+        int egIdx = 0;
+        foreach (var group in eventGroups)
         {
-            var t = trans[ti];
-            string skipLabel = $"sk_{si}_{ti}"; // points to next transition or fallback
+            string eventName = group.Key;
+            var transList = group.ToList();
 
             // Emit string comparison: buffer vs event name
-            int strOff = AddPoolString(t.EventName);
-            int cmpLen = t.EventName.Length;
-
-            // rsi = RIP-relative address of event string
+            int strOff = AddPoolString(eventName);
             EmitRipLea(Reg.RSI, strOff);
-            // rdi = buffer address + cursor
             Emit(OpCode.LEA_R64_MEM, R(Reg.RDI), Mem(Reg.RBP, _offBuf));
             Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, _offCursor));
             Emit(OpCode.ADD_R64_R64, R(Reg.RDI), R(Reg.RAX));
 
-            // Compare loop
-            string loopLabel = $"lp_{si}_{ti}";
-            string checkEventEnd = $"ce_{si}_{ti}";
+            string loopLabel = $"eg_lp_{si}_{egIdx}";
+            string checkEnd = $"eg_ce_{si}_{egIdx}";
             _labels[loopLabel] = _code.Count;
             Emit(OpCode.MOVZX_R64_MEM8, R(Reg.RAX), Mem(Reg.RDI, 0));
             Emit(OpCode.MOVZX_R64_MEM8, R(Reg.RBX), Mem(Reg.RSI, 0));
             Emit(OpCode.CMP_R64_R64, R(Reg.RAX), R(Reg.RBX));
-            // If bytes differ, check if event ended (bl=0) and input is terminator
-            EmitShortJmp(OpCode.JNE_REL8, checkEventEnd);
-            // If both zero, match
+            EmitShortJmp(OpCode.JNE_REL8, checkEnd);
             Emit(OpCode.TEST_R64_R64, R(Reg.RAX), R(Reg.RAX));
-            EmitShortJmp(OpCode.JE_REL8, $"mt_{si}_{ti}");
-            // Advance and loop
+            EmitShortJmp(OpCode.JE_REL8, $"eg_mt_{si}_{egIdx}");
             Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));
             Emit(OpCode.ADD_R64_IMM32, R(Reg.RSI), ImmU32(1));
             EmitShortJmp(OpCode.JMP_REL8, loopLabel);
 
-            // Check if event ended (rbx == 0) and input is null/newline → match
-            _labels[checkEventEnd] = _code.Count;
+            // Event end check: event byte != 0 → real mismatch → skip group
+            _labels[checkEnd] = _code.Count;
             Emit(OpCode.TEST_R64_R64, R(Reg.RBX), R(Reg.RBX));
-            EmitShortJmp(OpCode.JNE_REL8, skipLabel);   // event byte nonzero → real mismatch
-            // Event ended: accept null, \n, \r in input
+            EmitShortJmp(OpCode.JNE_REL8, $"eg_done_{si}_{egIdx}");
+            // Skip trailing whitespace then check for terminators
+            EmitShortJmp(OpCode.JMP_REL8, $"eg_skip_{si}_{egIdx}");
+            _labels[$"eg_ws_{si}_{egIdx}"] = _code.Count;
+            Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));
+            Emit(OpCode.MOVZX_R64_MEM8, R(Reg.RAX), Mem(Reg.RDI, 0));
+            _labels[$"eg_skip_{si}_{egIdx}"] = _code.Count;
+            Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x20));
+            EmitShortJmp(OpCode.JE_REL8, $"eg_ws_{si}_{egIdx}");
+            Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x09));
+            EmitShortJmp(OpCode.JE_REL8, $"eg_ws_{si}_{egIdx}");
             Emit(OpCode.TEST_R64_R64, R(Reg.RAX), R(Reg.RAX));
-            EmitShortJmp(OpCode.JE_REL8, $"mt_{si}_{ti}");
+            EmitShortJmp(OpCode.JE_REL8, $"eg_mt_{si}_{egIdx}");
             Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x0A));
-            EmitShortJmp(OpCode.JE_REL8, $"mt_{si}_{ti}");
+            EmitShortJmp(OpCode.JE_REL8, $"eg_mt_{si}_{egIdx}");
             Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x0D));
-            EmitShortJmp(OpCode.JE_REL8, $"mt_{si}_{ti}");
-            // Not a terminator → skip transition
-            EmitShortJmp(OpCode.JMP_REL8, skipLabel);
+            EmitShortJmp(OpCode.JE_REL8, $"eg_mt_{si}_{egIdx}");
+            EmitShortJmp(OpCode.JMP_REL8, $"eg_done_{si}_{egIdx}");
 
-            // Match label
-            _labels[$"mt_{si}_{ti}"] = _code.Count;
+            // Event matched — try each transition in order
+            _labels[$"eg_mt_{si}_{egIdx}"] = _code.Count;
 
-            // Guard check: skip to next transition if guard fails
-            EmitGuardSkip(t.Guard, si, ti);
+            int? defaultTi = null;
+            for (int gi = 0; gi < transList.Count; gi++)
+            {
+                var t = transList[gi];
+                int origTi = state.Transitions.IndexOf(t);
 
-            // Execute body
-            if (!string.IsNullOrEmpty(t.Body))
-                EmitAction(t.Body);
+                if (!string.IsNullOrEmpty(t.Guard))
+                {
+                    EmitGuardSkip(t.Guard, si, origTi);
+                    if (!string.IsNullOrEmpty(t.Body))
+                        EmitAction(t.Body, state.Name);
+                    ChangeToState(t.Target, si);
+                    // Guard failure → fall through to next transition
+                    _labels[$"sk_{si}_{origTi}"] = _code.Count;
+                }
+                else
+                {
+                    defaultTi = origTi;
+                }
+            }
 
-            // Change state + enter new state + loop
-            ChangeToState(t.Target);
+            // All guarded transitions failed → fire guardless fallback (if any)
+            if (defaultTi.HasValue)
+            {
+                var tFallback = transList.First(tr => string.IsNullOrEmpty(tr.Guard));
+                if (!string.IsNullOrEmpty(tFallback.Body))
+                    EmitAction(tFallback.Body, state.Name);
+                ChangeToState(tFallback.Target, si);
+            }
 
-            // Skip label — next transition starts here
-            _labels[skipLabel] = _code.Count;
+            // Event group skip label — event name mismatch or all guards failed with no fallback
+            _labels[$"eg_done_{si}_{egIdx}"] = _code.Count;
+            egIdx++;
         }
-
-        // If no transition matched, just loop
-        // (skip label for last transition already points here)
     }
 
     // ── Guard handling ──
@@ -402,32 +488,27 @@ public class X64CodeGen
         if (string.IsNullOrEmpty(guard)) return;
 
         string skipLabel = $"sk_{si}_{ti}"; // same skip target as transition mismatch
+        string curStateName = _program.States[si].Name;
 
         var (lhs, op, rhs) = ParseGuard(guard);
 
-        // Load lhs
-        int ci = _ctxVars.FindIndex(v => v.Name == lhs);
-        if (ci >= 0)
+        // Load lhs — check context, then state vars, then constant
+        if (!TryLoadVarToReg(Reg.RAX, lhs, curStateName))
         {
-            int vo = _offCtxVarStart - ci * 8;
-            Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, vo));
+            if (long.TryParse(lhs, out long lv))
+                Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(lv));
+            else
+                Emit(OpCode.XOR_R64_R64, R(Reg.RAX), R(Reg.RAX));
         }
-        else if (long.TryParse(lhs, out long lv))
-            Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(lv));
-        else
-            Emit(OpCode.XOR_R64_R64, R(Reg.RAX), R(Reg.RAX));
 
-        // Load rhs
-        int cj = _ctxVars.FindIndex(v => v.Name == rhs);
-        if (cj >= 0)
+        // Load rhs — check context, then state vars, then constant
+        if (!TryLoadVarToReg(Reg.RBX, rhs, curStateName))
         {
-            int vo = _offCtxVarStart - cj * 8;
-            Emit(OpCode.MOV_R64_MEM, R(Reg.RBX), Mem(Reg.RBP, vo));
+            if (long.TryParse(rhs, out long rv))
+                Emit(OpCode.MOV_R64_IMM64, R(Reg.RBX), Imm(rv));
+            else
+                Emit(OpCode.XOR_R64_R64, R(Reg.RBX), R(Reg.RBX));
         }
-        else if (long.TryParse(rhs, out long rv))
-            Emit(OpCode.MOV_R64_IMM64, R(Reg.RBX), Imm(rv));
-        else
-            Emit(OpCode.XOR_R64_R64, R(Reg.RBX), R(Reg.RBX));
 
         Emit(OpCode.CMP_R64_R64, R(Reg.RAX), R(Reg.RBX));
 
@@ -443,23 +524,47 @@ public class X64CodeGen
     }
 
     // ── State change ──
-    private void ChangeToState(string targetName)
+    private void ChangeToState(string targetName, int currentStateIdx)
     {
         int ti = FindStateIndex(targetName);
+
+        // Emit exit actions for current state
+        var curState = _program.States[currentStateIdx];
+        foreach (var act in curState.Actions.Where(a => a.Type == ActionType.Exit))
+            EmitAction(act.Body, curState.Name);
+
         // current_state = ti
         Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(ti));
         Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, _offCurState), R(Reg.RAX));
+
+        // On cross-state transition, re-init target state's variables (not on self-transition)
+        if (ti != currentStateIdx && _stateVars.TryGetValue(targetName, out var svList))
+        {
+            foreach (var sv in svList)
+            {
+                long defVal = ParseNumber(sv.DefaultValue);
+                Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(defVal));
+                Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, sv.StackOffset), R(Reg.RAX));
+            }
+        }
+
         // call enter_{ti}
         EmitCallToLabel("en_" + ti);
         // advance cursor and re-dispatch remaining buffer content
         EmitLongJmp("advance_cursor");
     }
 
-    // ── Action emission ──
-    private void EmitAction(string? body)
+    // ── Action emission (supports semicolons) ──
+    private void EmitAction(string? body, string currentStateName = "")
     {
         if (string.IsNullOrEmpty(body)) return;
-        body = body.Trim();
+        foreach (var stmt in body.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            EmitSingleAction(stmt, currentStateName);
+    }
+
+    private void EmitSingleAction(string body, string currentStateName)
+    {
+        if (string.IsNullOrEmpty(body)) return;
 
         // print("...")
         if (body.StartsWith("print(") && body.EndsWith(")"))
@@ -470,13 +575,66 @@ public class X64CodeGen
 
             Emit(OpCode.MOV_R64_MEM,    R(Reg.RCX), Mem(Reg.RBP, _offHStdOut));
             EmitRipLea(Reg.RDX, strOff);
-            Emit(OpCode.MOV_R64_IMM64,  R(Reg.R8),  Imm(content.Length));
+            Emit(OpCode.MOV_R64_IMM64,  R(Reg.R8),  Imm(Encoding.UTF8.GetByteCount(content)));
             Emit(OpCode.LEA_R64_MEM,    R(Reg.R9),  Mem(Reg.RBP, _offCharsWritten));
             Emit(OpCode.SUB_R64_IMM32, R(Reg.RSP), ImmU32(40)); // shadow + 5th arg
             Emit(OpCode.MOV_R64_IMM64,  R(Reg.RAX), Imm(0));
             Emit(OpCode.MOV_MEM_R64,    Mem(Reg.RSP, 32), R(Reg.RAX)); // 5th arg at safe offset
-            EmitIatCall(IdxWriteConsoleA);
+            EmitIatCall(IdxWriteFile);
             Emit(OpCode.ADD_R64_IMM32, R(Reg.RSP), ImmU32(40));
+            return;
+        }
+
+        // free(ptr)
+        if (body.StartsWith("free(") && body.EndsWith(")"))
+        {
+            string ptrName = body.Substring(5, body.Length - 6).Trim();
+            // GetProcessHeap() → RAX
+            Emit(OpCode.SUB_R64_IMM32, R(Reg.RSP), ImmU32(40));
+            EmitIatCall(IdxGetProcessHeap);
+            Emit(OpCode.ADD_R64_IMM32, R(Reg.RSP), ImmU32(40));
+            Emit(OpCode.MOV_R64_R64, R(Reg.RCX), R(Reg.RAX));
+            // RDX = dwFlags = 0
+            Emit(OpCode.XOR_R64_R64, R(Reg.RDX), R(Reg.RDX));
+            // R8 = pointer value
+            if (!TryLoadVarToReg(Reg.R8, ptrName, currentStateName))
+                Emit(OpCode.XOR_R64_R64, R(Reg.R8), R(Reg.R8));
+            // Call HeapFree
+            Emit(OpCode.SUB_R64_IMM32, R(Reg.RSP), ImmU32(40));
+            EmitIatCall(IdxHeapFree);
+            Emit(OpCode.ADD_R64_IMM32, R(Reg.RSP), ImmU32(40));
+            return;
+        }
+
+        // Compound assignment: var += expr
+        if (body.Contains("+="))
+        {
+            int idx = body.IndexOf("+=");
+            string varName = body.Substring(0, idx).Trim();
+            string expr = body.Substring(idx + 2).Trim();
+            int vo = GetVarOffset(currentStateName, varName);
+            if (vo != int.MinValue)
+            {
+                Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, vo));
+                EmitExprToRAXAdd(expr, currentStateName);
+                Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, vo), R(Reg.RAX));
+            }
+            return;
+        }
+
+        // Compound assignment: var -= expr
+        if (body.Contains("-="))
+        {
+            int idx = body.IndexOf("-=");
+            string varName = body.Substring(0, idx).Trim();
+            string expr = body.Substring(idx + 2).Trim();
+            int vo = GetVarOffset(currentStateName, varName);
+            if (vo != int.MinValue)
+            {
+                Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, vo));
+                EmitExprToRAXSub(expr, currentStateName);
+                Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, vo), R(Reg.RAX));
+            }
             return;
         }
 
@@ -486,14 +644,127 @@ public class X64CodeGen
         {
             string varName = body.Substring(0, eq).Trim();
             string expr = body.Substring(eq + 1).Trim();
-            int ci = _ctxVars.FindIndex(v => v.Name == varName);
-            if (ci >= 0)
+            int vo = GetVarOffset(currentStateName, varName);
+            if (vo != int.MinValue)
             {
-                long val = ParseNumber(expr);
-                int vo = _offCtxVarStart - ci * 8;
-                Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(val));
+                EmitExprToRAX(expr, currentStateName);
                 Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, vo), R(Reg.RAX));
             }
+            return;
+        }
+    }
+
+    private int GetVarOffset(string stateName, string varName)
+    {
+        int ci = _ctxVars.FindIndex(v => v.Name == varName);
+        if (ci >= 0) return _offCtxVarStart - ci * 8;
+        if (!string.IsNullOrEmpty(stateName) && _stateVars.TryGetValue(stateName, out var svList))
+        {
+            var sv = svList.FirstOrDefault(v => v.Name == varName);
+            if (sv != null) return sv.StackOffset;
+        }
+        return int.MinValue;
+    }
+
+    private bool TryLoadVarToReg(int reg, string name, string stateName)
+    {
+        int vo = GetVarOffset(stateName, name);
+        if (vo != int.MinValue)
+        {
+            Emit(OpCode.MOV_R64_MEM, R(reg), Mem(Reg.RBP, vo));
+            return true;
+        }
+        return false;
+    }
+
+    private void EmitExprToRAX(string expr, string stateName)
+    {
+        expr = expr.Trim();
+        int plusIdx = expr.LastIndexOf('+');
+        int minusIdx = expr.LastIndexOf('-');
+
+        if (plusIdx > 0)
+        {
+            string lhs = expr.Substring(0, plusIdx).Trim();
+            string rhs = expr.Substring(plusIdx + 1).Trim();
+            EmitExprAtomToRAX(lhs, stateName);
+            if (TryLoadVarToReg(Reg.RBX, rhs, stateName))
+                Emit(OpCode.ADD_R64_R64, R(Reg.RAX), R(Reg.RBX));
+            else if (long.TryParse(rhs, out long rv))
+                Emit(OpCode.ADD_R64_IMM32, R(Reg.RAX), ImmU32((uint)rv));
+            return;
+        }
+
+        if (minusIdx > 0)
+        {
+            string lhs = expr.Substring(0, minusIdx).Trim();
+            string rhs = expr.Substring(minusIdx + 1).Trim();
+            EmitExprAtomToRAX(lhs, stateName);
+            if (TryLoadVarToReg(Reg.RBX, rhs, stateName))
+                Emit(OpCode.SUB_R64_R64, R(Reg.RAX), R(Reg.RBX));
+            else if (long.TryParse(rhs, out long rv))
+                Emit(OpCode.SUB_R64_IMM32, R(Reg.RAX), ImmU32((uint)rv));
+            return;
+        }
+
+        EmitExprAtomToRAX(expr, stateName);
+    }
+
+    private void EmitExprToRAXAdd(string expr, string stateName)
+    {
+        expr = expr.Trim();
+        if (TryLoadVarToReg(Reg.RBX, expr, stateName))
+            Emit(OpCode.ADD_R64_R64, R(Reg.RAX), R(Reg.RBX));
+        else if (long.TryParse(expr, out long rv))
+            Emit(OpCode.ADD_R64_IMM32, R(Reg.RAX), ImmU32((uint)rv));
+    }
+
+    private void EmitExprToRAXSub(string expr, string stateName)
+    {
+        expr = expr.Trim();
+        if (TryLoadVarToReg(Reg.RBX, expr, stateName))
+            Emit(OpCode.SUB_R64_R64, R(Reg.RAX), R(Reg.RBX));
+        else if (long.TryParse(expr, out long rv))
+            Emit(OpCode.SUB_R64_IMM32, R(Reg.RAX), ImmU32((uint)rv));
+    }
+
+    private void EmitExprAtomToRAX(string atom, string stateName)
+    {
+        atom = atom.Trim();
+
+        // malloc(size) — returns pointer in RAX
+        if (atom.StartsWith("malloc(") && atom.EndsWith(")"))
+        {
+            string sizeExpr = atom.Substring(7, atom.Length - 8).Trim();
+            long szVal = ParseNumber(sizeExpr);
+            // GetProcessHeap() → RAX
+            ShadowCall(IdxGetProcessHeap);
+            Emit(OpCode.MOV_R64_R64, R(Reg.RCX), R(Reg.RAX));
+            // dwFlags = 0
+            Emit(OpCode.XOR_R64_R64, R(Reg.RDX), R(Reg.RDX));
+            // dwBytes = size
+            Emit(OpCode.MOV_R64_IMM64, R(Reg.R8), Imm(szVal));
+            // HeapAlloc
+            ShadowCall(IdxHeapAlloc);
+            return;
+        }
+
+        // *ptr — dereference pointer
+        if (atom.StartsWith("*"))
+        {
+            string ptrName = atom.Substring(1).Trim();
+            if (!TryLoadVarToReg(Reg.RAX, ptrName, stateName))
+                Emit(OpCode.XOR_R64_R64, R(Reg.RAX), R(Reg.RAX));
+            Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RAX, 0));
+            return;
+        }
+
+        if (!TryLoadVarToReg(Reg.RAX, atom, stateName))
+        {
+            if (long.TryParse(atom, out long v))
+                Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(v));
+            else
+                Emit(OpCode.XOR_R64_R64, R(Reg.RAX), R(Reg.RAX));
         }
     }
 
@@ -691,9 +962,9 @@ public class X64CodeGen
 
     private void ShadowCall(int importIdx)
     {
-        Emit(OpCode.SUB_R64_IMM32, R(Reg.RSP), ImmU32(32));
+        Emit(OpCode.SUB_R64_IMM32, R(Reg.RSP), ImmU32(40));
         EmitIatCall(importIdx);
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RSP), ImmU32(32));
+        Emit(OpCode.ADD_R64_IMM32, R(Reg.RSP), ImmU32(40));
     }
 
     // ── Parse number (with simple arithmetic) ──
@@ -758,6 +1029,14 @@ public class X64CodeGen
         public string Name { get; set; } = "";
         public string Type { get; set; } = "";
         public string DefaultValue { get; set; } = "0";
+    }
+
+    private class StateVarInfo
+    {
+        public string Name { get; set; } = "";
+        public string Type { get; set; } = "";
+        public string DefaultValue { get; set; } = "0";
+        public int StackOffset { get; set; }
     }
 
     public static (byte[] code, int dataSize) GenerateBenchmarkLoop(int iterations, int innerOps, int cacheKB)

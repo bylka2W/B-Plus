@@ -1,0 +1,24 @@
+state Start {
+    var buf: ptr
+    var val: int = 0
+    on alloc -> Start {
+        buf = malloc(64);
+        val = 42;
+        print("Alloc")
+    }
+    on read -> Start {
+        val = *buf;
+        print("Read")
+    }
+    on free_it -> Start {
+        free(buf);
+        print("Free")
+    }
+    on done -> End
+    enter { print("Start") }
+}
+state End {
+    on restart -> Start
+    enter { print("End") }
+}
+entry main() { print("PTR TEST") }

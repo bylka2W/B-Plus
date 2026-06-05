@@ -1,0 +1,10 @@
+state Start {
+    var buf: ptr
+    on alloc -> Start {
+        buf = malloc(64)
+    }
+    on read -> Start {
+        buf = 0
+    }
+}
+entry main() {}

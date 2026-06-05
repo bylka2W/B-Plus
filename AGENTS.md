@@ -66,6 +66,20 @@ Select-String "wrong_code" output.zig
 - Previously silent → tests expected these errors, now 218/218 pass
 - `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 218/218 passed
 
+### Stack layout overlap bug (x64 event loop hang)
+- **Root cause**: `ComputeStackLayout()` in `src/BPlus.Targets/Generators/X64CodeGen.cs:81-97` allocated `_offCharsRead` (4 bytes) and `_offCharsWritten` (4 bytes) adjacent at RBP-24 and RBP-28, with `_offCurState` (8 bytes) starting at RBP-32 → `charsWritten` at RBP-28 overlapped with upper half of `curState` at RBP-32
+- **Corruption chain**:
+  1. en_0 calls WriteFile → stores count (e.g. 13) into `charsWritten` at RBP-28 → overwrites upper 4 bytes of `curState` at RBP-32
+  2. Event loop loads `curState` via `MOV R12, [RBP-32]` → gets corrupted: `0x0000000D00000000` instead of `0`
+  3. State dispatch `CMP R12, 0` → not equal → `JMP re_dispatch` → infinite loop (re_dispatch → exit check → state dispatch → re_dispatch)
+- **Secondary issue**: `MOV RAX, [RBP-24]` (8-byte load from 4-byte `charsRead`) included `charsWritten` (or garbage) in upper 32 bits, making `remaining` and `cursor` corruption
+- **Fix**:
+  1. Changed `charsRead`/`charsWritten` from `off -= 4` to `off -= 8` (8-byte fields eliminate overlap)
+  2. Added `MOV_R32_MEM` opcode in `X64Encoder.cs` — 32-bit load (no REX.W) from memory, automatic zero-extend to 64 bits on x64
+  3. Changed charsRead/EOF check to use `MOV_R32_MEM` instead of `MOV_R64_MEM` for correct zero-extension
+- **UTF-8 truncation**: `Imm(content.Length)` in `EmitAction()` used char count (C# `string.Length`) instead of UTF-8 byte count → multi-byte chars like `→` were truncated. Fixed: `Imm(Encoding.UTF8.GetByteCount(content))`
+- `dotnet build`: 0 warnings, 0 errors; tests: all scenarios pass (file redirect, pipe, single/multi events)
+
 ### Warnings 0
 - `BPlusParser.cs:236` — CS8604: null check on ParseGpuKernel() return
 - `Program.cs:1591,1628` — CS8602: null-forgiving `!` on process.StartInfo

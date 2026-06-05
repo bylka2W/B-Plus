@@ -68,6 +68,23 @@ public static class X64Encoder
                 break;
             }
 
+            case OpCode.MOV_R32_MEM:
+            {
+                // 32-bit MOV from memory (no REX.W) — zero-extends to 64 on x64
+                if (operands.Length != 2) throw new ArgumentException("MOV_R32_MEM needs 2 operands");
+                int reg = operands[0].Reg;
+                int baseReg = operands[1].BaseReg;
+                if (reg < 0 || reg > 15 || baseReg < 0 || baseReg > 15) throw new ArgumentException("Invalid registers");
+                int disp = operands[1].Disp;
+                int rexB = (baseReg >> 3) & 1;
+                int rexR = (reg >> 3) & 1;
+                byte rex = (byte)(rexB | (rexR << 2));
+                if (rex != 0) bytes.Add((byte)(0x40 | rex));
+                bytes.Add(0x8B);
+                EncodeModrmSib(bytes, reg, baseReg, disp);
+                break;
+            }
+
             case OpCode.MOV_MEM_R64:
             {
                 if (operands.Length != 2) throw new ArgumentException("MOV_MEM_R64 needs 2 operands");
@@ -115,6 +132,19 @@ public static class X64Encoder
                 bytes.Add(0x81);
                 bytes.Add((byte)(0xE8 + (reg & 7)));
                 bytes.AddRange(BitConverter.GetBytes((uint)operands[1].Imm32));
+                break;
+            }
+
+            case OpCode.SUB_R64_R64:
+            {
+                if (operands.Length != 2) throw new ArgumentException("SUB_R64_R64 needs 2 operands");
+                int dst = operands[0].Reg;
+                int src = operands[1].Reg;
+                int rexB = (src >> 3) & 1;
+                int rexR = (dst >> 3) & 1;
+                bytes.Add((byte)(0x48 + rexB + (rexR << 2)));
+                bytes.Add(0x2B); // SUB r64, r/m64
+                bytes.Add((byte)(0xC0 + (dst & 7) * 8 + (src & 7)));
                 break;
             }
 
@@ -688,11 +718,13 @@ public enum OpCode
     MOV_R64_IMM32_SIGNEXT,
     MOV_R64_R64,
     MOV_R64_MEM,
+    MOV_R32_MEM,
     MOV_MEM_R64,
     MOVZX_R64_R32,
     ADD_R64_R64,
     ADD_R64_IMM32,
     SUB_R64_IMM32,
+    SUB_R64_R64,
     CMP_R64_R64,
     CMP_R64_IMM32,
     TEST_R64_R64,

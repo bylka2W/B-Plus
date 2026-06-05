@@ -1,0 +1,10 @@
+state Start {
+    on alloc -> Start {
+        buf = malloc(64);
+        print("A")
+    }
+    on read -> Start {
+        print("R")
+    }
+    enter { print("S") }
+}
