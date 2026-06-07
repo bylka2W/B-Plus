@@ -8,6 +8,8 @@
 
 ---
 
+> **⚠️ Release Status** — Features marked ✅ are implemented and tested in the current release. All other features listed below are **planned** and **not yet functional**. This is a living document describing the full roadmap.
+
 ## Table of Contents (EN)
 
 1. [Language Syntax](#1-language-syntax)
@@ -1397,6 +1399,8 @@ MIT License — use freely, edit, sell.
 # B+ v4.1.0 BETA
 
 **Machine Code Optimizer** — компилятор конечных автоматов из B+ напрямую в нативный x64 код.
+
+> **⚠️ Статус релиза** — Возможности, отмеченные ✅, реализованы и протестированы в текущем релизе. Все остальные возможности в списке ниже — **в планах** и **ещё не работают**. Это описание полной дорожной карты.
 
 ---
 
