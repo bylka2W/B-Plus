@@ -39,11 +39,14 @@ public class X64CodeGen
     private int _offBuf;
     private int _offCtxVarStart;
     private int _offStateDataBase; // base of shared state data block (zero-copy)
+    private int _offCoreType;      // 0=unknown, 0x40=P-core, 0x20=E-core (from CPUID leaf 0x1A)
+    private int _offNumaHighestNode; // DWORD — highest NUMA node number
+    private int _offNumaNodeMask;    // QWORD — processor mask for the selected NUMA node
 
     // State code bounds for L1i budget tracking
     private readonly Dictionary<int, (int start, int end)> _stateCodeBounds = new();
 
-    private static readonly string[] ImportFns = { "GetStdHandle", "WriteFile", "ReadFile", "ExitProcess", "GetProcessHeap", "HeapAlloc", "HeapFree" };
+    private static readonly string[] ImportFns = { "GetStdHandle", "WriteFile", "ReadFile", "ExitProcess", "GetProcessHeap", "HeapAlloc", "HeapFree", "SetThreadAffinityMask", "GetCurrentThread", "GetNumaHighestNodeNumber", "GetNumaNodeProcessorMask" };
     private const int IdxGetStdHandle = 0;
     private const int IdxWriteFile = 1;
     private const int IdxReadFile = 2;
@@ -51,6 +54,10 @@ public class X64CodeGen
     private const int IdxGetProcessHeap = 4;
     private const int IdxHeapAlloc = 5;
     private const int IdxHeapFree = 6;
+    private const int IdxSetThreadAffinityMask = 7;
+    private const int IdxGetCurrentThread = 8;
+    private const int IdxGetNumaHighestNodeNumber = 9;
+    private const int IdxGetNumaNodeProcessorMask = 10;
     private const int StdInputHandle = -10;
     private const int StdOutputHandle = -11;
     private const int BufSize = 256;
@@ -152,6 +159,9 @@ public class X64CodeGen
             _stateVars[state.Name] = svList;
         }
         // Input buffer at the bottom
+        _offCoreType = off; off -= 4;  // 4-byte slot for core type from CPUID leaf 0x1A
+        _offNumaHighestNode = off; off -= 4; // DWORD — highest NUMA node
+        _offNumaNodeMask = off; off -= 8;    // QWORD — processor mask for preferred NUMA node
         _offBuf = off - BufSize; off -= BufSize;
         _stackFrameSize = (-off + 0xF) & ~0xF;
     }
@@ -201,6 +211,9 @@ public class X64CodeGen
         // GetStdHandle(STD_OUTPUT_HANDLE)
         EmitWin32Call(IdxGetStdHandle, StdOutputHandle);
         Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, _offHStdOut), R(Reg.RAX));
+
+        // P/E-core affinity — detect hybrid topology and pin thread
+        EmitAffinityInit();
 
         // Emit entry main() body (first entry only)
         if (_program.Entries.Count > 0)
@@ -1096,6 +1109,37 @@ public class X64CodeGen
         if (count >= 3) { _code.AddRange(Nop3); count -= 3; }
         if (count >= 2) { _code.AddRange(Nop2); count -= 2; }
         if (count >= 1) { _code.Add(0x90); }
+    }
+
+    // ── CPUID helpers ──
+    private void EmitCpuidRaw() => _code.AddRange(new byte[] { 0x0F, 0xA2 });
+    private void EmitShiftRight24() => _code.AddRange(new byte[] { 0xC1, 0xE8, 0x18 }); // SHR EAX, 24
+
+    // ── P/E-core affinity init ──
+    // At startup: detect core type via CPUID leaf 0x1A, then pin to appropriate cores
+    private void EmitAffinityInit()
+    {
+        bool hasHotStates = _program.States.Any(s => (s.HotWeight ?? 0.5) >= 0.8);
+        int coreCount = Environment.ProcessorCount;
+
+        // CPUID leaf 0x1A — read core type from EAX[31:24]
+        EmitMovRegImm32(Reg.RAX, 0x1A);
+        EmitCpuidRaw();
+        EmitShiftRight24();                          // EAX = core type (0x20=E, 0x40=P, 0=unknown)
+        Emit(OpCode.MOV_MEM_R32, Mem(Reg.RBP, _offCoreType), R(Reg.RAX));
+
+        // Build affinity masks (compile-time heuristic)
+        long pCoreMask = coreCount >= 4 ? (1L << (coreCount / 2)) - 1 : -1L;
+        long eCoreMask = coreCount >= 4 ? ((1L << coreCount) - 1) ^ pCoreMask : -1L;
+        long mask = hasHotStates ? pCoreMask : eCoreMask;
+
+        // GetCurrentThread → RCX
+        ShadowCall(IdxGetCurrentThread);
+        Emit(OpCode.MOV_R64_R64, R(Reg.RCX), R(Reg.RAX));
+
+        // Load mask → RDX, call SetThreadAffinityMask(thread, mask)
+        EmitLoadImm(Reg.RDX, mask);
+        ShadowCall(IdxSetThreadAffinityMask);
     }
 
     // ── Compact instruction helpers ──

@@ -2697,6 +2697,102 @@ MIT License — используй свободно, редактируй, пр�
 
 ---
 
+
+Disassembly of section .text:
+
+0000000000000000 <dispatch_tagged>:
+       0: 48 83 ec 38                   subq    $0x38, %rsp
+       4: 48 89 4c 24 28                movq    %rcx, 0x28(%rsp)
+       9: 48 83 e1 07                   andq    $0x7, %rcx
+       d: 48 89 4c 24 30                movq    %rcx, 0x30(%rsp)
+      12: 74 1c                         je      0x30 <dispatch_tagged+0x30>
+      14: eb 00                         jmp     0x16 <dispatch_tagged+0x16>
+      16: 48 8b 44 24 30                movq    0x30(%rsp), %rax
+      1b: 48 83 e8 01                   subq    $0x1, %rax
+      1f: 74 23                         je      0x44 <dispatch_tagged+0x44>
+      21: eb 00                         jmp     0x23 <dispatch_tagged+0x23>
+      23: 48 8b 44 24 30                movq    0x30(%rsp), %rax
+      28: 48 83 e8 02                   subq    $0x2, %rax
+      2c: 74 2a                         je      0x58 <dispatch_tagged+0x58>
+      2e: eb 3c                         jmp     0x6c <dispatch_tagged+0x6c>
+      30: 48 8b 4c 24 28                movq    0x28(%rsp), %rcx
+      35: 31 c0                         xorl    %eax, %eax
+      37: 89 c2                         movl    %eax, %edx
+      39: e8 00 00 00 00                callq   0x3e <dispatch_tagged+0x3e>
+      3e: 90                            nop
+      3f: 48 83 c4 38                   addq    $0x38, %rsp
+      43: c3                            retq
+      44: 48 8b 4c 24 28                movq    0x28(%rsp), %rcx
+      49: 31 c0                         xorl    %eax, %eax
+      4b: 89 c2                         movl    %eax, %edx
+      4d: e8 00 00 00 00                callq   0x52 <dispatch_tagged+0x52>
+      52: 90                            nop
+      53: 48 83 c4 38                   addq    $0x38, %rsp
+      57: c3                            retq
+      58: 48 8b 4c 24 28                movq    0x28(%rsp), %rcx
+      5d: 31 c0                         xorl    %eax, %eax
+      5f: 89 c2                         movl    %eax, %edx
+      61: e8 00 00 00 00                callq   0x66 <dispatch_tagged+0x66>
+      66: 90                            nop
+      67: 48 83 c4 38                   addq    $0x38, %rsp
+      6b: c3                            retq
+      6c: 48 83 c4 38                   addq    $0x38, %rsp
+      70: c3                            retq
+      71: 66 66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00  nopw    %cs:(%rax,%rax)
+
+0000000000000080 <main>:
+      80: 31 c0                         xorl    %eax, %eax
+      82: c3                            retq
+
+Disassembly of section .text.warm.L2:
+
+0000000000000000 <state_Hot>:
+       0: 50                            pushq   %rax
+       1: 48 89 c8                      movq    %rcx, %rax
+       4: 48 89 04 24                   movq    %rax, (%rsp)
+       8: 48 83 c8 00                   orq     $0x0, %rax
+       c: 48 83 e0 07                   andq    $0x7, %rax
+      10: 48 83 f8 01                   cmpq    $0x1, %rax
+      14: 75 02                         jne     0x18 <state_Hot+0x18>
+      16: eb 02                         jmp     0x1a <state_Hot+0x1a>
+      18: eb 00                         jmp     0x1a <state_Hot+0x1a>
+      1a: 48 8b 04 24                   movq    (%rsp), %rax
+      1e: c6 00 01                      movb    $0x1, (%rax)
+      21: 66 c7 40 02 02 00             movw    $0x2, 0x2(%rax)
+      27: c7 40 04 03 00 00 00          movl    $0x3, 0x4(%rax)
+      2e: 48 c7 40 08 04 00 00 00       movq    $0x4, 0x8(%rax)
+      36: 58                            popq    %rax
+      37: c3                            retq
+      38: 0f 1f 84 00 00 00 00 00       nopl    (%rax,%rax)
+
+0000000000000040 <state_Warm>:
+      40: 50                            pushq   %rax
+      41: 48 89 c8                      movq    %rcx, %rax
+      44: 48 89 04 24                   movq    %rax, (%rsp)
+      48: 48 83 c8 00                   orq     $0x0, %rax
+      4c: 48 83 e0 07                   andq    $0x7, %rax
+      50: 48 83 f8 01                   cmpq    $0x1, %rax
+      54: 75 02                         jne     0x58 <state_Warm+0x18>
+      56: eb 02                         jmp     0x5a <state_Warm+0x1a>
+      58: eb 00                         jmp     0x5a <state_Warm+0x1a>
+      5a: 48 8b 04 24                   movq    (%rsp), %rax
+      5e: c7 00 00 00 00 00             movl    $0x0, (%rax)
+      64: 58                            popq    %rax
+      65: c3                            retq
+
+Disassembly of section .text.cold.L3:
+
+0000000000000000 <state_Cold>:
+       0: 48 89 c8                      movq    %rcx, %rax
+       3: 48 83 c8 02                   orq     $0x2, %rax
+       7: 48 83 e0 07                   andq    $0x7, %rax
+       b: 48 83 f8 01                   cmpq    $0x1, %rax
+       f: 75 02                         jne     0x13 <state_Cold+0x13>
+      11: eb 02                         jmp     0x15 <state_Cold+0x15>
+      13: eb 00                         jmp     0x15 <state_Cold+0x15>
+      15: c3                            retq
+
+
 ## Контакты
 
 - GitHub: https://github.com/CapGames221/B-Plus

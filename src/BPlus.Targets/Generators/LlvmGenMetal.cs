@@ -121,6 +121,26 @@ public class LlvmGenMetal
             _ir.AppendLine($"  call void @llvm.prefetch(i8* null, i32 0, i32 {hint}, i32 1)");
         }
 
+        // ── State variable initialisation ──
+        if (state.Variables.Count > 0)
+        {
+            _ir.AppendLine("  ; ── state variables ──");
+            _ir.AppendLine("  %base = inttoptr i64 %state_ptr to i8*");
+            int off = 0;
+            foreach (var v in state.Variables)
+            {
+                int size = LlvmTypeSize(v.Type);
+                int asz = LlvmTypeAlign(v.Type);
+                off = ((off + asz - 1) / asz) * asz;
+                string llvmTy = ToLlvmType(v.Type);
+                string safeName = SanitizeIdent(v.Name);
+                long val = ParseDefaultInt(v.DefaultValue);
+                _ir.AppendLine($"  %{safeName}_ptr = getelementptr i8, i8* %base, i32 {off}");
+                _ir.AppendLine($"  store {llvmTy} {val}, {llvmTy}* %{safeName}_ptr");
+                off += size;
+            }
+        }
+
         _ir.AppendLine("  ret void");
         _ir.AppendLine("}");
         _ir.AppendLine();
@@ -202,11 +222,12 @@ public class LlvmGenMetal
         _ir.AppendLine("@transition_table = internal constant [64 x i64] zeroinitializer, align 64");
         _ir.AppendLine();
 
-        // Emit example: load transition table into ZMM0
+        // Load transition table into ZMM register via pure LLVM IR
+        // bitcast [64 x i64]* → <8 x i64>* to match ZMM width (512 bit)
+        // volatile load prevents DCE of the dead SSA value
         _ir.AppendLine("define void @load_transition_table() {");
-        _ir.AppendLine("  %table = load [64 x i64], [64 x i64]* @transition_table");
-        _ir.AppendLine("  ; vmovdqa64 loads 512 bits into ZMM0");
-        _ir.AppendLine("  call void asm sideeffect \"vmovdqa64 $0, %zmm0\", \"=X,~{zmm0}\"()");
+        _ir.AppendLine("  %vec_ptr = bitcast [64 x i64]* @transition_table to <8 x i64>*");
+        _ir.AppendLine("  %zmm_val = load volatile <8 x i64>, <8 x i64>* %vec_ptr, align 64");
         _ir.AppendLine("  ret void");
         _ir.AppendLine("}");
         _ir.AppendLine();
@@ -304,6 +325,55 @@ public class LlvmGenMetal
             _ir.AppendLine("  ret i32 0");
         _ir.AppendLine("}");
         _ir.AppendLine();
+    }
+
+    // ── Type helpers for LLVM IR ──
+    private static int LlvmTypeSize(string type) => type.ToLowerInvariant() switch
+    {
+        "int8" or "byte" or "u8" or "bool" => 1,
+        "int16" or "short" or "half" or "u16" => 2,
+        "int32" or "int" or "uint" or "float" => 4,
+        "int64" or "long" or "double" or "uint64" => 8,
+        _ => 8
+    };
+
+    private static int LlvmTypeAlign(string type)
+    {
+        int s = LlvmTypeSize(type);
+        return s <= 4 ? s : 8;
+    }
+
+    private static string ToLlvmType(string type) => type.ToLowerInvariant() switch
+    {
+        "int8" or "byte" or "u8" or "bool" => "i8",
+        "int16" or "short" or "half" or "u16" => "i16",
+        "int32" or "int" or "uint" or "float" => "i32",
+        "int64" or "long" or "double" or "uint64" => "i64",
+        _ => "i64"
+    };
+
+    private static string SanitizeIdent(string name)
+    {
+        var sb = new StringBuilder(name.Length);
+        foreach (char c in name)
+        {
+            if (char.IsAsciiLetterOrDigit(c) || c == '_')
+                sb.Append(c);
+            else
+                sb.Append('_');
+        }
+        if (sb.Length == 0 || char.IsDigit(sb[0]))
+            sb.Insert(0, '_');
+        return sb.ToString();
+    }
+
+    private static long ParseDefaultInt(string? val)
+    {
+        if (string.IsNullOrEmpty(val)) return 0;
+        val = val.Trim().ToLowerInvariant();
+        if (val.StartsWith("0x"))
+            return long.TryParse(val[2..], System.Globalization.NumberStyles.HexNumber, null, out long h) ? h : 0;
+        return long.TryParse(val, out long d) ? d : 0;
     }
 
     public string GenerateFusionAsm(string instr1, string instr2)

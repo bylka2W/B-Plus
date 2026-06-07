@@ -1,37 +1,14 @@
-state Menu {
-    on start -> Playing
-    enter { print("=== GAME MENU ===") }
-    exit { print("Leaving menu...") }
-}
-
-state Playing {
+state Game {
     var score: int = 0
     var lives: int = 3
 
-    on hit -> Playing {
-        score = score + 10
-    }
-    on hit [score >= 50] -> WinState
-    on die -> Playing {
-        lives = lives - 1
-    }
-    on die [lives <= 0] -> GameOver
-    on pause -> Menu
-
-    enter { print("Game started! Score: 0, Lives: 3") }
-    exit { print("Exiting game...") }
-}
-
-state WinState {
-    on restart -> Menu
-    enter { print("*** YOU WIN! ***") }
+    on hit -> Game { score += 10 }
+    on die [lives <= 1] -> GameOver
+    on die [lives > 1] -> Game { lives -= 1 }
+    enter { start_game() }
 }
 
 state GameOver {
-    on restart -> Menu
-    enter { print("--- GAME OVER ---") }
-}
-
-entry main() {
-    print("B+ Game Engine v1.0")
+    on restart -> Game { reset_score() }
+    enter { show_game_over() }
 }

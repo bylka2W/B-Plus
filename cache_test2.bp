@@ -1,0 +1,12 @@
+state HotPath {
+    on tick -> HotPath
+    on done -> WarmState
+}
+
+state WarmState {
+    on tick -> ColdState
+}
+
+state ColdState {
+    on tick -> HotPath
+}

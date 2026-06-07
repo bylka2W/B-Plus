@@ -1,0 +1,19 @@
+state Start {
+    var x: int = 0
+    var y: int = 10
+    on go -> Start { x = x + 1; y = y - 1 }
+    on go [x == 3] -> EQ
+    on go [x != 5] -> NEQ
+    on go [x >= 7] -> GTE
+    on go [x > 9] -> GT
+    on go [y <= 5] -> LTE
+    on go [y < 2] -> LT
+    enter { print("S") }
+}
+state EQ { on next -> Start enter { print("==") } }
+state NEQ { on next -> Start enter { print("!=") } }
+state GTE { on next -> Start enter { print(">=") } }
+state GT { on next -> Start enter { print(">") } }
+state LTE { on next -> Start enter { print("<=") } }
+state LT { on next -> Start enter { print("<") } }
+entry main() { print("ALL") }

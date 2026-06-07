@@ -1,16 +1,7 @@
-state Start {
-    var x: int = 0
-    var y: int = 10
-    on tick -> Start { x = x + 1; y = y - 1 }
-    on tick [x >= 2] -> Middle
+state S {
+    var counter: int = 0
+    on inc -> S { counter = counter + 1 }
+    on check [counter >= 3] -> S
     enter { print("S") }
 }
-state Middle {
-    on tick -> End
-    enter { print("M") }
-}
-state End {
-    on tick -> Start
-    enter { print("E") }
-}
-entry main() { print("Test") }
+entry main() { print("INIT") }

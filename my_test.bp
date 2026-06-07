@@ -1,18 +1,15 @@
-state Red {
-    on timer -> Green
-    enter { print("Red light - STOP") }
+state Hot {
+    var x: int = 0
+    @hot(0.9)
+    on go -> Warm { x = x + 1 }
 }
 
-state Green {
-    on timer -> Yellow
-    enter { print("Green light - GO") }
+state Warm {
+    var y: int = 0
+    on go -> Cold { y = y + 1 }
 }
 
-state Yellow {
-    on timer -> Red
-    enter { print("Yellow light - WAIT") }
-}
-
-entry main() {
-    print("Traffic light started")
+state Cold {
+    @cold(0.05)
+    on go -> Hot
 }

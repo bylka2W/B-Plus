@@ -1,0 +1,11 @@
+state A {
+    on go -> B
+}
+
+state B {
+    on go -> C
+}
+
+state C {
+    on go -> A
+}

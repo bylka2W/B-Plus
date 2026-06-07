@@ -1,0 +1,24 @@
+state Login {
+    var attempts: int = 0
+    on password -> Login { attempts = attempts + 1 }
+    on password [attempts >= 3] -> Blocked
+    on correct -> Welcome
+    enter { print("Login") }
+}
+
+state Blocked {
+    var timer: int = 0
+    on tick -> Blocked { timer = timer + 1 }
+    on tick [timer >= 5] -> Login
+    enter { print("Blocked") }
+}
+
+state Welcome {
+    var visits: int = 0
+    on logout -> Login
+    on stay -> Welcome { visits = visits + 1 }
+    on stay [visits >= 2] -> Login
+    enter { print("Welcome") }
+}
+
+entry main() { print("AUTH SYSTEM") }

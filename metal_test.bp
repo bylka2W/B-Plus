@@ -1,0 +1,5 @@
+state Idle {
+    var counter: int = 0
+    on tick -> Idle { counter = counter + 1 }
+    on reset -> Idle { counter = 0 }
+}

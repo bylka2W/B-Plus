@@ -1,0 +1,12 @@
+state Start {
+    var x: int = 0
+    on alloc -> Start {
+        print("A");
+        x = 0
+    }
+    on read -> Start {
+        print("R")
+    }
+    enter { print("S") }
+}
+entry main() { print("GO") }
