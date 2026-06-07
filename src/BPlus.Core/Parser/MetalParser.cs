@@ -70,9 +70,13 @@ public class MetalParser
                 var annot = ParseMetalAnnotation();
                 if (annot != null)
                 {
-                    var block = new MetalBlock();
-                    ApplyAnnotation(block.Config, annot);
-                    blocks.Add(block);
+                    // Only create blocks for known metal annotations; skip B+ annotations like @hot/@cold
+                    if (IsRecognizedMetalAnnotation(annot.Name))
+                    {
+                        var block = new MetalBlock();
+                        ApplyAnnotation(block.Config, annot);
+                        blocks.Add(block);
+                    }
                 }
             }
             else
@@ -308,6 +312,19 @@ public class MetalParser
     }
 
     // --- Helpers ---
+
+    private static bool IsRecognizedMetalAnnotation(string name)
+    {
+        return name switch
+        {
+            "tier" or "register" or "zmm" or "mask" or "fusion"
+            or "section" or "gateway" or "prefetch" or "align" or "packed"
+            or "data_tier" or "hot_path" or "critical_size" or "byte_pack"
+            or "field" or "metal" or "numa" or "store_forward_safe"
+            or "muarch" or "ilp_max" => true,
+            _ => false
+        };
+    }
 
     private string ParseWord()
     {

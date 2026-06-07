@@ -86,7 +86,14 @@ public static class TierClassifier
         if (blockMap.TryGetValue(state.Name, out var cfg))
         {
             if (cfg.Tier.HasValue)
+            {
                 ApplyTier(r, cfg.Tier.Value);
+            }
+            else
+            {
+                // Metal block exists but no tier set — fall back to hot weight detection
+                DetectTierFromHotWeights(state, r);
+            }
             if (cfg.Alignment.HasValue)
                 r.Alignment = cfg.Alignment.Value;
             if (cfg.HotPath)
@@ -145,6 +152,16 @@ public static class TierClassifier
         bool hasHot = false;
         bool hasCold = false;
 
+        // Check state-level @hot/@cold first
+        if (state.HotWeight.HasValue)
+        {
+            if (state.HotWeight.Value >= 0.8)
+                hasHot = true;
+            else if (state.HotWeight.Value <= 0.1)
+                hasCold = true;
+        }
+
+        // Also check transition-level hot weights
         foreach (var t in state.Transitions)
         {
             if (t.HotWeight.HasValue && t.HotWeight.Value >= 0.8) hasHot = true;
