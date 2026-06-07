@@ -1,4 +1,5 @@
-﻿using System.Text.RegularExpressions;
+﻿using System.Globalization;
+using System.Text.RegularExpressions;
 using BPlus.Core.Ast;
 
 namespace BPlus.Core.Parser;
@@ -158,8 +159,15 @@ public partial class BPlusParser
                         if (a.Name == "predict" && a.Args.TryGetValue("_val", out var predVal))
                         {
                             state.Predict = predVal;
-                            if (a.Args.TryGetValue("p", out var pStr) && double.TryParse(pStr, out var pVal))
+                            if (a.Args.TryGetValue("p", out var pStr) && double.TryParse(pStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var pVal))
                                 state.PredictProbability = pVal;
+                        }
+                        if (a.Name == "hot")
+                        {
+                            if (a.Args.TryGetValue("_val", out var hotVal) && double.TryParse(hotVal, NumberStyles.Any, CultureInfo.InvariantCulture, out var hw))
+                                state.HotWeight = hw;
+                            else
+                                state.HotWeight = 0.9;
                         }
                     }
                     program.States.Add(state);
@@ -506,17 +514,17 @@ public partial class BPlusParser
         switch (a.Name)
         {
             case "hot":
-                if (a.Args.TryGetValue("_val", out var hotVal) && double.TryParse(hotVal, out var hotW))
+                if (a.Args.TryGetValue("_val", out var hotVal) && double.TryParse(hotVal, NumberStyles.Any, CultureInfo.InvariantCulture, out var hotW))
                     trans.HotWeight = hotW;
-                else if (a.Args.TryGetValue("weight", out var hotW2) && double.TryParse(hotW2, out var hotW3))
+                else if (a.Args.TryGetValue("weight", out var hotW2) && double.TryParse(hotW2, NumberStyles.Any, CultureInfo.InvariantCulture, out var hotW3))
                     trans.HotWeight = hotW3;
                 else
                     trans.HotWeight = 0.9; // default hot
                 break;
             case "cold":
-                if (a.Args.TryGetValue("_val", out var coldVal) && double.TryParse(coldVal, out var coldW))
+                if (a.Args.TryGetValue("_val", out var coldVal) && double.TryParse(coldVal, NumberStyles.Any, CultureInfo.InvariantCulture, out var coldW))
                     trans.HotWeight = coldW;
-                else if (a.Args.TryGetValue("weight", out var coldW2) && double.TryParse(coldW2, out var coldW3))
+                else if (a.Args.TryGetValue("weight", out var coldW2) && double.TryParse(coldW2, NumberStyles.Any, CultureInfo.InvariantCulture, out var coldW3))
                     trans.HotWeight = coldW3;
                 else
                     trans.HotWeight = 0.1; // default cold
@@ -524,7 +532,7 @@ public partial class BPlusParser
             case "predict":
                 if (a.Args.TryGetValue("_val", out var predV))
                     trans.Predict = predV;
-                if (a.Args.TryGetValue("p", out var probS) && double.TryParse(probS, out var prob))
+                if (a.Args.TryGetValue("p", out var probS) && double.TryParse(probS, NumberStyles.Any, CultureInfo.InvariantCulture, out var prob))
                     trans.PredictProbability = prob;
                 break;
         }
@@ -1663,8 +1671,8 @@ return entries;
                     if (_lexer.Src[_lexer.Pos] == ']') _lexer.Pos++;
                     sk.IntervalConfig = new IntervalArithmetic
                     {
-                        Lower = double.TryParse(lower, out var l) ? l : 0,
-                        Upper = double.TryParse(upper, out var u) ? u : 1
+                        Lower = double.TryParse(lower, NumberStyles.Any, CultureInfo.InvariantCulture, out var l) ? l : 0,
+                        Upper = double.TryParse(upper, NumberStyles.Any, CultureInfo.InvariantCulture, out var u) ? u : 1
                     };
                 }
             }
@@ -2614,7 +2622,7 @@ return entries;
                         th += _lexer.Src[_lexer.Pos];
                         _lexer.Pos++;
                     }
-                    if (double.TryParse(th, out var threshold))
+                    if (double.TryParse(th, NumberStyles.Any, CultureInfo.InvariantCulture, out var threshold))
                         config.AnomalyThreshold = threshold;
                 }
                 else
@@ -3840,7 +3848,7 @@ return entries;
         if (type is "int" or "i32" or "i64" or "u32" or "u64")
             return int.TryParse(value, out _) || long.TryParse(value, out _);
         if (type is "float" or "f32" or "double" or "f64")
-            return double.TryParse(value, out _);
+            return double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out _);
         if (type is "bool" or "boolean")
             return value is "true" or "false" or "0" or "1";
         if (type is "string")

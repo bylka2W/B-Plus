@@ -137,6 +137,7 @@ public class StateDefNode
     public bool CachePin { get; set; }
     public int? CacheAlign { get; set; }
     public bool NonTemporal { get; set; }
+    public double? HotWeight { get; set; }
 
     // Branch prediction
     public string? Predict { get; set; }

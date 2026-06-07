@@ -367,6 +367,38 @@ public static class X64Encoder
                 break;
             }
 
+            case OpCode.JG_REL32:
+            {
+                bytes.Add(0x0F);
+                bytes.Add(0x8F);
+                bytes.AddRange(BitConverter.GetBytes((uint)operands[0].Imm32));
+                break;
+            }
+
+            case OpCode.JGE_REL32:
+            {
+                bytes.Add(0x0F);
+                bytes.Add(0x8D);
+                bytes.AddRange(BitConverter.GetBytes((uint)operands[0].Imm32));
+                break;
+            }
+
+            case OpCode.JL_REL32:
+            {
+                bytes.Add(0x0F);
+                bytes.Add(0x8C);
+                bytes.AddRange(BitConverter.GetBytes((uint)operands[0].Imm32));
+                break;
+            }
+
+            case OpCode.JLE_REL32:
+            {
+                bytes.Add(0x0F);
+                bytes.Add(0x8E);
+                bytes.AddRange(BitConverter.GetBytes((uint)operands[0].Imm32));
+                break;
+            }
+
             case OpCode.JA_REL8:
             {
                 sbyte offset = operands[0].Imm8;
@@ -507,6 +539,28 @@ public static class X64Encoder
                 bytes.Add((byte)(0x48 + ((reg >> 3) & 1))); // REX.W
                 bytes.Add(0x8B);
                 bytes.Add((byte)(0x05 + ((reg & 7) << 3))); // mod=00, rm=101
+                bytes.AddRange(BitConverter.GetBytes(disp));
+                break;
+            }
+
+            case OpCode.PREFETCHT0_RIPREL:
+            {
+                int disp = (int)operands[0].Imm32;
+                bytes.Add(0x0F); bytes.Add(0x18); bytes.Add(0x0D); // T0: reg=1
+                bytes.AddRange(BitConverter.GetBytes(disp));
+                break;
+            }
+            case OpCode.PREFETCHT1_RIPREL:
+            {
+                int disp = (int)operands[0].Imm32;
+                bytes.Add(0x0F); bytes.Add(0x18); bytes.Add(0x15); // T1: reg=2
+                bytes.AddRange(BitConverter.GetBytes(disp));
+                break;
+            }
+            case OpCode.PREFETCHT2_RIPREL:
+            {
+                int disp = (int)operands[0].Imm32;
+                bytes.Add(0x0F); bytes.Add(0x18); bytes.Add(0x1D); // T2: reg=3
                 bytes.AddRange(BitConverter.GetBytes(disp));
                 break;
             }
@@ -708,6 +762,10 @@ public enum OpCode
     JGE_REL8,
     JL_REL8,
     JLE_REL8,
+    JG_REL32,
+    JGE_REL32,
+    JL_REL32,
+    JLE_REL32,
     JA_REL8,
     JB_REL8,
     PUSH_R64,
@@ -738,6 +796,9 @@ public enum OpCode
     MOVZX_R64_MEM8,
     CALL_RIPDISP,
     MOV_R64_MEM_RIP,
+    PREFETCHT0_RIPREL,
+    PREFETCHT1_RIPREL,
+    PREFETCHT2_RIPREL,
 }
 
 public struct Operand

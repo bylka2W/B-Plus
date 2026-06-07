@@ -38,6 +38,10 @@ public class X64CodeGen
     private int _offRemaining;
     private int _offBuf;
     private int _offCtxVarStart;
+    private int _offStateDataBase; // base of shared state data block (zero-copy)
+
+    // State code bounds for L1i budget tracking
+    private readonly Dictionary<int, (int start, int end)> _stateCodeBounds = new();
 
     private static readonly string[] ImportFns = { "GetStdHandle", "WriteFile", "ReadFile", "ExitProcess", "GetProcessHeap", "HeapAlloc", "HeapFree" };
     private const int IdxGetStdHandle = 0;
@@ -64,7 +68,9 @@ public class X64CodeGen
         ComputeStackLayout();
         EmitPrologueAndInit();
         EmitStateEnterFuncs();
+        PadForCacheAssociativity();
         EmitEventLoop();
+        EmitCacheBudgetChecks();
         EmbedStringPool();
         int importDirRva = EmitImportTable();
         ApplyFixups();
@@ -92,15 +98,45 @@ public class X64CodeGen
         _offCtxVarStart = off;
         foreach (var _ in _ctxVars)
             off -= 8;
-        // State variables (after context vars)
+
+        // Shared state data block for zero-copy transitions
+        // Variables with the same name share the same offset across states
+        // All @cache(L1) variables are in one compact block for hw prefetcher
+        _offStateDataBase = off;
         _stateVars.Clear();
-        foreach (var state in _program.States)
+        var sharedVarOffsets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        int l1BlockStart = off;
+        int l1BlockEnd = off;
+
+        // First pass: allocate unique variable names for @cache(L1) states
+        foreach (var state in _program.States.Where(s => s.CachePolicy == "L1"))
         {
             var svList = new List<StateVarInfo>();
             foreach (var v in state.Variables)
             {
-                svList.Add(new StateVarInfo { Name = v.Name, Type = v.Type, DefaultValue = v.DefaultValue ?? "0", StackOffset = off });
-                off -= 8;
+                if (!sharedVarOffsets.ContainsKey(v.Name))
+                {
+                    sharedVarOffsets[v.Name] = off;
+                    off -= 8;
+                }
+                svList.Add(new StateVarInfo { Name = v.Name, Type = v.Type, DefaultValue = v.DefaultValue ?? "0", StackOffset = sharedVarOffsets[v.Name] });
+            }
+            _stateVars[state.Name] = svList;
+        }
+        l1BlockEnd = off;
+
+        // Second pass: non-L1 state variables (cold, normal) — also shared by name
+        foreach (var state in _program.States.Where(s => s.CachePolicy != "L1"))
+        {
+            var svList = new List<StateVarInfo>();
+            foreach (var v in state.Variables)
+            {
+                if (!sharedVarOffsets.ContainsKey(v.Name))
+                {
+                    sharedVarOffsets[v.Name] = off;
+                    off -= 8;
+                }
+                svList.Add(new StateVarInfo { Name = v.Name, Type = v.Type, DefaultValue = v.DefaultValue ?? "0", StackOffset = sharedVarOffsets[v.Name] });
             }
             _stateVars[state.Name] = svList;
         }
@@ -127,7 +163,7 @@ public class X64CodeGen
         foreach (var v in _ctxVars)
         {
             long val = ParseNumber(v.DefaultValue);
-            Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(val));
+            EmitLoadImm(Reg.RAX, val);
             Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, off), R(Reg.RAX));
             off -= 8;
         }
@@ -138,7 +174,7 @@ public class X64CodeGen
             foreach (var sv in svList)
             {
                 long val = ParseNumber(sv.DefaultValue);
-                Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(val));
+                EmitLoadImm(Reg.RAX, val);
                 Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, sv.StackOffset), R(Reg.RAX));
             }
         }
@@ -181,13 +217,51 @@ public class X64CodeGen
     // ── State enter functions ──
     private void EmitStateEnterFuncs()
     {
-        for (int i = 0; i < _program.States.Count; i++)
+        var sorted = _program.States
+            .Select((s, i) => (State: s, OrigIdx: i))
+            .OrderByDescending(x => x.State.HotWeight >= 0.8 ? 2
+                                  : x.State.HotWeight <= 0.3 ? 0
+                                  : 1)
+            .ThenBy(x => x.OrigIdx)
+            .ToList();
+
+        foreach (var (state, origIdx) in sorted)
         {
-            _labels["en_" + i] = _code.Count;
-            var state = _program.States[i];
+            // Align hot states to 64-byte cache line boundary (prevents split)
+            if ((state.HotWeight ?? 0) >= 0.8)
+            {
+                int align = state.CacheAlign ?? 64;
+                if (align == 64) AlignTo64();
+                else if (align >= 16) { while (_code.Count % align != 0) _code.Add(0x90); }
+            }
+            int startOff = _code.Count;
+            _labels["en_" + origIdx] = _code.Count;
             foreach (var act in state.Actions.Where(a => a.Type == ActionType.Enter))
                 EmitAction(act.Body, state.Name);
+
+            // Lookahead prefetch: prefetch data for the 2-3 most likely next transitions
+            var likelyTransitions = state.Transitions
+                .OrderByDescending(t => t.HotWeight ?? 0.5)
+                .Take(3)
+                .ToList();
+            foreach (var t in likelyTransitions)
+            {
+                int ti = FindStateIndex(t.Target);
+                var targetState = _program.States[ti];
+                int level = targetState.CachePolicy switch { "L2" => 2, "L3" => 3, _ => 1 };
+                if (_stateVars.TryGetValue(t.Target, out var vars))
+                {
+                    foreach (var sv in vars)
+                        EmitPrefetchData(sv.StackOffset, level);
+                }
+                // Prefetch target enter code at L1i level
+                if (level <= 1)
+                    EmitPrefetch("en_" + ti);
+            }
+
             Emit(OpCode.RET);
+            int endOff = _code.Count;
+            _stateCodeBounds[origIdx] = (startOff, endOff);
         }
     }
 
@@ -199,10 +273,10 @@ public class X64CodeGen
         // ReadFile(hStdIn, buf, BufSize, &charsRead, null)
         Emit(OpCode.MOV_R64_MEM,  R(Reg.RCX), Mem(Reg.RBP, _offHStdIn));
         Emit(OpCode.LEA_R64_MEM,  R(Reg.RDX), Mem(Reg.RBP, _offBuf));
-        Emit(OpCode.MOV_R64_IMM64, R(Reg.R8),  Imm(BufSize));
+        EmitMovRegImm32(Reg.R8, BufSize);
         Emit(OpCode.LEA_R64_MEM,  R(Reg.R9),  Mem(Reg.RBP, _offCharsRead));
         Emit(OpCode.SUB_R64_IMM32, R(Reg.RSP), ImmU32(40)); // shadow + 5th arg
-        Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(0));
+        EmitXorReg(Reg.RAX);
         Emit(OpCode.MOV_MEM_R64,   Mem(Reg.RSP, 32), R(Reg.RAX)); // overlapped = NULL
         EmitIatCall(IdxReadFile);
         Emit(OpCode.ADD_R64_IMM32, R(Reg.RSP), ImmU32(40));
@@ -222,10 +296,11 @@ public class X64CodeGen
         Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, _offRemaining), R(Reg.RAX));
 
         // ── Re-dispatch entry: skip ReadFile, process remaining buffer ──
+        AlignTo16();
         _labels["re_dispatch"] = _code.Count;
 
         // If remaining == 0, no more data in buffer → read more
-        Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, _offRemaining));
+        Emit(OpCode.MOV_R32_MEM, R(Reg.RAX), Mem(Reg.RBP, _offRemaining));
         Emit(OpCode.TEST_R64_R64, R(Reg.RAX), R(Reg.RAX));
         EmitCondLongJmp(OpCode.JE_REL32, "evloop");
 
@@ -233,7 +308,7 @@ public class X64CodeGen
         int exIdx = AddPoolString("exit");
         EmitRipLea(Reg.RSI, exIdx);
         Emit(OpCode.LEA_R64_MEM, R(Reg.RDI), Mem(Reg.RBP, _offBuf));
-        Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, _offCursor));
+        Emit(OpCode.MOV_R32_MEM, R(Reg.RAX), Mem(Reg.RBP, _offCursor));
         Emit(OpCode.ADD_R64_R64, R(Reg.RDI), R(Reg.RAX));
         string exLp = "exl";
         string exCe = "exce";
@@ -244,8 +319,8 @@ public class X64CodeGen
         EmitShortJmp(OpCode.JNE_REL8, exCe);
         Emit(OpCode.TEST_R64_R64, R(Reg.RAX), R(Reg.RAX));
         EmitCondLongJmp(OpCode.JE_REL32, "exit_process");
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RSI), ImmU32(1));
+        EmitInc(Reg.RDI);
+        EmitInc(Reg.RSI);
         EmitShortJmp(OpCode.JMP_REL8, exLp);
         _labels[exCe] = _code.Count;
         Emit(OpCode.TEST_R64_R64, R(Reg.RBX), R(Reg.RBX));
@@ -253,7 +328,7 @@ public class X64CodeGen
         // Skip trailing whitespace before checking terminator
         EmitShortJmp(OpCode.JMP_REL8, "ex_chk_term");
         _labels["ex_skip_ws"] = _code.Count;
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));
+        EmitInc(Reg.RDI);
         Emit(OpCode.MOVZX_R64_MEM8, R(Reg.RAX), Mem(Reg.RDI, 0));
         _labels["ex_chk_term"] = _code.Count;
         Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x20));
@@ -270,7 +345,7 @@ public class X64CodeGen
         _labels["no_exit"] = _code.Count;
 
         // Load current_state into R12
-        Emit(OpCode.MOV_R64_MEM, R(Reg.R12), Mem(Reg.RBP, _offCurState));
+        Emit(OpCode.MOV_R32_MEM, R(Reg.R12), Mem(Reg.RBP, _offCurState));
 
         // Switch: cmp R12, i → je handler_i
         for (int i = 0; i < _stateNames.Count; i++)
@@ -284,8 +359,12 @@ public class X64CodeGen
         // ── State dispatch handlers ──
         for (int si = 0; si < _program.States.Count; si++)
         {
+            var dpState = _program.States[si];
             _labels["dp_" + si] = _code.Count;
-            EmitStateDispatch(_program.States[si], si);
+            // Non-temporal prefetch for cold state data — evict from L1
+            if ((dpState.HotWeight ?? 0.5) <= 0.3)
+                EmitPrefetchColdData(dpState);
+            EmitStateDispatch(dpState, si);
             // No transition matched → advance past this line, re-dispatch
             EmitLongJmp("advance_cursor");
         }
@@ -294,17 +373,17 @@ public class X64CodeGen
         EmitLongJmp("advance_cursor");
 
         // ── Advance cursor past current line (shared snippet) ──
+        AlignTo16();
         _labels["advance_cursor"] = _code.Count;
 
         // RDI = buf_start + cursor (current line start)
         Emit(OpCode.LEA_R64_MEM, R(Reg.RDI), Mem(Reg.RBP, _offBuf));
-        Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, _offCursor));
+        Emit(OpCode.MOV_R32_MEM, R(Reg.RAX), Mem(Reg.RBP, _offCursor));
         Emit(OpCode.ADD_R64_R64, R(Reg.RDI), R(Reg.RAX));
         // RBX = old cursor (save for delta computation)
         Emit(OpCode.MOV_R64_R64, R(Reg.RBX), R(Reg.RAX));
         // RCX = remaining (scan limit)
-        Emit(OpCode.MOV_R64_IMM64, R(Reg.RCX), Imm(0));
-        Emit(OpCode.MOV_R64_MEM, R(Reg.RCX), Mem(Reg.RBP, _offRemaining));
+        Emit(OpCode.MOV_R32_MEM, R(Reg.RCX), Mem(Reg.RBP, _offRemaining));
 
         // Scan for \n, \r, or \0
         string advScan = "adv_scan";
@@ -321,24 +400,24 @@ public class X64CodeGen
         EmitShortJmp(OpCode.JE_REL8, advFound);        // \n → found
         Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x0D));
         EmitShortJmp(OpCode.JE_REL8, advCr);           // \r → handle CRLF
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RCX), ImmU32(0xFFFFFFFF)); // decrement
+        EmitInc(Reg.RDI);
+        EmitDec(Reg.RCX);
         EmitShortJmp(OpCode.JMP_REL8, advScan);
 
         _labels[advCr] = _code.Count;
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));  // skip \r
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RCX), ImmU32(0xFFFFFFFF));
+        EmitInc(Reg.RDI);
+        EmitDec(Reg.RCX);
         EmitShortJmp(OpCode.JE_REL8, advDone);               // RCX hit 0
         Emit(OpCode.MOVZX_R64_MEM8, R(Reg.RAX), Mem(Reg.RDI, 0));  // load next byte
         Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x0A));
         EmitShortJmp(OpCode.JNE_REL8, advDone);              // not CRLF → done
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));  // skip \n in CRLF
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RCX), ImmU32(0xFFFFFFFF));
+        EmitInc(Reg.RDI);
+        EmitDec(Reg.RCX);
         EmitShortJmp(OpCode.JMP_REL8, advDone);              // done (skip advFound INC)
 
         _labels[advFound] = _code.Count;
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));  // skip terminator
-        Emit(OpCode.ADD_R64_IMM32, R(Reg.RCX), ImmU32(0xFFFFFFFF));
+        EmitInc(Reg.RDI);
+        EmitDec(Reg.RCX);
 
         _labels[advDone] = _code.Count;
         // RDI = absolute position after consumed line's terminator
@@ -349,7 +428,7 @@ public class X64CodeGen
         Emit(OpCode.MOV_R64_R64, R(Reg.RAX), R(Reg.RDI));
         Emit(OpCode.SUB_R64_R64, R(Reg.RAX), R(Reg.RBX));
         // _offRemaining -= consumed
-        Emit(OpCode.MOV_R64_MEM, R(Reg.RCX), Mem(Reg.RBP, _offRemaining));
+        Emit(OpCode.MOV_R32_MEM, R(Reg.RCX), Mem(Reg.RBP, _offRemaining));
         Emit(OpCode.SUB_R64_R64, R(Reg.RCX), R(Reg.RAX));
         Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, _offRemaining), R(Reg.RCX));
         // _offCursor = new_cursor
@@ -405,7 +484,7 @@ public class X64CodeGen
             int strOff = AddPoolString(eventName);
             EmitRipLea(Reg.RSI, strOff);
             Emit(OpCode.LEA_R64_MEM, R(Reg.RDI), Mem(Reg.RBP, _offBuf));
-            Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, _offCursor));
+            Emit(OpCode.MOV_R32_MEM, R(Reg.RAX), Mem(Reg.RBP, _offCursor));
             Emit(OpCode.ADD_R64_R64, R(Reg.RDI), R(Reg.RAX));
 
             string loopLabel = $"eg_lp_{si}_{egIdx}";
@@ -417,18 +496,18 @@ public class X64CodeGen
             EmitShortJmp(OpCode.JNE_REL8, checkEnd);
             Emit(OpCode.TEST_R64_R64, R(Reg.RAX), R(Reg.RAX));
             EmitShortJmp(OpCode.JE_REL8, $"eg_mt_{si}_{egIdx}");
-            Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));
-            Emit(OpCode.ADD_R64_IMM32, R(Reg.RSI), ImmU32(1));
+            EmitInc(Reg.RDI);
+            EmitInc(Reg.RSI);
             EmitShortJmp(OpCode.JMP_REL8, loopLabel);
 
             // Event end check: event byte != 0 → real mismatch → skip group
             _labels[checkEnd] = _code.Count;
             Emit(OpCode.TEST_R64_R64, R(Reg.RBX), R(Reg.RBX));
-            EmitShortJmp(OpCode.JNE_REL8, $"eg_done_{si}_{egIdx}");
+            EmitCondLongJmp(OpCode.JNE_REL32, $"eg_done_{si}_{egIdx}");
             // Skip trailing whitespace then check for terminators
             EmitShortJmp(OpCode.JMP_REL8, $"eg_skip_{si}_{egIdx}");
             _labels[$"eg_ws_{si}_{egIdx}"] = _code.Count;
-            Emit(OpCode.ADD_R64_IMM32, R(Reg.RDI), ImmU32(1));
+            EmitInc(Reg.RDI);
             Emit(OpCode.MOVZX_R64_MEM8, R(Reg.RAX), Mem(Reg.RDI, 0));
             _labels[$"eg_skip_{si}_{egIdx}"] = _code.Count;
             Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x20));
@@ -441,39 +520,45 @@ public class X64CodeGen
             EmitShortJmp(OpCode.JE_REL8, $"eg_mt_{si}_{egIdx}");
             Emit(OpCode.CMP_R64_IMM32, R(Reg.RAX), ImmU32(0x0D));
             EmitShortJmp(OpCode.JE_REL8, $"eg_mt_{si}_{egIdx}");
-            EmitShortJmp(OpCode.JMP_REL8, $"eg_done_{si}_{egIdx}");
+            EmitLongJmp($"eg_done_{si}_{egIdx}");
 
-            // Event matched — try each transition in order
+            // Event matched — try each transition in priority order
             _labels[$"eg_mt_{si}_{egIdx}"] = _code.Count;
 
-            int? defaultTi = null;
-            for (int gi = 0; gi < transList.Count; gi++)
+            // Split: specific guards first, then guardless, then != guards last
+            var specificGuards = transList.Where(t => !string.IsNullOrEmpty(t.Guard) && !t.Guard.Contains("!=")).ToList();
+            var neqGuards = transList.Where(t => t.Guard?.Contains("!=") ?? false).ToList();
+            var guardlessList = transList.Where(t => string.IsNullOrEmpty(t.Guard)).ToList();
+
+            // 1) Specific guarded transitions first (==, >=, <=, >, <)
+            foreach (var t in specificGuards)
             {
-                var t = transList[gi];
                 int origTi = state.Transitions.IndexOf(t);
-
-                if (!string.IsNullOrEmpty(t.Guard))
-                {
-                    EmitGuardSkip(t.Guard, si, origTi);
-                    if (!string.IsNullOrEmpty(t.Body))
-                        EmitAction(t.Body, state.Name);
-                    ChangeToState(t.Target, si);
-                    // Guard failure → fall through to next transition
-                    _labels[$"sk_{si}_{origTi}"] = _code.Count;
-                }
-                else
-                {
-                    defaultTi = origTi;
-                }
+                EmitGuardSkip(t.Guard!, si, origTi);
+                EmitPrefetchForTransitionCacheAware(t);
+                if (!string.IsNullOrEmpty(t.Body))
+                    EmitAction(t.Body, state.Name);
+                ChangeToState(t.Target, si);
+                _labels[$"sk_{si}_{origTi}"] = _code.Count;
             }
-
-            // All guarded transitions failed → fire guardless fallback (if any)
-            if (defaultTi.HasValue)
+            // 2) Guardless fallback
+            foreach (var t in guardlessList)
             {
-                var tFallback = transList.First(tr => string.IsNullOrEmpty(tr.Guard));
-                if (!string.IsNullOrEmpty(tFallback.Body))
-                    EmitAction(tFallback.Body, state.Name);
-                ChangeToState(tFallback.Target, si);
+                EmitPrefetchForTransitionCacheAware(t);
+                if (!string.IsNullOrEmpty(t.Body))
+                    EmitAction(t.Body, state.Name);
+                ChangeToState(t.Target, si);
+            }
+            // 3) != guards last (broadest)
+            foreach (var t in neqGuards)
+            {
+                int origTi = state.Transitions.IndexOf(t);
+                EmitGuardSkip(t.Guard!, si, origTi);
+                EmitPrefetchForTransitionCacheAware(t);
+                if (!string.IsNullOrEmpty(t.Body))
+                    EmitAction(t.Body, state.Name);
+                ChangeToState(t.Target, si);
+                _labels[$"sk_{si}_{origTi}"] = _code.Count;
             }
 
             // Event group skip label — event name mismatch or all guards failed with no fallback
@@ -496,16 +581,16 @@ public class X64CodeGen
         if (!TryLoadVarToReg(Reg.RAX, lhs, curStateName))
         {
             if (long.TryParse(lhs, out long lv))
-                Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(lv));
+                EmitLoadImm(Reg.RAX, lv);
             else
-                Emit(OpCode.XOR_R64_R64, R(Reg.RAX), R(Reg.RAX));
+                EmitXorReg(Reg.RAX);
         }
 
         // Load rhs — check context, then state vars, then constant
         if (!TryLoadVarToReg(Reg.RBX, rhs, curStateName))
         {
             if (long.TryParse(rhs, out long rv))
-                Emit(OpCode.MOV_R64_IMM64, R(Reg.RBX), Imm(rv));
+                EmitLoadImm(Reg.RBX, rv);
             else
                 Emit(OpCode.XOR_R64_R64, R(Reg.RBX), R(Reg.RBX));
         }
@@ -514,12 +599,12 @@ public class X64CodeGen
 
         switch (op)
         {
-            case ">" : EmitShortJmp(OpCode.JLE_REL8, skipLabel); break;
-            case "<" : EmitShortJmp(OpCode.JGE_REL8, skipLabel); break;
-            case ">=": EmitShortJmp(OpCode.JL_REL8,  skipLabel); break;
-            case "<=": EmitShortJmp(OpCode.JG_REL8,  skipLabel); break;
-            case "==": EmitShortJmp(OpCode.JNE_REL8, skipLabel); break;
-            case "!=": EmitShortJmp(OpCode.JE_REL8,  skipLabel); break;
+            case ">" : EmitCondLongJmp(OpCode.JLE_REL32, skipLabel); break;
+            case "<" : EmitCondLongJmp(OpCode.JGE_REL32, skipLabel); break;
+            case ">=": EmitCondLongJmp(OpCode.JL_REL32,  skipLabel); break;
+            case "<=": EmitCondLongJmp(OpCode.JG_REL32,  skipLabel); break;
+            case "==": EmitCondLongJmp(OpCode.JNE_REL32, skipLabel); break;
+            case "!=": EmitCondLongJmp(OpCode.JE_REL32,  skipLabel); break;
         }
     }
 
@@ -534,19 +619,12 @@ public class X64CodeGen
             EmitAction(act.Body, curState.Name);
 
         // current_state = ti
-        Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(ti));
+        EmitMovRegImm32(Reg.RAX, (uint)ti);
         Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, _offCurState), R(Reg.RAX));
 
-        // On cross-state transition, re-init target state's variables (not on self-transition)
-        if (ti != currentStateIdx && _stateVars.TryGetValue(targetName, out var svList))
-        {
-            foreach (var sv in svList)
-            {
-                long defVal = ParseNumber(sv.DefaultValue);
-                Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(defVal));
-                Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, sv.StackOffset), R(Reg.RAX));
-            }
-        }
+        // Zero-copy transition: NO variable re-initialization.
+        // Variables persist in the shared state data block.
+        // The target state's enter function handles any needed setup.
 
         // call enter_{ti}
         EmitCallToLabel("en_" + ti);
@@ -578,7 +656,7 @@ public class X64CodeGen
             Emit(OpCode.MOV_R64_IMM64,  R(Reg.R8),  Imm(Encoding.UTF8.GetByteCount(content)));
             Emit(OpCode.LEA_R64_MEM,    R(Reg.R9),  Mem(Reg.RBP, _offCharsWritten));
             Emit(OpCode.SUB_R64_IMM32, R(Reg.RSP), ImmU32(40)); // shadow + 5th arg
-            Emit(OpCode.MOV_R64_IMM64,  R(Reg.RAX), Imm(0));
+            EmitXorReg(Reg.RAX);
             Emit(OpCode.MOV_MEM_R64,    Mem(Reg.RSP, 32), R(Reg.RAX)); // 5th arg at safe offset
             EmitIatCall(IdxWriteFile);
             Emit(OpCode.ADD_R64_IMM32, R(Reg.RSP), ImmU32(40));
@@ -762,9 +840,9 @@ public class X64CodeGen
         if (!TryLoadVarToReg(Reg.RAX, atom, stateName))
         {
             if (long.TryParse(atom, out long v))
-                Emit(OpCode.MOV_R64_IMM64, R(Reg.RAX), Imm(v));
+                EmitLoadImm(Reg.RAX, v);
             else
-                Emit(OpCode.XOR_R64_R64, R(Reg.RAX), R(Reg.RAX));
+                EmitXorReg(Reg.RAX);
         }
     }
 
@@ -956,7 +1034,10 @@ public class X64CodeGen
     // Win32 call with single int arg
     private void EmitWin32Call(int importIdx, int arg)
     {
-        Emit(OpCode.MOV_R64_IMM64, R(Reg.RCX), Imm(arg));
+        if (arg == 0)
+            EmitXorReg(Reg.RCX);
+        else
+            Emit(OpCode.MOV_R64_IMM64, R(Reg.RCX), Imm(arg));
         ShadowCall(importIdx);
     }
 
@@ -965,6 +1046,276 @@ public class X64CodeGen
         Emit(OpCode.SUB_R64_IMM32, R(Reg.RSP), ImmU32(40));
         EmitIatCall(importIdx);
         Emit(OpCode.ADD_R64_IMM32, R(Reg.RSP), ImmU32(40));
+    }
+
+    // ── Multi-byte NOP (up to 9 bytes) ──
+    private static ReadOnlySpan<byte> Nop9 => new byte[] { 0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    private static ReadOnlySpan<byte> Nop8 => new byte[] { 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    private static ReadOnlySpan<byte> Nop7 => new byte[] { 0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00 };
+    private static ReadOnlySpan<byte> Nop6 => new byte[] { 0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00 };
+    private static ReadOnlySpan<byte> Nop5 => new byte[] { 0x0F, 0x1F, 0x44, 0x00, 0x00 };
+    private static ReadOnlySpan<byte> Nop4 => new byte[] { 0x0F, 0x1F, 0x40, 0x00 };
+    private static ReadOnlySpan<byte> Nop3 => new byte[] { 0x0F, 0x1F, 0x00 };
+    private static ReadOnlySpan<byte> Nop2 => new byte[] { 0x66, 0x90 };
+
+    private void EmitNop(int count)
+    {
+        while (count >= 9) { _code.AddRange(Nop9); count -= 9; }
+        if (count >= 8) { _code.AddRange(Nop8); count -= 8; }
+        if (count >= 7) { _code.AddRange(Nop7); count -= 7; }
+        if (count >= 6) { _code.AddRange(Nop6); count -= 6; }
+        if (count >= 5) { _code.AddRange(Nop5); count -= 5; }
+        if (count >= 4) { _code.AddRange(Nop4); count -= 4; }
+        if (count >= 3) { _code.AddRange(Nop3); count -= 3; }
+        if (count >= 2) { _code.AddRange(Nop2); count -= 2; }
+        if (count >= 1) { _code.Add(0x90); }
+    }
+
+    // ── Compact instruction helpers ──
+
+    // XOR reg32, reg32 — 2 bytes (reg 0-7) or 3 bytes (reg 8-15)
+    private void EmitXorReg(int reg)
+    {
+        if (reg >= 8)
+            _code.Add(0x45); // REX.RB
+        _code.Add(0x33);
+        _code.Add((byte)(0xC0 + (reg & 7) * 9));
+    }
+
+    // INC r64 — 3 bytes
+    private void EmitInc(int reg)
+    {
+        _code.Add((byte)(0x48 + ((reg >> 3) & 1)));
+        _code.Add(0xFF);
+        _code.Add((byte)(0xC0 + (reg & 7)));
+    }
+
+    // DEC r64 — 3 bytes
+    private void EmitDec(int reg)
+    {
+        _code.Add((byte)(0x48 + ((reg >> 3) & 1)));
+        _code.Add(0xFF);
+        _code.Add((byte)(0xC8 + (reg & 7)));
+    }
+
+    // MOV r32, imm32 — 5 bytes (reg 0-7) or 6 bytes (reg 8-15)
+    private void EmitMovRegImm32(int reg, uint imm)
+    {
+        if (reg >= 8)
+            _code.Add(0x41); // REX.B
+        _code.Add((byte)(0xB8 + (reg & 7)));
+        _code.AddRange(BitConverter.GetBytes(imm));
+    }
+
+    // Load small constant into register — auto-picks smallest encoding
+    private void EmitLoadImm(int reg, long val)
+    {
+        if (val == 0)
+            EmitXorReg(reg);
+        else if (val > 0 && val <= int.MaxValue)
+            EmitMovRegImm32(reg, (uint)val);
+        else
+            Emit(OpCode.MOV_R64_IMM64, R(reg), Imm(val));
+    }
+
+    // Align current position to 32-byte boundary with NOP padding
+    private void AlignTo32()
+    {
+        int mod = _code.Count % 32;
+        if (mod != 0)
+            EmitNop(32 - mod);
+    }
+
+    // Align current position to 16-byte boundary with NOP padding
+    private void AlignTo16()
+    {
+        int mod = _code.Count % 16;
+        if (mod != 0)
+            EmitNop(16 - mod);
+    }
+
+    // Align current position to 64-byte boundary with NOP padding
+    private void AlignTo64()
+    {
+        int mod = _code.Count % 64;
+        if (mod != 0)
+            EmitNop(64 - mod);
+    }
+
+    // ── Cache pyramid: prefetch at appropriate level ──
+    //
+    //  @cache(L1)  → PREFETCHT0  (L1 + L2 + L3)
+    //  @cache(L2)  → PREFETCHT1  (L2 + L3, skip L1)
+    //  @cache(L3)  → PREFETCHT2  (L3 only)
+    //  cold (≤0.3) → PREFETCHNTA (non-temporal, evict)
+    //
+    private void EmitPrefetchData(int stackOffset, int level)
+    {
+        _code.Add(0x0F);
+        _code.Add(0x18);
+        // reg field: 0=NTA, 1=T0, 2=T1, 3=T2
+        int reg = level switch { 0 => 0, 1 => 1, 2 => 2, 3 => 3, _ => 1 };
+        if (stackOffset >= sbyte.MinValue && stackOffset <= sbyte.MaxValue)
+        {
+            _code.Add((byte)(0x45 + (reg << 3))); // mod=01, reg, rm=101
+            _code.Add((byte)(sbyte)stackOffset);
+        }
+        else
+        {
+            _code.Add((byte)(0x85 + (reg << 3))); // mod=10, reg, rm=101
+            _code.AddRange(BitConverter.GetBytes(stackOffset));
+        }
+    }
+
+    // Shorthand: prefetch to L1
+    private void EmitPrefetchL1(int stackOffset) => EmitPrefetchData(stackOffset, 1);
+
+    // Prefetch target state's variables at cache level matching its @cache policy
+    private void EmitPrefetchForTransition(TransitionNode t)
+    {
+        int ti = FindStateIndex(t.Target);
+        var targetState = _program.States[ti];
+        int level = targetState.CachePolicy switch
+        {
+            "L1" => 1,
+            "L2" => 2,
+            "L3" => 3,
+            _ => 0 // NTA
+        };
+        if (_stateVars.TryGetValue(t.Target, out var vars))
+        {
+            foreach (var sv in vars)
+                EmitPrefetchData(sv.StackOffset, level);
+        }
+        // Prefetch enter code at matching level (L1 code → T0, L2 code → T1)
+        if (level > 0)
+            EmitPrefetch("en_" + ti, level);
+    }
+
+    // Full pyramid-aware prefetch: uses HotWeight + @cache to pick level
+    private void EmitPrefetchForTransitionCacheAware(TransitionNode t)
+    {
+        var hw = t.HotWeight ?? 0.5;
+        int ti = FindStateIndex(t.Target);
+        var targetState = _program.States[ti];
+        int level;
+        if (hw >= 0.8)
+            level = 1; // T0 → L1
+        else if (hw >= 0.4)
+            level = 2; // T1 → L2
+        else
+            level = 0; // NTA → evict
+
+        if (_stateVars.TryGetValue(t.Target, out var vars))
+        {
+            foreach (var sv in vars)
+                EmitPrefetchData(sv.StackOffset, level);
+        }
+        // Prefetch enter code at matching cache level
+        EmitPrefetch("en_" + ti, level > 0 ? level : 1);
+    }
+
+    // Code prefetch at specified cache level: 1=L1, 2=L2, 3=L3
+    private void EmitPrefetch(string targetLabel, int level = 1)
+    {
+        var op = level switch
+        {
+            2 => OpCode.PREFETCHT1_RIPREL,
+            3 => OpCode.PREFETCHT2_RIPREL,
+            _ => OpCode.PREFETCHT0_RIPREL,
+        };
+        Emit(op, Imm(0));
+        _pendingFixups.Add((_code.Count - 4, 4, targetLabel));
+    }
+
+    // Non-temporal prefetch for cold (≤0.3) state variables — evict from L1
+    private void EmitPrefetchColdData(StateDefNode state)
+    {
+        if ((state.HotWeight ?? 0.5) <= 0.3 && state.CachePolicy != "L1")
+        {
+            if (_stateVars.TryGetValue(state.Name, out var vars))
+                foreach (var sv in vars)
+                    EmitPrefetchData(sv.StackOffset, 0); // NTA
+        }
+    }
+
+    // Apply padding to avoid L1i cache set collisions (8-way, 4KB per way)
+    private void PadForCacheAssociativity()
+    {
+        var hotEntries = _stateCodeBounds
+            .Where(kv => (_program.States[kv.Key].HotWeight ?? 0) >= 0.8)
+            .Select(kv => (origIdx: kv.Key, offset: kv.Value.start, origEnd: kv.Value.end))
+            .ToList();
+
+        var setOccupancy = new Dictionary<int, int>();
+        foreach (var (origIdx, offset, origEnd) in hotEntries)
+        {
+            int set = offset % 4096;
+            setOccupancy.TryGetValue(set, out int count);
+            if (count >= 8)
+            {
+                int pad = 4096 - (offset % 4096);
+                if (pad == 4096) pad = 0;
+                EmitNop(pad);
+                int origSize = origEnd - offset;
+                int newOff = _code.Count;
+                _labels["en_" + origIdx] = newOff;
+                _stateCodeBounds[origIdx] = (newOff, newOff + origSize);
+                set = 0;
+                count = 0;
+            }
+            setOccupancy[set] = count + 1;
+        }
+    }
+
+    // Cache budget checks: L1i (32KB), L1d (48KB for @cache(L1) data), DSB/Op-Cache µops
+    private void EmitCacheBudgetChecks()
+    {
+        int reDispStart = _labels.GetValueOrDefault("re_dispatch", 0);
+        int adStart = _labels.GetValueOrDefault("advance_cursor", 0);
+        int loopEnd = (adStart > reDispStart) ? adStart : _code.Count;
+        int loopBytes = Math.Max(0, loopEnd - reDispStart);
+
+        // Total hot enter code
+        int hotEnterBytes = 0;
+        foreach (var kv in _stateCodeBounds)
+        {
+            if ((_program.States[kv.Key].HotWeight ?? 0) >= 0.8)
+                hotEnterBytes += kv.Value.end - kv.Value.start;
+        }
+
+        int totalHotCode = loopBytes + hotEnterBytes;
+        // Embed warnings as ASCII strings in the code (harmless data)
+        if (totalHotCode > 24576) // warn at 75% of L1i
+        {
+            string w = $"; L1i: hot {totalHotCode}B > 75% of 32KB";
+            foreach (char c in w) _code.Add((byte)c);
+            _code.Add(0);
+        }
+
+        // DSB µop estimate (rough: 3 bytes/instr × 1.2 µops/instr)
+        int estUops = loopBytes / 3;
+        if (estUops > 3500)
+        {
+            string w = $"; DSB: ~{estUops} µops > 85% of 4096";
+            foreach (char c in w) _code.Add((byte)c);
+            _code.Add(0);
+        }
+
+        // L1d data budget for @cache(L1) vars
+        if (_stateVars.Values.Any(sv => sv.Count > 0))
+        {
+            int l1VarBytes = 0;
+            foreach (var state in _program.States.Where(s => s.CachePolicy == "L1"))
+                if (_stateVars.TryGetValue(state.Name, out var sv))
+                    l1VarBytes += sv.Count * 8;
+            if (l1VarBytes > 49152)
+            {
+                string w = $"; L1d: @cache(L1) vars {l1VarBytes}B > 48KB";
+                foreach (char c in w) _code.Add((byte)c);
+                _code.Add(0);
+            }
+        }
     }
 
     // ── Parse number (with simple arithmetic) ──
@@ -1053,23 +1404,27 @@ public class X64CodeGen
         X64Encoder.Emit(code, OpCode.MOV_R64_IMM64, Operand.R(Reg.R11), Operand.Imm(arrSize));
 
         int outer = code.Count;
-        X64Encoder.Emit(code, OpCode.MOV_R64_IMM64, Operand.R(Reg.RBX), Operand.Imm(0));
-        X64Encoder.Emit(code, OpCode.MOV_R64_IMM64, Operand.R(Reg.R12), Operand.Imm(0));
+        // XOR r32,r32 — zero RBX, R12, R13
+        code.Add(0x33); code.Add(0xDB);                         // XOR EBX, EBX
+        code.Add(0x45); code.Add(0x33); code.Add(0xE4);         // XOR R12D, R12D
 
         int inner = code.Count;
-        X64Encoder.Emit(code, OpCode.MOV_R64_IMM64, Operand.R(Reg.R13), Operand.Imm(0));
+        code.Add(0x45); code.Add(0x33); code.Add(0xED);         // XOR R13D, R13D
 
         X64Encoder.Emit(code, OpCode.MOV_R64_R64, Operand.R(Reg.R14), Operand.R(Reg.R13));
         X64Encoder.Emit(code, OpCode.AND_R64_R64, Operand.R(Reg.R14), Operand.R(Reg.R11));
 
         int loadAddr = code.Count;
         X64Encoder.Emit(code, OpCode.MOV_R64_R64, Operand.R(Reg.R15), Operand.R(Reg.R14));
-        X64Encoder.Emit(code, OpCode.ADD_R64_IMM32, Operand.R(Reg.R12), Operand.ImmU32(1));
+        // INC R12 — 3 bytes
+        code.Add(0x4D); code.Add(0xFF); code.Add(0xC4);         // INC R12
         X64Encoder.Emit(code, OpCode.CMP_R64_R64, Operand.R(Reg.R12), Operand.R(Reg.R10));
         X64Encoder.Emit(code, OpCode.JNE_REL8, Operand.Imm((sbyte)(inner - code.Count - 2)));
 
-        X64Encoder.Emit(code, OpCode.ADD_R64_IMM32, Operand.R(Reg.RBX), Operand.ImmU32(1));
-        X64Encoder.Emit(code, OpCode.ADD_R64_IMM32, Operand.R(Reg.RAX), Operand.ImmU32(0xFFFFFFFF));
+        // INC RBX — 3 bytes
+        code.Add(0x48); code.Add(0xFF); code.Add(0xC3);         // INC RBX
+        // DEC RAX — 3 bytes
+        code.Add(0x48); code.Add(0xFF); code.Add(0xC8);         // DEC RAX
         X64Encoder.Emit(code, OpCode.JNE_REL8, Operand.Imm((sbyte)(outer - code.Count - 2)));
 
         X64Encoder.Emit(code, OpCode.MOV_R64_R64, Operand.R(Reg.RAX), Operand.R(Reg.RBX));
