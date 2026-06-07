@@ -2,6 +2,7 @@ using BPlusTranspiler;
 using BPlusTranspiler.Ast;
 using BPlusTranspiler.Parser;
 using BPlusTranspiler.Algorithm;
+using BPlus.Targets.Generators;
 
 namespace BPlusTranspiler.Tests;
 
@@ -33,6 +34,7 @@ public static class BPlusTests
         TestBoltProfileLayout(); // BOLT/Propeller profile-guided layout
         TestAssemblyOptimizer(); // Peephole, JumpShrink, ABI, CFI
         TestAiArchitect();       // AI architect pipeline
+        TestCachePyramid();
 
         Console.WriteLine($"\n═══════════════════════════════════════");
         Console.WriteLine($"  {_passed}/{_passed + _failed} tests passed");
@@ -1118,6 +1120,92 @@ entry main() -> i32 { return 0 }");
         Assert(wetResult.TransitionsSorted >= 1, "A6b: wet run sorts transitions");
         Assert(wetResult.EnterBlocksInlined >= 1, "A6c: wet run inlines enter blocks");
         Assert(wetResult.StateCountAfter >= wetResult.StateCountBefore, "A6d: state count does not decrease");
+
+        Console.WriteLine();
+    }
+
+    static void TestCachePyramid()
+    {
+        Console.WriteLine("[Cache Pyramid]");
+
+        // ── 1. X64Encoder prefetch opcode encoding ──
+        var code = new List<byte>();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.PREFETCHT0_RIPREL, BPlus.Runtime.Operand.Imm(0));
+        Assert(code.Count == 7 && code[0] == 0x0F && code[1] == 0x18 && code[2] == 0x0D,
+            "PREFETCHT0_RIPREL → 0F 18 0D");
+
+        code.Clear();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.PREFETCHT1_RIPREL, BPlus.Runtime.Operand.Imm(0));
+        Assert(code.Count == 7 && code[0] == 0x0F && code[1] == 0x18 && code[2] == 0x15,
+            "PREFETCHT1_RIPREL → 0F 18 15");
+
+        code.Clear();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.PREFETCHT2_RIPREL, BPlus.Runtime.Operand.Imm(0));
+        Assert(code.Count == 7 && code[0] == 0x0F && code[1] == 0x18 && code[2] == 0x1D,
+            "PREFETCHT2_RIPREL → 0F 18 1D");
+
+        // ── 2. Integration: cold state emits NTA (0F 18 45) in dispatch handler ──
+        var p = new BPlus.Core.Ast.ProgramNode();
+        var stateA = new BPlus.Core.Ast.StateDefNode
+        {
+            Name = "A",
+            HotWeight = 0.1,
+        };
+        stateA.Variables.Add(new BPlus.Core.Ast.VariableNode { Name = "x", Type = "int32" });
+        stateA.Transitions.Add(new BPlus.Core.Ast.TransitionNode { EventName = "e", Target = "B" });
+        p.States.Add(stateA);
+
+        var stateB = new BPlus.Core.Ast.StateDefNode
+        {
+            Name = "B",
+            HotWeight = 0.9,
+        };
+        stateB.Variables.Add(new BPlus.Core.Ast.VariableNode { Name = "x", Type = "int32" });
+        stateB.Transitions.Add(new BPlus.Core.Ast.TransitionNode { EventName = "f", Target = "A" });
+        p.States.Add(stateB);
+
+        p.Entries.Add(new BPlus.Core.Ast.EntryDecl());
+        p.Entries[0].BodyLines.Add("run");
+
+        var gen = new X64CodeGen();
+        var output = gen.Generate(p);
+        var bytes = output.Code;
+
+        bool hasNta = false;
+        bool hasT0Data = false;
+        bool hasT0Code = false;
+        for (int i = 0; i < bytes.Length - 2; i++)
+        {
+            if (bytes[i] == 0x0F && bytes[i + 1] == 0x18)
+            {
+                byte modrm = bytes[i + 2];
+                if (modrm == 0x45) hasNta = true;           // mod=01, reg=000 (NTA), rm=101
+                else if (modrm == 0x4D) hasT0Data = true;   // mod=01, reg=001 (T0), rm=101
+                else if (modrm == 0x0D) hasT0Code = true;   // mod=00, reg=001 (T0), rm=101 (RIP-rel)
+            }
+        }
+        Assert(hasNta, "Cold state A emits PREFETCHNTA (0F 18 45 XX) in dispatch handler");
+        Assert(hasT0Data, "Lookahead prefetch emits PREFETCHT0 data (0F 18 4D XX)");
+        Assert(hasT0Code, "Lookahead prefetch emits PREFETCHT0 code (0F 18 0D XX XX XX XX)");
+
+        // ── 3. Check that hot state does NOT get cold NTA prefetch ──
+        int ntaCount = 0;
+        for (int i = 0; i < bytes.Length - 2; i++)
+            if (bytes[i] == 0x0F && bytes[i + 1] == 0x18 && bytes[i + 2] == 0x45)
+                ntaCount++;
+        Assert(ntaCount == 1, "Only the cold state receives NTA prefetch (not hot state B)");
+
+        // ── 4. Disassemble produces output without crash ──
+        var disasm = BPlus.Runtime.X64Encoder.Disassemble(bytes);
+        Assert(!string.IsNullOrEmpty(disasm), "Disassemble of generated code succeeds");
+
+        // ── 5. PREFETCHT1 and PREFETCHT2 via X64Encoder ──
+        code.Clear();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.PREFETCHT1_RIPREL, BPlus.Runtime.Operand.Imm(0));
+        Assert(code[2] == 0x15, "PREFETCHT1_RIPREL ModRM byte is 0x15 (reg=2)");
+        code.Clear();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.PREFETCHT2_RIPREL, BPlus.Runtime.Operand.Imm(0));
+        Assert(code[2] == 0x1D, "PREFETCHT2_RIPREL ModRM byte is 0x1D (reg=3)");
 
         Console.WriteLine();
     }
