@@ -109,6 +109,7 @@ public class X64CodeGen
         int l1BlockEnd = off;
 
         // First pass: allocate unique variable names for @cache(L1) states
+        // Pack by natural alignment + actual size to avoid cache line holes
         foreach (var state in _program.States.Where(s => s.CachePolicy == "L1"))
         {
             var svList = new List<StateVarInfo>();
@@ -116,10 +117,15 @@ public class X64CodeGen
             {
                 if (!sharedVarOffsets.ContainsKey(v.Name))
                 {
+                    int align = GetTypeAlign(v.Type);
+                    int size = GetTypeSize(v.Type);
+                    off = (off / align) * align - size; // align down, then allocate
                     sharedVarOffsets[v.Name] = off;
-                    off -= 8;
                 }
-                svList.Add(new StateVarInfo { Name = v.Name, Type = v.Type, DefaultValue = v.DefaultValue ?? "0", StackOffset = sharedVarOffsets[v.Name] });
+                svList.Add(new StateVarInfo {
+                    Name = v.Name, Type = v.Type, DefaultValue = v.DefaultValue ?? "0",
+                    StackOffset = sharedVarOffsets[v.Name], Size = GetTypeSize(v.Type)
+                });
             }
             _stateVars[state.Name] = svList;
         }
@@ -133,10 +139,15 @@ public class X64CodeGen
             {
                 if (!sharedVarOffsets.ContainsKey(v.Name))
                 {
+                    int align = GetTypeAlign(v.Type);
+                    int size = GetTypeSize(v.Type);
+                    off = (off / align) * align - size;
                     sharedVarOffsets[v.Name] = off;
-                    off -= 8;
                 }
-                svList.Add(new StateVarInfo { Name = v.Name, Type = v.Type, DefaultValue = v.DefaultValue ?? "0", StackOffset = sharedVarOffsets[v.Name] });
+                svList.Add(new StateVarInfo {
+                    Name = v.Name, Type = v.Type, DefaultValue = v.DefaultValue ?? "0",
+                    StackOffset = sharedVarOffsets[v.Name], Size = GetTypeSize(v.Type)
+                });
             }
             _stateVars[state.Name] = svList;
         }
@@ -175,7 +186,7 @@ public class X64CodeGen
             {
                 long val = ParseNumber(sv.DefaultValue);
                 EmitLoadImm(Reg.RAX, val);
-                Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, sv.StackOffset), R(Reg.RAX));
+                EmitStoreVarFromReg(sv.StackOffset, Reg.RAX, sv.Size);
             }
         }
 
@@ -693,9 +704,10 @@ public class X64CodeGen
             int vo = GetVarOffset(currentStateName, varName);
             if (vo != int.MinValue)
             {
-                Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, vo));
+                int size = GetVarSize(currentStateName, varName);
+                EmitLoadVarToReg(Reg.RAX, vo, size);
                 EmitExprToRAXAdd(expr, currentStateName);
-                Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, vo), R(Reg.RAX));
+                EmitStoreVarFromReg(vo, Reg.RAX, size);
             }
             return;
         }
@@ -709,9 +721,10 @@ public class X64CodeGen
             int vo = GetVarOffset(currentStateName, varName);
             if (vo != int.MinValue)
             {
-                Emit(OpCode.MOV_R64_MEM, R(Reg.RAX), Mem(Reg.RBP, vo));
+                int size = GetVarSize(currentStateName, varName);
+                EmitLoadVarToReg(Reg.RAX, vo, size);
                 EmitExprToRAXSub(expr, currentStateName);
-                Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, vo), R(Reg.RAX));
+                EmitStoreVarFromReg(vo, Reg.RAX, size);
             }
             return;
         }
@@ -726,7 +739,8 @@ public class X64CodeGen
             if (vo != int.MinValue)
             {
                 EmitExprToRAX(expr, currentStateName);
-                Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, vo), R(Reg.RAX));
+                int size = GetVarSize(currentStateName, varName);
+                EmitStoreVarFromReg(vo, Reg.RAX, size);
             }
             return;
         }
@@ -749,10 +763,23 @@ public class X64CodeGen
         int vo = GetVarOffset(stateName, name);
         if (vo != int.MinValue)
         {
-            Emit(OpCode.MOV_R64_MEM, R(reg), Mem(Reg.RBP, vo));
+            int size = GetVarSize(stateName, name);
+            EmitLoadVarToReg(reg, vo, size);
             return true;
         }
         return false;
+    }
+
+    private int GetVarSize(string stateName, string name)
+    {
+        int ci = _ctxVars.FindIndex(v => v.Name == name);
+        if (ci >= 0) return 8;
+        if (!string.IsNullOrEmpty(stateName) && _stateVars.TryGetValue(stateName, out var svList))
+        {
+            var sv = svList.FirstOrDefault(v => v.Name == name);
+            if (sv != null) return sv.Size;
+        }
+        return 8;
     }
 
     private void EmitExprToRAX(string expr, string stateName)
@@ -1388,6 +1415,63 @@ public class X64CodeGen
         public string Type { get; set; } = "";
         public string DefaultValue { get; set; } = "0";
         public int StackOffset { get; set; }
+        public int Size { get; set; }
+    }
+
+    private static int GetTypeSize(string type)
+    {
+        return type.ToLowerInvariant() switch
+        {
+            "int8" or "byte" or "u8" or "bool" => 1,
+            "int16" or "short" or "half" or "u16" => 2,
+            "int32" or "int" or "uint" or "float" => 4,
+            "int64" or "long" or "double" or "uint64" => 8,
+            _ => 8
+        };
+    }
+
+    private static int GetTypeAlign(string type)
+    {
+        int s = GetTypeSize(type);
+        return s <= 4 ? s : 8; // align to natural size, but never more than 8
+    }
+
+    private void EmitLoadVarToReg(int reg, int vo, int size)
+    {
+        switch (size)
+        {
+            case 1:
+                Emit(OpCode.MOVZX_R64_MEM8, R(reg), Mem(Reg.RBP, vo));
+                break;
+            case 2:
+                Emit(OpCode.MOVZX_R64_MEM16, R(reg), Mem(Reg.RBP, vo));
+                break;
+            case 4:
+                Emit(OpCode.MOV_R32_MEM, R(reg), Mem(Reg.RBP, vo));
+                break;
+            default:
+                Emit(OpCode.MOV_R64_MEM, R(reg), Mem(Reg.RBP, vo));
+                break;
+        }
+    }
+
+    private void EmitStoreVarFromReg(int vo, int reg, int size)
+    {
+        switch (size)
+        {
+            case 1:
+                Emit(OpCode.MOV_MEM_R8, Mem(Reg.RBP, vo), R(reg));
+                break;
+            case 2:
+                Emit(OpCode.MOV_MEM_R16, Mem(Reg.RBP, vo), R(reg));
+                break;
+            case 4:
+                Emit(OpCode.MOV_MEM_R32, Mem(Reg.RBP, vo), R(reg));
+                break;
+            default:
+                Emit(OpCode.MOV_MEM_R64, Mem(Reg.RBP, vo), R(reg));
+                break;
+        }
     }
 
     public static (byte[] code, int dataSize) GenerateBenchmarkLoop(int iterations, int innerOps, int cacheKB)

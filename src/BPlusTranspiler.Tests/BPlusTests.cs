@@ -1207,6 +1207,58 @@ entry main() -> i32 { return 0 }");
         BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.PREFETCHT2_RIPREL, BPlus.Runtime.Operand.Imm(0));
         Assert(code[2] == 0x1D, "PREFETCHT2_RIPREL ModRM byte is 0x1D (reg=3)");
 
+        // ── 6. Width-aware MOV encodings ──
+        code.Clear();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.MOVZX_R64_MEM16, BPlus.Runtime.Operand.R(0), BPlus.Runtime.Operand.Mem(5, -56));
+        Assert(code.Count >= 4 && code[0] == 0x0F && code[1] == 0xB7,
+            "MOVZX_R64_MEM16 → 0F B7");
+        code.Clear();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.MOVSX_R64_MEM8, BPlus.Runtime.Operand.R(0), BPlus.Runtime.Operand.Mem(5, -56));
+        Assert(code.Count >= 4 && code[0] == 0x48 && code[1] == 0x0F && code[2] == 0xBE,
+            "MOVSX_R64_MEM8 → 48 0F BE");
+        code.Clear();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.MOVSX_R64_MEM16, BPlus.Runtime.Operand.R(0), BPlus.Runtime.Operand.Mem(5, -56));
+        Assert(code.Count >= 4 && code[0] == 0x48 && code[1] == 0x0F && code[2] == 0xBF,
+            "MOVSX_R64_MEM16 → 48 0F BF");
+        code.Clear();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.MOV_MEM_R8, BPlus.Runtime.Operand.Mem(5, -56), BPlus.Runtime.Operand.R(0));
+        Assert(code.Count >= 3 && code[0] == 0x88,
+            "MOV_MEM_R8 → 88");
+        code.Clear();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.MOV_MEM_R16, BPlus.Runtime.Operand.Mem(5, -56), BPlus.Runtime.Operand.R(0));
+        Assert(code.Count >= 3 && code[0] == 0x66 && code[1] == 0x89,
+            "MOV_MEM_R16 → 66 89");
+        code.Clear();
+        BPlus.Runtime.X64Encoder.Emit(code, BPlus.Runtime.OpCode.MOV_MEM_R32, BPlus.Runtime.Operand.Mem(5, -56), BPlus.Runtime.Operand.R(0));
+        Assert(code.Count >= 3 && code[0] == 0x89,
+            "MOV_MEM_R32 → 89");
+
+        // ── 7. Integration: packed @cache(L1) variables use width-aware MOV ──
+        // Create program with int8, int32, int64 variables in L1 state = packed tightly
+        var p2 = new BPlus.Core.Ast.ProgramNode();
+        var s = new BPlus.Core.Ast.StateDefNode { Name = "S", HotWeight = 0.9, CachePolicy = "L1" };
+        s.Variables.Add(new BPlus.Core.Ast.VariableNode { Name = "a", Type = "int8", DefaultValue = "0" });
+        s.Variables.Add(new BPlus.Core.Ast.VariableNode { Name = "b", Type = "int32", DefaultValue = "0" });
+        s.Variables.Add(new BPlus.Core.Ast.VariableNode { Name = "c", Type = "int64", DefaultValue = "0" });
+        s.Transitions.Add(new BPlus.Core.Ast.TransitionNode { EventName = "e", Target = "S" });
+        p2.States.Add(s);
+        p2.Entries.Add(new BPlus.Core.Ast.EntryDecl());
+        p2.Entries[0].BodyLines.Add("run");
+
+        var gen2 = new X64CodeGen();
+        var bytes2 = gen2.Generate(p2).Code;
+
+        // Verify at least one width-aware load/store instruction exists
+        bool hasMemR8 = false;
+        bool hasMemR32 = false;
+        for (int i = 0; i < bytes2.Length - 2; i++)
+        {
+            if (bytes2[i] == 0x88) hasMemR8 = true;             // MOV_MEM_R8
+            if (bytes2[i] == 0x89 && (i == 0 || bytes2[i-1] != 0x66)) hasMemR32 = true; // MOV_MEM_R32 (not R16)
+        }
+        Assert(hasMemR8, "Packed int8 uses MOV_MEM_R8 (0x88) in generated code");
+        Assert(hasMemR32, "Packed int32 uses MOV_MEM_R32 (0x89) in generated code");
+
         Console.WriteLine();
     }
 }

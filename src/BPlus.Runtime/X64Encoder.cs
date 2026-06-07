@@ -565,6 +565,128 @@ public static class X64Encoder
                 break;
             }
 
+            case OpCode.MOVZX_R64_MEM16:
+            {
+                // movzx r64, word [mem] — 0F B7 /r
+                int dst = operands[0].Reg;
+                int baseReg = operands[1].BaseReg;
+                int disp = operands[1].Disp;
+                int rexR = (dst >> 3) & 1;
+
+                if (baseReg == 255) // RIP-relative
+                {
+                    bytes.Add((byte)(0x48 + (rexR << 2)));
+                    bytes.Add(0x0F); bytes.Add(0xB7);
+                    bytes.Add((byte)(0x05 + ((dst & 7) << 3)));
+                    bytes.AddRange(BitConverter.GetBytes(disp));
+                }
+                else
+                {
+                    int rexB = (baseReg >> 3) & 1;
+                    byte rex = (byte)(rexB | (rexR << 2));
+                    if (rex != 0) bytes.Add((byte)(0x40 | rex));
+                    bytes.Add(0x0F); bytes.Add(0xB7);
+                    EncodeModrmSib(bytes, dst, baseReg, disp);
+                }
+                break;
+            }
+
+            case OpCode.MOVSX_R64_MEM8:
+            {
+                // movsx r64, byte [mem] — REX.W 0F BE /r
+                int dst = operands[0].Reg;
+                int baseReg = operands[1].BaseReg;
+                int disp = operands[1].Disp;
+                int rexR = (dst >> 3) & 1;
+
+                if (baseReg == 255)
+                {
+                    bytes.Add((byte)(0x48 + (rexR << 2)));
+                    bytes.Add(0x0F); bytes.Add(0xBE);
+                    bytes.Add((byte)(0x05 + ((dst & 7) << 3)));
+                    bytes.AddRange(BitConverter.GetBytes(disp));
+                }
+                else
+                {
+                    int rexB = (baseReg >> 3) & 1;
+                    bytes.Add((byte)(0x48 + rexB + (rexR << 2)));
+                    bytes.Add(0x0F); bytes.Add(0xBE);
+                    EncodeModrmSib(bytes, dst, baseReg, disp);
+                }
+                break;
+            }
+
+            case OpCode.MOVSX_R64_MEM16:
+            {
+                // movsx r64, word [mem] — REX.W 0F BF /r
+                int dst = operands[0].Reg;
+                int baseReg = operands[1].BaseReg;
+                int disp = operands[1].Disp;
+                int rexR = (dst >> 3) & 1;
+
+                if (baseReg == 255)
+                {
+                    bytes.Add((byte)(0x48 + (rexR << 2)));
+                    bytes.Add(0x0F); bytes.Add(0xBF);
+                    bytes.Add((byte)(0x05 + ((dst & 7) << 3)));
+                    bytes.AddRange(BitConverter.GetBytes(disp));
+                }
+                else
+                {
+                    int rexB = (baseReg >> 3) & 1;
+                    bytes.Add((byte)(0x48 + rexB + (rexR << 2)));
+                    bytes.Add(0x0F); bytes.Add(0xBF);
+                    EncodeModrmSib(bytes, dst, baseReg, disp);
+                }
+                break;
+            }
+
+            case OpCode.MOV_MEM_R8:
+            {
+                // mov byte [mem], reg — 88 /r
+                int baseReg = operands[0].BaseReg;
+                int src = operands[1].Reg;
+                int disp = operands[0].Disp;
+                int rexB = (baseReg >> 3) & 1;
+                int rexR = (src >> 3) & 1;
+                byte rex = (byte)(rexB | (rexR << 2));
+                if (rex != 0) bytes.Add((byte)(0x40 | rex));
+                bytes.Add(0x88);
+                EncodeModrmSib(bytes, src, baseReg, disp);
+                break;
+            }
+
+            case OpCode.MOV_MEM_R16:
+            {
+                // mov word [mem], reg — 66 89 /r
+                int baseReg = operands[0].BaseReg;
+                int src = operands[1].Reg;
+                int disp = operands[0].Disp;
+                int rexB = (baseReg >> 3) & 1;
+                int rexR = (src >> 3) & 1;
+                bytes.Add(0x66);
+                byte rex = (byte)(rexB | (rexR << 2));
+                if (rex != 0) bytes.Add((byte)(0x40 | rex));
+                bytes.Add(0x89);
+                EncodeModrmSib(bytes, src, baseReg, disp);
+                break;
+            }
+
+            case OpCode.MOV_MEM_R32:
+            {
+                // mov dword [mem], reg — 89 /r
+                int baseReg = operands[0].BaseReg;
+                int src = operands[1].Reg;
+                int disp = operands[0].Disp;
+                int rexB = (baseReg >> 3) & 1;
+                int rexR = (src >> 3) & 1;
+                byte rex = (byte)(rexB | (rexR << 2));
+                if (rex != 0) bytes.Add((byte)(0x40 | rex));
+                bytes.Add(0x89);
+                EncodeModrmSib(bytes, src, baseReg, disp);
+                break;
+            }
+
             default:
                 throw new NotSupportedException($"OpCode {op} not supported");
         }
@@ -799,6 +921,12 @@ public enum OpCode
     PREFETCHT0_RIPREL,
     PREFETCHT1_RIPREL,
     PREFETCHT2_RIPREL,
+    MOVZX_R64_MEM16,
+    MOVSX_R64_MEM8,
+    MOVSX_R64_MEM16,
+    MOV_MEM_R8,
+    MOV_MEM_R16,
+    MOV_MEM_R32,
 }
 
 public struct Operand
