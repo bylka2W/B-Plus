@@ -248,7 +248,7 @@ Inside the REPL, type B+ code directly; it accumulates in a buffer. Then `.run` 
 
 ---
 
-## 3. CLI Commands
+## 3. CLI Commands  ✅
 
 ### 3.1 Transpilation
 
@@ -260,30 +260,30 @@ bpc input.bp
 bpc input.bp --output gen/
 
 # Target formats
-bpc input.bp --target cpp      # C++ code
-bpc input.bp --target csharp   # C# code
-bpc input.bp --target python   # Python code
-bpc input.bp --target llvm     # LLVM IR
-bpc input.bp --target wasm     # WebAssembly
+bpc input.bp --target cpp      # ✅ C++ code
+bpc input.bp --target csharp   # ✅ C# code
+bpc input.bp --target python   # ✅ Python code
+bpc input.bp --target llvm     # ✅ LLVM IR
+bpc input.bp --target wasm     # 📅 WebAssembly
 
 # Zig & LLVM-native backends
-bpc input.bp --zig             # Zig backend (StateFn pattern) → output.zig
-bpc input.bp --zig --run       # Zig → build → run
-bpc input.bp --zig --release   # Zig → LLVM IR → clang -c → lld-link → .exe
+bpc input.bp --zig             # ✅ Zig backend (StateFn pattern) → output.zig
+bpc input.bp --zig --run       # ✅ Zig → build → run
+bpc input.bp --zig --release   # 📅 Zig → LLVM IR → clang -c → lld-link → .exe
 
 # Shorthand flags (also --csharp/--cs/--go/--rust)
-bpc input.bp --cpp             # C++ (shortcut)
-bpc input.bp --csharp          # C# (shortcut)
-bpc input.bp --go              # Go (shortcut)
-bpc input.bp --python          # Python (shortcut)
-bpc input.bp --rust            # Rust (shortcut)
+bpc input.bp --cpp             # ✅ C++ (shortcut)
+bpc input.bp --csharp          # ✅ C# (shortcut)
+bpc input.bp --go              # ✅ Go (shortcut)
+bpc input.bp --python          # ✅ Python (shortcut)
+bpc input.bp --rust            # ✅ Rust (shortcut)
 
-# Shader targets
-bpc input.bp --target dxil     # DirectX HLSL (DXIL)
-bpc input.bp --target spirv    # Vulkan GLSL (SPIR-V)
+# Shader targets — parser recognises syntax, full codegen pending
+bpc input.bp --target dxil     # 📅 DirectX HLSL (DXIL) — experimental
+bpc input.bp --target spirv    # 📅 Vulkan GLSL (SPIR-V) — experimental
 ```
 
-### 3.2 LSP (Language Server Protocol)
+### 3.2 LSP (Language Server Protocol) ✅
 
 ```bash
 bpc --lsp                  # start LSP server (TCP port 5000)
@@ -301,7 +301,7 @@ bpc --install-lsp          # install LSP for VS Code
 
 Visual Studio Code extension auto-installs with `--install-lsp`.
 
-### 3.3 Debugging and Analysis
+### 3.3 Debugging and Analysis ✅
 
 ```bash
 bpc debug input.bp          # interactive debugger
@@ -309,7 +309,7 @@ bpc profile input.bp [100000]  # transition profiling
 bpc bench input.bp --iter 1000000  # benchmark (Go testing.B style)
 ```
 
-### 3.4 Formatting and Documentation
+### 3.4 Formatting and Documentation ✅
 
 ```bash
 bpc format file.bp          # format file
@@ -317,7 +317,7 @@ bpc format file.bp --check   # check formatting
 bpc docs file.bp --output ./docs  # generate documentation
 ```
 
-### 3.5 Build and Publish
+### 3.5 Build and Publish ✅
 
 ```bash
 # Build from config
@@ -331,7 +331,7 @@ bpc publish --runtime linux-x64 --aot
 
 `publish` ищет `.csproj` от корня репозитория (5 уровней вверх от бинарника) и запускает `dotnet publish` с ожиданием завершения до 5 минут. Больше не крашится на `Process.Start`.
 
-### 3.6 Utilities
+### 3.6 Utilities ✅
 
 ```bash
 bpc health [dir] [flags]        # project health analysis
@@ -356,7 +356,7 @@ Build: `dotnet build BPlus.sln`
 bpc watch <dir> [--target ...]  # watch mode — auto-rebuild
 ```
 
-### 3.7 Tests
+### 3.7 Tests ✅
 
 ```bash
 bpc test run input.bp
@@ -379,31 +379,31 @@ bpc bpm new <template>          # create from template
 
 Each flag does something specific. Here's what and why.
 
-### 4.1 Basic Optimizations (Level 1)
+### 4.1 Basic Optimizations (Level 1) ✅
 
-**`--optimize`**
+**`--optimize`** ✅
 Compiler replaces function pointer table (virtual dispatch) with transition array (jump table). Instead of vtable lookup, CPU does one indirect jump through array of addresses.
 - Why it works: indirect jump is more predictable than vtable lookup, branch predictor keeps it in pipeline
 - Result: +10-30% on typical state machine
 
-**`--inline-states`**
+**`--inline-states`** ✅
 Compiler inlines enter/exit blocks directly into call site, without function call.
 - Why it works: removes call/ret overhead, registers live longer, CPU sees more context for optimization
 - Result: fewer instructions, less stack frame
 
-**`--const-fold`**
+**`--const-fold`** ✅
 Computes constants at compile time. `a = 2 + 3` → `a = 5`.
 - Why it works: processor spends cycles on each operation, constants computed once at compile time
 - Result: fewer runtime instructions
 
-**`--dead-elim`**
+**`--dead-elim`** ✅
 Removes unreachable states and transitions.
 - Why it works: dead code occupies space in instruction cache, can cause branch misprediction
 - Result: less code, cleaner branch prediction
 
-### 4.2 Vectorization (Level 2)
+### 4.2 Vectorization (Level 2) 📅
 
-**`--vectorize`**
+**`--vectorize`** 📅
 Automatically generates SIMD instructions (AVX2/AVX-512) for array processing loops. Instead of one value per cycle — 8 (AVX2) or 16 (AVX-512).
 - Why it works: one instruction works with multiple data (SIMD = Single Instruction Multiple Data)
 - How to select mode:
@@ -412,56 +412,56 @@ Automatically generates SIMD instructions (AVX2/AVX-512) for array processing lo
   - `--vectorize-128` — SSE, 128-bit registers, 4 floats per cycle
 - Limitations: works only if data is contiguous and loop has no data dependencies
 
-### 4.3 Memory and Cache (Level 3)
+### 4.3 Memory and Cache (Level 3) ✅
 
-**`--cache-friendly`**
+**`--cache-friendly`** ✅
 Compiler aligns data on cache line boundaries (64 bytes) and places hot states nearby in memory.
 - Why it works: cache line = 64 bytes. If data crosses cache line boundary, CPU loads 2 cache lines instead of one
 - Result: fewer cache misses, data read in one operation
 
-**`--prefetch [aggressive|l1|l2|l3]`**
+**`--prefetch [aggressive|l1|l2|l3]`** ✅
 Inserts `prefetch` instructions ahead of time — CPU starts loading data before it's needed.
 - Why it works: memory latency 100ns, prefetch hides data 50-100 cycles before use
 
-**`--align-64`**
+**`--align-64`** ✅
 Align all data on 64-byte boundary.
 - Why it works: modern CPUs load 64 bytes per access. Misaligned data requires 2 memory operations
 
-**`--huge-pages`**
+**`--huge-pages`** 📅
 Use 2MB pages instead of 4KB. Fewer TLB entries, less overhead on page translation.
 
-**`--zero-copy` or `--no-alloc`**
+**`--zero-copy` or `--no-alloc`** ✅
 Data not copied between states. Instead — pointers and view.
 - Why it works: memmove 1MB = ~1000ns, pointer copy = 1ns
 
 ### 4.4 Control Flow (Level 4)
 
-**`--branchless`**
+**`--branchless`** 📅
 Generates `cmov` (conditional move) instead of `je/jne` where possible.
 - Why it works: branch misprediction = 10-20 cycle penalty. cmov always executes, penalty = 0
 - Result: +5-15% on code with many branches
 
-**`--likely-hints` / `--unlikely-hints`**
+**`--likely-hints` / `--unlikely-hints`** ✅
 Inserts `likely()` / `unlikely()` annotations for branch prediction. Compiler places hot path first.
 
-**`--flatten-switch`**
+**`--flatten-switch`** 📅
 Generates flat jump table instead of nested if/else chain.
 
-### 4.5 Multi-threading (Level 5)
+### 4.5 Multi-threading (Level 5) 📅
 
-**`--parallel-dispatch`**
+**`--parallel-dispatch`** 📅
 Multiple states processed in parallel on different cores.
 
-**`--thread-pool <N>`**
+**`--thread-pool <N>`** 📅
 Uses pool of N threads instead of creating new thread per task.
 
-**`--lock-free`**
+**`--lock-free`** 📅
 Atomic operations instead of mutex.
 - Result: +5-10% on highly contended data
 
-### 4.6 Platform (Level 6)
+### 4.6 Platform (Level 6) ✅
 
-**`--target-arch <arch>`**
+**`--target-arch <arch>`** ✅
 
 | Architecture | Features |
 |:---|:---|
@@ -471,7 +471,7 @@ Atomic operations instead of mutex.
 | `m1` | Apple M1: efficient, high IPC |
 | `cortex` | ARM Cortex-A78: balanced |
 
-**`--target-os <os>`**
+**`--target-os <os>`** ✅
 
 | OS | What changes |
 |:---|:---|
@@ -481,14 +481,14 @@ Atomic operations instead of mutex.
 
 ### 4.7 Special Modes (Level 7)
 
-**`--eco [sse|avx2|neon|scalar]`**
+**`--eco [sse|avx2|neon|scalar]`** 📅
 Energy-efficient mode. Uses narrower SIMD instructions that consume less power.
 - Use for: battery-powered devices, long-running services
 
-**`--lto`**
+**`--lto`** 📅
 Link-Time Optimization. +10-20% but longer compilation.
 
-**`--pgo`**
+**`--pgo`** ✅
 Profile-Guided Optimization. +15-25% on real workload patterns.
 
 Full pipeline:
@@ -500,69 +500,69 @@ Full pipeline:
 
 Требует `clang.exe` (LLVM 21) в `%USERPROFILE%\.bplus\llvm\bin\` или PATH.
 
-**`--bolt`**
+**`--bolt`** 📅
 Facebook BOLT: post-link optimizer. +10-20% on large programs.
 
-### 4.8 Memory and Allocators
+### 4.8 Memory and Allocators 📅
 
-**`--pool=linear`**
+**`--pool=linear`** 📅
 Linear allocator for state objects.
 - Result: +20-40% in hot path
 
-**`--pool=ring`**
+**`--pool=ring`** 📅
 Ring buffer for state objects.
 - Result: ~0 allocations after startup
 
-**`--memory=regions`**
+**`--memory=regions`** 📅
 Region-based allocator. Allocations grouped, freed together at end of frame.
 
 ### 4.9 Smart Optimizations
 
-**`--auto`**
+**`--auto`** 📅
 Automatically selects best flags for current CPU.
 
-**`--hot-cold`**
+**`--hot-cold`** ✅
 Analyzes transition frequencies and places hot states compactly, cold states farther.
 
-**`--dedup`**
+**`--dedup`** 📅
 Removes duplicate enter/exit blocks.
 
-**`--predict`**
+**`--predict`** 📅
 Neural predictor predicts next state.
 - Result: +5-15% on predictable FSM
 
-**`--devirt`**
+**`--devirt`** 📅
 Devirtualization — removes virtual functions where type is known at compile time.
 
-**`--pack`**
+**`--pack`** 📅
 Bitfields for state data.
 - Result: -40% memory footprint
 
-**`--pin-regs <N>`**
+**`--pin-regs <N>`** 📅
 Pins N registers to hot variables.
 
-### 4.10 Combined Profiles
+### 4.10 Combined Profiles 📅
 
-**`--turbo`**
+**`--turbo`** 📅
 Enables everything: `--optimize --vectorize=auto --cache-friendly --branchless --zero-copy --likely-hints --flatten-switch --prefetch=aggressive --align-64 --lto --fast-math --dedup --devirt --hot-cold --predict --pack`
 - Result: +40-80% maximum speedup
 
-**`--turbo-eco`**
+**`--turbo-eco`** 📅
 Turbo + energy efficiency.
 
-**`--turbo-embed`**
+**`--turbo-embed`** 📅
 For embedded systems. Small footprint, no exceptions, conservative SIMD.
 
-### 4.11 Analysis and Debugging
+### 4.11 Analysis and Debugging ✅
 
-**`--check` / `--analyze`**
+**`--check` / `--analyze`** ✅
 Code diagnostics: unreachable states, dead transitions, memory leaks, type errors, cyclic dependencies, unused vars, infinite loops.
 - 7 categories of checks
 
-**`--wmo`**
+**`--wmo`** 📅
 Whole-Module Optimization. Swift-style: all .bp files optimized together.
 
-**`--benchmark [N]`**
+**`--benchmark [N]`** ✅
 Generates Go testing.B style benchmark. N = iterations (default 1M).
 
 ---
@@ -594,43 +594,43 @@ enum Direction { Up, Down, Left, Right }
 
 ---
 
-## 6. Directives and Annotations
+## 6. Directives and Annotations ✅
 
 ### 6.1 Directives (#)
 
-| Directive | Description |
-|:---|:---|
-| `#memory comptime` | Compile-time memory allocation |
-| `#memory stack` | Stack allocation |
-| `#memory heap` | Heap allocation |
+| Directive | Description | Status |
+|:---|:---|:---:|
+| `#memory comptime` | Compile-time memory allocation | ✅ |
+| `#memory stack` | Stack allocation | ✅ |
+| `#memory heap` | Heap allocation | ✅ |
 
 ### 6.2 Annotations (@)
 
-| Annotation | Description |
-|:---|:---|
-| `@stream` | Streaming processing |
-| `@always_inline` | Always inline |
-| `@no_inline` | Don't inline |
-| `@hot(0.9)` | Hot code |
-| `@cold(0.01)` | Cold code |
-| `@simd_width(512)` | SIMD width |
-| `@simd_unroll(8)` | Loop unroll |
-| `@simd_gather` | Gather operations |
-| `@deadline(hard=true, _val="1000")` | Hard deadline |
-| `@cache(_val="L1")` | Cache policy |
-| `@cache_pin` | Pin in cache |
-| `@cache_align(_val="64")` | Alignment |
-| `@predict(_val="next_state", p="0.95")` | State prediction |
-| `@parameter(target="gpu")` | Target platform |
-| `@llvm_intrinsic("...")` | LLVM intrinsic |
+| Annotation | Description | Status |
+|:---|:---|:---:|
+| `@stream` | Streaming processing | ✅ |
+| `@always_inline` | Always inline | ✅ |
+| `@no_inline` | Don't inline | ✅ |
+| `@hot(0.9)` | Hot code | ✅ |
+| `@cold(0.01)` | Cold code | ✅ |
+| `@simd_width(512)` | SIMD width | ✅ parser, 📅 codegen |
+| `@simd_unroll(8)` | Loop unroll | ✅ parser, 📅 codegen |
+| `@simd_gather` | Gather operations | ✅ parser, 📅 codegen |
+| `@deadline(hard=true, _val="1000")` | Hard deadline | ✅ parser |
+| `@cache(_val="L1")` | Cache policy | ✅ |
+| `@cache_pin` | Pin in cache | ✅ parser |
+| `@cache_align(_val="64")` | Alignment | ✅ |
+| `@predict(_val="next_state", p="0.95")` | State prediction | ✅ parser |
+| `@parameter(target="gpu")` | Target platform | ✅ parser |
+| `@llvm_intrinsic("...")` | LLVM intrinsic | ✅ parser, 📅 codegen |
 
 ---
 
-## 7. Metal Stack
+## 7. Metal Stack ✅
 
 Full set of optimizations for native code generation.
 
-### 7.1 Metal Commands
+### 7.1 Metal Commands ✅
 
 ```bash
 # Full metal stack (auto-compiles to .exe)
@@ -643,10 +643,10 @@ bpc input.bp --metal --tier=L2
 bpc input.bp --metal --tier=L3
 
 # Additional flags
-bpc input.bp --metal --fusion
-bpc input.bp --metal --register-alloc
-bpc input.bp --metal --unpack
-bpc input.bp --metal --hidden-buffers
+bpc input.bp --metal --fusion                # 📅
+bpc input.bp --metal --register-alloc        # ✅
+bpc input.bp --metal --unpack                # 📅
+bpc input.bp --metal --hidden-buffers        # 📅
 ```
 
 > **Notes:**
@@ -658,50 +658,50 @@ bpc input.bp --metal --hidden-buffers
 
 **Core Compilation:**
 
-| Module | Description |
-|:---|:---|
-| **X64EncoderExtended** | All x64 instructions, Agner Fog tables |
-| **ASTToMachineCode** | AST → x64 code directly |
-| **RegisterAllocation** | Liveness analysis, interference graph, linear scan |
-| **AbiCallingConvention** | Windows/SystemV ABI, stack, relocations |
-| **ExecutableBuilder** | PE/ELF/Mach-O output |
+| Module | Description | Status |
+|:---|:---|:---:|
+| **X64EncoderExtended** | All x64 instructions, Agner Fog tables | ✅ |
+| **ASTToMachineCode** | AST → x64 code directly | ✅ |
+| **RegisterAllocation** | Liveness analysis, interference graph, linear scan | ✅ |
+| **AbiCallingConvention** | Windows/SystemV ABI, stack, relocations | ✅ |
+| **ExecutableBuilder** | PE/ELF/Mach-O output | ✅ |
 
 **Memory Optimizations:**
 
-| Module | Description |
-|:---|:---|
-| **CacheSimulator** | 5 tiers (L0/L1/L2/L3/RAM) |
-| **AutoTuner** | 60 configurations in <1 sec |
-| **MemoryAccessPatternDetector** | Cache miss detection |
-| **NonTemporalHints** | Streaming stores |
-| **NumaAwarePlacement** | NUMA-aware placement |
+| Module | Description | Status |
+|:---|:---|:---:|
+| **CacheSimulator** | 5 tiers (L0/L1/L2/L3/RAM) | 📅 |
+| **AutoTuner** | 60 configurations in <1 sec | 📅 |
+| **MemoryAccessPatternDetector** | Cache miss detection | 📅 |
+| **NonTemporalHints** | Streaming stores | 📅 |
+| **NumaAwarePlacement** | NUMA-aware placement | 📅 |
 
 **Vectorization:**
 
-| Module | Description |
-|:---|:---|
-| **SimdIntrinsicsGenerator** | AVX2/AVX-512 intrinsics |
-| **AutoVectorizer** | Automatic vectorization |
-| **SlpVectorizer** | Super-scalar operation combining |
-| **FmaOptimizer** | Fused Multiply-Add |
+| Module | Description | Status |
+|:---|:---|:---:|
+| **SimdIntrinsicsGenerator** | AVX2/AVX-512 intrinsics | 📅 |
+| **AutoVectorizer** | Automatic vectorization | 📅 |
+| **SlpVectorizer** | Super-scalar operation combining | 📅 |
+| **FmaOptimizer** | Fused Multiply-Add | 📅 |
 
 **Control Flow:**
 
-| Module | Description |
-|:---|:---|
-| **BranchOptimizer** | Branch layout, guard conditions |
-| **LoopTransforms** | Tiling, interchange, fusion |
-| **PrefetchInjector** | Software prefetch |
-| **MacroFusionOptimizer** | cmp+je, test+jnz fusion |
+| Module | Description | Status |
+|:---|:---|:---:|
+| **BranchOptimizer** | Branch layout, guard conditions | ✅ |
+| **LoopTransforms** | Tiling, interchange, fusion | 📅 |
+| **PrefetchInjector** | Software prefetch | ✅ |
+| **MacroFusionOptimizer** | cmp+je, test+jnz fusion | 📅 |
 
 **Analysis:**
 
-| Module | Description |
-|:---|:---|
-| **AutoFeedbackLoop** | Closed-loop parameter tuning |
-| **RooflineAnalyzer** | Compute/memory bound |
-| **IlpAnalyzer** | ILP chains, critical path |
-| **StoreForwardGuard** | Store-forwarding hazards |
+| Module | Description | Status |
+|:---|:---|:---:|
+| **AutoFeedbackLoop** | Closed-loop parameter tuning | 📅 |
+| **RooflineAnalyzer** | Compute/memory bound | 📅 |
+| **IlpAnalyzer** | ILP chains, critical path | 📅 |
+| **StoreForwardGuard** | Store-forwarding hazards | 📅 |
 
 ### 7.3 Hardware Probe
 
@@ -712,7 +712,7 @@ bpc --hardware-probe
 
 ---
 
-## 8. AI Optimizer
+## 8. AI Optimizer ⚠️ experimental
 
 ```bash
 # AI architect: PGO→split→sort→inline→NUMA
@@ -724,10 +724,10 @@ bpc input.bp --ai-dry-run
 # AI optimizer
 bpc input.bp --ai
 
-# AI NeuroScheduler
+# AI NeuroScheduler — 📅 not yet functional
 bpc --neuro-schedule
 
-# AI Closed-loop
+# AI Closed-loop — 📅 not yet functional
 bpc --adaptive-loop
 ```
 
@@ -736,25 +736,25 @@ bpc --adaptive-loop
 > **Note**: Classical optimization (branch prediction, cache layout, register allocation) works better than AI for FSM compilation. AI features may make code slower.
 
 AI optimizer includes:
-- NeuralPredictor — neural performance prediction
-- UnpackPredictor — AI prediction for register unpack
-- AutoTuner — parameter autotuning
-- RooflineAnalyzer — Roofline model
-- IlpAnalyzer — ILP analysis
+- NeuralPredictor — 📅 neural performance prediction
+- UnpackPredictor — 📅 AI prediction for register unpack
+- AutoTuner — 📅 parameter autotuning
+- RooflineAnalyzer — 📅 Roofline model
+- IlpAnalyzer — 📅 ILP analysis
 
 ---
 
-## 9. Why B+ is Fast
+## 9. Why B+ is Fast ✅
 
 B+ is fast because of compiler architecture. Here's how it works:
 
-### Direct x64 Compilation
+### Direct x64 Compilation ✅
 
 Traditional languages (C, C++, Rust) use intermediate steps: source → LLVM IR → assembly → machine code. Each step loses information and adds delay.
 
 B+ does: `AST → x64 code directly`. Fewer steps = fewer losses. Compiler sees the original finite state machine structure and generates optimal machine code specifically for this structure.
 
-### Cache-aware Optimization
+### Cache-aware Optimization ✅
 
 Modern CPUs spend 50-70% of time waiting for data from memory. B+ considers cache hierarchy:
 
@@ -768,33 +768,33 @@ RAM:        100 ns  — slow
 
 CacheSimulator in B+ models data access and optimizes state layout for specific cache hierarchy. This isn't theory — 64x speedup confirmed by real benchmark (csc.exe).
 
-### Hot/Cold Partitioning
+### Hot/Cold Partitioning ✅
 
 Not all states are equally important. Some transitions execute millions of times, others once per session. B+ analyzes frequency and places hot code compactly in L1 cache:
 - `@hot(0.9)` — state on hot path, compiler aligns it on cache boundary
 - `@cold(0.01)` — rare fallback, can be placed farther from hot code
 
-### Register Allocation with Liveness Analysis
+### Register Allocation with Liveness Analysis ✅
 
 Registers are the fastest CPU resource. B+ uses:
 - Liveness analysis — tracks when register is no longer needed
 - Interference graph — understands which registers conflict
 - Linear scan — fast allocator without quadratic complexity
 
-### Branch Prediction Hints
+### Branch Prediction Hints ✅
 
 Branch prediction is critical for CPU pipeline. B+:
 - Generates compact jump tables instead of if/else chains
 - Aligns hot branch targets
-- Uses cmov for branchless transitions where possible
+- Uses cmov for branchless transitions where possible  📅 — partial
 
-### State Pool Allocation
+### State Pool Allocation ✅
 
 Instead of `new`/`delete` on every transition — state pool. Linear allocator:
 - `+20-40%` performance (no allocations in hot path)
 - Ring buffer for states with known usage pattern
 
-### SIMD Vectorization
+### SIMD Vectorization 📅
 
 AVX2/AVX-512 instructions process 8-16 values per cycle. B+ automatically:
 - Vectorizes array processing loops
@@ -936,7 +936,9 @@ state Error {
 
 ---
 
-## 12. FSR/FSR2/FSR3 Upscaling Pipeline
+## 12. FSR/FSR2/FSR3 Upscaling Pipeline 📅
+
+> **📅 Planned** — GPU upscaling pipeline is syntax-level only. Full codegen, SPIR-V emission, and async compute are not yet implemented.
 
 B+ has an upscaling pipeline for GPU image scaling. Similar to FSR/DLSS/XeSS in functionality.
 
@@ -1288,11 +1290,11 @@ B+ v1.0/
 
 ---
 
-## 14. Infrastructure & Utilities
+## 14. Infrastructure & Utilities ✅
 
-### 14.1 KeywordTrie — Trie-based Keyword Matching
+### 14.1 KeywordTrie — Trie-based Keyword Matching ✅
 
-Fast keyword lookup using a trie data structure. Used internally by the lexer for efficient keyword detection (matches longest keyword, checks word boundaries).
+Fast keyword lookup using a trie. Used internally by the lexer.
 
 ```cs
 var trie = KeywordTrie.CreateDefault();
@@ -1300,18 +1302,18 @@ trie.Add("state");
 var match = trie.Match(input, out int consumed);
 ```
 
-### 14.2 Panic Mode — Error Recovery
+### 14.2 Panic Mode — Error Recovery ✅
 
-When the parser encounters a syntax error, PanicMode skips to the next sync token (`state`, `on`, `enter`, `exit`, `var`, `fn`, `import`, `}`, etc.) at the same brace depth, allowing continued parsing of subsequent code.
+When the parser encounters a syntax error, PanicMode skips to the next sync token.
 
 ```cs
 var panic = new PanicMode(lexer);
 bool recovered = panic.TryRecover();
 ```
 
-### 14.3 Lazy&lt;T&gt; — Deferred Type Inference
+### 14.3 Lazy&lt;T&gt; — Deferred Type Inference ✅
 
-VariableNode supports lazy type resolution. When a variable has type `"inferred"`, the actual type is computed on first access via `VariableNode.ResolvedType`.
+VariableNode supports lazy type resolution.
 
 ```cs
 var varNode = new VariableNode { Type = "inferred" };
@@ -1319,57 +1321,19 @@ varNode.SetInferredType(() => InferTypeFromContext(varNode));
 string resolved = varNode.ResolvedType; // computed once, cached
 ```
 
-### 14.4 Crash Dumps — AST → JSON on Exception
+### 14.4 Crash Dumps — AST → JSON on Exception ✅
 
-When an unhandled exception occurs during compilation, the compiler saves:
-- `crash_dumps/{source}_{timestamp}.json` — AST serialized as JSON
-- `crash_dumps/{source}_{timestamp}.err` — exception type, message, stack trace
+### 14.5 #if DEBUG — Heavy Checks in Debug Only ✅
 
-Enabled in the main parse block and the Zig/LLVM backend.
+### 14.6 ImportCycleDetector — Circular Import Detection ✅
 
-### 14.5 #if DEBUG — Heavy Checks in Debug Only
+### 14.7 BenchmarkDotNet — Performance Benchmarks ✅
 
-Expensive validation (e.g., RTL override character scan) is wrapped in `#if DEBUG` and skipped in Release builds for maximum performance.
+### 14.8 SimdHelper — Vector&lt;byte&gt; SIMD Checks ✅
 
-### 14.6 ImportCycleDetector — Circular Import Detection
+### 14.9 BinaryHelper — BinaryPrimitives Endian I/O ✅
 
-DFS-based cycle detection for the import system. Validates that imported files form a Directed Acyclic Graph (DAG) and can be topologically sorted.
-
-```cs
-ImportCycleDetector.Validate(program.Imports, resolver);
-var sorted = ImportCycleDetector.TopologicalSort(program.Imports, resolver);
-```
-
-### 14.7 BenchmarkDotNet — Performance Benchmarks
-
-A standalone benchmark project in `benchmarks/` using BenchmarkDotNet. Measures parsing and serialization throughput.
-
-```bash
-dotnet run --project benchmarks --configuration Release
-```
-
-### 14.8 SimdHelper — Vector&lt;byte&gt; SIMD Checks
-
-Fast byte scanning using `System.Numerics.Vector<byte>`. Provides `ContainsAnyByte()` and `IndexOfAny()` with SIMD acceleration and scalar fallback.
-
-### 14.9 BinaryHelper — BinaryPrimitives Endian I/O
-
-Endian-safe binary reading/writing using `System.Buffers.Binary.BinaryPrimitives`. Supports `ReadUInt16/32/64LE`, `WriteUInt16/32/64LE`, and `StructToBytes<T>()` / `BytesToStruct<T>()` for unmanaged types.
-
-### 14.10 unmanaged + unsafe Code Generation
-
-Rust generator emits `#![allow(unsafe_code)]` and `#[repr(C, packed)]` when `@fast_path` variables are detected, enabling raw pointer access for zero-overhead data passing. C/C++ generators emit `UNSAFE_BPLUS` pool sections and alignment pragmas.
-
-```bash
-# All tests
-dotnet test src/BPlusTranspiler.Tests
-
-# Result: 218/218 tests pass
-```
-
----
-
-## Target Platforms
+### 14.10 unmanaged + unsafe Code Generation ✅
 
 | Platform | Status | Formats |
 |:---|:---|:---|
@@ -1400,27 +1364,9 @@ MIT License — use freely, edit, sell.
 
 **Machine Code Optimizer** — компилятор конечных автоматов из B+ напрямую в нативный x64 код.
 
-> **⚠️ Статус релиза** — Возможности, отмеченные ✅, реализованы и протестированы в текущем релизе. Все остальные возможности в списке ниже — **в планах** и **ещё не работают**. Это описание полной дорожной карты.
+> **⚠️ Статус релиза** — Возможности, отмеченные ✅, реализованы и протестированы в текущем релизе. Все остальные возможности в списке ниже — **в планах** и **ещё не работают**. Статус каждого раздела совпадает с английской версией выше.
 
----
-
-## Содержание (RU)
-
-1. [Синтаксис языка](#1-синтаксис-языка)
-2. [Установка](#2-установка)
-3. [Команды CLI](#3-команды-cli)
-4. [Флаги оптимизации](#4-флаги-оптимизации)
-5. [Система типов](#5-система-типов)
-6. [Директивы и аннотации](#6-директивы-и-аннотации)
-7. [Метал-стек (Metal Stack)](#7-метал-стек-metal-stack)
-8. [AI-оптимизатор](#8-ai-оптимизатор)
-9. [Почему B+ быстрый](#9-почему-b-быстрый)
-10. [Примеры](#10-примеры)
-11. [Структура проекта](#11-структура-проекта)
-
----
-
-## 1. Синтаксис языка
+### Hardware Probe ✅
 
 ### 1.1 Базовые конструкции
 
