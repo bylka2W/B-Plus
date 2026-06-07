@@ -171,7 +171,7 @@ parallel {
 }
 ```
 
-### 1.10 Entry Point
+### 1.10 Entry Point ✅
 
 ```bp
 entry main {

@@ -228,6 +228,11 @@ public static class BPlusTests
         p = Parse("entry main() {\n  run\n}");
         Assert(p.Entries.Count == 1, "entry parsed");
 
+        // Entry with braces (no parens)
+        p = Parse("entry main {\n  run\n}");
+        Assert(p.Entries.Count == 1, "entry brace parsed");
+        Assert(p.Entries[0].BodyLines.Count >= 1, "entry brace has body");
+
         Console.WriteLine();
     }
 

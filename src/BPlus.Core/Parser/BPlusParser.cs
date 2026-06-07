@@ -3629,24 +3629,53 @@ return entries;
         var e = new EntryDecl();
         e.Name = ParseWord();
         SkipWs();
-        Expect("(");
-        SkipWs();
-        Expect(")");
-        SkipWs();
-        // Optional return type
+        // Optional parentheses: entry main ( ) { ... } or entry main { ... }
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '(')
+        {
+            _lexer.Pos++;
+            SkipWs();
+            if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == ')')
+                _lexer.Pos++;
+            SkipWs();
+        }
+        // Optional return type: entry main() -> i32 { ... }
         if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '-')
         {
             Expect("->");
             SkipWs();
             e.ReturnType = ParseWord();
+            SkipWs();
         }
-        // Body is everything until end or next top-level construct
+        // Brace-delimited body: entry main { ... }
+        if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '{')
+        {
+            _lexer.Pos++; // skip opening {
+            int depth = 1;
+            int start = _lexer.Pos;
+            while (_lexer.Pos < _lexer.Src.Length && depth > 0)
+            {
+                if (_lexer.Src[_lexer.Pos] == '{') depth++;
+                else if (_lexer.Src[_lexer.Pos] == '}') depth--;
+                if (depth > 0) _lexer.Pos++;
+            }
+            var bodyText = _lexer.Src[start.._lexer.Pos].Trim();
+            if (_lexer.Pos < _lexer.Src.Length) _lexer.Pos++; // skip closing }
+            if (bodyText.Length > 0)
+            {
+                foreach (var line in bodyText.Split('\n'))
+                {
+                    var trimmed = line.Trim();
+                    if (trimmed.Length > 0) e.BodyLines.Add(trimmed);
+                }
+            }
+            return e;
+        }
+        // Fallback: body is lines until next top-level construct
         if (_lexer.Pos < _lexer.Src.Length && _lexer.Src[_lexer.Pos] == '\n')
         {
             _lexer.Pos++;
             SkipWs();
         }
-        // Parse body lines
         while (_lexer.Pos < _lexer.Src.Length && !Peek("state ") && !Peek("kernel") && !Peek("pipeline")
                && !Peek("entry") && !Peek("enum ") && !Peek("import ") && !Peek("context")
                && !Peek("parallel ") && !Peek("use cxx") && !Peek("extern") && _lexer.Src[_lexer.Pos] != '#')
