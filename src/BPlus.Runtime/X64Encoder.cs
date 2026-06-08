@@ -16,7 +16,6 @@ public static class X64Encoder
                 if (operands.Length != 2) throw new ArgumentException("MOV_R64_IMM64 needs 2 operands");
                 int reg = operands[0].Reg;
                 if (reg < 0 || reg > 15) throw new ArgumentException($"Invalid register: {reg}");
-                if (operands[1].Imm64 > uint.MaxValue) throw new ArgumentException("Imm too large for 64-bit");
                 if (reg >= 8)
                     bytes.Add((byte)(0x48 + ((reg >> 3) & 1))); // REX.W + REX.B
                 else

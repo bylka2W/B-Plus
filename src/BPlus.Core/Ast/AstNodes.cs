@@ -1,6 +1,4 @@
-﻿using BPlus.Core.Algorithm.Optimizer;
-
-namespace BPlus.Core.Ast;
+﻿namespace BPlus.Core.Ast;
 
 public enum ActionType { Enter, Exit }
 
@@ -123,14 +121,6 @@ public class StateDefNode
     public List<ParameterCondition> ParameterConditions { get; } = new();
     // Zig: Error transitions
     public List<ErrorTransitionNode> ErrorTransitions { get; } = new();
-    // Rust: NLL liveness results
-    public LivenessResult? Liveness { get; set; }
-    // Julia: inferred types per variable
-    public Dictionary<string, string> InferredTypes { get; } = new();
-    // Go: escape analysis result per variable
-    public Dictionary<string, EscapeKind> EscapeResults { get; } = new();
-    // Haskell: demand analysis result
-    public DemandSignature? Demand { get; set; }
 
     // Cache control
     public string? CachePolicy { get; set; }

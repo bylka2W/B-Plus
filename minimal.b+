@@ -1,0 +1,7 @@
+state A {
+    enter { print("hello") }
+}
+
+entry main {
+    print("hi")
+}

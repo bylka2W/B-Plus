@@ -1,0 +1,12 @@
+state Start {
+    enter { print("Enter Start") }
+    on go -> End
+}
+
+state End {
+    enter { print("Enter End") }
+}
+
+entry main {
+    print("Entry main")
+}

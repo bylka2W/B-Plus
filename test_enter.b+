@@ -1,0 +1,2 @@
+state Test { enter { print("hello") } } 
+entry main { run } 

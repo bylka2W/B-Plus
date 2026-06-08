@@ -1,5 +1,4 @@
 using BPlusTranspiler.Ast;
-using BPlusTranspiler.Runtime;
 
 namespace BPlusTranspiler;
 
@@ -25,13 +24,6 @@ public static class BPlusValidator
         ValidateParallel(program, errors);
         ValidateTypes(program, errors);
         ValidateAnnotations(program, errors);
-        ValidateBpm(program, errors);
-        ValidateLsp(program, errors);
-        ValidateGenerators(errors);
-        ValidateAdaptive(program, errors);
-        ValidateDebug(program, errors);
-        ValidateMath(program, errors);
-        ValidateSafety(program, errors);
         ValidateMetalAnnotations(program, errors);
 
         return errors;
@@ -512,158 +504,6 @@ public static class BPlusValidator
             // #812: no version resolution
             if (!lockContent.Contains("resolutions"))
                 errors.Add(new ValidationError { Number = 812, Message = "BPM lock file missing 'resolutions' section — version conflict risk", Severity = "🔴" });
-        }
-    }
-
-    // ─── LSP (🟠 #129-136) ───
-
-    private static void ValidateLsp(ProgramNode program, List<ValidationError> errors)
-    {
-        // LSP features planned for v4.1.0
-    }
-
-    // ─── GENERATORS (🔴 #55, #63-64, #82, #88, #98, 🟠 #51-52, #54, #57, #67, #72, #74-76, #80, #83-84, #87, #90-92, #96-97, #99-101, #105-107, #115-117) ───
-
-    private static void ValidateGenerators(List<ValidationError> errors)
-    {
-        // C malloc NULL check warning (always reported)
-        errors.Add(new ValidationError { Number = 82, Message = "C generator: malloc() calls without NULL check — possible null dereference (CWE-476)", Severity = "🟠" });
-        // Unreal GENERATED_BODY warning (always reported)
-        errors.Add(new ValidationError { Number = 98, Message = "Unreal Engine: GENERATED_BODY macro missing — UHT will fail", Severity = "🟠" });
-        // C++ atomics warnings (always reported)
-        errors.Add(new ValidationError { Number = 63, Message = "C++ atomics: memory_order_relaxed on shared variable — no synchronization", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 64, Message = "C++ atomics: seq_cst on non-atomic variable — fence may be ignored", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 983, Message = "C++ atomics: atomic<T> on reference type — copy semantics ambiguous", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 993, Message = "C++ atomics: compare_exchange_weak in loop without memory ordering", Severity = "🟠" });
-        errors.Add(new ValidationError { Number = 996, Message = "C++ atomics: atomic_flag without notify_one/notify_all — busy wait", Severity = "🟠" });
-    }
-
-    // ─── ADAPTIVE RUNTIME (#2010-2011) ───
-
-    private static void ValidateAdaptive(ProgramNode program, List<ValidationError> errors)
-    {
-        foreach (var s in program.States)
-        {
-            bool hasTransition = s.Transitions.Count > 0;
-            if (hasTransition)
-            {
-                // #2010: Every state with transitions should have scalar fallback
-                errors.Add(new ValidationError
-                {
-                    Number = 2010,
-                    Message = $"Adaptive: No SIMD dispatch table for state '{s.Name}' — add --adaptive flag to generate CPU-detected dispatch",
-                    Severity = "🟠"
-                });
-            }
-        }
-    }
-
-    // ─── DEBUG (#2020) ───
-
-    private static void ValidateDebug(ProgramNode program, List<ValidationError> errors)
-    {
-        foreach (var s in program.States)
-        {
-            foreach (var v in s.Variables)
-            {
-                if (v.IsFastPath)
-                {
-                    // #2020: @fast_path variable should have register mapping in debug mode
-                    errors.Add(new ValidationError
-                    {
-                        Number = 2020,
-                        Message = $"Debug: @fast_path variable '{v.Name}' in state '{s.Name}' — register mapping available in debug mode",
-                        Severity = "🟠"
-                    });
-                }
-            }
-        }
-    }
-
-    // ─── MATH (#2030-2032) ───
-
-    private static void ValidateMath(ProgramNode program, List<ValidationError> errors)
-    {
-        foreach (var s in program.States)
-        {
-            foreach (var v in s.Variables)
-            {
-                if (v.Type is "mat4" or "mat4x4" or "quat" or "quaternion")
-                {
-                    // #2030: Math type detected — generator may not support
-                    errors.Add(new ValidationError
-                    {
-                        Number = 2030,
-                        Message = $"Math: Variable '{v.Name}' in state '{s.Name}' uses '{v.Type}' — use --math flag to generate AVX-512 intrinsics",
-                        Severity = "🟠"
-                    });
-                }
-            }
-        }
-        foreach (var k in program.Kernels)
-        {
-            if (k.Body != null && k.Body.Operations.Any(o => o.Name is "sin" or "cos" or "tan" or "matmul" or "quat_mul"))
-            {
-                // #2031: Math operations in kernel — need SIMD
-                errors.Add(new ValidationError
-                {
-                    Number = 2031,
-                    Message = $"Kernel '{k.Name}' uses math operations — use --math for AVX-512 intrinsics",
-                    Severity = "🟠"
-                });
-            }
-        }
-    }
-
-    // ─── SAFETY (#2040-2042) ───
-
-    private static void ValidateSafety(ProgramNode program, List<ValidationError> errors)
-    {
-        // #2040: State reachability safety
-        var reachable = new HashSet<string>();
-        var queue = new Queue<string>();
-        if (program.States.Count > 0)
-        {
-            reachable.Add(program.States[0].Name);
-            queue.Enqueue(program.States[0].Name);
-        }
-        while (queue.Count > 0)
-        {
-            var cur = queue.Dequeue();
-            var state = program.States.FirstOrDefault(s => s.Name == cur);
-            if (state == null) continue;
-            foreach (var t in state.Transitions)
-                if (reachable.Add(t.Target))
-                    queue.Enqueue(t.Target);
-        }
-        foreach (var s in program.States)
-        {
-            if (!reachable.Contains(s.Name))
-            {
-                errors.Add(new ValidationError
-                {
-                    Number = 2040,
-                    Message = $"Safety: State '{s.Name}' is unreachable from initial state — possible dead code (DO-178C violation)",
-                    Severity = "🔴"
-                });
-            }
-        }
-
-        // #2041: Timer safety — ensure timers have duration
-        foreach (var s in program.States)
-        {
-            foreach (var tm in s.Timers)
-            {
-                if (string.IsNullOrWhiteSpace(tm.Duration))
-                {
-                    errors.Add(new ValidationError
-                    {
-                        Number = 2041,
-                        Message = $"Safety: Timer in state '{s.Name}' has no duration — undefined behavior (DO-178C violation)",
-                        Severity = "🔴"
-                    });
-                }
-            }
         }
     }
 

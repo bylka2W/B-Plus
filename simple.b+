@@ -1,0 +1,7 @@
+state Idle {
+    enter { print("hello") }
+}
+
+entry main {
+    print("world")
+}
