@@ -1,86 +1,453 @@
-# B+ — state machine compiler (x64)
+# B+ — компилятор конечных автоматов (x64)
 
-**B+** is a compiler for state machines written in `.b+` files. It generates **native x64 machine code** directly and produces Windows PE executables — no assembler, no linker, no LLVM.
+**B+** транслирует `.b+` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe).  
+Никаких ассемблеров, линкеров, LLVM — весь кодогенератор написан с нуля на Zig.
 
 ---
 
-## What it does
+## Содержание
 
-| Feature | Status |
-|---------|--------|
-| State machine parsing (states, events, transitions, guards) | ✅ |
-| x64 machine code generation (no external tools) | ✅ |
-| Windows PE executable output | ✅ |
-| Entry/exit actions per state | ✅ |
-| `@cache(L1)`, `@hot`, `@cold` annotations | ✅ |
-| `print()` for console output | ✅ |
-| Basic guard conditions on transitions | ✅ |
-| LLVM / WASM / SPIR-V / GPU targets | ❌ |
-| LSP / IDE support | ❌ |
-| "AI optimizer" / "Metal Stack" | ❌ |
-| Multi-platform (Windows x64 only) | ⚠️ |
+1. [Быстрый старт](#1-быстрый-старт)
+2. [Команды компилятора](#2-команды-компилятора)
+3. [Синтаксис языка](#3-синтаксис-языка)
+   - [Состояния](#31-состояния)
+   - [Переходы (on)](#32-переходы-on)
+   - [Безусловные переходы (always)](#33-безусловные-переходы-always)
+   - [Вход и выход (entry / exit)](#34-вход-и-выход-entry--exit)
+   - [Переменные](#35-переменные)
+   - [Присваивания](#36-присваивания)
+   - [Печать (print)](#37-печать-print)
+   - [Сторожевые условия (guard)](#38-сторожевые-условия-guard)
+   - [global entry](#39-global-entry)
+   - [Контекст (context)](#310-контекст-context)
+   - [Аннотации](#311-аннотации)
+   - [Перечисления (enum)](#312-перечисления-enum)
+   - [Параллельные блоки (parallel)](#313-параллельные-блоки-parallel)
+   - [Kernel-функции](#314-kernel-функции)
+   - [Внешние функции (extern)](#315-внешние-функции-extern)
+   - [Комментарии](#316-комментарии)
+4. [Типы данных](#4-типы-данных)
+5. [Примеры](#5-примеры)
+6. [Сборка из исходников](#6-сборка-из-исходников)
+7. [Структура проекта](#7-структура-проекта)
 
-## Quick start
+---
+
+## 1. Быстрый старт
 
 ```
-bpc input.b+
-.\input.exe
+bpc.exe build hello.b+
+.\hello.exe
 ```
 
-Compiles `input.b+` to `input.exe` and runs it.
+Первая команда компилирует `hello.b+` в `hello.exe`.  
+Вторая — запускает.
 
-## What a `.b+` file looks like
+Можно совместить:
+
+```
+bpc.exe run hello.b+
+```
+
+---
+
+## 2. Команды компилятора
+
+```
+bpc build <input.b+> [-o <output.exe>]
+bpc run  <input.b+>
+```
+
+- **build** — скомпилировать `.b+` в `.exe`. Если не указать `-o`, имя выходного файла = имя входного с расширением `.exe`.
+- **run** — скомпилировать и сразу запустить. Вывод программы печатается в консоль.
+
+### Примеры
+
+```
+bpc build traffic.b+
+bpc build traffic.b+ -o light.exe
+bpc run traffic.b+
+```
+
+---
+
+## 3. Синтаксис языка
+
+### 3.1 Состояния
+
+```
+state <Имя> {
+    ...
+}
+```
+
+Состояние — базовый строительный блок. Внутри могут быть переменные, переходы, entry/exit-блоки.
+
+```
+state Red {
+    on timer -> Green
+    entry { print("RED\n") }
+}
+```
+
+### 3.2 Переходы (on)
+
+```
+on <событие> -> <ЦелевоеСостояние>
+```
+
+Когда приходит событие (строка из stdin), автомат переходит в указанное состояние.
 
 ```
 state Green {
     on timer -> Yellow
-    entry { print("Green\n") }
+    on pedestrian -> Red
+}
+```
+
+### 3.3 Безусловные переходы (always)
+
+```
+always -> <ЦелевоеСостояние>
+```
+
+Переход происходит сразу при входе в состояние, без ожидания события.
+
+```
+state Init {
+    always -> Menu
+}
+```
+
+### 3.4 Вход и выход (entry / exit)
+
+```
+state Door {
+    entry { print("entered\n") }
+    exit  { print("exited\n") }
+    on open -> Opened
+}
+```
+
+- `entry { ... }` — выполняется при входе в состояние.
+- `exit { ... }` — выполняется перед выходом из состояния (перед переходом в другое).
+
+### 3.5 Переменные
+
+```
+var <имя>: <тип> [= <значение>]
+```
+
+Объявляются внутри состояния. Типы: int8, int16, int32, int64, u8, u16, u32, u64, byte, bool, short, int, float и т.д.
+
+```
+state Counter {
+    var count: int = 0
+    on tick -> Self {
+        count += 1
+    }
+}
+```
+
+Можно объявлять несколько переменных через запятую:
+
+```
+var x: int, y: int, name: int
+```
+
+### 3.6 Присваивания
+
+Внутри `entry { }`, `exit { }` или тела перехода:
+
+```
+var x: int
+
+on event -> Next {
+    x = 42
+    x += 1
+    x -= 5
+}
+```
+
+Поддерживаются операторы `=`, `+=`, `-=`.  
+В правой части можно использовать числа и имена переменных.
+
+### 3.7 Печать (print)
+
+```
+print("строка")
+```
+
+Печатает строку в stdout. Поддерживаются escape-последовательности `\n`, `\r`, `\t`.
+
+```
+state Hello {
+    entry { print("Hello, world!\n") }
+}
+```
+
+### 3.8 Сторожевые условия (guard)
+
+```
+on <событие> [<условие>] -> <ЦелевоеСостояние>
+```
+
+Переход происходит только если условие истинно. Поддерживаются операторы:
+`==`, `!=`, `>`, `<`, `>=`, `<=`
+
+```
+state Crosswalk {
+    var cars_waiting: bool
+    on timer [cars_waiting == 0] -> Walk
+    on timer [cars_waiting > 0]  -> Wait
+}
+```
+
+### 3.9 global entry
+
+```
+entry <Имя> {
+    ...
+}
+```
+
+Глобальная точка входа — выполняется один раз при старте программы. Можно использовать для инициализации.
+
+```
+entry main {
+    print("Starting...\n")
+}
+```
+
+### 3.10 Контекст (context)
+
+```
+context {
+    var <имя>: <тип>
+    ...
+}
+```
+
+Контекстные переменные — глобальные для всей программы, видимы во всех состояниях.
+
+```
+context {
+    var global_count: int
+}
+```
+
+### 3.11 Аннотации
+
+Аннотации ставятся перед состоянием или переходом.
+
+| Аннотация | Описание |
+|-----------|----------|
+| `@hot` | Горячий код — размещается в L1 кеше |
+| `@cold` | Холодный код — не кешируется |
+| `@hot(0.9)` | Явный weight горячести |
+| `@cache(L1)` | Данные состояния в L1 |
+| `@cache(L2)` | Данные состояния в L2 |
+| `@cache(L3)` | Данные состояния в L3 |
+| `@fast_path` | Быстрый путь исполнения |
+| `@always_inline` | Всегда встраивать |
+| `@no_inline` | Не встраивать |
+| `@owned` / `@borrowed` | Владение памятью |
+
+```
+@hot
+@cache(L1)
+state FastPath {
+    ...
+}
+
+@cold
+state ErrorHandler {
+    ...
+}
+
+on critical @hot(0.95) -> Shutdown
+```
+
+### 3.12 Перечисления (enum)
+
+```
+enum <Имя> {
+    Член1,
+    Член2,
+    ...
+}
+```
+
+Глобальное объявление перечисления.
+
+```
+enum Color {
+    Red,
+    Yellow,
+    Green
+}
+```
+
+### 3.13 Параллельные блоки (parallel)
+
+```
+parallel <Имя> {
+    state A { ... }
+    state B { ... }
+}
+```
+
+Группировка состояний в параллельный блок (состояния не влияют друг на друга).
+
+### 3.14 Kernel-функции
+
+```
+kernel <имя>(<параметр>: <тип>, ...) -> <тип>
+```
+
+Объявление kernel-функции (для генерации кода на стороне GPU/металла).
+
+```
+kernel matrixMul(a: int, b: int) -> int
+```
+
+### 3.15 Внешние функции (extern)
+
+```
+extern "dllname.dll" fn <имя>(<парам>: <тип>, ...) -> <тип>
+```
+
+Объявление внешней функции из DLL.
+
+```
+extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType: int) -> int
+```
+
+### 3.16 Комментарии
+
+```
+// однострочный комментарий
+-- тоже комментарий
+```
+
+---
+
+## 4. Типы данных
+
+| Тип | Размер (байт) |
+|-----|--------------|
+| `int8`, `i8`, `u8`, `byte`, `bool` | 1 |
+| `int16`, `i16`, `u16`, `short`, `half` | 2 |
+| `int32`, `i32`, `u32`, `int`, `uint`, `float` | 4 |
+| `int64`, `i64`, `u64` (и всё остальное) | 8 |
+
+---
+
+## 5. Примеры
+
+### Светофор
+
+```
+state Green {
+    on timer -> Yellow
+    entry { print("GREEN\n") }
 }
 
 state Yellow {
-    on timer [cars_waiting] -> Green
     on timer -> Red
-    entry { print("Yellow\n") }
+    entry { print("YELLOW\n") }
 }
 
 state Red {
     on timer -> Green
-    entry { print("Red\n") }
+    entry { print("RED\n") }
 }
 ```
 
-## Project structure
+Ввод: `timer\n` переключает состояния.
+
+### Счётчик
 
 ```
-zig/src/       — compiler source (Zig)
-  main.zig     — entry point
-  parser.zig   — .b+ file parser
-  ast.zig      — AST types
-  x64gen.zig   — x64 code generation
-  x64enc.zig   — x64 instruction encoding
-  pe.zig       — PE executable writer
-src/           — original C# version (reference)
+context {
+    var total: int
+}
+
+state Count {
+    var n: int = 0
+    on inc -> Self { n += 1; total += 1 }
+    on show -> Show
+}
+
+state Show {
+    always -> Count
+    entry { print("n="); print("?\n") }
+}
 ```
 
-## Building from source
+### Охраняемый переход
 
-Requires [Zig](https://ziglang.org/) master.
+```
+state Door {
+    on open [key == 1] -> Opened
+    entry { print("locked\n") }
+}
+
+state Opened {
+    on close -> Door
+    entry { print("opened\n") }
+}
+
+context {
+    var key: int
+}
+```
+
+---
+
+## 6. Сборка из исходников
+
+Требуется [Zig](https://ziglang.org/) (master, >= 0.14).
 
 ```
 cd zig
 zig build
 ```
 
-Or compile directly:
+Или напрямую:
 
 ```
 cd zig
 zig build-exe src/main.zig -femit-bin=bpc.exe
 ```
 
-## Notes
+После сборки:
 
-- Only **Windows x64** target is supported.
-- The compiler is **minimal** — just enough to compile simple state machines.
-- Error messages are basic.
-- The C# version in `src/` is the original implementation; the Zig version in `zig/` is the current active development.
+```
+bpc.exe run example.b+
+```
+
+---
+
+## 7. Структура проекта
+
+```
+zig/                    — компилятор (Zig, активная разработка)
+  src/
+    main.zig            — точка входа, CLI, оркестрация
+    parser.zig          — лексер + парсер .b+
+    ast.zig             — типы AST (StateDef, Transition, и т.д.)
+    x64gen.zig          — генератор машинного кода x64
+    x64enc.zig          — кодировщик инструкций x64
+    pe.zig             — генератор PE (.exe)
+  build.zig            — сборка через zig build
+src/                    — оригинальная версия на C# (не развивается)
+```
+
+---
+
+**Ограничения:**
+- Только Windows x64.
+- Минимальные сообщения об ошибках.
+- Чтение ввода через stdin (одна строка = одно событие).
+- Нет поддержки LLVM, WASM, GPU, LSP.
