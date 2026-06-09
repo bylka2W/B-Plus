@@ -1,6 +1,6 @@
 # B+ — компилятор конечных автоматов (x64)
 
-**B+** транслирует `.b+` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe).  
+**B+** транслирует `.b+` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор написан с нуля на Zig.
 
 ---
@@ -30,8 +30,8 @@
 5. [Примеры](#5-примеры)
 6. [Сборка из исходников](#6-сборка-из-исходников)
 7. [Структура проекта](#7-структура-проекта)
-8. [Лицензия](#8-лицензия--license)
-9. [Контакты](#9-контакты--contact)
+8. [Лицензия](#8-лицензия)
+9. [Контакты](#9-контакты)
 
 ---
 
@@ -42,7 +42,7 @@ bpc.exe build hello.b+
 .\hello.exe
 ```
 
-Первая команда компилирует `hello.b+` в `hello.exe`.  
+Первая команда компилирует `hello.b+` в `hello.exe`.
 Вторая — запускает.
 
 Можно совместить:
@@ -53,49 +53,36 @@ bpc.exe run hello.b+
 
 ---
 
-## 2. Команды компилятора / Compiler commands
+## 2. Команды компилятора
 
-### Синтаксис / Syntax
+### Синтаксис
 
-**Русский:**
 ```
-bpc build <входной.b+>     — скомпилировать в <входной>.exe
-bpc build <входной.b+> -o <выход.exe>  — скомпилировать с указанием имени
-bpc run   <входной.b+>     — скомпилировать и сразу запустить
+bpc build <входной.b+>              — скомпилировать в <входной>.exe
+bpc build <входной.b+> -o <выход.exe> — скомпилировать с указанием имени
+bpc run   <входной.b+>              — скомпилировать и сразу запустить
 ```
-
-**English:**
-```
-bpc build <input.b+>              — compile to <input>.exe
-bpc build <input.b+> -o <out.exe> — compile with custom output name
-bpc run   <input.b+>              — compile and run immediately
-```
-
----
-
-### Подробное описание / Detailed description
 
 #### `bpc build <input.b+> [-o <output.exe>]`
 
-Что делает / What it does:
+Что делает:
 
-| Шаг | Русский | English |
-|-----|---------|---------|
-| 1 | Читает файл `.b+` целиком в память | Reads the entire `.b+` file into memory |
-| 2 | Разбирает (парсит) исходный код в AST | Parses source code into an AST |
-| 3 | Проверяет, что есть хотя бы одно состояние | Verifies at least one state exists |
-| 4 | Генерирует машинный код x64 напрямую | Generates raw x64 machine code (no assembler) |
-| 5 | Расставляет NOP-выравнивание для кеша | Inserts NOP padding for cache alignment |
-| 6 | Встраивает пул строк (для print) | Embeds string pool (for print) |
-| 7 | Генерирует таблицу импорта (kernel32.dll) | Generates import table (kernel32.dll) |
-| 8 | Применяет все fixup'ы (адреса переходов) | Applies all jump/call fixups |
-| 9 | Упаковывает всё в формат PE (.exe) | Wraps everything into a PE (.exe) file |
-| 10 | Записывает результат на диск | Writes the result to disk |
+| Шаг | Описание |
+|-----|----------|
+| 1 | Читает файл `.b+` целиком в память |
+| 2 | Разбирает (парсит) исходный код в AST |
+| 3 | Проверяет, что есть хотя бы одно состояние |
+| 4 | Генерирует машинный код x64 напрямую (без ассемблера) |
+| 5 | Расставляет NOP-выравнивание для кеша |
+| 6 | Встраивает пул строк (для print) |
+| 7 | Генерирует таблицу импорта (kernel32.dll) |
+| 8 | Применяет все fixup'ы (адреса переходов) |
+| 9 | Упаковывает всё в формат PE (.exe) |
+| 10 | Записывает результат на диск |
 
-Если `-o` не указан, имя выходного файла = имя входного с расширением `.exe`.  
-If `-o` is omitted, the output name = input name with `.exe` extension.
+Если `-o` не указан, имя выходного файла = имя входного с расширением `.exe`.
 
-**Примеры / Examples:**
+**Примеры:**
 ```
 bpc build traffic.b+              → traffic.exe
 bpc build traffic.b+ -o light.exe → light.exe
@@ -104,38 +91,35 @@ bpc build source.b+               → source.exe
 
 #### `bpc run <input.b+>`
 
-Что делает / What it does:
+Что делает:
 
-| Шаг | Русский | English |
-|-----|---------|---------|
-| 1 | Компилирует `<input>.exe` | Compiles `<input>.exe` |
-| 2 | Запускает полученный `.exe` | Runs the resulting `.exe` |
-| 3 | Перехватывает stdout и печатает в консоль | Captures stdout and prints to console |
-| 4 | Возвращает код завершения программы | Returns the program exit code |
+| Шаг | Описание |
+|-----|----------|
+| 1 | Компилирует `<input>.exe` |
+| 2 | Запускает полученный `.exe` |
+| 3 | Перехватывает stdout и печатает в консоль |
+| 4 | Возвращает код завершения программы |
 
-**Примеры / Examples:**
+**Примеры:**
 ```
-bpc run traffic.b+    — компилирует launch.exe и сразу запускает
-bpc run hello.b+      — компилирует hello.exe и сразу запускает
+bpc run traffic.b+    — компилирует и сразу запускает
+bpc run hello.b+      — компилирует и сразу запускает
 ```
 
-### Коды возврата / Exit codes
+### Коды возврата
 
-| Код | Русский | English |
-|-----|---------|---------|
-| 0 | Успех | Success |
-| 1 | Ошибка: неверные аргументы или файл не найден | Error: invalid args or file not found |
-| >0 | Код завершения скомпилированной программы | Exit code of the compiled program (when using `run`) |
+| Код | Значение |
+|-----|----------|
+| 0 | Успех |
+| 1 | Ошибка: неверные аргументы или файл не найден |
+| >0 | Код завершения скомпилированной программы (при использовании `run`) |
 
-### Примечания / Notes
+### Примечания
 
 - Входной файл **обязан** иметь расширение `.b+`.
 - Если расширения нет, компилятор всё равно добавит `.exe` к базовому имени.
 - Компилятор **не использует** внешние ассемблеры, линкеры или LLVM — весь машинный код генерируется самостоятельно.
 - Выходной файл — полноценный Windows PE x64 исполняемый файл.
-- The input file **must** have a `.b+` extension.
-- The compiler does **not** use external assemblers, linkers, or LLVM — all machine code is self-generated.
-- The output is a fully valid Windows PE x64 executable.
 
 ---
 
@@ -237,7 +221,7 @@ on event -> Next {
 }
 ```
 
-Поддерживаются операторы `=`, `+=`, `-=`.  
+Поддерживаются операторы `=`, `+=`, `-=".
 В правой части можно использовать числа и имена переменных.
 
 ### 3.7 Печать (print)
@@ -497,9 +481,8 @@ bpc.exe run example.b+
 
 ---
 
-## 7. Структура проекта / Project structure
+## 7. Структура проекта
 
-**Русский:**
 ```
 zig/                    — компилятор (Zig, активная разработка)
   src/
@@ -513,31 +496,9 @@ zig/                    — компилятор (Zig, активная разр
 src/                    — оригинальная версия на C# (не развивается)
 ```
 
-**English:**
-```
-zig/                    — compiler (Zig, active development)
-  src/
-    main.zig            — entry point, CLI, orchestration
-    parser.zig          — lexer + parser for .b+
-    ast.zig             — AST types (states, transitions, etc.)
-    x64gen.zig          — x64 machine code generator
-    x64enc.zig          — x64 instruction encoder
-    pe.zig             — PE (.exe) generator
-  build.zig            — build script (zig build)
-src/                    — original C# version (no longer developed)
-```
-
 ---
 
-**Ограничения / Limitations:**
-- Только Windows x64 / Windows x64 only.
-- Минимальные сообщения об ошибках / Minimal error messages.
-- Чтение ввода через stdin (одна строка = одно событие) / Reads input from stdin (one line = one event).
-- Нет поддержки LLVM, WASM, GPU, LSP / No LLVM, WASM, GPU, LSP support.
-
----
-
-## 8. Лицензия / License
+## 8. Лицензия
 
 MIT License
 
@@ -567,8 +528,564 @@ SOFTWARE.
 
 ---
 
-## 9. Контакты / Contact
+## 9. Контакты
 
 - **GitHub**: [github.com/bylka2W](https://github.com/bylka2W)
 - **Репозиторий**: [github.com/bylka2W/B-Plus](https://github.com/bylka2W/B-Plus)
 - **Автор**: bylka2W
+
+---
+
+**Ограничения:**
+- Только Windows x64.
+- Минимальные сообщения об ошибках.
+- Чтение ввода через stdin (одна строка = одно событие).
+- Нет поддержки LLVM, WASM, GPU, LSP.
+
+---
+
+---
+
+# B+ — state machine compiler (x64)
+
+**B+** compiles `.b+` files directly to x64 machine code and packages them into Windows PE executables (.exe).
+No assemblers, linkers, or LLVM — the entire code generator is written from scratch in Zig.
+
+---
+
+## Table of Contents
+
+1. [Quick Start](#1-quick-start)
+2. [Compiler Commands](#2-compiler-commands)
+3. [Language Syntax](#3-language-syntax)
+   - [States](#31-states)
+   - [Transitions (on)](#32-transitions-on)
+   - [Unconditional Transitions (always)](#33-unconditional-transitions-always)
+   - [Entry and Exit (entry / exit)](#34-entry-and-exit-entry--exit)
+   - [Variables](#35-variables)
+   - [Assignments](#36-assignments)
+   - [Print (print)](#37-print-print)
+   - [Guard Conditions (guard)](#38-guard-conditions-guard)
+   - [global entry](#39-global-entry)
+   - [Context (context)](#310-context-context)
+   - [Annotations](#311-annotations)
+   - [Enums (enum)](#312-enums-enum)
+   - [Parallel Blocks (parallel)](#313-parallel-blocks-parallel)
+   - [Kernel Functions](#314-kernel-functions)
+   - [External Functions (extern)](#315-external-functions-extern)
+   - [Comments](#316-comments)
+4. [Data Types](#4-data-types)
+5. [Examples](#5-examples)
+6. [Building from Source](#6-building-from-source)
+7. [Project Structure](#7-project-structure)
+8. [License](#8-license)
+9. [Contact](#9-contact)
+
+---
+
+## 1. Quick Start
+
+```
+bpc.exe build hello.b+
+.\hello.exe
+```
+
+The first command compiles `hello.b+` into `hello.exe`.
+The second runs it.
+
+Or combine both:
+
+```
+bpc.exe run hello.b+
+```
+
+---
+
+## 2. Compiler Commands
+
+### Syntax
+
+```
+bpc build <input.b+>              — compile to <input>.exe
+bpc build <input.b+> -o <out.exe> — compile with custom output name
+bpc run   <input.b+>              — compile and run immediately
+```
+
+#### `bpc build <input.b+> [-o <output.exe>]`
+
+What it does:
+
+| Step | Description |
+|------|-------------|
+| 1 | Reads the entire `.b+` file into memory |
+| 2 | Parses source code into an AST |
+| 3 | Verifies at least one state exists |
+| 4 | Generates raw x64 machine code (no assembler) |
+| 5 | Inserts NOP padding for cache alignment |
+| 6 | Embeds string pool (for print) |
+| 7 | Generates import table (kernel32.dll) |
+| 8 | Applies all jump/call fixups |
+| 9 | Wraps everything into a PE (.exe) file |
+| 10 | Writes the result to disk |
+
+If `-o` is omitted, the output name = input name with `.exe` extension.
+
+**Examples:**
+```
+bpc build traffic.b+              → traffic.exe
+bpc build traffic.b+ -o light.exe → light.exe
+bpc build source.b+               → source.exe
+```
+
+#### `bpc run <input.b+>`
+
+What it does:
+
+| Step | Description |
+|------|-------------|
+| 1 | Compiles `<input>.exe` |
+| 2 | Runs the resulting `.exe` |
+| 3 | Captures stdout and prints to console |
+| 4 | Returns the program exit code |
+
+**Examples:**
+```
+bpc run traffic.b+    — compiles and runs immediately
+bpc run hello.b+      — compiles and runs immediately
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Error: invalid args or file not found |
+| >0 | Exit code of the compiled program (when using `run`) |
+
+### Notes
+
+- The input file **must** have a `.b+` extension.
+- If the extension is missing, the compiler still adds `.exe` to the base name.
+- The compiler does **not** use external assemblers, linkers, or LLVM — all machine code is self-generated.
+- The output is a fully valid Windows PE x64 executable.
+
+---
+
+## 3. Language Syntax
+
+### 3.1 States
+
+```
+state <Name> {
+    ...
+}
+```
+
+A state is the basic building block. It can contain variables, transitions, and entry/exit blocks.
+
+```
+state Red {
+    on timer -> Green
+    entry { print("RED\n") }
+}
+```
+
+### 3.2 Transitions (on)
+
+```
+on <event> -> <TargetState>
+```
+
+When an event (a string from stdin) arrives, the machine transitions to the specified state.
+
+```
+state Green {
+    on timer -> Yellow
+    on pedestrian -> Red
+}
+```
+
+### 3.3 Unconditional Transitions (always)
+
+```
+always -> <TargetState>
+```
+
+The transition happens immediately upon entering the state, without waiting for an event.
+
+```
+state Init {
+    always -> Menu
+}
+```
+
+### 3.4 Entry and Exit (entry / exit)
+
+```
+state Door {
+    entry { print("entered\n") }
+    exit  { print("exited\n") }
+    on open -> Opened
+}
+```
+
+- `entry { ... }` — executed when entering the state.
+- `exit { ... }` — executed before leaving the state (before transitioning to another state).
+
+### 3.5 Variables
+
+```
+var <name>: <type> [= <value>]
+```
+
+Declared inside a state. Types: int8, int16, int32, int64, u8, u16, u32, u64, byte, bool, short, int, float, etc.
+
+```
+state Counter {
+    var count: int = 0
+    on tick -> Self {
+        count += 1
+    }
+}
+```
+
+Multiple variables can be declared separated by commas:
+
+```
+var x: int, y: int, name: int
+```
+
+### 3.6 Assignments
+
+Inside `entry { }`, `exit { }` or a transition body:
+
+```
+var x: int
+
+on event -> Next {
+    x = 42
+    x += 1
+    x -= 5
+}
+```
+
+Supported operators: `=`, `+=`, `-=`.
+The right side can use numbers and variable names.
+
+### 3.7 Print (print)
+
+```
+print("string")
+```
+
+Prints a string to stdout. Supports escape sequences `\n`, `\r`, `\t`.
+
+```
+state Hello {
+    entry { print("Hello, world!\n") }
+}
+```
+
+### 3.8 Guard Conditions (guard)
+
+```
+on <event> [<condition>] -> <TargetState>
+```
+
+The transition only occurs if the condition is true. Supported operators:
+`==`, `!=`, `>`, `<`, `>=`, `<=`
+
+```
+state Crosswalk {
+    var cars_waiting: bool
+    on timer [cars_waiting == 0] -> Walk
+    on timer [cars_waiting > 0]  -> Wait
+}
+```
+
+### 3.9 global entry
+
+```
+entry <Name> {
+    ...
+}
+```
+
+A global entry point — executed once at program startup. Can be used for initialization.
+
+```
+entry main {
+    print("Starting...\n")
+}
+```
+
+### 3.10 Context (context)
+
+```
+context {
+    var <name>: <type>
+    ...
+}
+```
+
+Context variables are global across the entire program, visible in all states.
+
+```
+context {
+    var global_count: int
+}
+```
+
+### 3.11 Annotations
+
+Annotations are placed before a state or transition.
+
+| Annotation | Description |
+|-----------|-------------|
+| `@hot` | Hot code — placed in L1 cache |
+| `@cold` | Cold code — not cached |
+| `@hot(0.9)` | Explicit hotness weight |
+| `@cache(L1)` | State data in L1 |
+| `@cache(L2)` | State data in L2 |
+| `@cache(L3)` | State data in L3 |
+| `@fast_path` | Fast execution path |
+| `@always_inline` | Always inline |
+| `@no_inline` | Do not inline |
+| `@owned` / `@borrowed` | Memory ownership |
+
+```
+@hot
+@cache(L1)
+state FastPath {
+    ...
+}
+
+@cold
+state ErrorHandler {
+    ...
+}
+
+on critical @hot(0.95) -> Shutdown
+```
+
+### 3.12 Enums (enum)
+
+```
+enum <Name> {
+    Member1,
+    Member2,
+    ...
+}
+```
+
+A global enum declaration.
+
+```
+enum Color {
+    Red,
+    Yellow,
+    Green
+}
+```
+
+### 3.13 Parallel Blocks (parallel)
+
+```
+parallel <Name> {
+    state A { ... }
+    state B { ... }
+}
+```
+
+Groups states into a parallel block (states don't affect each other).
+
+### 3.14 Kernel Functions
+
+```
+kernel <name>(<param>: <type>, ...) -> <type>
+```
+
+Declares a kernel function (for GPU/metal code generation).
+
+```
+kernel matrixMul(a: int, b: int) -> int
+```
+
+### 3.15 External Functions (extern)
+
+```
+extern "dllname.dll" fn <name>(<param>: <type>, ...) -> <type>
+```
+
+Declares an external function from a DLL.
+
+```
+extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType: int) -> int
+```
+
+### 3.16 Comments
+
+```
+// single-line comment
+-- also a comment
+```
+
+---
+
+## 4. Data Types
+
+| Type | Size (bytes) |
+|------|-------------|
+| `int8`, `i8`, `u8`, `byte`, `bool` | 1 |
+| `int16`, `i16`, `u16`, `short`, `half` | 2 |
+| `int32`, `i32`, `u32`, `int`, `uint`, `float` | 4 |
+| `int64`, `i64`, `u64` (and anything else) | 8 |
+
+---
+
+## 5. Examples
+
+### Traffic Light
+
+```
+state Green {
+    on timer -> Yellow
+    entry { print("GREEN\n") }
+}
+
+state Yellow {
+    on timer -> Red
+    entry { print("YELLOW\n") }
+}
+
+state Red {
+    on timer -> Green
+    entry { print("RED\n") }
+}
+```
+
+Input: `timer\n` cycles through states.
+
+### Counter
+
+```
+context {
+    var total: int
+}
+
+state Count {
+    var n: int = 0
+    on inc -> Self { n += 1; total += 1 }
+    on show -> Show
+}
+
+state Show {
+    always -> Count
+    entry { print("n="); print("?\n") }
+}
+```
+
+### Guarded Transition
+
+```
+state Door {
+    on open [key == 1] -> Opened
+    entry { print("locked\n") }
+}
+
+state Opened {
+    on close -> Door
+    entry { print("opened\n") }
+}
+
+context {
+    var key: int
+}
+```
+
+---
+
+## 6. Building from Source
+
+Requires [Zig](https://ziglang.org/) (master, >= 0.14).
+
+```
+cd zig
+zig build
+```
+
+Or directly:
+
+```
+cd zig
+zig build-exe src/main.zig -femit-bin=bpc.exe
+```
+
+After building:
+
+```
+bpc.exe run example.b+
+```
+
+---
+
+## 7. Project Structure
+
+```
+zig/                    — compiler (Zig, active development)
+  src/
+    main.zig            — entry point, CLI, orchestration
+    parser.zig          — lexer + parser for .b+
+    ast.zig             — AST types (states, transitions, etc.)
+    x64gen.zig          — x64 machine code generator
+    x64enc.zig          — x64 instruction encoder
+    pe.zig             — PE (.exe) generator
+  build.zig            — build script (zig build)
+src/                    — original C# version (no longer developed)
+```
+
+---
+
+## 8. License
+
+MIT License
+
+```
+MIT License
+
+Copyright (c) 2025 bylka2W
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## 9. Contact
+
+- **GitHub**: [github.com/bylka2W](https://github.com/bylka2W)
+- **Repository**: [github.com/bylka2W/B-Plus](https://github.com/bylka2W/B-Plus)
+- **Author**: bylka2W
+
+---
+
+**Limitations:**
+- Windows x64 only.
+- Minimal error messages.
+- Reads input from stdin (one line = one event).
+- No LLVM, WASM, GPU, LSP support.
