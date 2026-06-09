@@ -45,6 +45,8 @@ output.zig
 
 # Zig build cache
 zig-global-cache/
+.zig-cache/
+**/zig-cache/
 
 # Standalone bpc binary
 bpc.exe

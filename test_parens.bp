@@ -1,6 +1,0 @@
-context {
-    var x: int = 10
-}
-state Test {
-    on [(10 + 5) * (2 + 1) == 45] -> Test {}
-}

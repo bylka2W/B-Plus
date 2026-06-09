@@ -96,32 +96,32 @@ const Lexer = struct {
     fn next(self: *Lexer) Token {
         self.skipWs();
         self.tok_start = self.pos;
-        if (self.char == 0) return token(.eof);
+        if (self.char == 0) return self.token(.eof);
 
         if (self.char == '\n') {
             self.advance();
-            return token(.newline);
+            return self.token(.newline);
         }
 
         // Comments
         if (self.char == '/' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '/') {
             while (self.char != '\n' and self.char != 0) self.advance();
             self.tok_start = self.pos;
-            if (self.char == '\n') { self.advance(); return token(.newline); }
-            return token(.eof);
+            if (self.char == '\n') { self.advance(); return self.token(.newline); }
+            return self.token(.eof);
         }
         if (self.char == '-' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '-') {
             while (self.char != '\n' and self.char != 0) self.advance();
             self.tok_start = self.pos;
-            if (self.char == '\n') { self.advance(); return token(.newline); }
-            return token(.eof);
+            if (self.char == '\n') { self.advance(); return self.token(.newline); }
+            return self.token(.eof);
         }
 
         // Annotations: @ident or @ident(...)
         if (self.char == '@') {
             self.advance();
             while (isIdentChar(self.char)) self.advance();
-            return token(.annotation);
+            return self.token(.annotation);
         }
 
         // Identifiers and keywords
@@ -129,7 +129,7 @@ const Lexer = struct {
             while (isIdentChar(self.char)) self.advance();
             const word = self.src[self.tok_start..self.pos];
             const kind = keywordMap.get(word) orelse .ident;
-            return token(kind);
+            return self.token(kind);
         }
 
         // Numbers
@@ -137,14 +137,14 @@ const Lexer = struct {
             if (self.char == '-') self.advance();
             while (isDigit(self.char)) self.advance();
             if (self.char == '.') { self.advance(); while (isDigit(self.char)) self.advance(); }
-            return token(.number);
+            return self.token(.number);
         }
 
         // Hex
         if (self.char == '0' and self.pos + 1 < self.src.len and (self.src[self.pos + 1] == 'x' or self.src[self.pos + 1] == 'X')) {
             self.advance(); self.advance();
             while (isHexDigit(self.char)) self.advance();
-            return token(.number);
+            return self.token(.number);
         }
 
         // Strings
@@ -155,7 +155,7 @@ const Lexer = struct {
                 self.advance();
             }
             if (self.char == '"') self.advance();
-            return token(.string);
+            return self.token(.string);
         }
 
         // Char literals
@@ -164,57 +164,57 @@ const Lexer = struct {
             if (self.char == '\\') self.advance();
             if (self.char != 0) self.advance();
             if (self.char == '\'') self.advance();
-            return token(.char_lit);
+            return self.token(.char_lit);
         }
 
         // Multi-char operators
         if (self.char == '-' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '>') {
             self.advance(); self.advance();
-            return token(.arrow);
+            return self.token(.arrow);
         }
         if (self.char == '+' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '=') {
             self.advance(); self.advance();
-            return token(.plus_eq);
+            return self.token(.plus_eq);
         }
         if (self.char == '-' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '=') {
             self.advance(); self.advance();
-            return token(.minus_eq);
+            return self.token(.minus_eq);
         }
         if (self.char == '=' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '=') {
             self.advance(); self.advance();
-            return token(.eq_eq);
+            return self.token(.eq_eq);
         }
         if (self.char == '!' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '=') {
             self.advance(); self.advance();
-            return token(.not_eq);
+            return self.token(.not_eq);
         }
         if (self.char == '<' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '=') {
             self.advance(); self.advance();
-            return token(.lte);
+            return self.token(.lte);
         }
         if (self.char == '>' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '=') {
             self.advance(); self.advance();
-            return token(.gte);
+            return self.token(.gte);
         }
 
         // Single char
         const c = self.char; self.advance();
         return switch (c) {
-            '{' => token(.lbrace), '}' => token(.rbrace),
-            '(' => token(.lparen), ')' => token(.rparen),
-            '[' => token(.lbracket), ']' => token(.rbracket),
-            ':' => token(.colon), ';' => token(.semicolon),
-            ',' => token(.comma), '.' => token(.dot),
-            '+' => token(.plus), '-' => token(.minus),
-            '*' => token(.star), '/' => token(.slash),
-            '=' => token(.eq), '<' => token(.lt), '>' => token(.gt),
-            '#' => token(.hash),
-            else => token(.invalid),
+            '{' => self.token(.lbrace), '}' => self.token(.rbrace),
+            '(' => self.token(.lparen), ')' => self.token(.rparen),
+            '[' => self.token(.lbracket), ']' => self.token(.rbracket),
+            ':' => self.token(.colon), ';' => self.token(.semicolon),
+            ',' => self.token(.comma), '.' => self.token(.dot),
+            '+' => self.token(.plus), '-' => self.token(.minus),
+            '*' => self.token(.star), '/' => self.token(.slash),
+            '=' => self.token(.eq), '<' => self.token(.lt), '>' => self.token(.gt),
+            '#' => self.token(.hash),
+            else => self.token(.invalid),
         };
     }
 
-    fn token(kind: Token.Kind) Token {
-        return .{ .kind = kind, .start = 0, .end = 0 };
+    fn token(self: *Lexer, kind: Token.Kind) Token {
+        return .{ .kind = kind, .start = self.tok_start, .end = self.pos };
     }
 
     fn isIdentStart(c: u8) bool { return std.ascii.isAlphabetic(c) or c == '_'; }
@@ -293,7 +293,7 @@ pub const Parser = struct {
     }
 
     fn identText(p: *Parser) []const u8 {
-        return p.src[p.prev_tok.start..p.prev_tok.end];
+        return p.src[p.cur_tok.start..p.cur_tok.end];
     }
 
     pub fn parse(p: *Parser) !ast.ProgramNode {
@@ -410,6 +410,8 @@ pub const Parser = struct {
         p.nesting_depth += 1;
         var variables = std.ArrayList(ast.VariableNode).init(p.allocator);
         var transitions = std.ArrayList(ast.TransitionNode).init(p.allocator);
+        var state_enter_body: ?[]const u8 = null;
+        var state_exit_body: ?[]const u8 = null;
 
         while (p.cur_tok.kind != .rbrace and p.cur_tok.kind != .eof) {
             p.consumeNewlines();
@@ -421,11 +423,14 @@ pub const Parser = struct {
                 vars.deinit();
             } else if (p.peek(.keyword_on) or p.peek(.keyword_always)) {
                 try transitions.append(try p.parseTransition());
-            } else if (p.peek(.keyword_enter) or p.peek(.keyword_exit)) {
-                // Enter/exit blocks - skip for now
+            } else if (p.peek(.keyword_enter)) {
                 p.advance();
-                while (p.cur_tok.kind != .newline and p.cur_tok.kind != .rbrace and p.cur_tok.kind != .eof) p.advance();
-                if (p.peek(.newline)) p.advance();
+                p.consumeNewlines();
+                state_enter_body = try p.parseBraceBody();
+            } else if (p.peek(.keyword_exit)) {
+                p.advance();
+                p.consumeNewlines();
+                state_exit_body = try p.parseBraceBody();
             } else if (p.peek(.annotation)) {
                 p.advance();
                 p.consumeNewlines();
@@ -449,6 +454,8 @@ pub const Parser = struct {
             .depth = p.nesting_depth,
             .variables = variables,
             .transitions = transitions,
+            .enter_body = state_enter_body,
+            .exit_body = state_exit_body,
             .hot_weight = hot_weight,
             .cache_policy = cache_policy,
             .cache_align = cache_align,
@@ -675,6 +682,34 @@ pub const Parser = struct {
             v.deinit();
         }
         return vars;
+    }
+
+    fn parseBraceBody(p: *Parser) !?[]const u8 {
+        if (!p.peek(.lbrace)) return null;
+        p.advance();
+        var depth: u32 = 1;
+        var buf = std.ArrayList(u8).init(p.allocator);
+        defer buf.deinit();
+
+        while (depth > 0 and p.cur_tok.kind != .eof) {
+            if (p.peek(.lbrace)) depth += 1;
+            if (p.peek(.rbrace)) depth -= 1;
+            if (depth > 0) {
+                const lineStart = p.lexer.tok_start;
+                while (p.cur_tok.kind != .newline and p.cur_tok.kind != .rbrace and p.cur_tok.kind != .eof) p.advance();
+                const line = std.mem.trim(u8, p.src[lineStart..p.lexer.tok_start], " \t");
+                if (line.len > 0) {
+                    if (buf.items.len > 0) try buf.append(';');
+                    try buf.appendSlice(line);
+                }
+                if (p.peek(.newline)) p.advance();
+            }
+        }
+        if (p.peek(.rbrace)) p.advance();
+
+        if (buf.items.len == 0) return null;
+        const owned = try buf.toOwnedSlice();
+        return @as(?[]const u8, @as([]const u8, owned));
     }
 
     fn parseString(p: *Parser) ?[]const u8 {

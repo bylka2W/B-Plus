@@ -89,7 +89,21 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
     try emitCacheBudgetChecks(&p, program);
     try embedStringPool(&p);
     const import_dir_rva = try emitImportTable(&p);
+    const stderr = std.io.getStdErr().writer();
+    var kit = p.labels.iterator();
+    while (kit.next()) |entry| {
+        stderr.print("label '{s}' = 0x{X}\n", .{ entry.key_ptr.*, entry.value_ptr.* }) catch {};
+    }
     try applyFixups(&p);
+    for (p.pending_fixups.items) |fx| {
+        stderr.print("fixup '{s}' offset=0x{X} disp_size={d}\n", .{fx.label, fx.offset, fx.disp_size}) catch {};
+        if (p.labels.get(fx.label)) |target| {
+            const disp = @as(i64, @intCast(target)) - @as(i64, @intCast(fx.offset + fx.disp_size));
+            stderr.print("  target=0x{X} disp=0x{X} ({d})\n", .{target, @as(u32, @bitCast(@as(i32, @truncate(disp)))), disp}) catch {};
+        } else {
+            stderr.print("  label NOT FOUND!\n", .{}) catch {};
+        }
+    }
     const idat_size = computeImportTableSize();
     return X64Output{ .code = try p.code.toOwnedSlice(), .import_dir_rva = @intCast(import_dir_rva), .idat_size = idat_size };
 }
@@ -234,6 +248,7 @@ fn emitStateEnterFuncs(p: *PendingOutput, program: ast.ProgramNode) !void {
         const start_off = p.code.items.len;
         const label = try std.fmt.allocPrint(p.allocator, "en_{d}", .{item.idx});
         try p.labels.put(label, p.code.items.len);
+        if (state.enter_body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
         for (state.transitions.items) |t| {
             if (t.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
         }
@@ -317,15 +332,15 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RBX), x64.Operand.mem(Reg.RSI, 0) });
     try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
-    try emitShortJmp(p, .JE_REL32, "exce");
+    try emitShortJmp(p, .JNE_REL32, "exce");
     try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try emitCondLongJmp(p, .JE_REL32, "exit_process");
     try emitInc(p, Reg.RDI); try emitInc(p, Reg.RSI);
     try emitShortJmp(p, .JMP_REL32, "exl");
     try p.labels.put("exce", p.code.items.len);
     try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RBX) });
-    try emitShortJmp(p, .JNE_REL32, "no_exit");
-    try emitShortJmp(p, .JMP_REL32, "ex_chk_term");
+    try emitShortJmp(p, .JE_REL32, "ex_chk_term");
+    try emitShortJmp(p, .JMP_REL32, "no_exit");
     try p.labels.put("ex_skip_ws", p.code.items.len);
     try emitInc(p, Reg.RDI);
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
@@ -437,15 +452,15 @@ fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usiz
         try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
         try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RBX), x64.Operand.mem(Reg.RSI, 0) });
         try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
-        try emitShortJmp(p, .JE_REL32, ce);
+        try emitShortJmp(p, .JNE_REL32, ce);
         try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
         try emitShortJmp(p, .JE_REL32, try std.fmt.allocPrint(p.allocator, "eg_mt_{d}_{d}", .{si, eg_idx}));
         try emitInc(p, Reg.RDI); try emitInc(p, Reg.RSI);
         try emitShortJmp(p, .JMP_REL32, ll);
         try p.labels.put(ce, p.code.items.len);
         try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RBX) });
-        try emitCondLongJmp(p, .JNE_REL32, try std.fmt.allocPrint(p.allocator, "eg_done_{d}_{d}", .{si, eg_idx}));
-        try emitShortJmp(p, .JMP_REL32, try std.fmt.allocPrint(p.allocator, "eg_skip_{d}_{d}", .{si, eg_idx}));
+        try emitCondLongJmp(p, .JE_REL32, try std.fmt.allocPrint(p.allocator, "eg_skip_{d}_{d}", .{si, eg_idx}));
+        try emitLongJmp(p, try std.fmt.allocPrint(p.allocator, "eg_done_{d}_{d}", .{si, eg_idx}));
         try p.labels.put(try std.fmt.allocPrint(p.allocator, "eg_ws_{d}_{d}", .{si, eg_idx}), p.code.items.len);
         try emitInc(p, Reg.RDI);
         try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
@@ -535,6 +550,7 @@ fn emitGuardSkip(p: *PendingOutput, guard: []const u8, si: usize, ti: usize) !vo
 fn changeToState(p: *PendingOutput, target: []const u8, current_si: usize, program: ast.ProgramNode) !void {
     const ti = findStateIndex(p, target);
     const cur_state = program.states.items[current_si];
+    if (cur_state.exit_body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, cur_state.name); }
     for (cur_state.transitions.items) |act| {
         if (act.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, cur_state.name); }
     }
@@ -613,7 +629,8 @@ fn emitImportTable(p: *PendingOutput) !u32 {
     try p.code.appendNTimes(0, 8);
 
     for (IMPORT_FNS, 0..) |_, i| {
-        try p.labels.put(try std.fmt.allocPrint(p.allocator, "iat_{d}", .{i}), @intCast(iat_off + @as(u32, @intCast(i)) * 8));
+        const iat_label_val = @as(usize, @intCast(iat_off + @as(u32, @intCast(i)) * 8));
+        try p.labels.put(try std.fmt.allocPrint(p.allocator, "iat_{d}", .{i}), iat_label_val);
     }
     for (hint_dats.items) |hd| p.allocator.free(hd);
     hint_offs.deinit(); hint_dats.deinit();

@@ -1,7 +1,0 @@
-state S {
-    var counter: int = 0
-    on inc -> S { counter = counter + 1 }
-    on check [counter >= 3] -> S
-    enter { print("S") }
-}
-entry main() { print("INIT") }

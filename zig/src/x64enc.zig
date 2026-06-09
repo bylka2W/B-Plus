@@ -322,7 +322,7 @@ fn emitModrmSibDisp(code: *std.ArrayList(u8), rex_base: u8, op: u8, reg: i16, m:
         if (m.base_reg >= 8) rex |= 0x01; // REX.B for base register
     }
     if (m.index_reg >= 8) rex |= 0x02; // REX.X for index register
-    if (rex != 0) try code.append(rex);
+    if (rex != 0) try code.append(0x40 | rex);
     if (prefix != 0) try code.append(prefix);
 
     try code.append(op);

@@ -1,1 +1,0 @@
-﻿state Idle { on go -> Idle }

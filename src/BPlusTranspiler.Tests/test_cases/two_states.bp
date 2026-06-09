@@ -1,9 +1,0 @@
-context {
-    var count: int = 0
-}
-state Idle {
-    on start -> Running { count = 1 }
-}
-state Running {
-    on stop -> Idle { count = 0 }
-}
