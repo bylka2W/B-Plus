@@ -497,19 +497,34 @@ bpc.exe run example.b+
 
 ---
 
-## 7. Структура проекта
+## 7. Структура проекта / Project structure
 
+**Русский:**
 ```
 zig/                    — компилятор (Zig, активная разработка)
   src/
     main.zig            — точка входа, CLI, оркестрация
     parser.zig          — лексер + парсер .b+
-    ast.zig             — типы AST (StateDef, Transition, и т.д.)
+    ast.zig             — типы AST (состояния, переходы и т.д.)
     x64gen.zig          — генератор машинного кода x64
     x64enc.zig          — кодировщик инструкций x64
     pe.zig             — генератор PE (.exe)
   build.zig            — сборка через zig build
 src/                    — оригинальная версия на C# (не развивается)
+```
+
+**English:**
+```
+zig/                    — compiler (Zig, active development)
+  src/
+    main.zig            — entry point, CLI, orchestration
+    parser.zig          — lexer + parser for .b+
+    ast.zig             — AST types (states, transitions, etc.)
+    x64gen.zig          — x64 machine code generator
+    x64enc.zig          — x64 instruction encoder
+    pe.zig             — PE (.exe) generator
+  build.zig            — build script (zig build)
+src/                    — original C# version (no longer developed)
 ```
 
 ---
