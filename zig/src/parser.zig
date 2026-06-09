@@ -356,6 +356,8 @@ pub const Parser = struct {
                 // Skip stray statements at top level
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 if (p.peek(.newline)) p.advance();
+            } else if (p.peek(.string) or p.peek(.number) or p.peek(.char_lit) or p.peek(.arrow) or p.peek(.minus) or p.peek(.plus) or p.peek(.star) or p.peek(.slash) or p.peek(.lparen) or p.peek(.rparen) or p.peek(.lbracket) or p.peek(.rbracket) or p.peek(.colon) or p.peek(.semicolon) or p.peek(.comma) or p.peek(.hash) or p.peek(.invalid)) {
+                return error.UnexpectedToken;
             } else {
                 if (p.peek(.eof)) break;
                 p.advance();
@@ -439,6 +441,8 @@ pub const Parser = struct {
                 const s = try p.parseStateDef();
                 s.variables.deinit();
                 s.transitions.deinit();
+            } else if (p.peek(.string) or p.peek(.number) or p.peek(.char_lit) or p.peek(.minus) or p.peek(.plus) or p.peek(.star) or p.peek(.slash) or p.peek(.semicolon) or p.peek(.invalid)) {
+                return error.UnexpectedToken;
             } else {
                 if (p.peek(.eof)) break;
                 p.advance();

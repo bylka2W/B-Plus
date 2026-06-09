@@ -1,4 +1,4 @@
-# B+ — компилятор конечных автоматов (x64)
+# B+ v4.1.5 — компилятор конечных автоматов (x64)
 
 **B+** транслирует `.b+` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор написан с нуля на Zig.
@@ -546,7 +546,7 @@ SOFTWARE.
 
 ---
 
-# B+ — state machine compiler (x64)
+# B+ v4.1.5 — state machine compiler (x64)
 
 **B+** compiles `.b+` files directly to x64 machine code and packages them into Windows PE executables (.exe).
 No assemblers, linkers, or LLVM — the entire code generator is written from scratch in Zig.
