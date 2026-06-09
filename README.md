@@ -30,6 +30,8 @@
 5. [Примеры](#5-примеры)
 6. [Сборка из исходников](#6-сборка-из-исходников)
 7. [Структура проекта](#7-структура-проекта)
+8. [Лицензия](#8-лицензия--license)
+9. [Контакты](#9-контакты--contact)
 
 ---
 
@@ -51,23 +53,89 @@ bpc.exe run hello.b+
 
 ---
 
-## 2. Команды компилятора
+## 2. Команды компилятора / Compiler commands
 
+### Синтаксис / Syntax
+
+**Русский:**
 ```
-bpc build <input.b+> [-o <output.exe>]
-bpc run  <input.b+>
+bpc build <входной.b+>     — скомпилировать в <входной>.exe
+bpc build <входной.b+> -o <выход.exe>  — скомпилировать с указанием имени
+bpc run   <входной.b+>     — скомпилировать и сразу запустить
 ```
 
-- **build** — скомпилировать `.b+` в `.exe`. Если не указать `-o`, имя выходного файла = имя входного с расширением `.exe`.
-- **run** — скомпилировать и сразу запустить. Вывод программы печатается в консоль.
-
-### Примеры
-
+**English:**
 ```
-bpc build traffic.b+
-bpc build traffic.b+ -o light.exe
-bpc run traffic.b+
+bpc build <input.b+>              — compile to <input>.exe
+bpc build <input.b+> -o <out.exe> — compile with custom output name
+bpc run   <input.b+>              — compile and run immediately
 ```
+
+---
+
+### Подробное описание / Detailed description
+
+#### `bpc build <input.b+> [-o <output.exe>]`
+
+Что делает / What it does:
+
+| Шаг | Русский | English |
+|-----|---------|---------|
+| 1 | Читает файл `.b+` целиком в память | Reads the entire `.b+` file into memory |
+| 2 | Разбирает (парсит) исходный код в AST | Parses source code into an AST |
+| 3 | Проверяет, что есть хотя бы одно состояние | Verifies at least one state exists |
+| 4 | Генерирует машинный код x64 напрямую | Generates raw x64 machine code (no assembler) |
+| 5 | Расставляет NOP-выравнивание для кеша | Inserts NOP padding for cache alignment |
+| 6 | Встраивает пул строк (для print) | Embeds string pool (for print) |
+| 7 | Генерирует таблицу импорта (kernel32.dll) | Generates import table (kernel32.dll) |
+| 8 | Применяет все fixup'ы (адреса переходов) | Applies all jump/call fixups |
+| 9 | Упаковывает всё в формат PE (.exe) | Wraps everything into a PE (.exe) file |
+| 10 | Записывает результат на диск | Writes the result to disk |
+
+Если `-o` не указан, имя выходного файла = имя входного с расширением `.exe`.  
+If `-o` is omitted, the output name = input name with `.exe` extension.
+
+**Примеры / Examples:**
+```
+bpc build traffic.b+              → traffic.exe
+bpc build traffic.b+ -o light.exe → light.exe
+bpc build source.b+               → source.exe
+```
+
+#### `bpc run <input.b+>`
+
+Что делает / What it does:
+
+| Шаг | Русский | English |
+|-----|---------|---------|
+| 1 | Компилирует `<input>.exe` | Compiles `<input>.exe` |
+| 2 | Запускает полученный `.exe` | Runs the resulting `.exe` |
+| 3 | Перехватывает stdout и печатает в консоль | Captures stdout and prints to console |
+| 4 | Возвращает код завершения программы | Returns the program exit code |
+
+**Примеры / Examples:**
+```
+bpc run traffic.b+    — компилирует launch.exe и сразу запускает
+bpc run hello.b+      — компилирует hello.exe и сразу запускает
+```
+
+### Коды возврата / Exit codes
+
+| Код | Русский | English |
+|-----|---------|---------|
+| 0 | Успех | Success |
+| 1 | Ошибка: неверные аргументы или файл не найден | Error: invalid args or file not found |
+| >0 | Код завершения скомпилированной программы | Exit code of the compiled program (when using `run`) |
+
+### Примечания / Notes
+
+- Входной файл **обязан** иметь расширение `.b+`.
+- Если расширения нет, компилятор всё равно добавит `.exe` к базовому имени.
+- Компилятор **не использует** внешние ассемблеры, линкеры или LLVM — весь машинный код генерируется самостоятельно.
+- Выходной файл — полноценный Windows PE x64 исполняемый файл.
+- The input file **must** have a `.b+` extension.
+- The compiler does **not** use external assemblers, linkers, or LLVM — all machine code is self-generated.
+- The output is a fully valid Windows PE x64 executable.
 
 ---
 
@@ -446,8 +514,46 @@ src/                    — оригинальная версия на C# (не 
 
 ---
 
-**Ограничения:**
-- Только Windows x64.
-- Минимальные сообщения об ошибках.
-- Чтение ввода через stdin (одна строка = одно событие).
-- Нет поддержки LLVM, WASM, GPU, LSP.
+**Ограничения / Limitations:**
+- Только Windows x64 / Windows x64 only.
+- Минимальные сообщения об ошибках / Minimal error messages.
+- Чтение ввода через stdin (одна строка = одно событие) / Reads input from stdin (one line = one event).
+- Нет поддержки LLVM, WASM, GPU, LSP / No LLVM, WASM, GPU, LSP support.
+
+---
+
+## 8. Лицензия / License
+
+MIT License
+
+```
+MIT License
+
+Copyright (c) 2025 bylka2W
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## 9. Контакты / Contact
+
+- **GitHub**: [github.com/bylka2W](https://github.com/bylka2W)
+- **Репозиторий**: [github.com/bylka2W/B-Plus](https://github.com/bylka2W/B-Plus)
+- **Автор**: bylka2W
