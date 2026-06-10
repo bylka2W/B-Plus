@@ -1258,6 +1258,39 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, 32), x64.Operand.r(Reg.RAX) });
     try emitIatCall(p, 1);
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+    // State hit profile dump
+    try alignTo16(p);
+    try setLabel(p, try allocLabelId(p, "sth_start", .{}));
+    // RSI = &state_hits[0], R12 = state count (loop counter)
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RSI), x64.Operand.mem(Reg.RBP, p.off_state_hits) });
+    try emitMovRegImm32(p, Reg.R12, @intCast(program.states.items.len));
+    try setLabel(p, try allocLabelId(p, "sth_loop", .{}));
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDI), x64.Operand.mem(Reg.RBP, p.off_buf) });
+    try emitMovRegImm32(p, Reg.RAX, 'S');
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try emitMovRegImm32(p, Reg.RAX, ' ');
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RSI, 0) });
+    try emitCallToLabel(p, th_sub);
+    try emitMovRegImm32(p, Reg.RAX, 0x0A);
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    // WriteFile(stdout, buf, length)
+    try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RBP, p.off_hstdout) });
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDX), x64.Operand.mem(Reg.RBP, p.off_buf) });
+    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.RDI) });
+    try x64.emit(&p.code, .SUB_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.RDX) });
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R9), x64.Operand.mem(Reg.RBP, p.off_chars_written) });
+    try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+    try emitXorReg(p, Reg.RAX);
+    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, 32), x64.Operand.r(Reg.RAX) });
+    try emitIatCall(p, 1);
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSI), x64.Operand.immU32(8) });
+    try emitDec(p, Reg.R12);
+    try emitCondLongJmp(p, .JNE_REL32, try allocLabelId(p, "sth_loop", .{}));
     try emitLongJmp(p, try allocLabelId(p, "exit_end", .{}));
     // Hex conversion subroutine (reached only via CALL)
     try setLabel(p, th_sub);
