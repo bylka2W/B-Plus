@@ -1173,8 +1173,6 @@ causes a compile error until `emitOneIntrinsic` handles it.
 - No LLVM, WASM, GPU, LSP, DISK tier support.
 
 
-
-
 ✅ Stage 1A-J — Deterministic Runtime Kernel
    ├─ L1/L2/L3 Arena (alloc + reset)
    ├─ Handle Table (generation-based)
@@ -1184,7 +1182,7 @@ causes a compile error until `emitOneIntrinsic` handles it.
    ├─ 3 validate функции
    ├─ Intrinsic ABI (16 интринсиков)
    └─ x64gen интеграция (exhaustive switch)
-
+   
 🔜 Stage 2 — Heat + Migration Engine
    ├─ Heat system (increment + decay)
    ├─ Chunk migration (64KB blocks)
