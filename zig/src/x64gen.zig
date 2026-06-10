@@ -63,6 +63,7 @@ const PendingOutput = struct {
     off_l3_base: i32, off_l3_ptr: i32, off_l3_end: i32, off_l3_buf_start: i32,
     off_pool_head: i32,
     off_state_hits: i32,
+    off_trans_hits: i32,
     off_epoch: i32,
     off_ht_tiers: i32,
     off_ht_states: i32,
@@ -86,6 +87,7 @@ const PendingOutput = struct {
     l3_block_size: u32,
     l3_num_blocks: u32,
     has_hot_states: bool,
+    total_transitions: u32,
     dp_id: []u32,
     en_id: []u32,
     allocator: Allocator,
@@ -118,6 +120,7 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         .off_l3_base = 0, .off_l3_ptr = 0, .off_l3_end = 0, .off_l3_buf_start = 0,
         .off_pool_head = -132,
         .off_state_hits = 0,
+        .off_trans_hits = 0,
         .off_epoch = 0,
         .off_ht_tiers = 0,
         .off_ht_states = 0,
@@ -136,6 +139,7 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         .l3_block_size = 0,
         .l3_num_blocks = 0,
         .has_hot_states = false,
+        .total_transitions = 0,
         .dp_id = &.{},
         .en_id = &.{},
         .allocator = allocator,
@@ -157,6 +161,7 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         });
     }
     computeArenaSizes(&p, program);
+    for (program.states.items) |s| p.total_transitions += @intCast(s.transitions.items.len);
     try computeStackLayout(&p, program);
     try emitPrologueAndInit(&p, program);
     try emitRuntimeSection(&p);
@@ -319,6 +324,7 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     p.off_telem_l2_allocs = off; off -= 8;
     p.off_telem_l3_allocs = off; off -= 8;
     p.off_state_hits = off - @as(i32, @intCast(program.states.items.len * 8)); off -= @as(i32, @intCast(program.states.items.len * 8));
+    p.off_trans_hits = off - @as(i32, @intCast(p.total_transitions * 8)); off -= @as(i32, @intCast(p.total_transitions * 8));
     p.off_buf = off - 256; off -= 256;
     p.off_l1_buf_start = off - @as(i32, @intCast(p.arena_l1_size)); off -= @as(i32, @intCast(p.arena_l1_size));
     p.off_l2_buf_start = off - @as(i32, @intCast(p.arena_l2_size)); off -= @as(i32, @intCast(p.arena_l2_size));
@@ -1062,16 +1068,26 @@ fn analyzeTraces(program: ast.ProgramNode, state_index_map: std.StringHashMap(us
         var chain_len: usize = 1;
         while (si + chain_len < program.states.items.len) {
             const prev = program.states.items[si + chain_len - 1];
-            const prev_ti = if (prev.transitions.items.len == 1 and prev.transitions.items[0].is_always and (prev.transitions.items[0].event_name == null or prev.transitions.items[0].event_name.?.len == 0)) state_index_map.get(prev.transitions.items[0].target).? else program.states.items.len;
-            if (prev_ti == si + chain_len) {
-                chain_len += 1;
-            } else break;
+            const has_always = prev.transitions.items.len == 1 and prev.transitions.items[0].is_always and (prev.transitions.items[0].event_name == null or prev.transitions.items[0].event_name.?.len == 0);
+            if (!has_always) break;
+            const prev_ti = state_index_map.get(prev.transitions.items[0].target).?;
+            if (prev_ti != si + chain_len) break;
+            const trans_hw = prev.transitions.items[0].hot_weight orelse prev.hot_weight orelse 0.5;
+            if (trans_hw < 0.4) break;
+            chain_len += 1;
         }
         var total_hw: f64 = 0;
+        var total_trans_hw: f64 = 0;
         for (si..si + chain_len) |i| {
             total_hw += program.states.items[i].hot_weight orelse 0.5;
+            if (i + 1 < si + chain_len) {
+                const t_hw = program.states.items[i].transitions.items[0].hot_weight orelse program.states.items[i].hot_weight orelse 0.5;
+                total_trans_hw += t_hw;
+            }
         }
-        try traces.append(.{ .start_state = si, .len = chain_len, .hot_weight = total_hw / @as(f64, @floatFromInt(chain_len)) });
+        const avg_state_hw = total_hw / @as(f64, @floatFromInt(chain_len));
+        const avg_trans_hw = if (chain_len > 1) total_trans_hw / @as(f64, @floatFromInt(chain_len - 1)) else 0.5;
+        try traces.append(.{ .start_state = si, .len = chain_len, .hot_weight = avg_state_hw * 0.6 + avg_trans_hw * 0.4 });
         si += chain_len;
     }
     return traces;
@@ -1291,6 +1307,36 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSI), x64.Operand.immU32(8) });
     try emitDec(p, Reg.R12);
     try emitCondLongJmp(p, .JNE_REL32, try allocLabelId(p, "sth_loop", .{}));
+    // Transition counter dump
+    try setLabel(p, try allocLabelId(p, "thr_start", .{}));
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RSI), x64.Operand.mem(Reg.RBP, p.off_trans_hits) });
+    try emitMovRegImm32(p, Reg.R12, p.total_transitions);
+    try setLabel(p, try allocLabelId(p, "thr_loop", .{}));
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDI), x64.Operand.mem(Reg.RBP, p.off_buf) });
+    try emitMovRegImm32(p, Reg.RAX, 'T');
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try emitMovRegImm32(p, Reg.RAX, ' ');
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RSI, 0) });
+    try emitCallToLabel(p, th_sub);
+    try emitMovRegImm32(p, Reg.RAX, 0x0A);
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RBP, p.off_hstdout) });
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDX), x64.Operand.mem(Reg.RBP, p.off_buf) });
+    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.RDI) });
+    try x64.emit(&p.code, .SUB_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.RDX) });
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R9), x64.Operand.mem(Reg.RBP, p.off_chars_written) });
+    try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+    try emitXorReg(p, Reg.RAX);
+    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, 32), x64.Operand.r(Reg.RAX) });
+    try emitIatCall(p, 1);
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSI), x64.Operand.immU32(8) });
+    try emitDec(p, Reg.R12);
+    try emitCondLongJmp(p, .JNE_REL32, try allocLabelId(p, "thr_loop", .{}));
     try emitLongJmp(p, try allocLabelId(p, "exit_end", .{}));
     // Hex conversion subroutine (reached only via CALL)
     try setLabel(p, th_sub);
@@ -1316,17 +1362,24 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
 }
 
 fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usize, program: ast.ProgramNode, fuse: bool) !void {
+    var state_trans_start: u32 = 0;
+    for (0..si) |i| state_trans_start += @intCast(program.states.items[i].transitions.items.len);
     for (state.transitions.items, 0..) |t, ti_| {
-        _ = ti_;
         if ((t.event_name != null and t.event_name.?.len > 0) or !t.is_always) continue;
         if (t.is_always and (t.event_name == null or t.event_name.?.len == 0)) {
             if (t.guard == null or t.guard.?.len == 0) {
                 if (t.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
+                const trans_hit_off = p.off_trans_hits + @as(i32, @intCast((state_trans_start + @as(u32, @intCast(ti_))) * 8));
+                try p.code.appendSlice(&.{ 0x48, 0xFF, 0x85 });
+                try p.code.appendSlice(&@as([4]u8, @bitCast(trans_hit_off)));
                 try changeToState(p, t.target, si, program, true, fuse);
                 return;
             }
             try emitGuardSkip(p, t.guard.?, si, 0);
             if (t.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
+            const trans_hit_off = p.off_trans_hits + @as(i32, @intCast((state_trans_start + @as(u32, @intCast(ti_))) * 8));
+            try p.code.appendSlice(&.{ 0x48, 0xFF, 0x85 });
+            try p.code.appendSlice(&@as([4]u8, @bitCast(trans_hit_off)));
             try changeToState(p, t.target, si, program, true, fuse);
             try setLabel(p, try allocLabelId(p, "sk_{d}_{d}", .{si, 0}));
         }
@@ -1411,6 +1464,9 @@ fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usiz
             if (tt.guard) |g| { if (g.len > 0) { try emitGuardSkip(p, g, si, orig_ti); } }
             try emitPrefetchForTransitionCacheAware(p, tt);
             if (tt.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
+            const trans_hit_off = p.off_trans_hits + @as(i32, @intCast((state_trans_start + @as(u32, @intCast(orig_ti))) * 8));
+            try p.code.appendSlice(&.{ 0x48, 0xFF, 0x85 });
+            try p.code.appendSlice(&@as([4]u8, @bitCast(trans_hit_off)));
             try changeToState(p, tt.target, si, program, false, false);
             try setLabel(p, try allocLabelId(p, "sk_{d}_{d}", .{si, orig_ti}));
         }
