@@ -1110,7 +1110,11 @@ zig/                    — compiler (Zig, active development)
     runtime.zig          — Stage 1 runtime kernel (handle table, arena, FSM, migration)
     parser.zig          — lexer + parser for .b+
     ast.zig             — AST types (states, transitions, etc.)
-    x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime)
+    x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime).
+                          Features: jump-table dispatch, superblock fusion,
+                          compiled event matching (inline CMP imm for ≤4B names),
+                          label interning (u32 IDs, zero formatting in hot paths),
+                          O(1) state lookup via HashMap.
     x64enc.zig          — x64 instruction encoder
     pe.zig             — PE (.exe) generator
   build.zig            — build script (zig build)
@@ -1208,6 +1212,83 @@ The arena allocator (bump-pointer) cascades allocation:
 
 Arena sizes are computed dynamically: `max_data_size × (8 + MIGRATION_BUDGET)`,
 minimum 256 bytes.
+
+---
+
+## Code Generation Optimizations
+
+### Jump-table dispatch
+
+State dispatch uses an O(1) jump table instead of a linear CMP/JE chain:
+
+```asm
+MOV R12, [RBP + off_cur_state]
+CMP R12, N; JAE re_dispatch
+LEA R11, [RIP + jmp_table]
+MOV EAX, [R11 + R12*4]
+ADD RAX, R11
+JMP RAX
+```
+
+The table stores 32-bit relative offsets filled at link time via `applyFixups`.
+Scale = 4 (4-byte entries). Eliminates O(n) dispatch entirely — no structural
+degradation regardless of state count.
+
+### Superblock fusion (always-chain fusion)
+
+Greedy linear expansion: states where `transitions.len == 1 && is_always &&
+target_idx == si + chain_len` are fused into fallthrough chains. Fused states
+skip L1 reset, budget decrement, and JMP back to the scheduler. Only the last
+state in a chain does a normal exit.
+
+This transforms:
+
+```text
+A → scheduler → dispatch → B → scheduler → dispatch → C
+```
+
+into:
+
+```text
+A fallthrough B fallthrough C
+```
+
+### Compiled event matching
+
+Instead of a byte-by-byte comparison loop at runtime, event names ≤4 bytes are
+matched with direct inline `CMP` using immediate values:
+
+```asm
+; event "go" (2 bytes)
+MOVZX RAX, WORD [RDI]     ; load 2 bytes from input
+CMP   RAX, 0x6F67         ; compare with "go"
+JNE   next_event           ; not this event
+MOVZX RAX, BYTE [RDI+2]   ; check delimiter
+CMP   RAX, 0x0A; JE match ; newline?
+```
+
+This eliminates:
+- Loop pointer increments (INC RDI, INC RSI)
+- Null-term check per iteration
+- Loop back-edge branch (JMP loop)
+- Taken/not-taken branch mispredictions from the comparison loop
+
+Longer event names fall back to the byte loop.
+
+### Label interning
+
+All labels are assigned a single `u32` ID at compile time via `allocLabelId`.
+String formatting only occurs once per unique label (memoized via
+`label_name_map`). Hot emit loops use pre-computed `dp_id[i]` / `en_id[i]`
+arrays — zero formatting, zero allocation in per-state code generation.
+
+`Fixup` stores `label_id: u32` instead of `label: []const u8`. No per-fixup
+string duplication.
+
+### O(1) state lookup
+
+`state_index_map` (`StringHashMap(usize)`) replaces all O(n) `findStateIndex`
+linear scans. Built once at initialization after parsing.
 
 ---
 
