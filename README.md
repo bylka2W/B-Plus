@@ -36,34 +36,19 @@
 9. [Контакты](#9-контакты)
 
 ---
-C:\B-Plus\zig>powershell -Command "$bytes = [System.IO.File]::ReadAllBytes('firewall.exe'); for($i=0x200; $i -lt 0x2C0; $i+=16) { $hex = ($bytes[$i..($i+15)] | ForEach-Object { '{0:X2}' -f $_ }) -join ' '; Write-Host ('{0:X4}: {1}' -f $i, $hex) }"
+C:\B-Plus\zig>powershell -Command "$bytes = [System.IO.File]::ReadAllBytes('game_ai.exe'); for($i=0x200; $i -lt 0x2C0; $i+=16) { $hex = ($bytes[$i..($i+15)] | ForEach-Object { '{0:X2}' -f $_ }) -join ' '; Write-Host ('{0:X4}: {1}' -f $i, $hex) }"
 0200: 55 48 8B EC 53 41 54 41 55 41 56 41 57 48 81 EC
-0210: 80 09 00 00 33 C0 89 45 BC 48 31 C0 48 8D 85 8C
-0220: F6 FF FF 48 89 45 A4 48 89 45 9C 48 81 C0 00 08
-0230: 00 00 48 89 45 94 48 31 C0 48 89 45 D8 48 B9 F6
-0240: FF FF FF FF FF FF FF 48 81 EC 28 00 00 00 FF 15
-0250: ED 07 00 00 48 81 C4 28 00 00 00 48 89 45 F8 48
-0260: B9 F5 FF FF FF FF FF FF FF 48 81 EC 28 00 00 00
-0270: FF 15 CB 07 00 00 48 81 C4 28 00 00 00 48 89 45
-0280: F0 B8 1A 00 00 00 0F A2 C1 E8 18 89 45 BC 48 81
-0290: EC 28 00 00 00 FF 15 E6 07 00 00 48 81 C4 28 00
-02A0: 00 00 48 8B C8 48 BA F0 FF FF FF FF FF FF FF 48
-02B0: 81 EC 28 00 00 00 FF 15 BD 07 00 00 48 81 C4 28
-
-C:\B-Plus\zig>
-C:\B-Plus\zig>powershell -Command "$bytes = [System.IO.File]::ReadAllBytes('firewall.exe'); for($i=0x2C0; $i -lt 0x380; $i+=16) { $hex = ($bytes[$i..($i+15)] | ForEach-Object { '{0:X2}' -f $_ }) -join ' '; Write-Host ('{0:X4}: {1}' -f $i, $hex) }"
-02C0: 00 00 00 E8 A7 00 00 00 E9 41 02 00 00 48 8B 4D
-02D0: 9C 48 01 C1 48 8B 55 94 48 39 D1 0F 87 8B 00 00
-02E0: 00 48 89 4D 9C 48 29 C1 48 8B C1 C3 48 8B 4D 9C
-02F0: 48 01 C1 48 8B 55 94 48 39 D1 0F 87 6C 00 00 00
-0300: 48 89 4D 9C 48 29 C1 48 8B C1 C3 48 8B 4D 9C 48
-0310: 01 C1 48 8B 55 94 48 39 D1 0F 87 4D 00 00 00 48
-0320: 89 4D 9C 48 29 C1 48 8B C1 C3 48 8B 45 A4 48 89
-0330: 45 9C C3 48 8B 45 A4 48 89 45 9C C3 48 8B 45 A4
-0340: 48 89 45 9C C3 33 C0 C3 C3 33 C0 C3 C3 C3 C3 C3
-0350: C3 33 C9 48 FF C1 48 81 EC 28 00 00 00 FF 15 F6
-0360: 06 00 00 48 81 C4 28 00 00 00 C3 C3 33 C0 C3 48
-0370: 8B 4D F0 48 8D 15 50 04 00 00 49 B8 21 00 00 00
+0210: 40 20 00 00 48 8D 85 5C F6 FF FF 48 89 45 A4 48
+0220: 89 45 9C 48 81 C0 00 08 00 00 48 89 45 94 48 8D
+0230: 85 5C EE FF FF 48 89 45 8C 48 89 45 84 48 81 C0
+0240: 00 08 00 00 48 89 85 7C FF FF FF 48 8D 85 5C E6
+0250: FF FF 48 89 85 74 FF FF FF 48 89 85 6C FF FF FF
+0260: 48 81 C0 00 08 00 00 48 89 85 64 FF FF FF 48 31
+0270: C0 48 89 45 D8 48 89 85 5C E6 FF FF 48 8D BD D4
+0280: DF FF FF B9 80 06 00 00 F3 AA 33 C9 48 81 F9 40
+0290: 00 00 00 0F 83 3B 00 00 00 4C 8D 9D D4 E1 FF FF
+02A0: 4C 8B D1 49 C1 E2 02 4D 01 D3 4C 8D 51 01 49 81
+02B0: FA 40 00 00 00 0F 83 08 00 00 00 45 89 13 E9 09
 
 ## 1. Быстрый старт
 
