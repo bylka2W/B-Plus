@@ -1,8 +1,95 @@
-state Start {
-    entry { print("My B+ test!\n") }
-    always -> Next
+state Idle @Cache(L1) {
+    var timer : int32 @Cache(L1)
+    entry { 
+        print("IDLE\n")
+        timer = 0
+    }
+    on 'p' -> Patrol
+    on 'a' -> Alert
+    on 's' -> Search
+    always -> Idle
 }
-state Next {
-    entry { print("Done\n") }
-    always -> Start
+
+state Patrol @Cache(L2) {
+    var path : int32 @Cache(L1)
+    var speed : int32 @Cache(L1)
+    entry {
+        print("PATROL\n")
+        path = 1
+        speed = 5
+    }
+    on 'e' -> Engage
+    on 'a' -> Alert
+    on 'r' -> Retreat
+    always -> Idle
+}
+
+state Alert @Cache(L2) {
+    var level : int32 @Cache(L1)
+    entry {
+        print("ALERT\n")
+        level = 10
+    }
+    on 'e' -> Engage
+    on 's' -> Search
+    on 'c' -> Clear
+    always -> Idle
+}
+
+state Search @Cache(L3) {
+    var area : int32 @Cache(L1)
+    var found : int32 @Cache(L1)
+    entry {
+        print("SEARCH\n")
+        area = 3
+        found = 0
+    }
+    on 'e' -> Engage
+    on 'c' -> Clear
+    always -> Idle
+}
+
+state Engage @Cache(L1) {
+    var damage : int32 @Cache(L1)
+    var target : int32 @Cache(L1)
+    entry {
+        print("ENGAGE\n")
+        damage = 25
+        target = 1
+    }
+    on 'k' -> Kill
+    on 'r' -> Retreat
+    on 'd' -> Dead
+    always -> Idle
+}
+
+state Kill @Cache(L1) {
+    entry {
+        print("KILL\n")
+    }
+    always -> Idle
+}
+
+state Retreat @Cache(L2) {
+    var hp : int32 @Cache(L1)
+    entry {
+        print("RETREAT\n")
+        hp = 50
+    }
+    always -> Idle
+}
+
+state Clear @Cache(L1) {
+    entry {
+        print("CLEAR\n")
+    }
+    always -> Idle
+}
+
+state Dead @Cache(L3) {
+    entry {
+        print("DEAD\n")
+    }
+    on 'r' -> Idle
+    always -> Dead
 }

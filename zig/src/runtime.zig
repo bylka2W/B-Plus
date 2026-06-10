@@ -533,12 +533,52 @@ pub const TieredRuntime = struct {
 
     // ── Tick / heat ──
 
+    const PROMOTE_THRESH: u32 = 100;
+    const DEMOTE_THRESH: u32 = 30;
+    const MIGRATION_BUDGET: u32 = 4;
+
     pub fn tick(tr: *TieredRuntime) void {
         tr.epoch += 1;
         tr.logger.tick();
-        tr.logger.log(.TICK, 0, 0, @intCast(tr.retired_count));
+
+        // 1. Heat decay + collect migration candidates
+        const cap = tr.handles.capacity();
+        var candidates: [MIGRATION_BUDGET]struct { slot: u32, promote: bool } = undefined;
+        var n_candidates: u32 = 0;
+
+        for (0..cap) |i| {
+            if (tr.handles.meta.states[i] != .Used) continue;
+            const slot: u32 = @intCast(i);
+
+            // Decay: heat >>= 1
+            tr.handles.meta.heats[slot] >>= 1;
+
+            if (n_candidates >= MIGRATION_BUDGET) continue;
+            const heat = tr.handles.meta.heats[slot];
+            const ptr = tr.handles.meta.ptrs[slot] orelse continue;
+            const current = tr.tierOfPtr(ptr) orelse continue;
+
+            if (heat > PROMOTE_THRESH and current != .L1) {
+                candidates[n_candidates] = .{ .slot = slot, .promote = true };
+                n_candidates += 1;
+            } else if (heat < DEMOTE_THRESH and current != .L3) {
+                candidates[n_candidates] = .{ .slot = slot, .promote = false };
+                n_candidates += 1;
+            }
+        }
+
+        // 2. Apply migrations within budget
+        var migrated: u32 = 0;
+        for (0..n_candidates) |j| {
+            const c = candidates[j];
+            const gen = tr.handles.meta.generations[c.slot];
+            const handle = Handle{ .slot = c.slot, .generation = gen };
+            if (c.promote) tr.moveHotter(handle) else tr.moveColder(handle);
+            migrated += 1;
+        }
+
+        tr.logger.log(.TICK, 0, 0, migrated);
         tr.retired_count = 0;
-        // future: heat decay, migration scheduler
     }
 };
 

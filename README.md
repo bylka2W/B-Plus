@@ -591,7 +591,7 @@ applyMigration → migrate (единственный execution boundary)
 | `Handle` | Поколенческий идентификатор: slot + generation |
 | `HandleTable` | Состояния слотов (Used/Free), free-лист O(1), инвалидация через generation |
 | `MetaStore` | SoA: ptrs, sizes, generations, heats, states |
-| `Arena` | Bump-аллокатор (без проверок — prevalidated inputs) |
+| `Arena` | Трёхуровневый bump-аллокатор (L1/L2/L3) с spill-цепочкой (L1→L2→L3→oom). Динамический размер под FSM. |
 | `Transition` | Decision record: handle + src_tier + dst_tier |
 | `PanicCode` | INVALID_HANDLE и INVALID_TIER — только через validate функции |
 | `assertInvariant` | Приватная — только внутри validateHandle/validateAccess/validateTier |
@@ -601,6 +601,23 @@ applyMigration → migrate (единственный execution boundary)
 `x64gen.zig` использует `inline for (comptime std.meta.tags(rt.Intrinsic))` для
 исчерпывающей генерации всех runtime-функций. Любое добавление варианта `Intrinsic`
 вызывает compile error до тех пор, пока `emitOneIntrinsic` не обработает его.
+
+### Scheduler budget guard
+
+Чтобы предотвратить livelock на always-переходах, каждый тик получает бюджет (4 перехода).
+- **Scheduler** (`always_entry`): read-only guard — проверяет бюджет > 0
+- **FSM** (`changeToState`): consumption — декремент при реальном always-переходе
+- Бюджет сбрасывается на 4 при каждом `ReadFile` (начало тика)
+
+### Spill chain
+
+Аренный аллокатор (bump-pointer) каскадирует выделение:
+- `arena_l1_alloc` → try L1 → spill L2 → spill L3 → oom
+- `arena_l2_alloc` → try L2 → spill L3 → oom
+- `arena_l1_reset` сбрасывает все три арены (L1+L2+L3)
+
+Размер арен вычисляется динамически: `max_data_size × (8 + MIGRATION_BUDGET)`,
+минимум 256 байт.
 
 ---
 
@@ -1179,7 +1196,7 @@ applyMigration → migrate (sole execution boundary)
 | `Handle` | Generational slot identifier: slot + generation |
 | `HandleTable` | Slot states (Used/Free), O(1) free-list, invalidation via generation |
 | `MetaStore` | SoA: ptrs, sizes, generations, heats, states |
-| `Arena` | Bump allocator (no bounds checks — prevalidated inputs) |
+| `Arena` | Three-tier bump allocator (L1/L2/L3) with spill chain (L1→L2→L3→oom). Dynamically sized per FSM. |
 | `Transition` | Decision record: handle + src_tier + dst_tier |
 | `PanicCode` | INVALID_HANDLE and INVALID_TIER — only through validate functions |
 | `assertInvariant` | Private — only inside validateHandle/validateAccess/validateTier |
@@ -1189,6 +1206,23 @@ applyMigration → migrate (sole execution boundary)
 `x64gen.zig` uses `inline for (comptime std.meta.tags(rt.Intrinsic))` for
 exhaustive generation of all runtime functions. Adding an `Intrinsic` variant
 causes a compile error until `emitOneIntrinsic` handles it.
+
+### Scheduler budget guard
+
+To prevent always-transition livelock, each tick has a budget (4 transitions).
+- **Scheduler** (`always_entry`): read-only guard — checks budget > 0
+- **FSM** (`changeToState`): consumption — decrement on real always transition
+- Budget resets to 4 on each `ReadFile` (tick start)
+
+### Spill chain
+
+The arena allocator (bump-pointer) cascades allocation:
+- `arena_l1_alloc` → try L1 → spill L2 → spill L3 → oom
+- `arena_l2_alloc` → try L2 → spill L3 → oom
+- `arena_l1_reset` resets all three arenas (L1+L2+L3)
+
+Arena sizes are computed dynamically: `max_data_size × (8 + MIGRATION_BUDGET)`,
+minimum 256 bytes.
 
 ---
 
