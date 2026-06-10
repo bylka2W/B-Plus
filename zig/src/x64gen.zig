@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const x64 = @import("x64enc.zig");
+const rt = @import("runtime.zig");
 const Allocator = std.mem.Allocator;
 
 pub const X64Output = struct {
@@ -20,12 +21,14 @@ const IMPORT_FNS = [_][]const u8{
     "GetStdHandle", "WriteFile", "ReadFile", "ExitProcess",
     "GetProcessHeap", "HeapAlloc", "HeapFree", "SetThreadAffinityMask",
     "GetCurrentThread", "GetNumaHighestNodeNumber", "GetNumaNodeProcessorMask",
+    "VirtualAlloc", "VirtualFree", "CreateFileW", "GetFileSizeEx",
+    "CreateFileMappingW", "MapViewOfFile", "UnmapViewOfFile", "CloseHandle",
 };
 
 const SectionRva: u32 = 0x1000;
 
 const ContextVarInfo = struct { name: []const u8, type_name: []const u8, default_value: []const u8 };
-const StateVarInfo = struct { name: []const u8, type_name: []const u8, default_value: []const u8, stack_offset: i32, size: u32 };
+const StateVarInfo = struct { name: []const u8, type_name: []const u8, default_value: []const u8, stack_offset: i32, size: u32, cache_policy: ?[]const u8 };
 const Fixup = struct { offset: usize, disp_size: u32, label: []const u8 };
 const StateBounds = struct { start: usize, end: usize };
 
@@ -36,6 +39,7 @@ const PendingOutput = struct {
     string_pool: std.StringHashMap(usize),
     string_list: std.ArrayList([]const u8),
     state_names: std.ArrayList([]const u8),
+    allocated_labels: std.ArrayList([]const u8),
     ctx_vars: std.ArrayList(ContextVarInfo),
     state_vars: std.StringHashMap(std.ArrayList(StateVarInfo)),
     state_code_bounds: std.StringHashMap(StateBounds),
@@ -46,6 +50,8 @@ const PendingOutput = struct {
     off_buf: i32,
     off_ctx_var_start: i32, off_state_data_base: i32,
     off_core_type: i32, off_numa_highest_node: i32, off_numa_node_mask: i32,
+    off_arena_base: i32, off_arena_ptr: i32, off_arena_end: i32, off_arena_buf_start: i32,
+    off_pool_head: i32,
     has_hot_states: bool,
     allocator: Allocator,
 };
@@ -59,6 +65,7 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         .string_pool = std.StringHashMap(usize).init(allocator),
         .string_list = std.ArrayList([]const u8).init(allocator),
         .state_names = std.ArrayList([]const u8).init(allocator),
+        .allocated_labels = std.ArrayList([]const u8).init(allocator),
         .ctx_vars = std.ArrayList(ContextVarInfo).init(allocator),
         .state_vars = std.StringHashMap(std.ArrayList(StateVarInfo)).init(allocator),
         .state_code_bounds = std.StringHashMap(StateBounds).init(allocator),
@@ -69,6 +76,8 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         .off_buf = -64,
         .off_ctx_var_start = -72, .off_state_data_base = -80,
         .off_core_type = -88, .off_numa_highest_node = -92, .off_numa_node_mask = -100,
+        .off_arena_base = -108, .off_arena_ptr = -116, .off_arena_end = -124, .off_arena_buf_start = 0,
+        .off_pool_head = -132,
         .has_hot_states = false,
         .allocator = allocator,
     };
@@ -83,6 +92,7 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
     }
     try computeStackLayout(&p, program);
     try emitPrologueAndInit(&p, program);
+    try emitRuntimeSection(&p);
     try emitStateEnterFuncs(&p, program);
     try padForCacheAssociativity(&p, program);
     try emitEventLoop(&p, program);
@@ -104,8 +114,31 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
             stderr.print("  label NOT FOUND!\n", .{}) catch {};
         }
     }
+    // Cleanup allocations
+    p.labels.deinit();
+    {
+        var sit = p.state_vars.iterator();
+        while (sit.next()) |e| e.value_ptr.deinit();
+        p.state_vars.deinit();
+    }
+    for (p.allocated_labels.items) |l| p.allocator.free(l);
+    p.allocated_labels.deinit();
+    p.state_code_bounds.deinit();
+    for (p.pending_fixups.items) |fx| p.allocator.free(fx.label);
+    p.pending_fixups.deinit();
+    for (p.string_list.items) |s| p.allocator.free(s);
+    p.string_list.deinit();
+    p.string_pool.deinit();
+    p.state_names.deinit();
+    p.ctx_vars.deinit();
     const idat_size = computeImportTableSize();
     return X64Output{ .code = try p.code.toOwnedSlice(), .import_dir_rva = @intCast(import_dir_rva), .idat_size = idat_size };
+}
+
+fn allocLabel(p: *PendingOutput, comptime fmt: []const u8, args: anytype) ![]const u8 {
+    const l = try std.fmt.allocPrint(p.allocator, fmt, args);
+    try p.allocated_labels.append(l);
+    return l;
 }
 
 fn getTypeSize(t: []const u8) u32 {
@@ -137,8 +170,8 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
         var sv = std.ArrayList(StateVarInfo).init(p.allocator);
         for (state.variables.items) |v| {
             const g = shared.get(v.name);
-            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = getTypeSize(v.type_name) }); }
-            else { const a = getTypeAlign(v.type_name); const sz = getTypeSize(v.type_name); off = @divFloor(off, @as(i32, @intCast(a))) * @as(i32, @intCast(a)) - @as(i32, @intCast(sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = sz }); }
+            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = getTypeSize(v.type_name), .cache_policy = v.cache_policy }); }
+            else { const a = getTypeAlign(v.type_name); const sz = getTypeSize(v.type_name); off = @divFloor(off, @as(i32, @intCast(a))) * @as(i32, @intCast(a)) - @as(i32, @intCast(sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = sz, .cache_policy = v.cache_policy }); }
         }
         try p.state_vars.put(state.name, sv);
     }
@@ -148,15 +181,20 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
         var sv = std.ArrayList(StateVarInfo).init(p.allocator);
         for (state.variables.items) |v| {
             const g = shared.get(v.name);
-            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = getTypeSize(v.type_name) }); }
-            else { const sz = getTypeSize(v.type_name); off -= @as(i32, @intCast(sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = sz }); }
+            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = getTypeSize(v.type_name), .cache_policy = v.cache_policy }); }
+            else { const sz = getTypeSize(v.type_name); off -= @as(i32, @intCast(sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = sz, .cache_policy = v.cache_policy }); }
         }
         try p.state_vars.put(state.name, sv);
     }
     p.off_core_type = off; off -= 4;
     p.off_numa_highest_node = off; off -= 4;
     p.off_numa_node_mask = off; off -= 8;
+    p.off_pool_head = off; off -= 8;
+    p.off_arena_base = off; off -= 8;
+    p.off_arena_ptr = off; off -= 8;
+    p.off_arena_end = off; off -= 8;
     p.off_buf = off - 256; off -= 256;
+    p.off_arena_buf_start = off - 2048; off -= 2048;
     const neg = -off;
     p.stack_frame_size = @as(u32, @intCast(neg + 15)) & ~@as(u32, 15);
     if (p.stack_frame_size < 40) p.stack_frame_size = 40;
@@ -182,6 +220,13 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
         }
     }
     try x64.emit(&p.code, .XOR_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    // Arena init: base = RBP + buf_start, ptr = base, end = base + 2KB
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_arena_buf_start) });
+    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_arena_base), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_arena_ptr), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(2048) });
+    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_arena_end), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .XOR_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_cur_state), x64.Operand.r(Reg.RAX) });
     try emitWin32Call(p, 0, -10);
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdin), x64.Operand.r(Reg.RAX) });
@@ -201,6 +246,62 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
         }
     }
     if (program.states.items.len > 0) { try emitCallToLabel(p, "en_0"); try emitLongJmp(p, "evloop"); }
+}
+
+fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
+    try p.labels.put(try allocLabel(p, "rt_{d}", .{@intFromEnum(intrinsic)}), p.code.items.len);
+    switch (intrinsic) {
+        .arena_l1_alloc, .arena_l2_alloc, .arena_l3_alloc => {
+            // bump alloc: RAX=size → RAX=ptr
+            try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RBP, p.off_arena_ptr) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+            try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RDX), x64.Operand.mem(Reg.RBP, p.off_arena_end) });
+            try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RDX) });
+            try emitShortJmp(p, .JA_REL32, try allocLabel(p, "rt_oom", .{}));
+            try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_arena_ptr), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RCX) });
+        },
+        .arena_l1_reset, .arena_l2_reset, .arena_l3_reset => {
+            // reset arena cursor to base
+            try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_arena_base) });
+            try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_arena_ptr), x64.Operand.r(Reg.RAX) });
+        },
+        .handle_alloc, .handle_access => {
+            // stub — return 0 (no handle support in Stage 1)
+            try emitXorReg(p, Reg.RAX);
+        },
+        .handle_release, .handle_touch, .handle_validate,
+        .move_hotter, .move_colder, .tick, .log_event => {
+            // stub — no-op
+        },
+        .panic => {
+            // ExitProcess(1)
+            try emitXorReg(p, Reg.RCX);
+            try emitInc(p, Reg.RCX);
+            try emitShadowCall(p, 3);
+        },
+    }
+    try emitRet(p);
+}
+
+fn emitRuntimeSection(p: *PendingOutput) !void {
+    inline for (comptime std.meta.tags(rt.Intrinsic)) |tag| {
+        try emitOneIntrinsic(p, tag);
+    }
+
+    // oom helper (shared across alloc intrinsics)
+    try p.labels.put(try allocLabel(p, "rt_oom", .{}), p.code.items.len);
+    try emitXorReg(p, Reg.RAX);
+    try emitRet(p);
+}
+
+fn emitIntrinsicCall(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
+    try emitCallToLabel(p, try allocLabel(p, "rt_{d}", .{@intFromEnum(intrinsic)}));
+}
+
+fn emitRet(p: *PendingOutput) !void {
+    try p.code.append(0xC3);
 }
 
 fn emitPushR64(p: *PendingOutput, reg: i16) !void {
@@ -246,8 +347,18 @@ fn emitStateEnterFuncs(p: *PendingOutput, program: ast.ProgramNode) !void {
             if (av == 64) { try alignTo64(p); } else if (av >= 16) { while (p.code.items.len % @as(usize, @intCast(av)) != 0) try p.code.append(0x90); }
         }
         const start_off = p.code.items.len;
-        const label = try std.fmt.allocPrint(p.allocator, "en_{d}", .{item.idx});
+        const label = try allocLabel(p, "en_{d}", .{item.idx});
         try p.labels.put(label, p.code.items.len);
+        // Re-init @Cache(L1) variables on state entry
+        for (state.variables.items) |v| {
+            if (v.cache_policy) |cp| {
+                if (std.mem.eql(u8, cp, "L1")) {
+                    try emitLoadImm(p, Reg.RAX, parseNumber(v.default_value orelse "0"));
+                    const vo = getVarOffset(p, state.name, v.name);
+                    if (vo != std.math.minInt(i32)) try emitStoreVarFromReg(p, vo, Reg.RAX, getVarSize(p, state.name, v.name));
+                }
+            }
+        }
         if (state.enter_body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
         for (state.transitions.items) |t| {
             if (t.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
@@ -266,12 +377,12 @@ fn emitStateEnterFuncs(p: *PendingOutput, program: ast.ProgramNode) !void {
             const ts = program.states.items[ti_idx];
             const level: i32 = if (ts.cache_policy) |cp| blk: { if (std.mem.eql(u8, cp, "L2")) break :blk 2; if (std.mem.eql(u8, cp, "L3")) break :blk 3; break :blk 1; } else 1;
             if (p.state_vars.get(t.target)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, sv.stack_offset, level); }
-            if (level <= 1) try emitPrefetch(p, try std.fmt.allocPrint(p.allocator, "en_{d}", .{ti_idx}), 1);
+            if (level <= 1) try emitPrefetch(p, try allocLabel(p, "en_{d}", .{ti_idx}), 1);
         }
         lv.deinit();
         try x64.emit(&p.code, .RET, &.{});
         const end_off = p.code.items.len;
-        try p.state_code_bounds.put(try std.fmt.allocPrint(p.allocator, "{d}", .{item.idx}), .{ .start = start_off, .end = end_off });
+        try p.state_code_bounds.put(try allocLabel(p, "{d}", .{item.idx}), .{ .start = start_off, .end = end_off });
     }
 }
 
@@ -292,7 +403,7 @@ fn padForCacheAssociativity(p: *PendingOutput, program: ast.ProgramNode) !void {
             try emitNop(p, @intCast(pad));
             const orig_sz = orig_end - offset;
             const new_off: u32 = @intCast(p.code.items.len);
-            try p.labels.put(try std.fmt.allocPrint(p.allocator, "en_{d}", .{oi}), new_off);
+            try p.labels.put(try allocLabel(p, "en_{d}", .{oi}), new_off);
             try p.state_code_bounds.put(entry.key_ptr.*, .{ .start = new_off, .end = new_off + orig_sz });
             try set_occ.put(0, 1);
         } else try set_occ.put(set, cnt + 1);
@@ -360,11 +471,11 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R12), x64.Operand.mem(Reg.RBP, p.off_cur_state) });
     for (0..p.state_names.items.len) |i| {
         try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R12), x64.Operand.immU32(@intCast(i)) });
-        try emitCondLongJmp(p, .JE_REL32, try std.fmt.allocPrint(p.allocator, "dp_{d}", .{i}));
+        try emitCondLongJmp(p, .JE_REL32, try allocLabel(p, "dp_{d}", .{i}));
     }
     try emitLongJmp(p, "re_dispatch");
     for (program.states.items, 0..) |ds, si| {
-        try p.labels.put(try std.fmt.allocPrint(p.allocator, "dp_{d}", .{si}), p.code.items.len);
+        try p.labels.put(try allocLabel(p, "dp_{d}", .{si}), p.code.items.len);
         if ((ds.hot_weight orelse 0.5) <= 0.3) try emitPrefetchColdData(p, &ds);
         try emitStateDispatch(p, &ds, si, program);
         try emitLongJmp(p, "advance_cursor");
@@ -427,7 +538,7 @@ fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usiz
             try emitGuardSkip(p, t.guard.?, si, 0);
             if (t.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
             try changeToState(p, t.target, si, program);
-            try p.labels.put(try std.fmt.allocPrint(p.allocator, "sk_{d}_{d}", .{si, 0}), p.code.items.len);
+            try p.labels.put(try allocLabel(p, "sk_{d}_{d}", .{si, 0}), p.code.items.len);
         }
     }
     var eg_keys = std.ArrayList([]const u8).init(p.allocator);
@@ -446,37 +557,37 @@ fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usiz
         try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDI), x64.Operand.mem(Reg.RBP, p.off_buf) });
         try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_cursor) });
         try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RDI), x64.Operand.r(Reg.RAX) });
-        const ll = try std.fmt.allocPrint(p.allocator, "eg_lp_{d}_{d}", .{si, eg_idx});
-        const ce = try std.fmt.allocPrint(p.allocator, "eg_ce_{d}_{d}", .{si, eg_idx});
+        const ll = try allocLabel(p, "eg_lp_{d}_{d}", .{si, eg_idx});
+        const ce = try allocLabel(p, "eg_ce_{d}_{d}", .{si, eg_idx});
         try p.labels.put(ll, p.code.items.len);
         try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
         try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RBX), x64.Operand.mem(Reg.RSI, 0) });
         try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
         try emitShortJmp(p, .JNE_REL32, ce);
         try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
-        try emitShortJmp(p, .JE_REL32, try std.fmt.allocPrint(p.allocator, "eg_mt_{d}_{d}", .{si, eg_idx}));
+        try emitShortJmp(p, .JE_REL32, try allocLabel(p, "eg_mt_{d}_{d}", .{si, eg_idx}));
         try emitInc(p, Reg.RDI); try emitInc(p, Reg.RSI);
         try emitShortJmp(p, .JMP_REL32, ll);
         try p.labels.put(ce, p.code.items.len);
         try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RBX) });
-        try emitCondLongJmp(p, .JE_REL32, try std.fmt.allocPrint(p.allocator, "eg_skip_{d}_{d}", .{si, eg_idx}));
-        try emitLongJmp(p, try std.fmt.allocPrint(p.allocator, "eg_done_{d}_{d}", .{si, eg_idx}));
-        try p.labels.put(try std.fmt.allocPrint(p.allocator, "eg_ws_{d}_{d}", .{si, eg_idx}), p.code.items.len);
+        try emitCondLongJmp(p, .JE_REL32, try allocLabel(p, "eg_skip_{d}_{d}", .{si, eg_idx}));
+        try emitLongJmp(p, try allocLabel(p, "eg_done_{d}_{d}", .{si, eg_idx}));
+        try p.labels.put(try allocLabel(p, "eg_ws_{d}_{d}", .{si, eg_idx}), p.code.items.len);
         try emitInc(p, Reg.RDI);
         try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
-        try p.labels.put(try std.fmt.allocPrint(p.allocator, "eg_skip_{d}_{d}", .{si, eg_idx}), p.code.items.len);
+        try p.labels.put(try allocLabel(p, "eg_skip_{d}_{d}", .{si, eg_idx}), p.code.items.len);
         try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x20) });
-        try emitShortJmp(p, .JE_REL32, try std.fmt.allocPrint(p.allocator, "eg_ws_{d}_{d}", .{si, eg_idx}));
+        try emitShortJmp(p, .JE_REL32, try allocLabel(p, "eg_ws_{d}_{d}", .{si, eg_idx}));
         try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x09) });
-        try emitShortJmp(p, .JE_REL32, try std.fmt.allocPrint(p.allocator, "eg_ws_{d}_{d}", .{si, eg_idx}));
+        try emitShortJmp(p, .JE_REL32, try allocLabel(p, "eg_ws_{d}_{d}", .{si, eg_idx}));
         try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
-        try emitShortJmp(p, .JE_REL32, try std.fmt.allocPrint(p.allocator, "eg_mt_{d}_{d}", .{si, eg_idx}));
+        try emitShortJmp(p, .JE_REL32, try allocLabel(p, "eg_mt_{d}_{d}", .{si, eg_idx}));
         try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
-        try emitShortJmp(p, .JE_REL32, try std.fmt.allocPrint(p.allocator, "eg_mt_{d}_{d}", .{si, eg_idx}));
+        try emitShortJmp(p, .JE_REL32, try allocLabel(p, "eg_mt_{d}_{d}", .{si, eg_idx}));
         try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0D) });
-        try emitShortJmp(p, .JE_REL32, try std.fmt.allocPrint(p.allocator, "eg_mt_{d}_{d}", .{si, eg_idx}));
-        try emitLongJmp(p, try std.fmt.allocPrint(p.allocator, "eg_done_{d}_{d}", .{si, eg_idx}));
-        try p.labels.put(try std.fmt.allocPrint(p.allocator, "eg_mt_{d}_{d}", .{si, eg_idx}), p.code.items.len);
+        try emitShortJmp(p, .JE_REL32, try allocLabel(p, "eg_mt_{d}_{d}", .{si, eg_idx}));
+        try emitLongJmp(p, try allocLabel(p, "eg_done_{d}_{d}", .{si, eg_idx}));
+        try p.labels.put(try allocLabel(p, "eg_mt_{d}_{d}", .{si, eg_idx}), p.code.items.len);
         var specific = std.ArrayList(*const ast.TransitionNode).init(p.allocator);
         var neq = std.ArrayList(*const ast.TransitionNode).init(p.allocator);
         var guardless = std.ArrayList(*const ast.TransitionNode).init(p.allocator);
@@ -503,16 +614,16 @@ fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usiz
             try emitPrefetchForTransitionCacheAware(p, tt);
             if (tt.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
             try changeToState(p, tt.target, si, program);
-            try p.labels.put(try std.fmt.allocPrint(p.allocator, "sk_{d}_{d}", .{si, orig_ti}), p.code.items.len);
+            try p.labels.put(try allocLabel(p, "sk_{d}_{d}", .{si, orig_ti}), p.code.items.len);
         }
         specific.deinit(); neq.deinit(); guardless.deinit(); allTis.deinit();
-        try p.labels.put(try std.fmt.allocPrint(p.allocator, "eg_done_{d}_{d}", .{si, eg_idx}), p.code.items.len);
+        try p.labels.put(try allocLabel(p, "eg_done_{d}_{d}", .{si, eg_idx}), p.code.items.len);
         eg_idx += 1;
     }
 }
 
 fn emitGuardSkip(p: *PendingOutput, guard: []const u8, si: usize, ti: usize) !void {
-    const skip = try std.fmt.allocPrint(p.allocator, "sk_{d}_{d}", .{si, ti});
+    const skip = try allocLabel(p, "sk_{d}_{d}", .{si, ti});
     const g = std.mem.trim(u8, guard, " \t");
     if (g.len == 0) return;
     const ops = [_][]const u8{ ">=", "<=", "==", "!=", ">", "<" };
@@ -549,6 +660,7 @@ fn emitGuardSkip(p: *PendingOutput, guard: []const u8, si: usize, ti: usize) !vo
 
 fn changeToState(p: *PendingOutput, target: []const u8, current_si: usize, program: ast.ProgramNode) !void {
     const ti = findStateIndex(p, target);
+    try emitIntrinsicCall(p, rt.Intrinsic.arena_l1_reset);
     const cur_state = program.states.items[current_si];
     if (cur_state.exit_body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, cur_state.name); }
     for (cur_state.transitions.items) |act| {
@@ -556,7 +668,7 @@ fn changeToState(p: *PendingOutput, target: []const u8, current_si: usize, progr
     }
     try emitMovRegImm32(p, Reg.RAX, @intCast(ti));
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_cur_state), x64.Operand.r(Reg.RAX) });
-    try emitCallToLabel(p, try std.fmt.allocPrint(p.allocator, "en_{d}", .{ti}));
+    try emitCallToLabel(p, try allocLabel(p, "en_{d}", .{ti}));
     try emitLongJmp(p, "advance_cursor");
 }
 
@@ -581,7 +693,7 @@ fn emitCacheBudgetChecks(p: *PendingOutput, program: ast.ProgramNode) !void {
 
 fn embedStringPool(p: *PendingOutput) !void {
     for (p.string_list.items, 0..) |s, i| {
-        try p.labels.put(try std.fmt.allocPrint(p.allocator, "str_{d}", .{i}), p.code.items.len);
+        try p.labels.put(try allocLabel(p, "str_{d}", .{i}), p.code.items.len);
         try p.code.appendSlice(s);
         try p.code.append(0);
     }
@@ -601,7 +713,7 @@ fn emitImportTable(p: *PendingOutput) !u32 {
     var cur = hint_base;
     for (IMPORT_FNS) |fn_name| {
         try hint_offs.append(cur);
-        const d = try std.fmt.allocPrint(p.allocator, "{s}\x00", .{fn_name});
+        const d = try allocLabel(p, "{s}\x00", .{fn_name});
         try hint_dats.append(d);
         cur += 2 + @as(u32, @intCast(d.len));
     }
@@ -630,9 +742,8 @@ fn emitImportTable(p: *PendingOutput) !u32 {
 
     for (IMPORT_FNS, 0..) |_, i| {
         const iat_label_val = @as(usize, @intCast(iat_off + @as(u32, @intCast(i)) * 8));
-        try p.labels.put(try std.fmt.allocPrint(p.allocator, "iat_{d}", .{i}), iat_label_val);
+        try p.labels.put(try allocLabel(p, "iat_{d}", .{i}), iat_label_val);
     }
-    for (hint_dats.items) |hd| p.allocator.free(hd);
     hint_offs.deinit(); hint_dats.deinit();
     return base_off;
 }
@@ -689,16 +800,18 @@ fn emitCallToLabel(p: *PendingOutput, label: []const u8) !void {
 fn emitRipLea(p: *PendingOutput, dst: i16, string_idx: u32) !void {
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(dst), x64.Operand.mem(255, 0) });
     const disp_off = p.code.items.len - 4;
-    const label = try std.fmt.allocPrint(p.allocator, "str_{d}", .{string_idx});
-    try p.pending_fixups.append(.{ .offset = disp_off, .disp_size = 4, .label = label });
+    const label = try allocLabel(p, "str_{d}", .{string_idx});
+    const l = try p.allocator.dupe(u8, label);
+    try p.pending_fixups.append(.{ .offset = disp_off, .disp_size = 4, .label = l });
 }
 
 fn emitIatCall(p: *PendingOutput, import_idx: usize) !void {
     try p.code.append(0xFF); try p.code.append(0x15);
     const fixoff = p.code.items.len;
     try p.code.appendNTimes(0, 4);
-    const label = try std.fmt.allocPrint(p.allocator, "iat_{d}", .{import_idx});
-    try p.pending_fixups.append(.{ .offset = fixoff, .disp_size = 4, .label = label });
+    const label = try allocLabel(p, "iat_{d}", .{import_idx});
+    const l = try p.allocator.dupe(u8, label);
+    try p.pending_fixups.append(.{ .offset = fixoff, .disp_size = 4, .label = l });
 }
 
 fn emitWin32Call(p: *PendingOutput, import_idx: usize, arg: i32) !void {
@@ -801,7 +914,7 @@ fn emitPrefetchForTransitionCacheAware(p: *PendingOutput, t: *const ast.Transiti
     const level: i32 = if (hw >= 0.8) 1 else if (hw >= 0.4) 2 else 0;
     const ti = findStateIndex(p, t.target);
     if (p.state_vars.get(t.target)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, sv.stack_offset, level); }
-    try emitPrefetch(p, try std.fmt.allocPrint(p.allocator, "en_{d}", .{ti}), if (level > 0) level else 1);
+    try emitPrefetch(p, try allocLabel(p, "en_{d}", .{ti}), if (level > 0) level else 1);
 }
 
 fn findStateIndex(p: *PendingOutput, name: []const u8) usize {

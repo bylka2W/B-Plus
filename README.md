@@ -1,7 +1,9 @@
-# B+ v4.1.5 — компилятор конечных автоматов (x64)
+# B+ v4.2.0 — детерминированная машина переходов (x64)
 
 **B+** транслирует `.b+` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор написан с нуля на Zig.
+
+Встроенный runtime-уровень (Stage 1) — детерминированная машина состояний с формальной моделью переходов, трёхуровневой иерархией памяти (L1/L2/L3), поколенческими handle и единственной точкой исполнения миграций (`applyMigration`).
 
 ---
 
@@ -487,9 +489,10 @@ bpc.exe run example.b+
 zig/                    — компилятор (Zig, активная разработка)
   src/
     main.zig            — точка входа, CLI, оркестрация
+    runtime.zig          — Stage 1 runtime kernel (handle table, arena, FSM, migration)
     parser.zig          — лексер + парсер .b+
     ast.zig             — типы AST (состояния, переходы и т.д.)
-    x64gen.zig          — генератор машинного кода x64
+    x64gen.zig          — генератор машинного кода x64 (+ Intrinsic binding к runtime)
     x64enc.zig          — кодировщик инструкций x64
     pe.zig             — генератор PE (.exe)
   build.zig            — сборка через zig build
@@ -536,20 +539,60 @@ SOFTWARE.
 
 ---
 
+## Stage 1 — Runtime kernel
+
+`src/runtime.zig` — детерминированная машина памяти, формальная модель переходов.
+
+```
+Handle → MetaStore → ptr → address → Tier (single source of truth)
+                                ↓
+moveHotter/moveColder → Tier.moveHotter/?Tier (pure FSM)
+                                ↓
+Transition{handle, src_tier, dst_tier} (pure decision record)
+                                ↓
+applyMigration → migrate (единственный execution boundary)
+    └─ validateAccess (safety gate)
+    └─ resolve: slot, ptr, size, arena
+    └─ alloc → memcpy → ptr swap → log
+```
+
+### Компоненты
+
+| Компонент | Описание |
+|-----------|----------|
+| `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
+| `Handle` | Поколенческий идентификатор: slot + generation |
+| `HandleTable` | Состояния слотов (Used/Free), free-лист O(1), инвалидация через generation |
+| `MetaStore` | SoA: ptrs, sizes, generations, heats, states |
+| `Arena` | Bump-аллокатор (без проверок — prevalidated inputs) |
+| `Transition` | Decision record: handle + src_tier + dst_tier |
+| `PanicCode` | INVALID_HANDLE и INVALID_TIER — только через validate функции |
+| `assertInvariant` | Приватная — только внутри validateHandle/validateAccess/validateTier |
+
+### Intrinsic binding
+
+`x64gen.zig` использует `inline for (comptime std.meta.tags(rt.Intrinsic))` для
+исчерпывающей генерации всех runtime-функций. Любое добавление варианта `Intrinsic`
+вызывает compile error до тех пор, пока `emitOneIntrinsic` не обработает его.
+
+---
+
 **Ограничения:**
 - Только Windows x64.
 - Минимальные сообщения об ошибках.
 - Чтение ввода через stdin (одна строка = одно событие).
-- Нет поддержки LLVM, WASM, GPU, LSP.
+- Нет поддержки LLVM, WASM, GPU, LSP, DISK tier.
 
 ---
 
 ---
 
-# B+ v4.1.5 — state machine compiler (x64)
+# B+ v4.2.0 — deterministic transition machine (x64)
 
 **B+** compiles `.b+` files directly to x64 machine code and packages them into Windows PE executables (.exe).
 No assemblers, linkers, or LLVM — the entire code generator is written from scratch in Zig.
+
+Built-in runtime layer (Stage 1) — a deterministic state machine with a formal transition model, three-level memory hierarchy (L1/L2/L3), generational handles, and a single migration execution point (`applyMigration`).
 
 ---
 
@@ -1035,9 +1078,10 @@ bpc.exe run example.b+
 zig/                    — compiler (Zig, active development)
   src/
     main.zig            — entry point, CLI, orchestration
+    runtime.zig          — Stage 1 runtime kernel (handle table, arena, FSM, migration)
     parser.zig          — lexer + parser for .b+
     ast.zig             — AST types (states, transitions, etc.)
-    x64gen.zig          — x64 machine code generator
+    x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime)
     x64enc.zig          — x64 instruction encoder
     pe.zig             — PE (.exe) generator
   build.zig            — build script (zig build)
@@ -1084,8 +1128,46 @@ SOFTWARE.
 
 ---
 
+## Stage 1 — Runtime kernel
+
+`src/runtime.zig` — deterministic memory machine with a formal transition model.
+
+```
+Handle → MetaStore → ptr → address → Tier (single source of truth)
+                                ↓
+moveHotter/moveColder → Tier.moveHotter/?Tier (pure FSM)
+                                ↓
+Transition{handle, src_tier, dst_tier} (pure decision record)
+                                ↓
+applyMigration → migrate (sole execution boundary)
+    └─ validateAccess (safety gate)
+    └─ resolve: slot, ptr, size, arena
+    └─ alloc → memcpy → ptr swap → log
+```
+
+### Components
+
+| Component | Description |
+|-----------|-------------|
+| `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
+| `Handle` | Generational slot identifier: slot + generation |
+| `HandleTable` | Slot states (Used/Free), O(1) free-list, invalidation via generation |
+| `MetaStore` | SoA: ptrs, sizes, generations, heats, states |
+| `Arena` | Bump allocator (no bounds checks — prevalidated inputs) |
+| `Transition` | Decision record: handle + src_tier + dst_tier |
+| `PanicCode` | INVALID_HANDLE and INVALID_TIER — only through validate functions |
+| `assertInvariant` | Private — only inside validateHandle/validateAccess/validateTier |
+
+### Intrinsic binding
+
+`x64gen.zig` uses `inline for (comptime std.meta.tags(rt.Intrinsic))` for
+exhaustive generation of all runtime functions. Adding an `Intrinsic` variant
+causes a compile error until `emitOneIntrinsic` handles it.
+
+---
+
 **Limitations:**
 - Windows x64 only.
 - Minimal error messages.
 - Reads input from stdin (one line = one event).
-- No LLVM, WASM, GPU, LSP support.
+- No LLVM, WASM, GPU, LSP, DISK tier support.

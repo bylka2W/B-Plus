@@ -97,9 +97,13 @@ pub const ProgramNode = struct {
             s.transitions.deinit();
             if (s.enter_body) |b| self.allocator.free(b);
             if (s.exit_body) |b| self.allocator.free(b);
+            if (s.cache_policy) |cp| self.allocator.free(cp);
         }
         self.states.deinit();
-        for (self.entries.items) |*e| e.body_lines.deinit();
+        for (self.entries.items) |*e| {
+            for (e.body_lines.items) |line| self.allocator.free(line);
+            e.body_lines.deinit();
+        }
         self.entries.deinit();
         for (self.kernels.items) |*k| {
             k.params.deinit();

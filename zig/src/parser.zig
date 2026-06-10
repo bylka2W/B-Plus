@@ -284,7 +284,11 @@ pub const Parser = struct {
 
     fn peek(p: *Parser, kind: Token.Kind) bool { return p.cur_tok.kind == kind; }
     fn expect(p: *Parser, kind: Token.Kind) !void {
-        if (p.cur_tok.kind != kind) return error.UnexpectedToken;
+        if (p.cur_tok.kind != kind) {
+            const found = p.src[p.cur_tok.start..p.cur_tok.end];
+            std.debug.print("error: expected '{s}', got '{s}' ({s})\n", .{ @tagName(kind), std.mem.trimRight(u8, found, "\x00\x0d\x0a"), @tagName(p.cur_tok.kind) });
+            return error.UnexpectedToken;
+        }
         p.advance();
     }
 
@@ -294,6 +298,22 @@ pub const Parser = struct {
 
     fn identText(p: *Parser) []const u8 {
         return p.src[p.cur_tok.start..p.cur_tok.end];
+    }
+
+    fn readAnnotationFull(p: *Parser) []const u8 {
+        const start = p.cur_tok.start + 1;
+        var end = p.cur_tok.end;
+        p.advance();
+        if (p.peek(.lparen)) {
+            p.advance();
+            while (!p.peek(.rparen) and !p.peek(.eof) and !p.peek(.newline)) p.advance();
+            end = p.cur_tok.end;
+            if (p.peek(.rparen)) {
+                end = p.cur_tok.end;
+                p.advance();
+            }
+        }
+        return p.src[start..end];
     }
 
     pub fn parse(p: *Parser) !ast.ProgramNode {
@@ -332,7 +352,8 @@ pub const Parser = struct {
                 try program.parallel_blocks.append(try p.parseParallel());
             } else if (p.peek(.keyword_context)) {
                 p.advance();
-                _ = p.parseVariables() catch {};
+                var ctx_vars = p.parseVariables() catch std.ArrayList(ast.VariableNode).init(p.allocator);
+                ctx_vars.deinit();
             } else if (p.peek(.keyword_extern)) {
                 p.advance();
                 _ = p.parseString();
@@ -357,6 +378,8 @@ pub const Parser = struct {
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 if (p.peek(.newline)) p.advance();
             } else if (p.peek(.string) or p.peek(.number) or p.peek(.char_lit) or p.peek(.arrow) or p.peek(.minus) or p.peek(.plus) or p.peek(.star) or p.peek(.slash) or p.peek(.lparen) or p.peek(.rparen) or p.peek(.lbracket) or p.peek(.rbracket) or p.peek(.colon) or p.peek(.semicolon) or p.peek(.comma) or p.peek(.hash) or p.peek(.invalid)) {
+                const found = p.src[p.cur_tok.start..p.cur_tok.end];
+                std.debug.print("error: unexpected token '{s}' ({s}) at top level\n", .{ std.mem.trimRight(u8, found, "\x00\x0d\x0a"), @tagName(p.cur_tok.kind) });
                 return error.UnexpectedToken;
             } else {
                 if (p.peek(.eof)) break;
@@ -392,18 +415,17 @@ pub const Parser = struct {
 
         // Parse annotations before opening brace
         while (p.peek(.annotation)) {
-            const a = p.src[p.prev_tok.start + 1 .. p.prev_tok.end];
-            if (std.mem.eql(u8, a, "hot")) { hot_weight = 0.9; }
-            else if (std.mem.eql(u8, a, "cold")) { hot_weight = 0.1; }
-            else if (std.mem.startsWith(u8, a, "cache(")) {
-                const pol = a["cache(".len..];
+            const full_a = p.readAnnotationFull();
+            if (std.mem.eql(u8, full_a, "hot")) { hot_weight = 0.9; }
+            else if (std.mem.eql(u8, full_a, "cold")) { hot_weight = 0.1; }
+            else if (std.mem.startsWith(u8, full_a, "Cache(")) {
+                const pol = full_a["Cache(".len..];
                 cache_policy = try p.allocator.dupe(u8, std.mem.trimRight(u8, pol, ")"));
-            } else if (std.mem.eql(u8, a, "fast_path")) { is_fast_path = true; }
-            else if (std.mem.eql(u8, a, "always_inline")) { inline_hint = .always_inline; }
-            else if (std.mem.eql(u8, a, "no_inline")) { inline_hint = .no_inline; }
-            else if (std.mem.eql(u8, a, "owned")) { ownership = .owned; }
-            else if (std.mem.eql(u8, a, "borrowed")) { ownership = .borrowed; }
-            p.advance();
+            } else if (std.mem.eql(u8, full_a, "fast_path")) { is_fast_path = true; }
+            else if (std.mem.eql(u8, full_a, "always_inline")) { inline_hint = .always_inline; }
+            else if (std.mem.eql(u8, full_a, "no_inline")) { inline_hint = .no_inline; }
+            else if (std.mem.eql(u8, full_a, "owned")) { ownership = .owned; }
+            else if (std.mem.eql(u8, full_a, "borrowed")) { ownership = .borrowed; }
             p.consumeNewlines();
         }
 
@@ -425,7 +447,7 @@ pub const Parser = struct {
                 vars.deinit();
             } else if (p.peek(.keyword_on) or p.peek(.keyword_always)) {
                 try transitions.append(try p.parseTransition());
-            } else if (p.peek(.keyword_enter)) {
+            } else if (p.peek(.keyword_enter) or p.peek(.keyword_entry)) {
                 p.advance();
                 p.consumeNewlines();
                 state_enter_body = try p.parseBraceBody();
@@ -434,7 +456,7 @@ pub const Parser = struct {
                 p.consumeNewlines();
                 state_exit_body = try p.parseBraceBody();
             } else if (p.peek(.annotation)) {
-                p.advance();
+                _ = p.readAnnotationFull();
                 p.consumeNewlines();
             } else if (p.peek(.keyword_state)) {
                 // Nested state - skip
@@ -442,6 +464,8 @@ pub const Parser = struct {
                 s.variables.deinit();
                 s.transitions.deinit();
             } else if (p.peek(.string) or p.peek(.number) or p.peek(.char_lit) or p.peek(.minus) or p.peek(.plus) or p.peek(.star) or p.peek(.slash) or p.peek(.semicolon) or p.peek(.invalid)) {
+                const found = p.src[p.cur_tok.start..p.cur_tok.end];
+                std.debug.print("error: unexpected token '{s}' ({s}) in state body\n", .{ std.mem.trimRight(u8, found, "\x00\x0d\x0a"), @tagName(p.cur_tok.kind) });
                 return error.UnexpectedToken;
             } else {
                 if (p.peek(.eof)) break;
@@ -490,12 +514,13 @@ pub const Parser = struct {
             }
         }
 
+        const cp = parseVarCacheAnnotation(p);
         try vars.append(.{
             .name = name,
             .type_name = type_name,
             .default_value = default,
             .is_fast_path = is_fast_path,
-            .cache_policy = null,
+            .cache_policy = cp,
             .cache_align = null,
         });
 
@@ -507,18 +532,29 @@ pub const Parser = struct {
             try p.expect(.colon);
             const t = p.identText();
             p.advance();
+            const cp2 = parseVarCacheAnnotation(p);
             try vars.append(.{
                 .name = n,
                 .type_name = t,
                 .default_value = null,
                 .is_fast_path = false,
-                .cache_policy = null,
+                .cache_policy = cp2,
                 .cache_align = null,
             });
         }
 
         if (p.peek(.newline)) p.advance();
         return vars;
+    }
+
+    fn parseVarCacheAnnotation(p: *Parser) ?[]const u8 {
+        if (!p.peek(.annotation)) return null;
+        const full_a = p.readAnnotationFull();
+        if (std.mem.startsWith(u8, full_a, "Cache(")) {
+            const pol = full_a["Cache(".len..];
+            return std.mem.trimRight(u8, pol, ")");
+        }
+        return null;
     }
 
     fn parseTransition(p: *Parser) !ast.TransitionNode {
@@ -546,10 +582,10 @@ pub const Parser = struct {
 
             // Annotations
             while (p.peek(.annotation)) {
-                const a = p.src[p.prev_tok.start + 1 .. p.prev_tok.end];
-                if (std.mem.eql(u8, a, "hot")) { hot_weight = 0.9; }
-                else if (std.mem.startsWith(u8, a, "hot(")) {
-                    const valstr = a["hot(".len..std.mem.indexOfScalar(u8, a, ')') orelse a.len];
+                const full_a = p.readAnnotationFull();
+                if (std.mem.eql(u8, full_a, "hot")) { hot_weight = 0.9; }
+                else if (std.mem.startsWith(u8, full_a, "hot(")) {
+                    const valstr = full_a["hot(".len..std.mem.indexOfScalar(u8, full_a, ')') orelse full_a.len];
                     hot_weight = std.fmt.parseFloat(f64, valstr) catch null;
                 }
                 p.advance();
@@ -627,9 +663,8 @@ pub const Parser = struct {
         try p.expect(.keyword_kernel);
         var annotations = std.ArrayList(ast.Annotation).init(p.allocator);
         while (p.peek(.annotation)) {
-            const a = p.src[p.prev_tok.start + 1 .. p.prev_tok.end];
-            try annotations.append(.{ .name = a, .value = null });
-            p.advance();
+            const full_a = p.readAnnotationFull();
+            try annotations.append(.{ .name = full_a, .value = null });
         }
 
         const name = p.identText();

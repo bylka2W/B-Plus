@@ -35,8 +35,15 @@ pub fn main() !void {
     }
 
     // Read input file
-    const src = try std.fs.cwd().readFileAlloc(allocator, input_path, std.math.maxInt(u32));
+    var src = try std.fs.cwd().readFileAlloc(allocator, input_path, std.math.maxInt(u32));
     defer allocator.free(src);
+
+    // Strip UTF-8 BOM if present
+    if (std.mem.startsWith(u8, src, "\xEF\xBB\xBF")) {
+        const stripped = try allocator.dupe(u8, src[3..]);
+        allocator.free(src);
+        src = stripped;
+    }
 
     // Parse
     var p = parser.Parser.init(allocator, src);
