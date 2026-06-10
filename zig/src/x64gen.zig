@@ -1452,7 +1452,9 @@ fn changeToState(p: *PendingOutput, target: []const u8, current_si: usize, progr
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_abudget) });
             try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(1) });
             try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_abudget), x64.Operand.r(Reg.RAX) });
-            try emitLongJmp(p, try allocLabelId(p, "always_entry", .{}));
+            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+            try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "always_entry", .{}));
+            try emitLongJmp(p, p.dp_id[ti]);
         }
     } else {
         try emitLongJmp(p, try allocLabelId(p, "advance_cursor", .{}));
