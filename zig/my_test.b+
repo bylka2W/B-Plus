@@ -1,0 +1,8 @@
+state Start {
+    entry { print("My B+ test!\n") }
+    always -> Next
+}
+state Next {
+    entry { print("Done\n") }
+    always -> Start
+}

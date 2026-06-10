@@ -1,0 +1,8 @@
+state A {
+    entry { print("A\n") }
+    always -> B
+}
+state B {
+    entry { print("B\n") }
+    always -> A
+}

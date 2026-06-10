@@ -1,0 +1,2 @@
+state A @hot { entry { print("A\n") } always - } 
+state B @hot { entry { print("B\n") } always - } 

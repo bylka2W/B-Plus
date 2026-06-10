@@ -1,0 +1,2 @@
+state A @Cache(L1) { entry { print("A\n") } always - } 
+state B @Cache(L1) { entry { print("B\n") } always - } 

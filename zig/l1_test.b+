@@ -1,0 +1,7 @@
+state A @Cache(L1) {
+    entry { print("L1\n") }
+    on go -> B
+}
+state B {
+    entry { print("OK\n") }
+}

@@ -1,0 +1,12 @@
+entry main {
+    print("Hello from B+!\n")
+}
+
+state Start {
+    entry { print("Start\n") }
+    on go -> Next
+}
+
+state Next {
+    always -> Start
+}

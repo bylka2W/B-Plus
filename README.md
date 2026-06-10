@@ -524,7 +524,6 @@ zig/                    — компилятор (Zig, активная разр
     x64enc.zig          — кодировщик инструкций x64
     pe.zig             — генератор PE (.exe)
   build.zig            — сборка через zig build
-src/                    — оригинальная версия на C# (не развивается)
 ```
 
 ---
@@ -1113,7 +1112,6 @@ zig/                    — compiler (Zig, active development)
     x64enc.zig          — x64 instruction encoder
     pe.zig             — PE (.exe) generator
   build.zig            — build script (zig build)
-src/                    — original C# version (no longer developed)
 ```
 
 ---

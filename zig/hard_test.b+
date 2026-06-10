@@ -1,0 +1,246 @@
+context {
+    int depth = 0;
+    int tokens = 0;
+    int numbers = 0;
+    int ops = 0;
+}
+
+state Init {
+    entry { 
+        print(">>> PARSER V2 <<<\n")
+        print("Enter expression: ")
+    }
+    on ' ' -> SkipWS
+    on '\t' -> SkipWS
+    on '\n' -> SkipWS
+    on '\r' -> SkipWS
+    on '0' -> NumStart
+    on '1' -> NumStart
+    on '2' -> NumStart
+    on '3' -> NumStart
+    on '4' -> NumStart
+    on '5' -> NumStart
+    on '6' -> NumStart
+    on '7' -> NumStart
+    on '8' -> NumStart
+    on '9' -> NumStart
+    on '+' -> PlusOp
+    on '-' -> MinusOp
+    on '*' -> MulOp
+    on '/' -> DivOp
+    on '(' -> LParen
+}
+
+state SkipWS {
+    entry { print(".") }
+    on ' ' -> SkipWS
+    on '\t' -> SkipWS
+    on '\n' -> Done
+    on '\r' -> Done
+    on '0' -> NumStart
+    on '1' -> NumStart
+    on '2' -> NumStart
+    on '3' -> NumStart
+    on '4' -> NumStart
+    on '5' -> NumStart
+    on '6' -> NumStart
+    on '7' -> NumStart
+    on '8' -> NumStart
+    on '9' -> NumStart
+    on '+' -> PlusOp
+    on '-' -> MinusOp
+    on '*' -> MulOp
+    on '/' -> DivOp
+    on '(' -> LParen
+    on ')' -> RParen
+}
+
+state NumStart {
+    entry { 
+        print("[NUM")
+        tokens = tokens + 1
+        numbers = numbers + 1
+    }
+    on '0' -> NumBody
+    on '1' -> NumBody
+    on '2' -> NumBody
+    on '3' -> NumBody
+    on '4' -> NumBody
+    on '5' -> NumBody
+    on '6' -> NumBody
+    on '7' -> NumBody
+    on '8' -> NumBody
+    on '9' -> NumBody
+}
+
+state NumBody {
+    entry { print("*") }
+    on '0' -> NumBody
+    on '1' -> NumBody
+    on '2' -> NumBody
+    on '3' -> NumBody
+    on '4' -> NumBody
+    on '5' -> NumBody
+    on '6' -> NumBody
+    on '7' -> NumBody
+    on '8' -> NumBody
+    on '9' -> NumBody
+    on ' ' -> NumEnd
+    on '\t' -> NumEnd
+    on '\n' -> NumEnd
+    on '\r' -> NumEnd
+    on '+' -> NumEnd
+    on '-' -> NumEnd
+    on '*' -> NumEnd
+    on '/' -> NumEnd
+    on ')' -> NumEnd
+}
+
+state NumEnd {
+    entry { print("]") }
+    on ' ' -> SkipWS
+    on '\t' -> SkipWS
+    on '\n' -> Done
+    on '\r' -> Done
+    on '+' -> PlusOp
+    on '-' -> MinusOp
+    on '*' -> MulOp
+    on '/' -> DivOp
+    on ')' -> RParen
+}
+
+state PlusOp {
+    entry { 
+        print("<+>")
+        ops = ops + 1
+        tokens = tokens + 1
+    }
+    on ' ' -> SkipWS
+    on '\t' -> SkipWS
+    on '0' -> NumStart
+    on '1' -> NumStart
+    on '2' -> NumStart
+    on '3' -> NumStart
+    on '4' -> NumStart
+    on '5' -> NumStart
+    on '6' -> NumStart
+    on '7' -> NumStart
+    on '8' -> NumStart
+    on '9' -> NumStart
+    on '(' -> LParen
+}
+
+state MinusOp {
+    entry { 
+        print("<->")
+        ops = ops + 1
+        tokens = tokens + 1
+    }
+    on ' ' -> SkipWS
+    on '\t' -> SkipWS
+    on '0' -> NumStart
+    on '1' -> NumStart
+    on '2' -> NumStart
+    on '3' -> NumStart
+    on '4' -> NumStart
+    on '5' -> NumStart
+    on '6' -> NumStart
+    on '7' -> NumStart
+    on '8' -> NumStart
+    on '9' -> NumStart
+    on '(' -> LParen
+}
+
+state MulOp {
+    entry { 
+        print("<*>")
+        ops = ops + 1
+        tokens = tokens + 1
+    }
+    on ' ' -> SkipWS
+    on '\t' -> SkipWS
+    on '0' -> NumStart
+    on '1' -> NumStart
+    on '2' -> NumStart
+    on '3' -> NumStart
+    on '4' -> NumStart
+    on '5' -> NumStart
+    on '6' -> NumStart
+    on '7' -> NumStart
+    on '8' -> NumStart
+    on '9' -> NumStart
+    on '(' -> LParen
+}
+
+state DivOp {
+    entry { 
+        print("</>")
+        ops = ops + 1
+        tokens = tokens + 1
+    }
+    on ' ' -> SkipWS
+    on '\t' -> SkipWS
+    on '0' -> NumStart
+    on '1' -> NumStart
+    on '2' -> NumStart
+    on '3' -> NumStart
+    on '4' -> NumStart
+    on '5' -> NumStart
+    on '6' -> NumStart
+    on '7' -> NumStart
+    on '8' -> NumStart
+    on '9' -> NumStart
+    on '(' -> LParen
+}
+
+state LParen {
+    entry { 
+        print("((")
+        depth = depth + 1
+        tokens = tokens + 1
+    }
+    on ' ' -> SkipWS
+    on '\t' -> SkipWS
+    on '0' -> NumStart
+    on '1' -> NumStart
+    on '2' -> NumStart
+    on '3' -> NumStart
+    on '4' -> NumStart
+    on '5' -> NumStart
+    on '6' -> NumStart
+    on '7' -> NumStart
+    on '8' -> NumStart
+    on '9' -> NumStart
+    on '+' -> PlusOp
+    on '-' -> MinusOp
+    on '(' -> LParen
+    on ')' -> RParen
+}
+
+state RParen {
+    entry { 
+        print("))")
+        depth = depth - 1
+        tokens = tokens + 1
+    }
+    on ' ' -> SkipWS
+    on '\t' -> SkipWS
+    on '\n' -> Done
+    on '\r' -> Done
+    on '+' -> PlusOp
+    on '-' -> MinusOp
+    on '*' -> MulOp
+    on '/' -> DivOp
+    on ')' -> RParen
+}
+
+state Done {
+    entry { 
+        print("\n================\n")
+        print("PARSING COMPLETE\n")
+        print("Tokens: ")
+        print("OK\n")
+        print("Depth: ")
+        print("OK\n")
+    }
+}

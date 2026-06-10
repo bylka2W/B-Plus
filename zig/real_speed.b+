@@ -1,0 +1,8 @@
+state Start {
+    entry { print("S\n") }
+    on go -> Loop
+}
+state Loop {
+    entry { print("L\n") }
+    on go -> Loop
+}
