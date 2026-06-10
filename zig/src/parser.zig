@@ -329,6 +329,7 @@ pub const Parser = struct {
             .context = null,
             .extern_cpp_fns = std.ArrayList(ast.ExternCppFn).init(p.allocator),
         };
+        errdefer program.deinit();
 
         while (p.cur_tok.kind != .eof) {
             p.consumeNewlines();
@@ -341,15 +342,28 @@ pub const Parser = struct {
                 try program.directives.append(std.mem.trim(u8, dir, " \t\r"));
                 if (p.peek(.newline)) p.advance();
             } else if (p.peek(.keyword_state)) {
-                try program.states.append(try p.parseStateDef());
+                const s = try p.parseStateDef();
+                errdefer { s.variables.deinit(); s.transitions.deinit(); }
+                try program.states.append(s);
             } else if (p.peek(.keyword_entry)) {
-                try program.entries.append(try p.parseEntry());
+                const e = try p.parseEntry();
+                errdefer e.body_lines.deinit();
+                try program.entries.append(e);
             } else if (p.peek(.keyword_kernel)) {
-                try program.kernels.append(try p.parseKernel());
+                const k = try p.parseKernel();
+                errdefer { k.params.deinit(); k.annotations.deinit(); }
+                try program.kernels.append(k);
             } else if (p.peek(.keyword_enum)) {
-                try program.enums.append(try p.parseEnum());
+                const e = try p.parseEnum();
+                errdefer e.members.deinit();
+                try program.enums.append(e);
             } else if (p.peek(.keyword_parallel)) {
-                try program.parallel_blocks.append(try p.parseParallel());
+                const pb = try p.parseParallel();
+                errdefer {
+                    for (pb.states.items) |*s| { s.variables.deinit(); s.transitions.deinit(); }
+                    pb.states.deinit();
+                }
+                try program.parallel_blocks.append(pb);
             } else if (p.peek(.keyword_context)) {
                 p.advance();
                 var ctx_vars = p.parseVariables() catch std.ArrayList(ast.VariableNode).init(p.allocator);
@@ -362,6 +376,7 @@ pub const Parser = struct {
                 p.advance();
                 try p.expect(.lparen);
                 var params = std.ArrayList(ast.KernelParam).init(p.allocator);
+                errdefer params.deinit();
                 while (!p.peek(.rparen)) {
                     const pname = p.identText(); p.advance();
                     try p.expect(.colon);
@@ -434,6 +449,10 @@ pub const Parser = struct {
         p.nesting_depth += 1;
         var variables = std.ArrayList(ast.VariableNode).init(p.allocator);
         var transitions = std.ArrayList(ast.TransitionNode).init(p.allocator);
+        errdefer {
+            variables.deinit();
+            transitions.deinit();
+        }
         var state_enter_body: ?[]const u8 = null;
         var state_exit_body: ?[]const u8 = null;
 
@@ -628,6 +647,7 @@ pub const Parser = struct {
         }
 
         var body_lines = std.ArrayList([]const u8).init(p.allocator);
+        errdefer body_lines.deinit();
 
         if (p.peek(.lbrace)) {
             p.advance();
@@ -662,6 +682,7 @@ pub const Parser = struct {
     fn parseKernel(p: *Parser) !ast.KernelDecl {
         try p.expect(.keyword_kernel);
         var annotations = std.ArrayList(ast.Annotation).init(p.allocator);
+        errdefer annotations.deinit();
         while (p.peek(.annotation)) {
             const full_a = p.readAnnotationFull();
             try annotations.append(.{ .name = full_a, .value = null });
@@ -671,6 +692,7 @@ pub const Parser = struct {
         p.advance();
         try p.expect(.lparen);
         var params = std.ArrayList(ast.KernelParam).init(p.allocator);
+        errdefer params.deinit();
         while (!p.peek(.rparen)) {
             const pn = p.identText(); p.advance();
             try p.expect(.colon);
@@ -689,6 +711,7 @@ pub const Parser = struct {
         const name = p.identText(); p.advance();
         try p.expect(.lbrace);
         var members = std.ArrayList([]const u8).init(p.allocator);
+        errdefer members.deinit();
         while (!p.peek(.rbrace)) {
             const m = p.identText(); p.advance();
             try members.append(m);
@@ -703,6 +726,10 @@ pub const Parser = struct {
         const name = p.identText(); p.advance();
         try p.expect(.lbrace);
         var states = std.ArrayList(ast.StateDefNode).init(p.allocator);
+        errdefer {
+            for (states.items) |*s| { s.variables.deinit(); s.transitions.deinit(); }
+            states.deinit();
+        }
         while (!p.peek(.rbrace)) {
             p.consumeNewlines();
             if (p.peek(.keyword_state)) {
@@ -715,6 +742,7 @@ pub const Parser = struct {
 
     fn parseVariables(p: *Parser) !std.ArrayList(ast.VariableNode) {
         var vars = std.ArrayList(ast.VariableNode).init(p.allocator);
+        errdefer vars.deinit();
         while (p.peek(.keyword_var)) {
             const v = try p.parseVarDecls();
             try vars.appendSlice(v.items);
