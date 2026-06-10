@@ -1171,3 +1171,32 @@ causes a compile error until `emitOneIntrinsic` handles it.
 - Minimal error messages.
 - Reads input from stdin (one line = one event).
 - No LLVM, WASM, GPU, LSP, DISK tier support.
+
+
+
+
+✅ Stage 1A-J — Deterministic Runtime Kernel
+   ├─ L1/L2/L3 Arena (alloc + reset)
+   ├─ Handle Table (generation-based)
+   ├─ Tier FSM (moveHotter/moveColder)
+   ├─ Transition Model (pure decision → applyMigration)
+   ├─ Panic Runtime (2 кода)
+   ├─ 3 validate функции
+   ├─ Intrinsic ABI (16 интринсиков)
+   └─ x64gen интеграция (exhaustive switch)
+
+🔜 Stage 2 — Heat + Migration Engine
+   ├─ Heat system (increment + decay)
+   ├─ Chunk migration (64KB blocks)
+   ├─ Migration budget
+   ├─ Hysteresis (promote > 100, demote < 30)
+   ├─ Epoch system
+   ├─ Replay logger
+   └─ handle_alloc/release/access (оживают!)
+
+🔜 Stage 3 — Compression + Disk + Async
+   ├─ L3 Compressed Pool (Zstd)
+   ├─ mmap (Disk tier)
+   ├─ Async migration
+   ├─ Prefetch
+   └─ Background worker threads
