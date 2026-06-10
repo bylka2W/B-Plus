@@ -32,6 +32,12 @@ const StateVarInfo = struct { name: []const u8, type_name: []const u8, default_v
 const Fixup = struct { offset: usize, disp_size: u32, label_id: u32 };
 const StateBounds = struct { start: usize, end: usize };
 
+const Trace = struct {
+    start_state: usize,
+    len: usize,
+    hot_weight: f64,
+};
+
 const PendingOutput = struct {
     code: std.ArrayList(u8),
     pending_fixups: std.ArrayList(Fixup),
@@ -56,6 +62,7 @@ const PendingOutput = struct {
     off_l2_base: i32, off_l2_ptr: i32, off_l2_end: i32, off_l2_buf_start: i32,
     off_l3_base: i32, off_l3_ptr: i32, off_l3_end: i32, off_l3_buf_start: i32,
     off_pool_head: i32,
+    off_state_hits: i32,
     off_epoch: i32,
     off_ht_tiers: i32,
     off_ht_states: i32,
@@ -110,6 +117,7 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         .off_l2_base = 0, .off_l2_ptr = 0, .off_l2_end = 0, .off_l2_buf_start = 0,
         .off_l3_base = 0, .off_l3_ptr = 0, .off_l3_end = 0, .off_l3_buf_start = 0,
         .off_pool_head = -132,
+        .off_state_hits = 0,
         .off_epoch = 0,
         .off_ht_tiers = 0,
         .off_ht_states = 0,
@@ -310,6 +318,7 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     p.off_telem_l1_allocs = off; off -= 8;
     p.off_telem_l2_allocs = off; off -= 8;
     p.off_telem_l3_allocs = off; off -= 8;
+    p.off_state_hits = off - @as(i32, @intCast(program.states.items.len * 8)); off -= @as(i32, @intCast(program.states.items.len * 8));
     p.off_buf = off - 256; off -= 256;
     p.off_l1_buf_start = off - @as(i32, @intCast(p.arena_l1_size)); off -= @as(i32, @intCast(p.arena_l1_size));
     p.off_l2_buf_start = off - @as(i32, @intCast(p.arena_l2_size)); off -= @as(i32, @intCast(p.arena_l2_size));
@@ -1046,6 +1055,28 @@ fn padForCacheAssociativity(p: *PendingOutput, program: ast.ProgramNode) !void {
     }
 }
 
+fn analyzeTraces(program: ast.ProgramNode, state_index_map: std.StringHashMap(usize)) !std.ArrayList(Trace) {
+    var traces = std.ArrayList(Trace).init(state_index_map.allocator);
+    var si: usize = 0;
+    while (si < program.states.items.len) {
+        var chain_len: usize = 1;
+        while (si + chain_len < program.states.items.len) {
+            const prev = program.states.items[si + chain_len - 1];
+            const prev_ti = if (prev.transitions.items.len == 1 and prev.transitions.items[0].is_always and (prev.transitions.items[0].event_name == null or prev.transitions.items[0].event_name.?.len == 0)) state_index_map.get(prev.transitions.items[0].target).? else program.states.items.len;
+            if (prev_ti == si + chain_len) {
+                chain_len += 1;
+            } else break;
+        }
+        var total_hw: f64 = 0;
+        for (si..si + chain_len) |i| {
+            total_hw += program.states.items[i].hot_weight orelse 0.5;
+        }
+        try traces.append(.{ .start_state = si, .len = chain_len, .hot_weight = total_hw / @as(f64, @floatFromInt(chain_len)) });
+        si += chain_len;
+    }
+    return traces;
+}
+
 fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try setLabel(p, try allocLabelId(p, "evloop", .{}));
     try emitMovRegImm32(p, Reg.RAX, 4);
@@ -1125,27 +1156,29 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     // Emit jump table (entries filled after fixups)
     try setLabel(p, try allocLabelId(p, "jmp_table", .{}));
     for (0..p.state_names.items.len) |_| try p.code.appendNTimes(0, 4);
-    // Superblock fusion: emit states with fallthrough chains
-    {
-        var si: usize = 0;
-        while (si < program.states.items.len) {
-            var chain_len: usize = 1;
-            while (si + chain_len < program.states.items.len) {
-                const prev = program.states.items[si + chain_len - 1];
-                const prev_ti = if (prev.transitions.items.len == 1 and prev.transitions.items[0].is_always and (prev.transitions.items[0].event_name == null or prev.transitions.items[0].event_name.?.len == 0)) p.state_index_map.get(prev.transitions.items[0].target).? else program.states.items.len;
-                if (prev_ti == si + chain_len) {
-                    chain_len += 1;
-                } else break;
-            }
-            for (si..si + chain_len) |block_si| {
-                const is_last = block_si == si + chain_len - 1;
-                const bs = program.states.items[block_si];
-                try setLabel(p, p.dp_id[block_si]);
-                if ((bs.hot_weight orelse 0.5) <= 0.3) try emitPrefetchColdData(p, &bs);
-                try emitStateDispatch(p, &bs, block_si, program, if (chain_len > 1) !is_last else false);
-                if (is_last) try emitLongJmp(p, try allocLabelId(p, "advance_cursor", .{}));
-            }
-            si += chain_len;
+    // Analyze traces (superblock chains) and emit in hot-first order
+    var traces = try analyzeTraces(program, p.state_index_map);
+    defer traces.deinit();
+    std.mem.sort(Trace, traces.items, {}, struct {
+        fn lessThan(_: void, a: Trace, b: Trace) bool {
+            if (a.hot_weight != b.hot_weight) return a.hot_weight > b.hot_weight;
+            return a.start_state < b.start_state;
+        }
+    }.lessThan);
+    for (traces.items) |trace| {
+        for (trace.start_state..trace.start_state + trace.len) |block_si| {
+            const is_last = block_si == trace.start_state + trace.len - 1;
+            const bs = program.states.items[block_si];
+            try setLabel(p, p.dp_id[block_si]);
+            // Profiling: increment state hit counter
+            const hit_off = p.off_state_hits + @as(i32, @intCast(block_si)) * 8;
+            try p.code.append(0x48); // REX.W
+            try p.code.append(0xFF); // Opcode
+            try p.code.append(0x85); // ModRM: mod=10(disp32), reg=0(INC), rm=101(RBP)
+            try p.code.appendSlice(&@as([4]u8, @bitCast(hit_off)));
+            if ((bs.hot_weight orelse 0.5) <= 0.3) try emitPrefetchColdData(p, &bs);
+            try emitStateDispatch(p, &bs, block_si, program, if (trace.len > 1) !is_last else false);
+            if (is_last) try emitLongJmp(p, try allocLabelId(p, "advance_cursor", .{}));
         }
     }
     try emitLongJmp(p, try allocLabelId(p, "advance_cursor", .{}));
