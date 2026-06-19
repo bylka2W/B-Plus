@@ -1,5 +1,7 @@
 # B+ v4.2.0 — детерминированная машина переходов (x64)
 
+> [English version ↓](#b-v420--deterministic-transition-machine-x64)
+
 **B+** транслирует `.b+` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор написан с нуля на Zig.
 
@@ -736,6 +738,8 @@ zig test src\scheduler_test.zig # 16 tests: sync/threaded/priority/steal/latency
 ---
 
 # B+ v4.2.0 — deterministic transition machine (x64)
+
+> [Russian version ↑](#b-v420--детерминированная-машина-переходов-x64)
 
 **B+** compiles `.b+` files directly to x64 machine code and packages them into Windows PE executables (.exe).
 No assemblers, linkers, or LLVM — the entire code generator is written from scratch in Zig.
