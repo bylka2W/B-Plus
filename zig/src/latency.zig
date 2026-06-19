@@ -152,6 +152,41 @@ pub const CoreStats = struct {
     }
 };
 
+pub const SystemLoad = struct {
+    avg_queue: f32,
+    max_queue: u32,
+    min_queue: u32,
+    imbalance_ratio: f32,
+};
+
+pub fn computeSystemLoad(cores: []const CoreStats) SystemLoad {
+    var sum: u64 = 0;
+    var max: u32 = 0;
+    var min: u32 = std.math.maxInt(u32);
+
+    for (cores) |c| {
+        const len = c.smoothed_load.load(.acquire);
+        sum +|= len;
+        if (len > max) max = @intCast(len);
+        if (len < min) min = @intCast(len);
+    }
+
+    const avg = @as(f32, @floatFromInt(sum)) / @as(f32, @floatFromInt(@max(cores.len, 1)));
+
+    const imbalance = @as(f32, @floatFromInt(max)) / @max(avg, 1.0);
+
+    return .{
+        .avg_queue = avg,
+        .max_queue = max,
+        .min_queue = @min(min, std.math.maxInt(u32) - 1),
+        .imbalance_ratio = imbalance,
+    };
+}
+
+pub fn isSystemUnderPressure(load: SystemLoad) bool {
+    return load.imbalance_ratio > 2.5 or load.max_queue > 64;
+}
+
 pub const LatencyProfile = struct {
     migration_cost_ns: Matrix,
     numa_penalty_ns: Matrix,

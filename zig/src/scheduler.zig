@@ -1,5 +1,7 @@
 const std = @import("std");
 const latency = @import("latency.zig");
+const sched_config = @import("scheduler_config.zig");
+const sched_state = @import("scheduler_state.zig");
 
 pub const Priority = enum(u8) {
     Critical = 0,
@@ -21,6 +23,7 @@ pub const Job = struct {
     next: ?*Job,
     sticky_core: ?u32 = null,
     stickiness: u8 = 0,
+    submitted_at: u64 = 0,
 };
 
 /// Per-worker double-ended queue.
@@ -77,6 +80,7 @@ pub const Metrics = struct {
     steals: std.atomic.Value(u64),
     rejected_steals: std.atomic.Value(u64),
     sticky_honored: std.atomic.Value(u64),
+    force_migrate_escape: std.atomic.Value(u64),
 
     pub fn init() Metrics {
         return Metrics{
@@ -84,8 +88,18 @@ pub const Metrics = struct {
             .steals = std.atomic.Value(u64).init(0),
             .rejected_steals = std.atomic.Value(u64).init(0),
             .sticky_honored = std.atomic.Value(u64).init(0),
+            .force_migrate_escape = std.atomic.Value(u64).init(0),
         };
     }
+};
+
+const Decision = enum(u8) { prefer_affinity, balanced };
+
+const DecisionContext = struct {
+    core_id: u32,
+    queue_len: u32,
+    is_sticky: bool,
+    load_state: latency.LoadState,
 };
 
 const Worker = struct {
@@ -112,6 +126,8 @@ pub const WorkerPool = struct {
     latency_profile: ?*latency.LatencyProfile,
     workers_for_node: [][]u32,
     metrics: Metrics,
+    config: sched_config.SchedulerConfig,
+    global_state: ?*sched_state.GlobalSchedulerState,
 
     pub fn init(pool: *WorkerPool, allocator: std.mem.Allocator, num_workers: u32) !void {
         try initWithTopo(pool, allocator, num_workers, null);
@@ -180,6 +196,8 @@ pub const WorkerPool = struct {
             .latency_profile = topo,
             .workers_for_node = wfn_buf,
             .metrics = Metrics.init(),
+            .config = sched_config.SchedulerConfig.default(),
+            .global_state = null,
         };
     }
 
@@ -207,40 +225,96 @@ pub const WorkerPool = struct {
         pool.worker_cond.signal();
     }
 
-    pub fn submit(pool: *WorkerPool, job: *Job) void {
-        // Sticky core: honour if load permits (state machine)
-        if (job.sticky_core) |sc| {
-            const wid = sc % pool.count;
-            const vic_len = pool.workers[wid].local_q.approxLen();
-            const state = if (pool.latency_profile) |lp|
-                lp.updateVictimState(sc, vic_len)
-            else
-                if (vic_len < latency.MEDIUM_ENTER) latency.LoadState.normal else latency.LoadState.overload;
-            if (state != .overload) {
-                _ = pool.metrics.sticky_honored.fetchAdd(1, .monotonic);
-                assignToWorker(pool, job, wid);
-                return;
+    pub fn setConfig(pool: *WorkerPool, cfg: sched_config.SchedulerConfig) void {
+        pool.config = cfg;
+    }
+
+    pub fn setGlobalState(pool: *WorkerPool, gs: *sched_state.GlobalSchedulerState) void {
+        pool.global_state = gs;
+    }
+
+    fn buildDecisionContext(pool: *const WorkerPool, job: *const Job) DecisionContext {
+        const sc = job.sticky_core orelse 0;
+        const wid = sc % pool.count;
+        const qlen = pool.workers[wid].local_q.approxLen();
+        const state = if (pool.latency_profile) |lp|
+            lp.updateVictimState(sc, qlen)
+        else
+            if (qlen < latency.MEDIUM_ENTER) latency.LoadState.normal else latency.LoadState.overload;
+        return DecisionContext{
+            .core_id = sc,
+            .queue_len = qlen,
+            .is_sticky = job.stickiness > 0,
+            .load_state = state,
+        };
+    }
+
+    fn localPolicy(pool: *const WorkerPool, ctx: *const DecisionContext, job: *const Job) Decision {
+        _ = pool;
+        if (ctx.load_state == .overload)
+            return .balanced;
+        if (ctx.is_sticky and job.sticky_core != null)
+            return .prefer_affinity;
+        return .balanced;
+    }
+
+    fn safetyOverride(pool: *const WorkerPool, ctx: *const DecisionContext, d: Decision) Decision {
+        if (d != .prefer_affinity) return d;
+        if (ctx.queue_len > pool.config.max_queue_len) {
+            return .balanced;
+        }
+        return d;
+    }
+
+    fn applyGlobal(pool: *const WorkerPool, ctx: *const DecisionContext, d: Decision) Decision {
+        _ = ctx;
+        const gs = pool.global_state orelse return d;
+        const load = &gs.last_system_load;
+        if (load.imbalance_ratio > 3.0) {
+            return .balanced;
+        }
+        if (load.imbalance_ratio > 2.0) {
+            if (d == .prefer_affinity) {
+                return .balanced;
             }
         }
-        // NUMA-aware fallback: pick least-loaded worker on the node
+        return d;
+    }
+
+    fn executeDecision(pool: *WorkerPool, job: *Job, ctx: *const DecisionContext, d: Decision) void {
+        _ = ctx;
+        switch (d) {
+            .prefer_affinity => {
+                _ = pool.metrics.sticky_honored.fetchAdd(1, .monotonic);
+                const wid = (job.sticky_core orelse 0) % pool.count;
+                assignToWorker(pool, job, wid);
+            },
+            .balanced => {
+                pool.enqueueBalanced(job);
+            },
+        }
+    }
+
+    fn enqueueBalanced(pool: *WorkerPool, job: *Job) void {
         if (pool.latency_profile) |lp| {
             const preferred_node = lp.core_to_numa[0];
-            const workers = pool.workers_for_node[preferred_node];
-            if (workers.len > 0) {
-                var best_wid = workers[0];
-                var best_load = pool.workers[best_wid].local_q.approxLen();
-                for (workers) |wid| {
-                    const load = pool.workers[wid].local_q.approxLen();
-                    if (load < best_load) {
-                        best_load = load;
-                        best_wid = wid;
+            if (preferred_node < pool.workers_for_node.len) {
+                const workers = pool.workers_for_node[preferred_node];
+                if (workers.len > 0) {
+                    var best_wid = workers[0];
+                    var best_load = pool.workers[best_wid].local_q.approxLen();
+                    for (workers) |wid| {
+                        const load = pool.workers[wid].local_q.approxLen();
+                        if (load < best_load) {
+                            best_load = load;
+                            best_wid = wid;
+                        }
                     }
+                    assignToWorker(pool, job, best_wid);
+                    return;
                 }
-                assignToWorker(pool, job, best_wid);
-                return;
             }
         }
-        // Shared queue
         pool.shared_mutex.lock();
         const q = &pool.shared_queues[@intFromEnum(job.priority)];
         job.next = null;
@@ -256,7 +330,17 @@ pub const WorkerPool = struct {
         pool.worker_cond.signal();
     }
 
+    pub fn submit(pool: *WorkerPool, job: *Job) void {
+        job.submitted_at = @intCast(std.time.nanoTimestamp());
+        const ctx = pool.buildDecisionContext(job);
+        var d = pool.localPolicy(&ctx, job);
+        d = pool.safetyOverride(&ctx, d);
+        d = pool.applyGlobal(&ctx, d);
+        pool.executeDecision(job, &ctx, d);
+    }
+
     pub fn submitAffine(pool: *WorkerPool, job: *Job, target_core: u32) void {
+        job.submitted_at = @intCast(std.time.nanoTimestamp());
         const wid = target_core % pool.count;
         if (pool.latency_profile != null) {
             if (pool.workers[wid].affinity) |aff| {
@@ -270,6 +354,10 @@ pub const WorkerPool = struct {
     }
 
     pub fn submitBatch(pool: *WorkerPool, jobs: []*Job) void {
+        const now: u64 = @intCast(std.time.nanoTimestamp());
+        for (jobs) |job| {
+            job.submitted_at = now;
+        }
         pool.shared_mutex.lock();
         for (jobs) |job| {
             const q = &pool.shared_queues[@intFromEnum(job.priority)];
@@ -331,20 +419,19 @@ fn workerEntry(pool: *WorkerPool) void {
             if (vic_len == 0) continue;
 
             // State machine: hysteresis prevents oscillation
+            const vc = if (victim.affinity) |a| a.core_id else vid;
             const state = if (pool.latency_profile) |lp| blk: {
-                const vic_core = if (victim.affinity) |a| a.core_id else vid;
-                break :blk lp.updateVictimState(vic_core, vic_len);
+                break :blk lp.updateVictimState(vc, vic_len);
             } else latency.LoadState.overload;
 
             switch (state) {
                 .normal => {
                     // Strict cost-benefit with adaptive threshold + sticky honored
                     if (pool.latency_profile) |lp| {
-                        const vic_core = if (victim.affinity) |a| a.core_id else vid;
-                        lp.recordStealAttempt(vic_core);
-                        const cost = lp.score(my_core, vic_core, 0);
+                        lp.recordStealAttempt(vc);
+                        const cost = lp.score(my_core, vc, 0);
                         const benefit = @as(u64, vic_len) * latency.LOAD_PENALTY_PER_JOB;
-                        const adaptive = lp.getAdaptiveThreshold(vic_core, cost);
+                        const adaptive = lp.getAdaptiveThreshold(vc, cost);
                         if (benefit < adaptive) {
                             _ = pool.metrics.rejected_steals.fetchAdd(1, .monotonic);
                             continue;
@@ -354,8 +441,7 @@ fn workerEntry(pool: *WorkerPool) void {
                 .medium => {
                     // Relaxed: skip cost-benefit, still respect sticky + cooldown
                     if (pool.latency_profile) |lp| {
-                        const vic_core = if (victim.affinity) |a| a.core_id else vid;
-                        lp.recordStealAttempt(vic_core);
+                        lp.recordStealAttempt(vc);
                     }
                 },
                 .overload => {
@@ -366,18 +452,30 @@ fn workerEntry(pool: *WorkerPool) void {
             if (victim.local_q.tryPopFront()) |job| {
                 const is_sticky = job.stickiness > 0;
                 if (is_sticky and state != .overload) {
+                    const now: u64 = @intCast(std.time.nanoTimestamp());
+                    const wait_ns = now -| job.submitted_at;
+                    if (wait_ns > pool.config.max_sticky_ns) {
+                        _ = pool.metrics.force_migrate_escape.fetchAdd(1, .monotonic);
+                        _ = pool.metrics.steals.fetchAdd(1, .monotonic);
+                        if (pool.latency_profile) |lp| {
+                            const benefit = @as(u64, vic_len) * latency.LOAD_PENALTY_PER_JOB;
+                            const cost = lp.score(my_core, vc, 0);
+                            lp.recordSuccessfulSteal(vc, benefit, cost);
+                        }
+                        executeAndComplete(pool, job);
+                        break;
+                    }
                     victim.local_q.pushBack(job, pool.allocator);
                     _ = pool.metrics.rejected_steals.fetchAdd(1, .monotonic);
                     continue;
                 }
                 _ = pool.metrics.steals.fetchAdd(1, .monotonic);
                 if (pool.latency_profile) |lp| {
-                    const vic_core = if (victim.affinity) |a| a.core_id else vid;
                     const benefit = @as(u64, vic_len) * latency.LOAD_PENALTY_PER_JOB;
-                    const cost = lp.score(my_core, vic_core, 0);
-                    lp.recordSuccessfulSteal(vic_core, benefit, cost);
+                    const cost = lp.score(my_core, vc, 0);
+                    lp.recordSuccessfulSteal(vc, benefit, cost);
                     if (state == .overload or lp.canMigrate(my_core)) {
-                        lp.recordMigration(vic_core, my_core);
+                        lp.recordMigration(vc, my_core);
                         _ = pool.metrics.migrations.fetchAdd(1, .monotonic);
                     }
                 }
@@ -556,5 +654,13 @@ pub const Scheduler = struct {
     pub fn workingCount(s: *const Scheduler) u32 {
         if (s.pool) |p| return p.runningCount();
         return 1;
+    }
+
+    pub fn setPoolConfig(s: *Scheduler, cfg: sched_config.SchedulerConfig) void {
+        if (s.pool) |*p| p.setConfig(cfg);
+    }
+
+    pub fn setPoolGlobalState(s: *Scheduler, gs: *sched_state.GlobalSchedulerState) void {
+        if (s.pool) |*p| p.setGlobalState(gs);
     }
 };

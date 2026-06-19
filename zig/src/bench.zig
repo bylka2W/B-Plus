@@ -2,6 +2,8 @@ const std = @import("std");
 const sched = @import("scheduler.zig");
 const cpu = @import("cpu.zig");
 const latency = @import("latency.zig");
+const sched_config = @import("scheduler_config.zig");
+const sched_state = @import("scheduler_state.zig");
 
 const NUM_WORKERS: u32 = 4;
 const ALLOC_SIZE = 64 * 1024 * 1024;
@@ -25,11 +27,14 @@ const RunResult = struct {
     p50_ns: u64,
     p95_ns: u64,
     p99_ns: u64,
+    p999_ns: u64,
     throughput: f64,
     steals: u64,
     rejected: u64,
     migrations: u64,
     sticky: u64,
+    stall_rate: f64,
+    force_escape: u64,
 };
 
 fn makeJob(jobs: []sched.Job, idx: usize, ctxs: []TimingCtx, iters: u32, sticky_core: ?u32, stickiness: u8) void {
@@ -57,16 +62,25 @@ fn compute(label: []const u8, ctxs: []TimingCtx, scheduler: *sched.Scheduler, fi
     else
         0;
 
+    const median = latencies[N * 50 / 100];
+    var stalls: u64 = 0;
+    for (latencies) |l| {
+        if (l > median * 2) stalls += 1;
+    }
+
     return RunResult{
         .label = label,
         .p50_ns = latencies[N * 50 / 100],
         .p95_ns = latencies[N * 95 / 100],
         .p99_ns = latencies[N * 99 / 100],
+        .p999_ns = latencies[N * 999 / 1000],
         .throughput = throughput,
         .steals = if (scheduler.pool) |*p| p.metrics.steals.load(.acquire) else 0,
         .rejected = if (scheduler.pool) |*p| p.metrics.rejected_steals.load(.acquire) else 0,
         .migrations = if (scheduler.pool) |*p| p.metrics.migrations.load(.acquire) else 0,
         .sticky = if (scheduler.pool) |*p| p.metrics.sticky_honored.load(.acquire) else 0,
+        .stall_rate = @as(f64, @floatFromInt(stalls)) / @as(f64, @floatFromInt(N)),
+        .force_escape = if (scheduler.pool) |*p| p.metrics.force_migrate_escape.load(.acquire) else 0,
     };
 }
 
@@ -255,6 +269,59 @@ fn runAffinityConflict(allocator: std.mem.Allocator, smart: bool) !RunResult {
     return result;
 }
 
+// ── Pattern E: Sticky starvation (90% pinned to core 0, 10% random) ──
+fn runStickyStarvation(allocator: std.mem.Allocator, smart: bool) !RunResult {
+    const N = 2000;
+    const mem = try allocator.alloc(u8, ALLOC_SIZE);
+    defer allocator.free(mem);
+
+    var topo: cpu.CpuTopology = undefined;
+    var lp: latency.LatencyProfile = undefined;
+    var scheduler: sched.Scheduler = undefined;
+
+    if (smart) {
+        topo = try cpu.CpuTopology.detect(allocator);
+        lp = try latency.LatencyProfile.init(allocator, &topo);
+        try sched.Scheduler.initThreadedWithTopo(&scheduler, allocator, NUM_WORKERS, 0, 0, &lp);
+        var cfg = sched_config.SchedulerConfig.default();
+        cfg.max_sticky_ns = 5_000_000;
+        scheduler.setPoolConfig(cfg);
+    } else {
+        try sched.Scheduler.initThreaded(&scheduler, allocator, NUM_WORKERS, 0, 0);
+    }
+    try scheduler.start();
+
+    var jobs = try allocator.alloc(sched.Job, N);
+    defer allocator.free(jobs);
+    var ctxs = try allocator.alloc(TimingCtx, N);
+    defer allocator.free(ctxs);
+
+    var seed: u64 = 42;
+    const first_submit = @as(u64, @intCast(std.time.nanoTimestamp()));
+    const pinned = N * 90 / 100;
+    var idx: usize = 0;
+    while (idx < pinned) : (idx += 1) {
+        makeJob(jobs, idx, ctxs, 100, @as(?u32, @intCast(0)), if (smart) 1 else 0);
+        ctxs[idx].submitted_at = @as(u64, @intCast(std.time.nanoTimestamp()));
+        scheduler.submit(&jobs[idx]);
+    }
+    while (idx < N) : (idx += 1) {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        const core = @as(u32, @truncate(seed >> 32)) % NUM_WORKERS;
+        makeJob(jobs, idx, ctxs, 50, @as(?u32, @intCast(core)), if (smart) 1 else 0);
+        ctxs[idx].submitted_at = @as(u64, @intCast(std.time.nanoTimestamp()));
+        scheduler.submit(&jobs[idx]);
+    }
+    scheduler.waitAll();
+    const end = @as(u64, @intCast(std.time.nanoTimestamp()));
+    const result = compute("sticky-starvation", ctxs, &scheduler, first_submit, end);
+
+    scheduler.deinit();
+    if (smart) lp.deinit();
+    if (smart) topo.deinit();
+    return result;
+}
+
 fn fmtVal(v: u64, is_ns: bool) [12]u8 {
     var buf: [12]u8 = undefined;
     if (is_ns) {
@@ -343,4 +410,10 @@ test "benchmark: baseline vs smart comparison" {
     }
 
     try printTable(&baseline, &smart);
+
+    for (smart) |r| {
+        if (r.p99_ns > 1_000_000) {
+            std.debug.print("\n  WARNING: p99={d}ns exceeds 1ms for {s}\n", .{ r.p99_ns, r.label });
+        }
+    }
 }
