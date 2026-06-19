@@ -735,6 +735,12 @@ pub const TieredRuntime = struct {
     const DEMOTE_THRESH: u32 = 30;
     const MIGRATION_BUDGET: u32 = 4;
     const COOLDOWN_TICKS: u32 = 3;
+    const ENABLE_COST_MODEL = true;
+
+    fn migrationCost(src: Tier, dst: Tier) u32 {
+        if (src == .L1 or dst == .L1) return 2;
+        return 1;
+    }
 
     pub fn tick(tr: *TieredRuntime) void {
         tr.epoch += 1;
@@ -785,6 +791,12 @@ pub const TieredRuntime = struct {
             if (ch.last_migration_tick != 0 and (cur_tick -| ch.last_migration_tick) < COOLDOWN_TICKS) continue;
 
             if (ch.heat > PROMOTE_THRESH and ch.tier != .L1) {
+                if (ENABLE_COST_MODEL) {
+                    const dst = ch.tier.moveHotter().?;
+                    const cost = migrationCost(ch.tier, dst);
+                    const score: i32 = @as(i32, @intCast(ch.heat)) - @as(i32, @intCast(cost));
+                    if (score <= 0) continue;
+                }
                 if (np < MIGRATION_BUDGET) {
                     promote_buf[np] = ci;
                     np += 1;
@@ -798,6 +810,12 @@ pub const TieredRuntime = struct {
             }
 
             if (ch.heat < DEMOTE_THRESH and ch.tier != .L3) {
+                if (ENABLE_COST_MODEL) {
+                    const dst = ch.tier.moveColder().?;
+                    const cost = migrationCost(ch.tier, dst);
+                    const score: i32 = @as(i32, @intCast(DEMOTE_THRESH)) - @as(i32, @intCast(ch.heat)) - @as(i32, @intCast(cost));
+                    if (score <= 0) continue;
+                }
                 if (nd < MIGRATION_BUDGET) {
                     demote_buf[nd] = ci;
                     nd += 1;

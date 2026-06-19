@@ -852,3 +852,78 @@ test "cooldown in tick: promoted chunk stays L1 for COOLDOWN_TICKS" {
     // After t4 promote: 125>>1 = 62. After t2: 31. After t3: 15. After t4: 7.
     // At t4: cooldown expired (4-1=3) + heat 7 < 30 → demote L1→L2
 }
+
+test "cost: expensive demote blocked for heat near threshold" {
+    var l1: [4096]u8 = undefined;
+    var l2: [4096]u8 = undefined;
+    var l3: [4096]u8 = undefined;
+    var cids: [CAP]u32 = undefined;
+    var offs: [CAP]u32 = undefined;
+    var gens: [CAP]u32 = undefined;
+    var sizes: [CAP]u32 = undefined;
+    var states: [CAP]rt.SlotState = undefined;
+    var free_next: [CAP]u32 = undefined;
+    var heats: [CAP]u32 = undefined;
+    var total_heats: [CAP]u32 = undefined;
+    var log: [64]rt.RuntimeEvent = undefined;
+    var chunks: [CHUNK_CAP]rt.Chunk = undefined;
+    const ms = makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = makeRuntime(&l1, &l2, &l3, ms, &log, &chunks);
+
+    const h = tr.allocL1(16);
+    const cid = tr.handles.meta.chunk_ids[h.slot];
+    // Before tick: heat=59. After decay: 29. cost=2 → score=(30-29)-2 = -1 ≤ 0 → blocked
+    tr.chunks.chunks[cid].heat = 59;
+    tr.tick();
+    try std.testing.expectEqual(rt.Tier.L1, tr.tierOfHandle(h));
+}
+
+test "cost: cheap demote passes for cold chunk" {
+    var l1: [4096]u8 = undefined;
+    var l2: [4096]u8 = undefined;
+    var l3: [4096]u8 = undefined;
+    var cids: [CAP]u32 = undefined;
+    var offs: [CAP]u32 = undefined;
+    var gens: [CAP]u32 = undefined;
+    var sizes: [CAP]u32 = undefined;
+    var states: [CAP]rt.SlotState = undefined;
+    var free_next: [CAP]u32 = undefined;
+    var heats: [CAP]u32 = undefined;
+    var total_heats: [CAP]u32 = undefined;
+    var log: [64]rt.RuntimeEvent = undefined;
+    var chunks: [CHUNK_CAP]rt.Chunk = undefined;
+    const ms = makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = makeRuntime(&l1, &l2, &l3, ms, &log, &chunks);
+
+    const h = tr.allocL2(16);
+    const cid = tr.handles.meta.chunk_ids[h.slot];
+    // Before tick: heat=5. After decay: 2. cost=1 → score=(30-2)-1 = 27 > 0 → passes
+    tr.chunks.chunks[cid].heat = 5;
+    tr.tick();
+    try std.testing.expectEqual(rt.Tier.L3, tr.tierOfHandle(h));
+}
+
+test "cost: promote still works for hot chunk" {
+    var l1: [4096]u8 = undefined;
+    var l2: [4096]u8 = undefined;
+    var l3: [4096]u8 = undefined;
+    var cids: [CAP]u32 = undefined;
+    var offs: [CAP]u32 = undefined;
+    var gens: [CAP]u32 = undefined;
+    var sizes: [CAP]u32 = undefined;
+    var states: [CAP]rt.SlotState = undefined;
+    var free_next: [CAP]u32 = undefined;
+    var heats: [CAP]u32 = undefined;
+    var total_heats: [CAP]u32 = undefined;
+    var log: [64]rt.RuntimeEvent = undefined;
+    var chunks: [CHUNK_CAP]rt.Chunk = undefined;
+    const ms = makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = makeRuntime(&l1, &l2, &l3, ms, &log, &chunks);
+
+    const h = tr.allocL3(16);
+    const cid = tr.handles.meta.chunk_ids[h.slot];
+    // Before tick: heat=300. After decay: 150 (>100) → promote. cost=1 → score=149 > 0 → passes
+    tr.chunks.chunks[cid].heat = 300;
+    tr.tick();
+    try std.testing.expectEqual(rt.Tier.L2, tr.tierOfHandle(h));
+}

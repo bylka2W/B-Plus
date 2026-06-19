@@ -591,6 +591,17 @@ migrateChunk → tier switch + memcpy used bytes (физическое копи�
 - **32 unit tests**: top-K priority, tie-breaking, budget limit.
 - **Fingerprint стабилен** — детерминированная сортировка не меняет конечное состояние при одинаковых входных данных.
 
+### Stage 5: cost-aware scheduling
+
+- **`migrationCost(src, dst)`**: L1↔L2 = 2, L2↔L3 = 1. Симметрично.
+- **Promote score**: `heat - cost`. Только если score > 0.
+- **Demote score**: `(DEMOTE_THRESH - heat) - cost`. Только если score > 0.
+- **Score фильтрует до top-K**: chunk с score ≤ 0 не тратит бюджет.
+- **ENABLE_COST_MODEL**: compile-time флаг отката.
+- **Эффект**: chunk в L1 с heat 29 не демотится (score = -1), chunk в L2 с heat 5 демотится (score = 24).
+- **35 unit tests**: +3 cost-specific (дорогой блок, дешёвый проходит, promote работает).
+- **Stress fingerprint стабилен** — cost не меняет top-K порядок для горячих чанков.
+
 ### Компоненты
 
 | Компонент | Описание |
@@ -1243,6 +1254,17 @@ migrateChunk → tier switch + memcpy used bytes (physical copy)
 - **Two queues**: promote (L2→L1, L3→L2) and demote (L1→L2, L2→L3) processed independently.
 - **32 unit tests**: top-K priority, tie-breaking, budget limit.
 - **Stable fingerprint** — deterministic sort preserves final state for identical inputs.
+
+### Stage 5: cost-aware scheduling
+
+- **`migrationCost(src, dst)`**: L1↔L2 = 2, L2↔L3 = 1. Symmetric.
+- **Promote score**: `heat - cost`. Only if score > 0.
+- **Demote score**: `(DEMOTE_THRESH - heat) - cost`. Only if score > 0.
+- **Score filters before top-K**: chunk with score ≤ 0 doesn't consume budget.
+- **ENABLE_COST_MODEL**: compile-time rollback flag.
+- **Effect**: L1 chunk at heat 29 stays L1 (score = -1), L2 chunk at heat 5 demotes (score = 24).
+- **35 unit tests**: +3 cost-specific (expensive blocked, cheap passes, promote works).
+- **Stress fingerprint stable** — cost doesn't affect top-K order for hot chunks.
 
 ### Components
 
