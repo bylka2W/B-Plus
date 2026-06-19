@@ -496,6 +496,7 @@ zig/                    — компилятор (Zig, активная разр
     latency.zig          — Stage 7.3 LatencyProfile, CoreStats, LoadState (adaptive thresholds)
     scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
     scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
+    bench.zig            — Stage 7 A/B benchmark: baseline vs smart scheduler (4 patterns)
     parser.zig          — лексер + парсер .b+
     ast.zig             — типы AST (состояния, переходы и т.д.)
     x64gen.zig          — генератор машинного кода x64 (+ Intrinsic binding к runtime)
@@ -675,7 +676,24 @@ Job → WorkerPool → worker[N] (per-core LIFO queue)
 zig test src\scheduler_test.zig   # 16 tests (sync/threaded/priority/steal/latency/state-machine)
 zig test src\latency_test.zig     # 5 tests (matrix build, NUMA, migration log, score)
 zig test src\cpu_test.zig         # 1 test (topology detection)
+zig test src\bench.zig            # 7 tests + A/B benchmark output
 ```
+
+#### Бенчмарк (Baseline vs Smart)
+
+Все 4 паттерна показывают измеримую разницу между `initThreaded` (baseline) и `initThreadedWithTopo` + LatencyProfile (smart):
+
+| Паттерн | p50/p95 | Throughput | Steals → Migrations |
+|---------|---------|------------|---------------------|
+| hot-core-skew | −43%/−46% | +64% | 0 → 1296 |
+| burst-load | −47%/−40% | +49% | 0 → 6172 |
+| mixed-size | **−81%/−91%** ✅ | **+362%** | 0 → 361 |
+| affinity-conflict | −70%/+609% mixed | **+758%** | 429 → **0** |
+
+Ключевые выводы:
+- **mixed-size** — самый чистый выигрыш: adaptive threshold + hysteresis не дают крупным задачам топить мелкие.
+- **affinity-conflict** — sticky + steal устраняют 429 краж, throughput ×8, но p99 страдает из-за sticky-задач на перегруженных ядрах.
+- **p99 tail latency** хуже в smart-режиме для 3/4 паттернов — локализация жертвует худшим временем завершения ради средней пропускной способности.
 
 | Компонент | Описание |
 |-----------|----------|
@@ -1230,6 +1248,7 @@ zig/                    — compiler (Zig, active development)
     latency.zig          — Stage 7.3 LatencyProfile, CoreStats, LoadState (adaptive thresholds)
     scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
     scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
+    bench.zig            — Stage 7 A/B benchmark: baseline vs smart scheduler (4 patterns)
     parser.zig          — lexer + parser for .b+
     ast.zig             — AST types (states, transitions, etc.)
     x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime).
@@ -1413,7 +1432,24 @@ Job → WorkerPool → worker[N] (per-core LIFO queue)
 zig test src\scheduler_test.zig   # 16 tests (sync/threaded/priority/steal/latency/state-machine)
 zig test src\latency_test.zig     # 5 tests (matrix build, NUMA, migration log, score)
 zig test src\cpu_test.zig         # 1 test (topology detection)
+zig test src\bench.zig            # 7 tests + A/B benchmark output
 ```
+
+#### Benchmark (Baseline vs Smart)
+
+All 4 patterns show measurable differences between `initThreaded` (baseline) and `initThreadedWithTopo` + LatencyProfile (smart):
+
+| Pattern | p50/p95 | Throughput | Steals → Migrations |
+|---------|---------|------------|---------------------|
+| hot-core-skew | −43%/−46% | +64% | 0 → 1296 |
+| burst-load | −47%/−40% | +49% | 0 → 6172 |
+| mixed-size | **−81%/−91%** ✅ | **+362%** | 0 → 361 |
+| affinity-conflict | −70%/+609% mixed | **+758%** | 429 → **0** |
+
+Key findings:
+- **mixed-size** — clearest win: adaptive threshold + hysteresis prevents large jobs from swamping small ones.
+- **affinity-conflict** — sticky + steal eliminate 429 steals, throughput ×8, but p99 suffers from sticky jobs on overloaded cores.
+- **p99 tail latency** is worse in smart mode for 3/4 patterns — locality trades worst-case completion time for average throughput.
 
 | Component | Description |
 |-----------|-------------|

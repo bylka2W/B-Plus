@@ -67,6 +67,7 @@ const PendingOutput = struct {
     off_epoch: i32,
     off_ht_tiers: i32,
     off_ht_states: i32,
+    off_ht_total_heats: i32,
     off_ht_heats: i32,
     off_ht_ptrs: i32,
     off_ht_generations: i32,
@@ -90,6 +91,7 @@ const PendingOutput = struct {
     total_transitions: u32,
     dp_id: []u32,
     en_id: []u32,
+    inline_enter: []const bool,
     allocator: Allocator,
 };
 
@@ -124,6 +126,7 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         .off_epoch = 0,
         .off_ht_tiers = 0,
         .off_ht_states = 0,
+        .off_ht_total_heats = 0,
         .off_ht_heats = 0,
         .off_ht_ptrs = 0,
         .off_ht_generations = 0,
@@ -142,6 +145,7 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         .total_transitions = 0,
         .dp_id = &.{},
         .en_id = &.{},
+        .inline_enter = &.{},
         .allocator = allocator,
     };
     for (program.states.items) |s| try p.state_names.append(s.name);
@@ -165,9 +169,40 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
     try computeStackLayout(&p, program);
     try emitPrologueAndInit(&p, program);
     try emitRuntimeSection(&p);
+    // Analyze traces and compute inline_enter before emitting enter funcs
+    var traces = try analyzeTraces(program, p.state_index_map);
+    defer traces.deinit();
+    std.mem.sort(Trace, traces.items, {}, struct {
+        fn lessThan(_: void, a: Trace, b: Trace) bool {
+            if (a.hot_weight != b.hot_weight) return a.hot_weight > b.hot_weight;
+            return a.start_state < b.start_state;
+        }
+    }.lessThan);
+    {
+        var indegree = try allocator.alloc(usize, program.states.items.len);
+        defer allocator.free(indegree);
+        @memset(indegree, 0);
+        for (program.states.items) |s| {
+            for (s.transitions.items) |t| {
+                if (p.state_index_map.get(t.target)) |ti| indegree[ti] += 1;
+            }
+        }
+        var ie = try allocator.alloc(bool, program.states.items.len);
+        for (0..ie.len) |i| ie[i] = false;
+        for (traces.items) |trace| {
+            if (trace.len <= 1) continue;
+            for (trace.start_state + 1..trace.start_state + trace.len) |bsi| {
+                if (indegree[bsi] == 1) ie[bsi] = true;
+            }
+        }
+        for (ie, 0..) |ie_flag, i| {
+            if (ie_flag) p.en_id[i] = p.dp_id[i];
+        }
+        p.inline_enter = ie;
+    }
     try emitStateEnterFuncs(&p, program);
     try padForCacheAssociativity(&p, program);
-    try emitEventLoop(&p, program);
+    try emitEventLoop(&p, program, traces);
     try emitCacheBudgetChecks(&p, program);
     try embedStringPool(&p);
     const import_dir_rva = try emitImportTable(&p);
@@ -192,6 +227,7 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
     // Cleanup allocations
     p.allocator.free(p.dp_id);
     p.allocator.free(p.en_id);
+    p.allocator.free(p.inline_enter);
     p.label_off.deinit();
     p.label_name_map.deinit();
     for (p.label_names.items) |n| p.allocator.free(n);
@@ -201,12 +237,17 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         while (sit.next()) |e| e.value_ptr.deinit();
         p.state_vars.deinit();
     }
+    {
+        var it = p.state_code_bounds.iterator();
+        while (it.next()) |entry| p.allocator.free(entry.key_ptr.*);
+    }
     p.state_code_bounds.deinit();
     p.pending_fixups.deinit();
     for (p.string_list.items) |s| p.allocator.free(s);
     p.string_list.deinit();
     p.string_pool.deinit();
     p.state_names.deinit();
+    p.state_index_map.deinit();
     p.ctx_vars.deinit();
     const idat_size = computeImportTableSize();
     return X64Output{ .code = try p.code.toOwnedSlice(), .import_dir_rva = @intCast(import_dir_rva), .idat_size = idat_size };
@@ -333,6 +374,7 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     p.off_ht_states = off - 64; off -= 64;
     p.off_ht_tiers = off - 64; off -= 64;
     p.off_ht_heats = off - 256; off -= 256;
+    p.off_ht_total_heats = off - 256; off -= 256;
     p.off_ht_generations = off - 256; off -= 256;
     p.off_ht_sizes = off - 256; off -= 256;
     p.off_ht_free_next = off - 256; off -= 256;
@@ -395,7 +437,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     }
     try emitXorReg(p, Reg.R8);
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RAX, 0), x64.Operand.r(Reg.R8) });
-    try x64.emit(&p.code, .XOR_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    try emitXorReg(p, Reg.RAX);
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_cur_state), x64.Operand.r(Reg.RAX) });
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_epoch), x64.Operand.r(Reg.RAX) });
     // Zero telemetry counters (RAX = 0 from XOR above)
@@ -410,7 +452,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     // Zero handle table metadata arrays (RAX=0 from earlier XOR)
     // Start at ptrs (lowest address), zero upward through free_next/sizes/gens/heats/states
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDI), x64.Operand.mem(Reg.RBP, p.off_ht_ptrs) });
-    try emitMovRegImm32(p, Reg.RCX, 512 + 256 + 256 + 256 + 256 + 64 + 64); // ptrs + free_next + sizes + gens + heats + tiers + states
+    try emitMovRegImm32(p, Reg.RCX, 512 + 256 + 256 + 256 + 256 + 256 + 64 + 64); // ptrs + free_next + sizes + gens + total_heats + heats + tiers + states
     try p.code.append(0xF3); try p.code.append(0xAA); // REP STOSB
     // Init free list: free_next[slot] = slot + 1, last = -1
     try emitXorReg(p, Reg.RCX); // slot = 0
@@ -419,7 +461,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     const fl_last = try allocLabelId(p, "fl_last", .{});
     const fl_next = try allocLabelId(p, "fl_next", .{});
     try setLabel(p, fl_loop);
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
     try emitCondLongJmp(p, .JAE_REL32, fl_done);
     // R11 = &free_next[0], R10 = slot, SHL R10, 2, ADD R11, R10 → &free_next[slot]
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_free_next) });
@@ -428,7 +470,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
     // R10 = slot + 1
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.RCX, 1) });
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(64) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(64) });
     try emitCondLongJmp(p, .JAE_REL32, fl_last);
     try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R11, 0), x64.Operand.r(Reg.R10) }); // free_next[slot] = slot+1
     try emitShortJmp(p, .JMP_REL32, fl_next);
@@ -463,6 +505,8 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
         try emitMovRegImm32(p, Reg.RAX, 4);
         try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_abudget), x64.Operand.r(Reg.RAX) });
         try emitCallToLabel(p, p.en_id[0]); try emitLongJmp(p, try allocLabelId(p, "always_entry", .{}));
+    } else {
+        try emitLongJmp(p, try allocLabelId(p, "exit_process", .{}));
     }
 }
 
@@ -637,7 +681,7 @@ fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
             const ha_done = try allocLabelId(p, "ha_done", .{});
             // RCX = ptr, RDX = size → RAX = Handle (slot | gen << 32)
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_ht_free_head) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0xFFFFFFFF) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0xFFFFFFFF) });
             try emitCondLongJmp(p, .JE_REL32, ha_fail);
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
             // free_head = free_next[slot]
@@ -666,7 +710,7 @@ fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
             try emitInc(p, Reg.R10);
-            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
+            try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
             try emitCondLongJmp(p, .JNE_REL32, ha_gen_ok);
             try emitInc(p, Reg.R10);
             try setLabel(p, ha_gen_ok);
@@ -681,6 +725,12 @@ fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
             // heats[slot] = 0
             try emitXorReg(p, Reg.R10);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_heats) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R14), x64.Operand.r(Reg.RBX) });
+            try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R14), x64.Operand.immU32(2) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R14) });
+            try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R11, 0), x64.Operand.r(Reg.R10) });
+            // total_heats[slot] = 0
+            try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_total_heats) });
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R14), x64.Operand.r(Reg.RBX) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R14), x64.Operand.immU32(2) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R14) });
@@ -702,25 +752,45 @@ fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
         .handle_access => {
             const ha_fail = try allocLabelId(p, "ha_fail", .{});
             const ha_done = try allocLabelId(p, "ha_done", .{});
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
             try emitCondLongJmp(p, .JAE_REL32, ha_fail);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_states) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
             try emitCondLongJmp(p, .JNE_REL32, ha_fail);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_generations) });
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-            try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RDX) });
+            try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RDX) });
             try emitCondLongJmp(p, .JNE_REL32, ha_fail);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_ptrs) });
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(3) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
             try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.R11, 0) });
+            // Touch: heats[slot]++ (capped at maxInt(u32))
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
+            try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_heats) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
+            try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(0xFFFFFFFF) });
+            try emitCondLongJmp(p, .JE_REL32, ha_done);
+            try emitInc(p, Reg.R10);
+            try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R11, 0), x64.Operand.r(Reg.R10) });
+            // total_heats[slot]++ (persistent metric, never reset)
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
+            try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_total_heats) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
+            try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(0xFFFFFFFF) });
+            try emitCondLongJmp(p, .JE_REL32, ha_done);
+            try emitInc(p, Reg.R10);
+            try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R11, 0), x64.Operand.r(Reg.R10) });
             try emitShortJmp(p, .JMP_REL32, ha_done);
             try setLabel(p, ha_fail);
             try emitXorReg(p, Reg.RAX);
@@ -729,19 +799,19 @@ fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
         .handle_release => {
             const hr_skip = try allocLabelId(p, "hr_skip", .{});
             const hr_gen_ok = try allocLabelId(p, "hr_gen_ok", .{});
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
             try emitCondLongJmp(p, .JAE_REL32, hr_skip);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_states) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
             try emitCondLongJmp(p, .JNE_REL32, hr_skip);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_generations) });
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-            try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RDX) });
+            try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RDX) });
             try emitCondLongJmp(p, .JNE_REL32, hr_skip);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_states) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
@@ -782,7 +852,7 @@ fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
             try emitInc(p, Reg.R10);
-            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
+            try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
             try emitCondLongJmp(p, .JNE_REL32, hr_gen_ok);
             try emitInc(p, Reg.R10);
             try setLabel(p, hr_gen_ok);
@@ -791,19 +861,19 @@ fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
         },
         .handle_validate => {
             const hv_ok = try allocLabelId(p, "hv_ok", .{});
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
             try emitCondLongJmp(p, .JAE_REL32, try allocLabelId(p, "rt_14", .{}));
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_states) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
             try emitCondLongJmp(p, .JNE_REL32, try allocLabelId(p, "rt_14", .{}));
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_generations) });
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-            try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RDX) });
+            try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RDX) });
             try emitCondLongJmp(p, .JNE_REL32, try allocLabelId(p, "rt_14", .{}));
             try setLabel(p, hv_ok);
         },
@@ -812,26 +882,36 @@ fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
         },
         .handle_touch => {
             const ht_skip = try allocLabelId(p, "ht_skip", .{});
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
             try emitCondLongJmp(p, .JAE_REL32, ht_skip);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_states) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
             try emitCondLongJmp(p, .JNE_REL32, ht_skip);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_generations) });
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-            try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RDX) });
+            try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RDX) });
             try emitCondLongJmp(p, .JNE_REL32, ht_skip);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_heats) });
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(0xFFFFFFFF) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(0xFFFFFFFF) });
+            try emitCondLongJmp(p, .JE_REL32, ht_skip);
+            try emitInc(p, Reg.R10);
+            try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R11, 0), x64.Operand.r(Reg.R10) });
+            // total_heats[slot]++
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
+            try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_total_heats) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
+            try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(0xFFFFFFFF) });
             try emitCondLongJmp(p, .JE_REL32, ht_skip);
             try emitInc(p, Reg.R10);
             try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R11, 0), x64.Operand.r(Reg.R10) });
@@ -863,12 +943,12 @@ const mc_label = try allocLabelId(p, "rt_{d}", .{@intFromEnum(rt.Intrinsic.move_
             try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_epoch), x64.Operand.r(Reg.RAX) });
             try emitXorReg(p, Reg.RCX);
             try setLabel(p, loop_label);
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
             try emitCondLongJmp(p, .JAE_REL32, done_label);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_states) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
+            try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
             try emitCondLongJmp(p, .JE_REL32, tick_next);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_heats) });
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RCX) });
@@ -878,15 +958,15 @@ const mc_label = try allocLabelId(p, "rt_{d}", .{@intFromEnum(rt.Intrinsic.move_
             try x64.emit(&p.code, .SHIFT_RIGHT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
             try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R11, 0), x64.Operand.r(Reg.R10) });
             // Migration: check budget, thresholds, tier
-            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.R12), x64.Operand.r(Reg.R12) });
+            try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.R12), x64.Operand.r(Reg.R12) });
             try emitCondLongJmp(p, .JE_REL32, tick_skip_mig);
             try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_tiers) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.R9), x64.Operand.mem(Reg.R11, 0) });
             // Promote: heat > 100 && tier > 0
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(100) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(100) });
             try emitCondLongJmp(p, .JBE_REL32, tick_try_demote);
-            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.R9), x64.Operand.r(Reg.R9) });
+            try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.R9), x64.Operand.r(Reg.R9) });
             try emitCondLongJmp(p, .JE_REL32, tick_try_demote);
             // Move hotter: RCX=slot, RDX=generations[slot]
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R13), x64.Operand.r(Reg.RCX) });
@@ -901,11 +981,11 @@ const mc_label = try allocLabelId(p, "rt_{d}", .{@intFromEnum(rt.Intrinsic.move_
             try emitShortJmp(p, .JMP_REL32, tick_next);
             try setLabel(p, tick_try_demote);
             // Demote: heat > 0 && heat < 30 && tier < 2
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(30) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(30) });
             try emitCondLongJmp(p, .JAE_REL32, tick_skip_mig);
-            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
+            try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
             try emitCondLongJmp(p, .JE_REL32, tick_skip_mig);
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R9), x64.Operand.immU32(2) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R9), x64.Operand.immU32(2) });
             try emitCondLongJmp(p, .JAE_REL32, tick_skip_mig);
             // Move colder: RCX=slot, RDX=generations[slot]
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R13), x64.Operand.r(Reg.RCX) });
@@ -979,6 +1059,23 @@ fn emitAffinityInit(p: *PendingOutput) !void {
 
 const SortedEntry = struct { idx: usize, hw: f64 };
 
+fn emitStateEnterBodyContent(p: *PendingOutput, state: *const ast.StateDefNode, si: usize) !void {
+    _ = si;
+    for (state.variables.items) |v| {
+        if (v.cache_policy) |cp| {
+            if (std.mem.eql(u8, cp, "L1")) {
+                try emitLoadImm(p, Reg.RAX, parseNumber(v.default_value orelse "0"));
+                const vo = getVarOffset(p, state.name, v.name);
+                if (vo != std.math.minInt(i32)) try emitStoreVarFromReg(p, vo, Reg.RAX, getVarSize(p, state.name, v.name));
+            }
+        }
+    }
+    if (state.enter_body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
+    for (state.transitions.items) |t| {
+        if (t.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
+    }
+}
+
 fn emitStateEnterFuncs(p: *PendingOutput, program: ast.ProgramNode) !void {
     var sorted = std.ArrayList(SortedEntry).init(p.allocator);
     defer sorted.deinit();
@@ -997,22 +1094,10 @@ fn emitStateEnterFuncs(p: *PendingOutput, program: ast.ProgramNode) !void {
             const av = state.cache_align orelse 64;
             if (av == 64) { try alignTo64(p); } else if (av >= 16) { while (p.code.items.len % @as(usize, @intCast(av)) != 0) try p.code.append(0x90); }
         }
+        if (p.inline_enter.len > item.idx and p.inline_enter[item.idx]) continue;
         const start_off = p.code.items.len;
         try setLabel(p, p.en_id[item.idx]);
-        // Re-init @Cache(L1) variables on state entry
-        for (state.variables.items) |v| {
-            if (v.cache_policy) |cp| {
-                if (std.mem.eql(u8, cp, "L1")) {
-                    try emitLoadImm(p, Reg.RAX, parseNumber(v.default_value orelse "0"));
-                    const vo = getVarOffset(p, state.name, v.name);
-                    if (vo != std.math.minInt(i32)) try emitStoreVarFromReg(p, vo, Reg.RAX, getVarSize(p, state.name, v.name));
-                }
-            }
-        }
-        if (state.enter_body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
-        for (state.transitions.items) |t| {
-            if (t.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, state.name); }
-        }
+        try emitStateEnterBodyContent(p, &state, item.idx);
         var lv = std.ArrayList(*const ast.TransitionNode).init(p.allocator);
         for (state.transitions.items) |*t| try lv.append(t);
         std.mem.sort(*const ast.TransitionNode, lv.items, {}, struct {
@@ -1093,7 +1178,7 @@ fn analyzeTraces(program: ast.ProgramNode, state_index_map: std.StringHashMap(us
     return traces;
 }
 
-fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
+fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode, traces: std.ArrayList(Trace)) !void {
     try setLabel(p, try allocLabelId(p, "evloop", .{}));
     try emitMovRegImm32(p, Reg.RAX, 4);
     try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_abudget), x64.Operand.r(Reg.RAX) });
@@ -1107,18 +1192,18 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, 32), x64.Operand.r(Reg.RAX) });
     try emitIatCall(p, 2);
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "exit_process", .{}));
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_chars_read) });
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "exit_process", .{}));
-    try x64.emit(&p.code, .XOR_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RCX) });
+    try emitXorReg(p, Reg.RCX);
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_cursor), x64.Operand.r(Reg.RCX) });
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_remaining), x64.Operand.r(Reg.RAX) });
     try alignTo16(p);
     try setLabel(p, try allocLabelId(p, "re_dispatch", .{}));
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_remaining) });
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "always_entry", .{}));
     const ex_idx = try addPoolString(p, "exit");
     try emitRipLea(p, Reg.RSI, ex_idx);
@@ -1128,41 +1213,41 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try setLabel(p, try allocLabelId(p, "exl", .{}));
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RBX), x64.Operand.mem(Reg.RSI, 0) });
-    try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
+    try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
     try emitShortJmp(p, .JNE_REL32, try allocLabelId(p, "exce", .{}));
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "exit_process", .{}));
     try emitInc(p, Reg.RDI); try emitInc(p, Reg.RSI);
     try emitShortJmp(p, .JMP_REL32, try allocLabelId(p, "exl", .{}));
     try setLabel(p, try allocLabelId(p, "exce", .{}));
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RBX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RBX) });
     try emitShortJmp(p, .JE_REL32, try allocLabelId(p, "ex_chk_term", .{}));
     try emitShortJmp(p, .JMP_REL32, try allocLabelId(p, "no_exit", .{}));
     try setLabel(p, try allocLabelId(p, "ex_skip_ws", .{}));
     try emitInc(p, Reg.RDI);
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
     try setLabel(p, try allocLabelId(p, "ex_chk_term", .{}));
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x20) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x20) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "ex_skip_ws", .{}));
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x09) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x09) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "ex_skip_ws", .{}));
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "exit_process", .{}));
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "exit_process", .{}));
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0D) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0D) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "exit_process", .{}));
     try emitShortJmp(p, .JMP_REL32, try allocLabelId(p, "no_exit", .{}));
     try setLabel(p, try allocLabelId(p, "always_entry", .{}));
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_abudget) });
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "evloop", .{}));
     try emitLongJmp(p, try allocLabelId(p, "always_dispatch", .{}));
     try setLabel(p, try allocLabelId(p, "always_dispatch", .{}));
     try setLabel(p, try allocLabelId(p, "no_exit", .{}));
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R12), x64.Operand.mem(Reg.RBP, p.off_cur_state) });
     // Jump table dispatch: bounds check + O(1) indirect jump via [table + state*4]
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R12), x64.Operand.immU32(@intCast(p.state_names.items.len)) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R12), x64.Operand.immU32(@intCast(p.state_names.items.len)) });
     try emitCondLongJmp(p, .JAE_REL32, try allocLabelId(p, "re_dispatch", .{}));
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(255, 0) });
     try p.pending_fixups.append(.{ .offset = p.code.items.len - 4, .disp_size = 4, .label_id = try allocLabelId(p, "jmp_table", .{}) });
@@ -1172,15 +1257,6 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     // Emit jump table (entries filled after fixups)
     try setLabel(p, try allocLabelId(p, "jmp_table", .{}));
     for (0..p.state_names.items.len) |_| try p.code.appendNTimes(0, 4);
-    // Analyze traces (superblock chains) and emit in hot-first order
-    var traces = try analyzeTraces(program, p.state_index_map);
-    defer traces.deinit();
-    std.mem.sort(Trace, traces.items, {}, struct {
-        fn lessThan(_: void, a: Trace, b: Trace) bool {
-            if (a.hot_weight != b.hot_weight) return a.hot_weight > b.hot_weight;
-            return a.start_state < b.start_state;
-        }
-    }.lessThan);
     for (traces.items) |trace| {
         for (trace.start_state..trace.start_state + trace.len) |block_si| {
             const is_last = block_si == trace.start_state + trace.len - 1;
@@ -1193,7 +1269,9 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
             try p.code.append(0x85); // ModRM: mod=10(disp32), reg=0(INC), rm=101(RBP)
             try p.code.appendSlice(&@as([4]u8, @bitCast(hit_off)));
             if ((bs.hot_weight orelse 0.5) <= 0.3) try emitPrefetchColdData(p, &bs);
-            try emitStateDispatch(p, &bs, block_si, program, if (trace.len > 1) !is_last else false);
+            const fuse = if (trace.len > 1) !is_last else false;
+            const next_inline = if (!is_last and block_si + 1 < p.inline_enter.len) p.inline_enter[block_si + 1] else false;
+            try emitStateDispatch(p, &bs, block_si, program, fuse, next_inline);
             if (is_last) try emitLongJmp(p, try allocLabelId(p, "advance_cursor", .{}));
         }
     }
@@ -1203,17 +1281,17 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDI), x64.Operand.mem(Reg.RBP, p.off_buf) });
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_cursor) });
     try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RDI), x64.Operand.r(Reg.RAX) });
-    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .MOV_R32_R32, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RBP, p.off_remaining) });
     try setLabel(p, try allocLabelId(p, "adv_scan", .{}));
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RCX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RCX) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "evloop", .{}));
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try emitShortJmp(p, .JE_REL32, try allocLabelId(p, "adv_found", .{}));
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
     try emitShortJmp(p, .JE_REL32, try allocLabelId(p, "adv_found", .{}));
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0D) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0D) });
     try emitShortJmp(p, .JE_REL32, try allocLabelId(p, "adv_cr", .{}));
     try emitInc(p, Reg.RDI); try emitDec(p, Reg.RCX);
     try emitShortJmp(p, .JMP_REL32, try allocLabelId(p, "adv_scan", .{}));
@@ -1221,7 +1299,7 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try emitInc(p, Reg.RDI); try emitDec(p, Reg.RCX);
     try emitShortJmp(p, .JE_REL32, try allocLabelId(p, "adv_done", .{}));
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
     try emitShortJmp(p, .JNE_REL32, try allocLabelId(p, "adv_done", .{}));
     try emitInc(p, Reg.RDI); try emitDec(p, Reg.RCX);
     try emitShortJmp(p, .JMP_REL32, try allocLabelId(p, "adv_done", .{}));
@@ -1229,11 +1307,11 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try emitInc(p, Reg.RDI); try emitDec(p, Reg.RCX);
     try setLabel(p, try allocLabelId(p, "adv_done", .{}));
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_buf) });
-    try x64.emit(&p.code, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RDI), x64.Operand.r(Reg.RAX) });
-    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDI) });
-    try x64.emit(&p.code, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
+    try x64.emit(&p.code, .SUB_R32_R32, &.{ x64.Operand.r(Reg.RDI), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .MOV_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDI) });
+    try x64.emit(&p.code, .SUB_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RBP, p.off_remaining) });
-    try x64.emit(&p.code, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .SUB_R32_R32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_remaining), x64.Operand.r(Reg.RCX) });
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_cursor), x64.Operand.r(Reg.RDI) });
     try emitLongJmp(p, try allocLabelId(p, "re_dispatch", .{}));
@@ -1280,6 +1358,8 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     // RSI = &state_hits[0], R12 = state count (loop counter)
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RSI), x64.Operand.mem(Reg.RBP, p.off_state_hits) });
     try emitMovRegImm32(p, Reg.R12, @intCast(program.states.items.len));
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R12), x64.Operand.immU32(0) });
+    try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "sth_done", .{}));
     try setLabel(p, try allocLabelId(p, "sth_loop", .{}));
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDI), x64.Operand.mem(Reg.RBP, p.off_buf) });
     try emitMovRegImm32(p, Reg.RAX, 'S');
@@ -1307,10 +1387,13 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSI), x64.Operand.immU32(8) });
     try emitDec(p, Reg.R12);
     try emitCondLongJmp(p, .JNE_REL32, try allocLabelId(p, "sth_loop", .{}));
+    try setLabel(p, try allocLabelId(p, "sth_done", .{}));
     // Transition counter dump
     try setLabel(p, try allocLabelId(p, "thr_start", .{}));
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RSI), x64.Operand.mem(Reg.RBP, p.off_trans_hits) });
     try emitMovRegImm32(p, Reg.R12, p.total_transitions);
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R12), x64.Operand.immU32(0) });
+    try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "thr_done", .{}));
     try setLabel(p, try allocLabelId(p, "thr_loop", .{}));
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDI), x64.Operand.mem(Reg.RBP, p.off_buf) });
     try emitMovRegImm32(p, Reg.RAX, 'T');
@@ -1337,6 +1420,68 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSI), x64.Operand.immU32(8) });
     try emitDec(p, Reg.R12);
     try emitCondLongJmp(p, .JNE_REL32, try allocLabelId(p, "thr_loop", .{}));
+    try setLabel(p, try allocLabelId(p, "thr_done", .{}));
+    // Heat dump: "H XXXXXXXX\n" for each slot (Used only)
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RSI), x64.Operand.mem(Reg.RBP, p.off_ht_heats) });
+    try emitMovRegImm32(p, Reg.R12, 64);
+    try setLabel(p, try allocLabelId(p, "hdp_loop", .{}));
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDI), x64.Operand.mem(Reg.RBP, p.off_buf) });
+    try emitMovRegImm32(p, Reg.RAX, 'H');
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try emitMovRegImm32(p, Reg.RAX, ' ');
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RSI, 0) });
+    try emitCallToLabel(p, th_sub);
+    try emitMovRegImm32(p, Reg.RAX, 0x0A);
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RBP, p.off_hstdout) });
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDX), x64.Operand.mem(Reg.RBP, p.off_buf) });
+    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.RDI) });
+    try x64.emit(&p.code, .SUB_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.RDX) });
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R9), x64.Operand.mem(Reg.RBP, p.off_chars_written) });
+    try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+    try emitXorReg(p, Reg.RAX);
+    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, 32), x64.Operand.r(Reg.RAX) });
+    try emitIatCall(p, 1);
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSI), x64.Operand.immU32(4) });
+    try emitDec(p, Reg.R12);
+    try emitCondLongJmp(p, .JNE_REL32, try allocLabelId(p, "hdp_loop", .{}));
+    // Total heat dump: "TH XXXXXXXX\n" for each slot
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RSI), x64.Operand.mem(Reg.RBP, p.off_ht_total_heats) });
+    try emitMovRegImm32(p, Reg.R12, 64);
+    try setLabel(p, try allocLabelId(p, "thdp_loop", .{}));
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDI), x64.Operand.mem(Reg.RBP, p.off_buf) });
+    try emitMovRegImm32(p, Reg.RAX, 'T');
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try emitMovRegImm32(p, Reg.RAX, 'H');
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try emitMovRegImm32(p, Reg.RAX, ' ');
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RSI, 0) });
+    try emitCallToLabel(p, th_sub);
+    try emitMovRegImm32(p, Reg.RAX, 0x0A);
+    try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RDI, 0), x64.Operand.r(Reg.RAX) });
+    try emitInc(p, Reg.RDI);
+    try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RBP, p.off_hstdout) });
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RDX), x64.Operand.mem(Reg.RBP, p.off_buf) });
+    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.RDI) });
+    try x64.emit(&p.code, .SUB_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.RDX) });
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R9), x64.Operand.mem(Reg.RBP, p.off_chars_written) });
+    try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+    try emitXorReg(p, Reg.RAX);
+    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, 32), x64.Operand.r(Reg.RAX) });
+    try emitIatCall(p, 1);
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSI), x64.Operand.immU32(4) });
+    try emitDec(p, Reg.R12);
+    try emitCondLongJmp(p, .JNE_REL32, try allocLabelId(p, "thdp_loop", .{}));
     try emitLongJmp(p, try allocLabelId(p, "exit_end", .{}));
     // Hex conversion subroutine (reached only via CALL)
     try setLabel(p, th_sub);
@@ -1345,7 +1490,7 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
     try x64.emit(&p.code, .SHIFT_RIGHT, &.{ x64.Operand.r(Reg.RDX), x64.Operand.immU32(60) });
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RDX), x64.Operand.immU32(0x30) });
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RDX), x64.Operand.immU32(0x39) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RDX), x64.Operand.immU32(0x39) });
     try emitShortJmp(p, .JBE_REL32, th_hd);
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RDX), x64.Operand.immU32(0x27) });
     try setLabel(p, th_hd);
@@ -1361,7 +1506,7 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode) !void {
     try emitLongJmp(p, try allocLabelId(p, "exit_process", .{}));
 }
 
-fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usize, program: ast.ProgramNode, fuse: bool) !void {
+fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usize, program: ast.ProgramNode, fuse: bool, inline_enter: bool) !void {
     var state_trans_start: u32 = 0;
     for (0..si) |i| state_trans_start += @intCast(program.states.items[i].transitions.items.len);
     for (state.transitions.items, 0..) |t, ti_| {
@@ -1372,7 +1517,7 @@ fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usiz
                 const trans_hit_off = p.off_trans_hits + @as(i32, @intCast((state_trans_start + @as(u32, @intCast(ti_))) * 8));
                 try p.code.appendSlice(&.{ 0x48, 0xFF, 0x85 });
                 try p.code.appendSlice(&@as([4]u8, @bitCast(trans_hit_off)));
-                try changeToState(p, t.target, si, program, true, fuse);
+                try changeToState(p, t.target, si, program, true, fuse, inline_enter);
                 return;
             }
             try emitGuardSkip(p, t.guard.?, si, 0);
@@ -1380,7 +1525,7 @@ fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usiz
             const trans_hit_off = p.off_trans_hits + @as(i32, @intCast((state_trans_start + @as(u32, @intCast(ti_))) * 8));
             try p.code.appendSlice(&.{ 0x48, 0xFF, 0x85 });
             try p.code.appendSlice(&@as([4]u8, @bitCast(trans_hit_off)));
-            try changeToState(p, t.target, si, program, true, fuse);
+            try changeToState(p, t.target, si, program, true, fuse, inline_enter);
             try setLabel(p, try allocLabelId(p, "sk_{d}_{d}", .{si, 0}));
         }
     }
@@ -1412,29 +1557,29 @@ fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usiz
             try setLabel(p, ll);
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RBX), x64.Operand.mem(Reg.RSI, 0) });
-            try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
+            try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
             try emitShortJmp(p, .JNE_REL32, ce);
-            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+            try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
             try emitShortJmp(p, .JE_REL32, match_label);
             try emitInc(p, Reg.RDI); try emitInc(p, Reg.RSI);
             try emitShortJmp(p, .JMP_REL32, ll);
             try setLabel(p, ce);
-            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RBX) });
+            try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RBX) });
             try emitCondLongJmp(p, .JE_REL32, skip_label);
             try emitLongJmp(p, done_label);
             try setLabel(p, ws_label);
             try emitInc(p, Reg.RDI);
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
             try setLabel(p, skip_label);
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x20) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x20) });
             try emitShortJmp(p, .JE_REL32, ws_label);
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x09) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x09) });
             try emitShortJmp(p, .JE_REL32, ws_label);
-            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+            try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
             try emitShortJmp(p, .JE_REL32, match_label);
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
             try emitShortJmp(p, .JE_REL32, match_label);
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0D) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0D) });
             try emitShortJmp(p, .JE_REL32, match_label);
             try emitLongJmp(p, done_label);
         }
@@ -1467,7 +1612,7 @@ fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usiz
             const trans_hit_off = p.off_trans_hits + @as(i32, @intCast((state_trans_start + @as(u32, @intCast(orig_ti))) * 8));
             try p.code.appendSlice(&.{ 0x48, 0xFF, 0x85 });
             try p.code.appendSlice(&@as([4]u8, @bitCast(trans_hit_off)));
-            try changeToState(p, tt.target, si, program, false, false);
+            try changeToState(p, tt.target, si, program, false, false, false);
             try setLabel(p, try allocLabelId(p, "sk_{d}_{d}", .{si, orig_ti}));
         }
         specific.deinit(); neq.deinit(); guardless.deinit(); allTis.deinit();
@@ -1500,7 +1645,7 @@ fn emitGuardSkip(p: *PendingOutput, guard: []const u8, si: usize, ti: usize) !vo
         if (rn != 0 or (rhs.len > 0 and (std.ascii.isDigit(rhs[0]) or rhs[0] == '-'))) {
             try emitLoadImm(p, Reg.RBX, rn);
         } else {
-            try x64.emit(&p.code, .XOR_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RBX) });
+            try emitXorReg(p, Reg.RBX);
         }
     }
     try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
@@ -1518,47 +1663,47 @@ fn emitCompiledEventMatch(p: *PendingOutput, en: []const u8, done_label: u32, ws
     switch (len) {
         1 => {
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(en[0]) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(en[0]) });
             try emitCondLongJmp(p, .JNE_REL32, done_label);
         },
         2 => {
             const imm = @as(u16, en[0]) | (@as(u16, en[1]) << 8);
             try x64.emit(&p.code, .MOVZX_R64_MEM16, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(imm) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(imm) });
             try emitCondLongJmp(p, .JNE_REL32, done_label);
         },
         3 => {
             const imm16 = @as(u16, en[0]) | (@as(u16, en[1]) << 8);
             try x64.emit(&p.code, .MOVZX_R64_MEM16, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(imm16) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(imm16) });
             try emitCondLongJmp(p, .JNE_REL32, done_label);
             try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 2) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(en[2]) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(en[2]) });
             try emitCondLongJmp(p, .JNE_REL32, done_label);
         },
         4 => {
             const imm = @as(u32, en[0]) | (@as(u32, en[1]) << 8) | (@as(u32, en[2]) << 16) | (@as(u32, en[3]) << 24);
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, 0) });
-            try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(imm) });
+            try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(imm) });
             try emitCondLongJmp(p, .JNE_REL32, done_label);
         },
         else => unreachable,
     }
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RDI, @intCast(len)) });
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x20) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x20) });
     try emitShortJmp(p, .JE_REL32, ws_label);
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x09) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x09) });
     try emitShortJmp(p, .JE_REL32, ws_label);
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try emitShortJmp(p, .JE_REL32, match_label);
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0A) });
     try emitShortJmp(p, .JE_REL32, match_label);
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0D) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(0x0D) });
     try emitShortJmp(p, .JE_REL32, match_label);
     try emitLongJmp(p, done_label);
 }
 
-fn changeToState(p: *PendingOutput, target: []const u8, current_si: usize, program: ast.ProgramNode, jump_to_scheduler: bool, fuse: bool) !void {
+fn changeToState(p: *PendingOutput, target: []const u8, current_si: usize, program: ast.ProgramNode, jump_to_scheduler: bool, fuse: bool, inline_enter: bool) !void {
     const ti = p.state_index_map.get(target).?;
     if (!fuse) try emitIntrinsicCall(p, rt.Intrinsic.arena_l1_reset);
     const cur_state = program.states.items[current_si];
@@ -1568,13 +1713,17 @@ fn changeToState(p: *PendingOutput, target: []const u8, current_si: usize, progr
     }
     try emitMovRegImm32(p, Reg.RAX, @intCast(ti));
     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_cur_state), x64.Operand.r(Reg.RAX) });
-    try emitCallToLabel(p, p.en_id[ti]);
+    if (inline_enter) {
+        try emitStateEnterBodyContent(p, &program.states.items[ti], ti);
+    } else {
+        try emitCallToLabel(p, p.en_id[ti]);
+    }
     if (jump_to_scheduler) {
         if (!fuse) {
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_abudget) });
-            try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .SUB_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(1) });
             try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_abudget), x64.Operand.r(Reg.RAX) });
-            try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+            try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
             try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "always_entry", .{}));
             try emitLongJmp(p, p.dp_id[ti]);
         }
@@ -1655,6 +1804,7 @@ fn emitImportTable(p: *PendingOutput) !u32 {
         const iat_label_val = @as(usize, @intCast(iat_off + @as(u32, @intCast(i)) * 8));
         try setLabelAt(p, try allocLabelId(p, "iat_{d}", .{i}), iat_label_val);
     }
+    for (hint_dats.items) |s| p.allocator.free(s);
     hint_offs.deinit(); hint_dats.deinit();
     return base_off;
 }
@@ -1785,30 +1935,30 @@ fn emitTierMove(p: *PendingOutput, skip: u32, panic: u32, comptime prefix: []con
     const l1 = try allocLabelId(p, "{s}_l1", .{prefix});
     const l2 = try allocLabelId(p, "{s}_l2", .{prefix});
     const done = try allocLabelId(p, "{s}_ad", .{prefix});
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RCX), x64.Operand.immU32(64) });
     try emitCondLongJmp(p, .JAE_REL32, skip);
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_states) });
     try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(1) });
     try emitCondLongJmp(p, .JNE_REL32, skip);
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_generations) });
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RCX) });
     try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
     try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
-    try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RDX) });
+    try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RDX) });
     try emitCondLongJmp(p, .JNE_REL32, skip);
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RBP, p.off_ht_tiers) });
     try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.R11, 0) });
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R15), x64.Operand.r(Reg.R10) });
     if (delta < 0) {
-        try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
+        try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
         try emitCondLongJmp(p, .JE_REL32, skip);
         try emitDec(p, Reg.R10);
     } else {
-        try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
+        try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(2) });
         try emitCondLongJmp(p, .JAE_REL32, skip);
         try emitInc(p, Reg.R10);
     }
@@ -1825,9 +1975,9 @@ fn emitTierMove(p: *PendingOutput, skip: u32, panic: u32, comptime prefix: []con
     try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R10) });
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RDX), x64.Operand.mem(Reg.R11, 0) });
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R12), x64.Operand.r(Reg.RDX) });
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R9), x64.Operand.immU32(0) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R9), x64.Operand.immU32(0) });
     try emitCondLongJmp(p, .JE_REL32, l1);
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R9), x64.Operand.immU32(1) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R9), x64.Operand.immU32(1) });
     try emitCondLongJmp(p, .JE_REL32, l2);
     try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_pool_head) });
     try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
@@ -1862,16 +2012,16 @@ fn emitTierMove(p: *PendingOutput, skip: u32, panic: u32, comptime prefix: []con
     const after_copy = try allocLabelId(p, "{s}_ac", .{prefix});
     try setLabel(p, done);
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.R12) });
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R9), x64.Operand.immU32(2) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R9), x64.Operand.immU32(2) });
     try emitCondLongJmp(p, .JNE_REL32, try_decomp);
     try emitCallToLabel(p, try allocLabelId(p, "l3_compress", .{}));
     try emitShortJmp(p, .JMP_REL32, after_copy);
     try setLabel(p, try_decomp);
-    try x64.emit(&p.code, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.R15), x64.Operand.immU32(2) });
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R15), x64.Operand.immU32(2) });
     try emitCondLongJmp(p, .JNE_REL32, plain);
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.RSI, -4) });
     try x64.emit(&p.code, .SHIFT_RIGHT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(31) });
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.R10) });
     try emitCondLongJmp(p, .JE_REL32, plain);
     try emitCallToLabel(p, try allocLabelId(p, "l3_decompress", .{}));
     try emitShortJmp(p, .JMP_REL32, after_copy);
@@ -1900,24 +2050,24 @@ fn emitL3Helpers(p: *PendingOutput) !void {
     try emitXorReg(p, Reg.R8);
     try emitXorReg(p, Reg.R9);
     try setLabel(p, cl_loop);
-    try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.RCX) });
+    try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.RCX) });
     try emitCondLongJmp(p, .JAE_REL32, cl_done);
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.memIdx(Reg.RSI, Reg.R8, 1, 0) });
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R8) });
-    try x64.emit(&p.code, .XOR_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
+    try x64.emit(&p.code, .XOR_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
     try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.memIdx(Reg.RDI, Reg.R8, 1, 0), x64.Operand.r(Reg.RAX) });
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RAX) });
     try emitCondLongJmp(p, .JE_REL32, cl_skip);
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R9), x64.Operand.mem(Reg.R8, 1) });
     try setLabel(p, cl_skip);
     try emitInc(p, Reg.R8);
     try emitShortJmp(p, .JMP_REL32, cl_loop);
     try setLabel(p, cl_done);
-    try x64.emit(&p.code, .TEST_R64_R64, &.{ x64.Operand.r(Reg.R9), x64.Operand.r(Reg.R9) });
+    try x64.emit(&p.code, .TEST_R32_R32, &.{ x64.Operand.r(Reg.R9), x64.Operand.r(Reg.R9) });
     try emitCondLongJmp(p, .JNE_REL32, cl_chk);
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R9), x64.Operand.r(Reg.RCX) });
     try setLabel(p, cl_chk);
-    try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R9), x64.Operand.r(Reg.RCX) });
+    try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.R9), x64.Operand.r(Reg.RCX) });
     try emitCondLongJmp(p, .JE_REL32, cl_store);
     try emitLoadImm(p, Reg.R10, 0x80000000);
     try x64.emit(&p.code, .OR_R64_R64, &.{ x64.Operand.r(Reg.R9), x64.Operand.r(Reg.R10) });
@@ -1938,18 +2088,18 @@ fn emitL3Helpers(p: *PendingOutput) !void {
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.RSI, -8) });
     try emitXorReg(p, Reg.R8);
     try setLabel(p, dl_loop);
-    try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.R10) });
+    try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.R10) });
     try emitCondLongJmp(p, .JAE_REL32, dl_zf);
     try x64.emit(&p.code, .MOVZX_R64_MEM8, &.{ x64.Operand.r(Reg.RAX), x64.Operand.memIdx(Reg.RSI, Reg.R8, 1, 0) });
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R8) });
-    try x64.emit(&p.code, .XOR_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
+    try x64.emit(&p.code, .XOR_R32_R32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
     try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.memIdx(Reg.RDI, Reg.R8, 1, 0), x64.Operand.r(Reg.RAX) });
     try emitInc(p, Reg.R8);
     try emitShortJmp(p, .JMP_REL32, dl_loop);
     try setLabel(p, dl_zf);
     try emitXorReg(p, Reg.RAX);
     try setLabel(p, dl_zloop);
-    try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.R11) });
+    try x64.emit(&p.code, .CMP_R32_R32, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.R11) });
     try emitCondLongJmp(p, .JAE_REL32, dl_done);
     try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.memIdx(Reg.RDI, Reg.R8, 1, 0), x64.Operand.r(Reg.RAX) });
     try emitInc(p, Reg.R8);
@@ -2016,7 +2166,7 @@ pub fn addPoolString(p: *PendingOutput, str: []const u8) !u32 {
     return @intCast(idx);
 }
 
-fn emitAction(p: *PendingOutput, body: []const u8, current_state: []const u8) !void {
+fn emitAction(p: *PendingOutput, body: []const u8, current_state: []const u8) anyerror!void {
     if (body.len == 0) return;
     var it = std.mem.splitScalar(u8, body, ';');
     while (it.next()) |stmt| {
@@ -2026,7 +2176,7 @@ fn emitAction(p: *PendingOutput, body: []const u8, current_state: []const u8) !v
     }
 }
 
-fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const u8) !void {
+fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const u8) anyerror!void {
     if (body.len == 0) return;
     if (std.mem.startsWith(u8, body, "print(") and std.mem.endsWith(u8, body, ")")) {
         const content = std.mem.trim(u8, body["print(".len..body.len - 1], " \t\"");
@@ -2041,6 +2191,16 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, 32), x64.Operand.r(Reg.RAX) });
         try emitIatCall(p, 1);
         try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+        return;
+    }
+    if (std.mem.startsWith(u8, body, "@handle_release(") and std.mem.endsWith(u8, body, ")")) {
+        const handle_expr = std.mem.trim(u8, body["@handle_release(".len..body.len - 1], " \t");
+        try emitExprToRAX(p, handle_expr, current_state);
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RAX) });
+        try x64.emit(&p.code, .SHIFT_RIGHT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(32) });
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R10) });
+        try emitIntrinsicCall(p, .handle_release);
         return;
     }
     if (std.mem.startsWith(u8, body, "free(") and std.mem.endsWith(u8, body, ")")) {
@@ -2122,7 +2282,7 @@ fn emitStoreVarFromReg(p: *PendingOutput, offset: i32, reg: i16, size: u32) !voi
     }
 }
 
-fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8) !void {
+fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8) anyerror!void {
     const e = std.mem.trim(u8, expr, " \t");
     if (e.len == 0) { try emitXorReg(p, Reg.RAX); return; }
     if (std.mem.eql(u8, e, "true")) { try emitLoadImm(p, Reg.RAX, 1); return; }
@@ -2156,7 +2316,7 @@ fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8)
     try emitExprAtomToRAX(p, e, current_state);
 }
 
-fn emitExprToRAXAdd(p: *PendingOutput, expr: []const u8, current_state: []const u8) !void {
+fn emitExprToRAXAdd(p: *PendingOutput, expr: []const u8, current_state: []const u8) anyerror!void {
     const e = std.mem.trim(u8, expr, " \t");
     if (try tryLoadVarToReg(p, Reg.RBX, e, current_state)) {
         try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
@@ -2166,7 +2326,7 @@ fn emitExprToRAXAdd(p: *PendingOutput, expr: []const u8, current_state: []const 
     }
 }
 
-fn emitExprToRAXSub(p: *PendingOutput, expr: []const u8, current_state: []const u8) !void {
+fn emitExprToRAXSub(p: *PendingOutput, expr: []const u8, current_state: []const u8) anyerror!void {
     const e = std.mem.trim(u8, expr, " \t");
     if (try tryLoadVarToReg(p, Reg.RBX, e, current_state)) {
         try x64.emit(&p.code, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
@@ -2176,9 +2336,29 @@ fn emitExprToRAXSub(p: *PendingOutput, expr: []const u8, current_state: []const 
     }
 }
 
-fn emitExprAtomToRAX(p: *PendingOutput, atom: []const u8, current_state: []const u8) !void {
+fn emitExprAtomToRAX(p: *PendingOutput, atom: []const u8, current_state: []const u8) anyerror!void {
     const a = std.mem.trim(u8, atom, " \t");
     if (a.len == 0) { try emitXorReg(p, Reg.RAX); return; }
+    if (std.mem.startsWith(u8, a, "@handle_alloc(") and std.mem.endsWith(u8, a, ")")) {
+        const size_expr = std.mem.trim(u8, a["@handle_alloc(".len..a.len-1], " \t");
+        try emitExprToRAX(p, size_expr, current_state);
+        try emitPushR64(p, Reg.RAX);
+        try emitIntrinsicCall(p, .arena_l1_alloc);
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+        try emitPopR64(p, Reg.RDX);
+        try emitIntrinsicCall(p, .handle_alloc);
+        return;
+    }
+    if (std.mem.startsWith(u8, a, "@handle_access(") and std.mem.endsWith(u8, a, ")")) {
+        const handle_expr = std.mem.trim(u8, a["@handle_access(".len..a.len-1], " \t");
+        try emitExprToRAX(p, handle_expr, current_state);
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R10), x64.Operand.r(Reg.RAX) });
+        try x64.emit(&p.code, .SHIFT_RIGHT, &.{ x64.Operand.r(Reg.R10), x64.Operand.immU32(32) });
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R10) });
+        try emitIntrinsicCall(p, .handle_access);
+        return;
+    }
     if (std.mem.startsWith(u8, a, "malloc(") and std.mem.endsWith(u8, a, ")")) {
         const size_expr = std.mem.trim(u8, a["malloc(".len..a.len-1], " \t");
         const sz_val = parseNumber(size_expr);

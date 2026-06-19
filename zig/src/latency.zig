@@ -138,7 +138,7 @@ pub const CoreStats = struct {
 
         const current_u8 = stats.load_state.load(.monotonic);
         const current = @as(LoadState, @enumFromInt(current_u8));
-        const next = LoadState.transition(current, @as(u32, @intCast(smoothed)));
+        const next = LoadState.transition(current, @as(u32, @truncate(smoothed)));
         const next_u8 = @intFromEnum(next);
         if (next_u8 != current_u8) {
             stats.load_state.store(next_u8, .monotonic);

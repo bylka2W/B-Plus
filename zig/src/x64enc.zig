@@ -4,23 +4,37 @@ const Allocator = std.mem.Allocator;
 pub const OpCode = enum(u16) {
     MOV_R64_IMM64,
     MOV_R64_R64,
+    MOV_R32_R32,
     MOV_R64_MEM,
     MOV_R32_MEM,
     MOV_MEM_R64,
     MOVZX_R64_R32,
     ADD_R64_R64,
+    ADD_R32_R32,
     ADD_R64_IMM32,
+    ADD_R32_IMM32,
     SUB_R64_IMM32,
+    SUB_R32_IMM32,
     SUB_R64_R64,
+    SUB_R32_R32,
     CMP_R64_R64,
+    CMP_R32_R32,
     CMP_R64_IMM32,
+    CMP_R32_IMM32,
     TEST_R64_R64,
+    TEST_R32_R32,
     XOR_R64_R64,
+    XOR_R32_R32,
     IMUL_R64_R64,
+    IMUL_R32_R32,
     AND_R64_R64,
+    AND_R32_R32,
     OR_R64_R64,
+    OR_R32_R32,
     SHIFT_LEFT,
+    SHIFT_LEFT_32,
     SHIFT_RIGHT,
+    SHIFT_RIGHT_32,
     LEA_R64_MEM,
     MOVZX_R64_MEM8,
     CALL_RIPDISP,
@@ -99,6 +113,18 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             try code.append(0x8B);
             try code.append(0xC0 | (@as(u8, @intCast(dst & 7)) << 3) | @as(u8, @intCast(src & 7)));
         },
+        .MOV_R32_R32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            const dst = operands[0].reg;
+            const src = operands[1].reg;
+            if (dst < 0 or dst > 15 or src < 0 or src > 15) return error.InvalidRegister;
+            const rex_b: u8 = @intCast((@as(u8, @intCast(src)) >> 3) & 1);
+            const rex_r: u8 = @intCast((@as(u8, @intCast(dst)) >> 3) & 1);
+            const rex = rex_b | (rex_r << 2);
+            if (rex != 0) try code.append(0x40 | rex);
+            try code.append(0x8B);
+            try code.append(0xC0 | (@as(u8, @intCast(dst & 7)) << 3) | @as(u8, @intCast(src & 7)));
+        },
         .MOV_R64_MEM => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0x8B, operands[0].reg, operands[1], 0);
@@ -155,6 +181,10 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0x01, operands[1].reg, operands[0], 0);
         },
+        .ADD_R32_R32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            try emitModrmSibDisp(code, 0, 0x01, operands[1].reg, operands[0], 0);
+        },
         .ADD_R64_IMM32 => {
             if (operands.len < 2) return error.MissingOperands;
             const dst = operands[0].reg;
@@ -162,6 +192,18 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             if (v == 0) return;
             const rex: u8 = if (dst >= 8) 0x48 | ((@as(u8, @intCast(dst)) >> 3) & 1) else 0x48;
             try code.append(rex);
+            try code.append(0x81);
+            try code.append(0xC0 | @as(u8, @intCast(dst & 7)));
+            const imm_bytes: [4]u8 = @bitCast(@as(i32, @bitCast(@as(u32, @truncate(v)))));
+            try code.appendSlice(&imm_bytes);
+        },
+        .ADD_R32_IMM32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            const dst = operands[0].reg;
+            const v = operands[1].imm64;
+            if (v == 0) return;
+            const rex: u8 = if (dst >= 8) 0x40 | ((@as(u8, @intCast(dst)) >> 3) & 1) else 0;
+            if (rex != 0) try code.append(rex);
             try code.append(0x81);
             try code.append(0xC0 | @as(u8, @intCast(dst & 7)));
             const imm_bytes: [4]u8 = @bitCast(@as(i32, @bitCast(@as(u32, @truncate(v)))));
@@ -179,13 +221,33 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             const imm_bytes: [4]u8 = @bitCast(@as(i32, @bitCast(@as(u32, @truncate(v)))));
             try code.appendSlice(&imm_bytes);
         },
+        .SUB_R32_IMM32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            const dst = operands[0].reg;
+            const v = operands[1].imm64;
+            if (v == 0) return;
+            const rex: u8 = if (dst >= 8) 0x40 | ((@as(u8, @intCast(dst)) >> 3) & 1) else 0;
+            if (rex != 0) try code.append(rex);
+            try code.append(0x81);
+            try code.append(0xE8 | @as(u8, @intCast(dst & 7)));
+            const imm_bytes: [4]u8 = @bitCast(@as(i32, @bitCast(@as(u32, @truncate(v)))));
+            try code.appendSlice(&imm_bytes);
+        },
         .SUB_R64_R64 => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0x29, operands[1].reg, operands[0], 0);
         },
+        .SUB_R32_R32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            try emitModrmSibDisp(code, 0, 0x29, operands[1].reg, operands[0], 0);
+        },
         .CMP_R64_R64 => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0x39, operands[1].reg, operands[0], 0);
+        },
+        .CMP_R32_R32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            try emitModrmSibDisp(code, 0, 0x39, operands[1].reg, operands[0], 0);
         },
         .CMP_R64_IMM32 => {
             if (operands.len < 2) return error.MissingOperands;
@@ -198,25 +260,56 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             const imm_bytes: [4]u8 = @bitCast(@as(i32, @bitCast(@as(u32, @truncate(v)))));
             try code.appendSlice(&imm_bytes);
         },
+        .CMP_R32_IMM32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            const dst = operands[0].reg;
+            const v = operands[1].imm64;
+            const rex: u8 = if (dst >= 8) 0x40 | ((@as(u8, @intCast(dst)) >> 3) & 1) else 0;
+            if (rex != 0) try code.append(rex);
+            try code.append(0x81);
+            try code.append(0xF8 | @as(u8, @intCast(dst & 7)));
+            const imm_bytes: [4]u8 = @bitCast(@as(i32, @bitCast(@as(u32, @truncate(v)))));
+            try code.appendSlice(&imm_bytes);
+        },
         .TEST_R64_R64 => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0x85, operands[1].reg, operands[0], 0);
+        },
+        .TEST_R32_R32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            try emitModrmSibDisp(code, 0, 0x85, operands[1].reg, operands[0], 0);
         },
         .XOR_R64_R64 => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0x31, operands[1].reg, operands[0], 0);
         },
+        .XOR_R32_R32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            try emitModrmSibDisp(code, 0, 0x31, operands[1].reg, operands[0], 0);
+        },
         .IMUL_R64_R64 => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0xAF, operands[0].reg, operands[1], 0x0F);
+        },
+        .IMUL_R32_R32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            try emitModrmSibDisp(code, 0, 0xAF, operands[0].reg, operands[1], 0x0F);
         },
         .AND_R64_R64 => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0x21, operands[1].reg, operands[0], 0);
         },
+        .AND_R32_R32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            try emitModrmSibDisp(code, 0, 0x21, operands[1].reg, operands[0], 0);
+        },
         .OR_R64_R64 => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0x09, operands[1].reg, operands[0], 0);
+        },
+        .OR_R32_R32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            try emitModrmSibDisp(code, 0, 0x09, operands[1].reg, operands[0], 0);
         },
         .SHIFT_LEFT => {
             if (operands.len < 2) return error.MissingOperands;
@@ -228,11 +321,31 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             const imm_bytes: [1]u8 = @bitCast(@as(i8, @intCast(operands[1].imm64)));
             try code.append(imm_bytes[0]);
         },
+        .SHIFT_LEFT_32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            const dst = operands[0].reg;
+            const rex: u8 = if (dst >= 8) 0x40 | ((@as(u8, @intCast(dst)) >> 3) & 1) else 0;
+            if (rex != 0) try code.append(rex);
+            try code.append(0xC1);
+            try code.append(0xE0 | @as(u8, @intCast(dst & 7)));
+            const imm_bytes: [1]u8 = @bitCast(@as(i8, @intCast(operands[1].imm64)));
+            try code.append(imm_bytes[0]);
+        },
         .SHIFT_RIGHT => {
             if (operands.len < 2) return error.MissingOperands;
             const dst = operands[0].reg;
             const rex: u8 = if (dst >= 8) 0x48 | ((@as(u8, @intCast(dst)) >> 3) & 1) else 0x48;
             try code.append(rex);
+            try code.append(0xC1);
+            try code.append(0xE8 | @as(u8, @intCast(dst & 7)));
+            const imm_bytes: [1]u8 = @bitCast(@as(i8, @intCast(operands[1].imm64)));
+            try code.append(imm_bytes[0]);
+        },
+        .SHIFT_RIGHT_32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            const dst = operands[0].reg;
+            const rex: u8 = if (dst >= 8) 0x40 | ((@as(u8, @intCast(dst)) >> 3) & 1) else 0;
+            if (rex != 0) try code.append(rex);
             try code.append(0xC1);
             try code.append(0xE8 | @as(u8, @intCast(dst & 7)));
             const imm_bytes: [1]u8 = @bitCast(@as(i8, @intCast(operands[1].imm64)));
