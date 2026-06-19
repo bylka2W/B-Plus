@@ -351,6 +351,21 @@ fn runFrameGraph(allocator: std.mem.Allocator) !u64 {
     }
     if (!has_present) return error.PresentDropped;
     if (!has_reproject) return error.ReprojectDropped;
+
+    // Validate edges: reproject (gpu[2]) ← depth (gpu[0]), motion_vectors (gpu[1])
+    if (plan.gpu.len >= 3) {
+        var edge_depth: bool = false;
+        var edge_mv: bool = false;
+        var edge_upscale: bool = false;
+        for (plan.gpu_edges) |e| {
+            if (e.from == 0 and e.to == 2) edge_depth = true;
+            if (e.from == 1 and e.to == 2) edge_mv = true;
+            if (e.from == 2 and e.to == 3) edge_upscale = true;
+        }
+        if (!edge_depth) return error.MissingEdgeDepth;
+        if (!edge_mv) return error.MissingEdgeMV;
+        if (plan.gpu.len > 3 and !edge_upscale) return error.MissingEdgeUpscale;
+    }
     return @as(u64, @intCast(plan.cpu.len + plan.gpu.len));
 }
 
@@ -366,6 +381,15 @@ fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
     var fg = frame_graph.FrameGraph.init(&passes);
     const plan = try fg.compile(allocator, 16_600);
     defer frame_graph.FrameGraph.deinitPlan(allocator, &plan);
+
+    // Validate edge: upscale (gpu[1]) ← depth (gpu[0])
+    if (plan.gpu.len >= 2) {
+        var has_edge: bool = false;
+        for (plan.gpu_edges) |e| {
+            if (e.from == 0 and e.to == 1) has_edge = true;
+        }
+        if (!has_edge) return error.MissingEdgeInGPUScheduler;
+    }
 
     gs.submitFrame(&plan);
 
