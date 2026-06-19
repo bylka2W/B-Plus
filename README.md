@@ -502,7 +502,9 @@ bpc.exe run example.b+
 zig/                    — компилятор (Zig, активная разработка)
   src/
     main.zig            — точка входа, CLI, оркестрация
-    runtime.zig          — Stage 1 runtime kernel (handle table, arena, FSM, migration)
+    runtime.zig          — Stage 2 runtime kernel (handle table, arena, FSM, migration, Snapshot)
+    runtime_test.zig     — 28 unit tests: alloc, release, tick, migration, decay, budget
+    stress_test.zig      — stress test: 100k ops with snapshot-based formal invariant verification
     parser.zig          — лексер + парсер .b+
     ast.zig             — типы AST (состояния, переходы и т.д.)
     x64gen.zig          — генератор машинного кода x64 (+ Intrinsic binding к runtime)
@@ -551,12 +553,12 @@ SOFTWARE.
 
 ---
 
-## Stage 1 — Runtime kernel
+## Stage 2 — Runtime kernel (hardened)
 
 `src/runtime.zig` — детерминированная машина памяти, формальная модель переходов.
 
 ```
-Handle → MetaStore → ptr → address → Tier (single source of truth)
+Handle → MetaStore → ptr → address → Tier (single source of truth: classifyPtr)
                                 ↓
 moveHotter/moveColder → Tier.moveHotter/?Tier (pure FSM)
                                 ↓
@@ -568,6 +570,16 @@ applyMigration → migrate (единственный execution boundary)
     └─ alloc → memcpy → ptr swap → log
 ```
 
+### Stage 2 hardening
+
+- **Arena safety**: `Arena.alloc` возвращает `null` при OOM (fail-fast, без тихого повреждения памяти).
+- **`classifyPtr`**: единый центральный классификатор адресов → Tier (заменил разрозненные `containsAddr`).
+- **`MigrationResult`**: enum `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary` вместо bool.
+- **`Snapshot`**: формальный слепок состояния runtime (tiers, heats, ptrs, states, gens) для верификации инвариантов.
+- **Двойное тепло** (`heat` / `total_heat`): `heat` сбрасывается при release, `total_heat` монотонно растёт.
+- **Stress test** (`src/stress_test.zig`): 100k операций, snapshot-based проверка: кол-во миграций = кол-во смен tier (delta = 0).
+- **28 unit tests**: alloc, release, tick, decay, promotion, demotion, hysteresis, budget, data integrity.
+
 ### Компоненты
 
 | Компонент | Описание |
@@ -575,11 +587,20 @@ applyMigration → migrate (единственный execution boundary)
 | `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
 | `Handle` | Поколенческий идентификатор: slot + generation |
 | `HandleTable` | Состояния слотов (Used/Free), free-лист O(1), инвалидация через generation |
-| `MetaStore` | SoA: ptrs, sizes, generations, heats, states |
-| `Arena` | Трёхуровневый bump-аллокатор (L1/L2/L3) с spill-цепочкой (L1→L2→L3→oom). Динамический размер под FSM. |
+| `MetaStore` | SoA: ptrs, sizes, generations, heats, total_heats, states |
+| `Arena` | Трёхуровневый bump-аллокатор (L1/L2/L3), fail-fast при OOM |
 | `Transition` | Decision record: handle + src_tier + dst_tier |
+| `Snapshot` | Слепок состояния: tiers, heats, total_heats, states, ptrs, gens, arena_used |
+| `MigrationResult` | Enum исходов миграции |
 | `PanicCode` | INVALID_HANDLE и INVALID_TIER — только через validate функции |
 | `assertInvariant` | Приватная — только внутри validateHandle/validateAccess/validateTier |
+
+### Тестирование
+
+```
+zig test src\runtime_test.zig   # 28 unit tests
+zig test src\stress_test.zig    # 100k ops stress test
+```
 
 ### Intrinsic binding
 
@@ -1107,7 +1128,9 @@ bpc.exe run example.b+
 zig/                    — compiler (Zig, active development)
   src/
     main.zig            — entry point, CLI, orchestration
-    runtime.zig          — Stage 1 runtime kernel (handle table, arena, FSM, migration)
+    runtime.zig          — Stage 2 runtime kernel (handle table, arena, FSM, migration, Snapshot)
+    runtime_test.zig     — 28 unit tests: alloc, release, tick, migration, decay, budget
+    stress_test.zig      — stress test: 100k ops with snapshot-based formal invariant verification
     parser.zig          — lexer + parser for .b+
     ast.zig             — AST types (states, transitions, etc.)
     x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime).
@@ -1160,12 +1183,12 @@ SOFTWARE.
 
 ---
 
-## Stage 1 — Runtime kernel
+## Stage 2 — Runtime kernel (hardened)
 
 `src/runtime.zig` — deterministic memory machine with a formal transition model.
 
 ```
-Handle → MetaStore → ptr → address → Tier (single source of truth)
+Handle → MetaStore → ptr → address → Tier (single source of truth: classifyPtr)
                                 ↓
 moveHotter/moveColder → Tier.moveHotter/?Tier (pure FSM)
                                 ↓
@@ -1177,6 +1200,16 @@ applyMigration → migrate (sole execution boundary)
     └─ alloc → memcpy → ptr swap → log
 ```
 
+### Stage 2 hardening
+
+- **Arena safety**: `Arena.alloc` returns `null` on OOM (fail-fast, no silent corruption).
+- **`classifyPtr`**: single central address → Tier classifier (replaced ad-hoc `containsAddr` chains).
+- **`MigrationResult`**: enum `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary` instead of bool.
+- **`Snapshot`**: formal runtime state snapshot (tiers, heats, ptrs, states, gens) for invariant verification.
+- **Dual heat** (`heat` / `total_heat`): `heat` resets on release, `total_heat` is monotonic.
+- **Stress test** (`src/stress_test.zig`): 100k operations, snapshot-based: migration count == tier change count (delta = 0).
+- **28 unit tests**: alloc, release, tick, decay, promotion, demotion, hysteresis, budget, data integrity.
+
 ### Components
 
 | Component | Description |
@@ -1184,11 +1217,20 @@ applyMigration → migrate (sole execution boundary)
 | `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
 | `Handle` | Generational slot identifier: slot + generation |
 | `HandleTable` | Slot states (Used/Free), O(1) free-list, invalidation via generation |
-| `MetaStore` | SoA: ptrs, sizes, generations, heats, states |
-| `Arena` | Three-tier bump allocator (L1/L2/L3) with spill chain (L1→L2→L3→oom). Dynamically sized per FSM. |
+| `MetaStore` | SoA: ptrs, sizes, generations, heats, total_heats, states |
+| `Arena` | Three-tier bump allocator (L1/L2/L3), fail-fast on OOM |
 | `Transition` | Decision record: handle + src_tier + dst_tier |
+| `Snapshot` | State snapshot: tiers, heats, total_heats, states, ptrs, gens, arena_used |
+| `MigrationResult` | Migration outcome enum |
 | `PanicCode` | INVALID_HANDLE and INVALID_TIER — only through validate functions |
 | `assertInvariant` | Private — only inside validateHandle/validateAccess/validateTier |
+
+### Testing
+
+```
+zig test src\runtime_test.zig   # 28 unit tests
+zig test src\stress_test.zig    # 100k ops stress test
+```
 
 ### Intrinsic binding
 
