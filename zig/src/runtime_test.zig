@@ -662,6 +662,94 @@ test "dual-heat: heat=0 after release, total_heat preserved" {
     try std.testing.expectEqual(@as(u32, 10), ht.meta.total_heats[slot]);
 }
 
+test "top-K: only hottest chunks promoted within budget" {
+    var l1: [8192]u8 = undefined;
+    var l2: [16384]u8 = undefined;
+    var l3: [8192]u8 = undefined;
+    const BIG_CAP = 64;
+    var big_cids: [BIG_CAP]u32 = undefined;
+    var big_offs: [BIG_CAP]u32 = undefined;
+    var big_gens: [BIG_CAP]u32 = undefined;
+    var big_sizes: [BIG_CAP]u32 = undefined;
+    var big_states: [BIG_CAP]rt.SlotState = undefined;
+    var big_free_next: [BIG_CAP]u32 = undefined;
+    var big_heats: [BIG_CAP]u32 = undefined;
+    var big_total_heats: [BIG_CAP]u32 = undefined;
+    var big_log: [64]rt.RuntimeEvent = undefined;
+    var big_chunks: [32]rt.Chunk = undefined;
+    const big_ms = rt.MetaStore.init(&big_cids, &big_offs, &big_gens, &big_sizes, &big_states, &big_free_next, &big_heats, &big_total_heats);
+    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, big_ms, &big_log, &big_chunks);
+
+    // Create 6 chunks with decreasing heat (heat values: 250, 240, 230, 220, 210, 200)
+    // Each alloc uses 200B → separate chunk (2*200=400 > CHUNK_SIZE=256)
+    var handles: [6]rt.Handle = undefined;
+    var i: usize = 0;
+    while (i < 6) : (i += 1) {
+        handles[i] = tr.allocL2(200);
+        const cid = tr.handles.meta.chunk_ids[handles[i].slot];
+        tr.chunks.chunks[cid].heat = @as(u32, @intCast(250 - @as(u32, @intCast(i)) * 10));
+    }
+
+    tr.tick();
+
+    var promoted: [6]bool = .{false} ** 6;
+    for (handles, 0..) |h, idx| {
+        if (tr.tierOfHandle(h) == .L1) promoted[idx] = true;
+    }
+
+    // Budget=4, only 4 hottest should promote (heat 250, 240, 230, 220)
+    // Coldest 2 (210, 200) stay in L2
+    try std.testing.expect(promoted[0]); // heat=250
+    try std.testing.expect(promoted[1]); // heat=240
+    try std.testing.expect(promoted[2]); // heat=230
+    try std.testing.expect(promoted[3]); // heat=220
+    try std.testing.expect(!promoted[4]); // heat=210
+    try std.testing.expect(!promoted[5]); // heat=200
+}
+
+test "top-K: tie-breaking by chunk_id for equal heat" {
+    var l1: [8192]u8 = undefined;
+    var l2: [16384]u8 = undefined;
+    var l3: [8192]u8 = undefined;
+    const BIG_CAP = 64;
+    var big_cids: [BIG_CAP]u32 = undefined;
+    var big_offs: [BIG_CAP]u32 = undefined;
+    var big_gens: [BIG_CAP]u32 = undefined;
+    var big_sizes: [BIG_CAP]u32 = undefined;
+    var big_states: [BIG_CAP]rt.SlotState = undefined;
+    var big_free_next: [BIG_CAP]u32 = undefined;
+    var big_heats: [BIG_CAP]u32 = undefined;
+    var big_total_heats: [BIG_CAP]u32 = undefined;
+    var big_log: [64]rt.RuntimeEvent = undefined;
+    var big_chunks: [32]rt.Chunk = undefined;
+    const big_ms = rt.MetaStore.init(&big_cids, &big_offs, &big_gens, &big_sizes, &big_states, &big_free_next, &big_heats, &big_total_heats);
+    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, big_ms, &big_log, &big_chunks);
+
+    // Create 5 chunks all with heat=250 → tie needs chunk_id to break
+    var handles: [5]rt.Handle = undefined;
+    var i: usize = 0;
+    while (i < 5) : (i += 1) {
+        handles[i] = tr.allocL2(200);
+        const cid = tr.handles.meta.chunk_ids[handles[i].slot];
+        tr.chunks.chunks[cid].heat = 250;
+    }
+
+    tr.tick();
+
+    // Budget=4, 5 eligible with equal heat
+    // Lowest chunk_id should win tie-break (chunk 0,1,2,3 promote; chunk 4 stays)
+    var promoted: [5]bool = .{false} ** 5;
+    for (handles, 0..) |h, idx| {
+        if (tr.tierOfHandle(h) == .L1) promoted[idx] = true;
+    }
+
+    try std.testing.expect(promoted[0]);
+    try std.testing.expect(promoted[1]);
+    try std.testing.expect(promoted[2]);
+    try std.testing.expect(promoted[3]);
+    try std.testing.expect(!promoted[4]);
+}
+
 test "cooldown: fresh chunk migrates without cooldown" {
     var l1: [4096]u8 = undefined;
     var l2: [4096]u8 = undefined;

@@ -580,6 +580,17 @@ migrateChunk → tier switch + memcpy used bytes (физическое копи�
 - **Cooldown не заменяет heat-логику**: heat решает *нужна ли* миграция, cooldown решает *можно ли сейчас*.
 - **30 unit tests**: cooldown fresh chunk, immediate block, window (1–3–4 тика), tick integration.
 
+### Stage 4: priority scheduling (top-K selection)
+
+- **Полный сбор**: все кандидаты собираются без budget-лимита (буфер 4096).
+- **Сортировка**: promote — `heat desc` (самые горячие первыми), demote — `heat asc` (самые холодные первыми).
+- **Tie-break**: `chunk_id asc` — строгий детерминизм при равном heat.
+- **Top-K**: `MIGRATION_BUDGET=4` применяется *после* ранжирования, а не во время сбора.
+- **Cooldown фильтрует до сортировки**: chunk в cooldown не участвует в очереди.
+- **Две очереди**: promote (L2→L1, L3→L2) и demote (L1→L2, L2→L3) обрабатываются независимо.
+- **32 unit tests**: top-K priority, tie-breaking, budget limit.
+- **Fingerprint стабилен** — детерминированная сортировка не меняет конечное состояние при одинаковых входных данных.
+
 ### Компоненты
 
 | Компонент | Описание |
@@ -597,7 +608,7 @@ migrateChunk → tier switch + memcpy used bytes (физическое копи�
 ### Тестирование
 
 ```bash
-zig test src\runtime_test.zig   # 30 unit tests (chunk-модель + cooldown)
+zig test src\runtime_test.zig   # 32 unit tests (chunk-модель + cooldown + top-K)
 zig test src\stress_test.zig    # 100k ops: 3817 миграций, фингерпринт детерминирован
 ```
 
@@ -1222,6 +1233,17 @@ migrateChunk → tier switch + memcpy used bytes (physical copy)
 - **Cooldown does not replace heat logic**: heat decides *if* migration is needed, cooldown decides *if it's allowed now*.
 - **30 unit tests**: fresh chunk bypass, immediate block, window (1–3–4 ticks), tick integration.
 
+### Stage 4: priority scheduling (top-K selection)
+
+- **Full scan**: all candidates collected without budget limit (buffer 4096).
+- **Sorting**: promote — `heat desc` (hottest first), demote — `heat asc` (coldest first).
+- **Tie-break**: `chunk_id asc` — strict determinism for equal heat.
+- **Top-K**: `MIGRATION_BUDGET=4` applied *after* ranking, not during collection.
+- **Cooldown filters before sorting**: chunks in cooldown are excluded from queues.
+- **Two queues**: promote (L2→L1, L3→L2) and demote (L1→L2, L2→L3) processed independently.
+- **32 unit tests**: top-K priority, tie-breaking, budget limit.
+- **Stable fingerprint** — deterministic sort preserves final state for identical inputs.
+
 ### Components
 
 | Component | Description |
@@ -1239,7 +1261,7 @@ migrateChunk → tier switch + memcpy used bytes (physical copy)
 ### Testing
 
 ```bash
-zig test src\runtime_test.zig   # 30 unit tests (chunk model + cooldown)
+zig test src\runtime_test.zig   # 32 unit tests (chunk model + cooldown + top-K)
 zig test src\stress_test.zig    # 100k ops: 3817 migrations, deterministic fingerprint
 ```
 
