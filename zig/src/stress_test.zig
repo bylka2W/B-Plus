@@ -35,7 +35,8 @@ test "deterministic stress: 100k ops with migration, budget, heat" {
     defer std.testing.allocator.free(l2);
     const l3 = try std.testing.allocator.alloc(u8, 4 * 1024 * 1024);
     defer std.testing.allocator.free(l3);
-    var ptrs: [HANDLES]?*anyopaque = undefined;
+    var cids: [HANDLES]u32 = undefined;
+    var offs: [HANDLES]u32 = undefined;
     var gens: [HANDLES]u32 = undefined;
     var sizes: [HANDLES]u32 = undefined;
     var states: [HANDLES]rt.SlotState = undefined;
@@ -43,8 +44,11 @@ test "deterministic stress: 100k ops with migration, budget, heat" {
     var heats: [HANDLES]u32 = undefined;
     var total_heats: [HANDLES]u32 = undefined;
     var log: [4096]rt.RuntimeEvent = undefined;
-    const ms = rt.MetaStore.init(&ptrs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
-    var tr = rt.TieredRuntime.init(l1, l2, l3, ms, &log);
+    const total_chunks = (l1.len + l2.len + l3.len) / rt.CHUNK_SIZE + 1;
+    const chunk_buf = try std.testing.allocator.alloc(rt.Chunk, total_chunks);
+    defer std.testing.allocator.free(chunk_buf);
+    const ms = rt.MetaStore.init(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = rt.TieredRuntime.init(l1, l2, l3, ms, &log, chunk_buf);
 
     var handles = std.ArrayList(rt.Handle).init(std.testing.allocator);
     defer handles.deinit();
@@ -54,7 +58,6 @@ test "deterministic stress: 100k ops with migration, budget, heat" {
     var total_release: u32 = 0;
     var total_migrations: u32 = 0;
     var total_ticks: u32 = 0;
-    var osc_count: u32 = 0;
     var total_tier_changes: u32 = 0;
 
     var i: u32 = 0;
@@ -67,7 +70,6 @@ test "deterministic stress: 100k ops with migration, budget, heat" {
             tr.tick();
             total_ticks += 1;
 
-            // Count MIGRATE events from this tick
             var tick_migs: u32 = 0;
             const capacity = tr.logger.capacity();
             var k = log_head_before;
@@ -79,7 +81,6 @@ test "deterministic stress: 100k ops with migration, budget, heat" {
             var post = try rt.TieredRuntime.Snapshot.capture(&tr, std.testing.allocator);
             defer post.deinit(std.testing.allocator);
 
-            // Invariant checks: compare pre vs post tiers directly from MetaStore
             var tier_changes: u32 = 0;
             for (0..HANDLES) |slot| {
                 if (post.states[slot] == .Used) {
@@ -93,6 +94,7 @@ test "deterministic stress: 100k ops with migration, budget, heat" {
                     try std.testing.expectEqual(@as(u32, 0), post.heats[slot]);
                 }
             }
+
             total_tier_changes += tier_changes;
         }
 
@@ -130,13 +132,12 @@ test "deterministic stress: 100k ops with migration, budget, heat" {
         }
     }
 
-    // Final snapshot and invariant checks
     var final_snap = try rt.TieredRuntime.Snapshot.capture(&tr, std.testing.allocator);
     defer final_snap.deinit(std.testing.allocator);
 
     var used_count: u32 = 0;
-    for (&ptrs, 0..) |p, slot| {
-        if (p != null and states[slot] == .Used) used_count += 1;
+    for (0..HANDLES) |slot| {
+        if (tr.handles.meta.states[slot] == .Used) used_count += 1;
     }
     try std.testing.expectEqual(@as(u32, @intCast(handles.items.len)), used_count);
 
@@ -156,9 +157,9 @@ test "deterministic stress: 100k ops with migration, budget, heat" {
     std.debug.print("Migrations: {d} ({d:.3}/1k ops)\n", .{ total_migrations, mig_rate });
     std.debug.print("Active handles: {d}\n", .{handles.items.len});
     std.debug.print("Tier changes detected: {d}\n", .{total_tier_changes});
-    osc_count = total_migrations -| total_tier_changes;
-    std.debug.print("Oscillation delta: {d}\n", .{osc_count});
-    try std.testing.expectEqual(total_migrations, total_tier_changes);
+    const excess = total_tier_changes -| total_migrations;
+    std.debug.print("Multi-handle chunk excess: {d}\n", .{excess});
+    try std.testing.expect(total_migrations <= total_tier_changes);
     std.debug.print("Fingerprint: 0x{x:016}\n", .{fp});
 
     const Pair = struct { slot: u32, val: u32 };

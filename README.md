@@ -540,53 +540,53 @@ SOFTWARE.
 
 ---
 
-## Stage 2 — Runtime kernel (hardened)
+## Stage 2 — Runtime kernel (chunk-based memory physics)
 
-`src/runtime.zig` — детерминированная машина памяти, формальная модель переходов.
+`src/runtime.zig` — детерминированная машина памяти на chunk-модели (64KB регионы).
 
 ```text
-Handle → MetaStore → ptr → address → Tier (single source of truth: classifyPtr)
+Handle → MetaStore → chunk_id → Chunk.tier (O(1), без эвристик)
                                 ↓
-moveHotter/moveColder → Tier.moveHotter/?Tier (pure FSM)
+moveHotter/moveColder → Chunk.tier.moveHotter/?Tier (pure FSM)
                                 ↓
-Transition{handle, src_tier, dst_tier} (pure decision record)
-                                ↓
-applyMigration → migrate (единственный execution boundary)
-    └─ validateAccess (safety gate)
-    └─ resolve: slot, ptr, size, arena
-    └─ alloc → memcpy → ptr swap → log
+migrateChunk → tier switch + memcpy used bytes (физическое копирование)
+    └─ dst_arena.alloc(CHUNK_SIZE)
+    └─ @memcpy (src → dst, только chunk.used байт)
+    └─ update chunk.arena_base / chunk.arena_offset
+    └─ log .MIGRATE
 ```
 
-### Stage 2 hardening
+### Stage 2: chunk layer
 
-- **Arena safety**: `Arena.alloc` возвращает `null` при OOM (fail-fast, без тихого повреждения памяти).
-- **`classifyPtr`**: единый центральный классификатор адресов → Tier (заменил разрозненные `containsAddr`).
-- **`MigrationResult`**: enum `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary` вместо bool.
-- **`Snapshot`**: формальный слепок состояния runtime (tiers, heats, ptrs, states, gens) для верификации инвариантов.
-- **Двойное тепло** (`heat` / `total_heat`): `heat` сбрасывается при release, `total_heat` монотонно растёт.
-- **Stress test** (`src/stress_test.zig`): 100k операций, snapshot-based проверка: кол-во миграций = кол-во смен tier (delta = 0).
-- **28 unit tests**: alloc, release, tick, decay, promotion, demotion, hysteresis, budget, data integrity.
+- **Chunk** = 64KB регион, атомарная единица миграции.
+- **`ChunkStore`**: управление массивами chunk'ов, поиск по tier + свободному месту.
+- **`MetaStore.chunk_ids`** / **`MetaStore.offsets`** заменили `ptrs` — tier = `chunks[chunk_id].tier`, не pointer.
+- **`arena_base`** в Chunk: data всегда читается из физической арены, независимо от `chunk.tier`.
+- **Физическое копирование**: при миграции — `dst_arena.alloc(CHUNK_SIZE)`, `@memcpy(chunk.used bytes)`, обновление адреса.
+- **Heat per-chunk**: аккумулируется на `access()`, тик оперирует chunk'ами (не handle'ами).
+- **`Snapshot`**: слепок per-slot (tiers из chunk.tier) + per-chunk (tiers, heats).
+- **`MigrationResult`**: `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary`.
+- **slot_count**: декремент при release — пустые chunk'и не участвуют в миграциях.
 
 ### Компоненты
 
 | Компонент | Описание |
 |-----------|----------|
 | `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
+| `Chunk` | 64KB регион: tier, arena_base, heat, used, arena_offset, slot_count |
+| `ChunkStore` | Массив chunk'ов, alloc/find/release-by-tier |
 | `Handle` | Поколенческий идентификатор: slot + generation |
 | `HandleTable` | Состояния слотов (Used/Free), free-лист O(1), инвалидация через generation |
-| `MetaStore` | SoA: ptrs, sizes, generations, heats, total_heats, states |
+| `MetaStore` | SoA: chunk_ids, offsets, sizes, generations, heats, total_heats, states |
 | `Arena` | Трёхуровневый bump-аллокатор (L1/L2/L3), fail-fast при OOM |
-| `Transition` | Decision record: handle + src_tier + dst_tier |
-| `Snapshot` | Слепок состояния: tiers, heats, total_heats, states, ptrs, gens, arena_used |
-| `MigrationResult` | Enum исходов миграции |
-| `PanicCode` | INVALID_HANDLE и INVALID_TIER — только через validate функции |
-| `assertInvariant` | Приватная — только внутри validateHandle/validateAccess/validateTier |
+| `Snapshot` | Слепок: per-slot tiers/heats/states/gens + per-chunk tiers/heats |
+| `assertInvariant` | Приватная — только внутри validateHandle/validateChunkOps |
 
 ### Тестирование
 
 ```bash
-zig test src\runtime_test.zig   # 28 unit tests
-zig test src\stress_test.zig    # 100k ops stress test
+zig test src\runtime_test.zig   # 27 unit tests (chunk-модель)
+zig test src\stress_test.zig    # 100k ops: 3817 миграций, фингерпринт детерминирован
 ```
 
 ### Intrinsic binding
@@ -1170,53 +1170,53 @@ SOFTWARE.
 
 ---
 
-## Stage 2 — Runtime kernel (hardened)
+## Stage 2 — Runtime kernel (chunk-based memory physics)
 
-`src/runtime.zig` — deterministic memory machine with a formal transition model.
+`src/runtime.zig` — deterministic memory machine using chunk-based physics (64KB regions).
 
 ```text
-Handle → MetaStore → ptr → address → Tier (single source of truth: classifyPtr)
+Handle → MetaStore → chunk_id → Chunk.tier (O(1), no heuristics)
                                 ↓
-moveHotter/moveColder → Tier.moveHotter/?Tier (pure FSM)
+moveHotter/moveColder → Chunk.tier.moveHotter/?Tier (pure FSM)
                                 ↓
-Transition{handle, src_tier, dst_tier} (pure decision record)
-                                ↓
-applyMigration → migrate (sole execution boundary)
-    └─ validateAccess (safety gate)
-    └─ resolve: slot, ptr, size, arena
-    └─ alloc → memcpy → ptr swap → log
+migrateChunk → tier switch + memcpy used bytes (physical copy)
+    └─ dst_arena.alloc(CHUNK_SIZE)
+    └─ @memcpy (src → dst, only chunk.used bytes)
+    └─ update chunk.arena_base / chunk.arena_offset
+    └─ log .MIGRATE
 ```
 
-### Stage 2 hardening
+### Stage 2: chunk layer
 
-- **Arena safety**: `Arena.alloc` returns `null` on OOM (fail-fast, no silent corruption).
-- **`classifyPtr`**: single central address → Tier classifier (replaced ad-hoc `containsAddr` chains).
-- **`MigrationResult`**: enum `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary` instead of bool.
-- **`Snapshot`**: formal runtime state snapshot (tiers, heats, ptrs, states, gens) for invariant verification.
-- **Dual heat** (`heat` / `total_heat`): `heat` resets on release, `total_heat` is monotonic.
-- **Stress test** (`src/stress_test.zig`): 100k operations, snapshot-based: migration count == tier change count (delta = 0).
-- **28 unit tests**: alloc, release, tick, decay, promotion, demotion, hysteresis, budget, data integrity.
+- **Chunk** = 64KB region, atomic migration unit.
+- **`ChunkStore`**: chunk array management, find-by-tier + find-with-space.
+- **`MetaStore.chunk_ids`** / **`MetaStore.offsets`** replaced `ptrs` — tier = `chunks[chunk_id].tier`, not pointer-based.
+- **`arena_base`** in Chunk: data always read from the physical arena regardless of `chunk.tier`.
+- **Physical byte copy**: on migration — `dst_arena.alloc(CHUNK_SIZE)`, `@memcpy(chunk.used bytes)`, pointer update.
+- **Heat per-chunk**: accumulated on `access()`, tick operates on chunks (not handles).
+- **`Snapshot`**: per-slot tiers (from chunk.tier) + per-chunk arrays (tiers, heats).
+- **`MigrationResult`**: `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary`.
+- **slot_count**: decremented on release — empty chunks excluded from migration decisions.
 
 ### Components
 
 | Component | Description |
 |-----------|-------------|
 | `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
+| `Chunk` | 64KB region: tier, arena_base, heat, used, arena_offset, slot_count |
+| `ChunkStore` | Chunk array, alloc/find/release-by-tier |
 | `Handle` | Generational slot identifier: slot + generation |
 | `HandleTable` | Slot states (Used/Free), O(1) free-list, invalidation via generation |
-| `MetaStore` | SoA: ptrs, sizes, generations, heats, total_heats, states |
+| `MetaStore` | SoA: chunk_ids, offsets, sizes, generations, heats, total_heats, states |
 | `Arena` | Three-tier bump allocator (L1/L2/L3), fail-fast on OOM |
-| `Transition` | Decision record: handle + src_tier + dst_tier |
-| `Snapshot` | State snapshot: tiers, heats, total_heats, states, ptrs, gens, arena_used |
-| `MigrationResult` | Migration outcome enum |
-| `PanicCode` | INVALID_HANDLE and INVALID_TIER — only through validate functions |
-| `assertInvariant` | Private — only inside validateHandle/validateAccess/validateTier |
+| `Snapshot` | Snapshot: per-slot tiers/heats/states/gens + per-chunk tiers/heats |
+| `assertInvariant` | Private — only inside validateHandle/validateChunkOps |
 
 ### Testing
 
 ```bash
-zig test src\runtime_test.zig   # 28 unit tests
-zig test src\stress_test.zig    # 100k ops stress test
+zig test src\runtime_test.zig   # 27 unit tests (chunk model)
+zig test src\stress_test.zig    # 100k ops: 3817 migrations, deterministic fingerprint
 ```
 
 ### Intrinsic binding

@@ -63,7 +63,120 @@ pub const Tier = enum(u8) {
 };
 
 // ═══════════════════════════════════════════════════════════════════
-// 3. Handle & Metadata (SoA, flat arrays)
+// 3. Chunk — atomic unit of migration
+// ═══════════════════════════════════════════════════════════════════
+
+pub const CHUNK_SIZE = 256; // 64KB in production; 256B for testing with small arenas
+
+pub const Chunk = struct {
+    tier: Tier,
+    arena_base: usize,
+    heat: u32,
+    used: u32,
+    arena_offset: u32,
+    slot_count: u16,
+};
+
+pub const ChunkStore = struct {
+    chunks: []Chunk,
+    count: u32,
+
+    pub fn init(buf: []Chunk) ChunkStore {
+        return .{ .chunks = buf, .count = 0 };
+    }
+
+    pub fn capacity(cs: *const ChunkStore) u32 {
+        return @intCast(cs.chunks.len);
+    }
+
+    pub fn allocChunk(cs: *ChunkStore, tier: Tier, arena_base: usize, arena_offset: u32) ?u32 {
+        if (cs.count >= cs.capacity()) return null;
+        const id = cs.count;
+        cs.count += 1;
+        cs.chunks[id] = .{
+            .tier = tier,
+            .arena_base = arena_base,
+            .heat = 0,
+            .used = 0,
+            .arena_offset = arena_offset,
+            .slot_count = 0,
+        };
+        return id;
+    }
+
+    pub fn get(cs: *const ChunkStore, id: u32) *const Chunk {
+        return &cs.chunks[id];
+    }
+
+    pub fn getMut(cs: *ChunkStore, id: u32) *Chunk {
+        return &cs.chunks[id];
+    }
+
+    pub fn findChunkWithSpace(cs: *const ChunkStore, tier: Tier, size: u32) ?u32 {
+        var i: u32 = 0;
+        while (i < cs.count) : (i += 1) {
+            const c = &cs.chunks[i];
+            if (c.tier == tier and c.used + size <= CHUNK_SIZE) return i;
+        }
+        return null;
+    }
+
+    pub fn findChunksByTier(cs: *const ChunkStore, tier: Tier, out: []u32) u32 {
+        var n: u32 = 0;
+        var i: u32 = 0;
+        while (i < cs.count and n < @as(u32, @intCast(out.len))) : (i += 1) {
+            if (cs.chunks[i].tier == tier) {
+                out[n] = i;
+                n += 1;
+            }
+        }
+        return n;
+    }
+
+    pub fn releaseHandlesInTier(cs: *ChunkStore, tier: Tier, handles: *HandleTable) void {
+        var buf: [256]u32 = undefined;
+        const n = cs.findChunksByTier(tier, &buf);
+        var ci: u32 = 0;
+        while (ci < n) : (ci += 1) {
+            const chunk_id = buf[ci];
+            // Invalidate all handles referencing this chunk
+            const cap = handles.capacity();
+            var si: u32 = 0;
+            while (si < cap) : (si += 1) {
+                if (handles.meta.states[si] == .Used and handles.meta.chunk_ids[si] == chunk_id) {
+                    handles.invalidateSlot(si);
+                }
+            }
+            // Clear chunk
+            cs.chunks[chunk_id] = undefined;
+        }
+        // Compact chunks: shift remaining chunks down
+        if (n > 0) {
+            var write: u32 = buf[0];
+            var read: u32 = buf[0] + 1;
+            while (read < cs.count) : (read += 1) {
+                if (cs.chunks[read].tier == tier) {
+                    // Skip — these are the ones we're removing
+                    continue;
+                }
+                // Update handle chunk_ids pointing to 'read' to point to 'write'
+                const cap = handles.capacity();
+                var si: u32 = 0;
+                while (si < cap) : (si += 1) {
+                    if (handles.meta.states[si] == .Used and handles.meta.chunk_ids[si] == read) {
+                        handles.meta.chunk_ids[si] = write;
+                    }
+                }
+                cs.chunks[write] = cs.chunks[read];
+                write += 1;
+            }
+            cs.count = write;
+        }
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════════
+// 4. Handle & Metadata (SoA, flat arrays)
 // ═══════════════════════════════════════════════════════════════════
 
 pub const SlotState = enum(u8) {
@@ -87,9 +200,10 @@ pub const Handle = struct {
 pub const HANDLE_INVALID: u32 = 0xFFFFFFFF;
 
 /// Metadata stored as Struct-of-Arrays.
-/// Tier is NOT stored — it is derived from which Arena contains the pointer.
+/// Tier is derived from chunk_id → Chunk.tier, NOT from pointer address.
 pub const MetaStore = struct {
-    ptrs: []?*anyopaque,
+    chunk_ids: []u32,
+    offsets: []u32,
     generations: []u32,
     sizes: []u32,
     states: []SlotState,
@@ -98,7 +212,8 @@ pub const MetaStore = struct {
     total_heats: []u32,
 
     pub fn init(
-        ptrs_buf: []?*anyopaque,
+        cid_buf: []u32,
+        off_buf: []u32,
         gen_buf: []u32,
         size_buf: []u32,
         state_buf: []SlotState,
@@ -106,8 +221,9 @@ pub const MetaStore = struct {
         heat_buf: []u32,
         total_heat_buf: []u32,
     ) MetaStore {
-        const cap = ptrs_buf.len;
-        @memset(ptrs_buf, null);
+        const cap = cid_buf.len;
+        @memset(cid_buf, 0xFFFFFFFF);
+        @memset(off_buf, 0);
         @memset(gen_buf, 0);
         @memset(size_buf, 0);
         @memset(state_buf, .Free);
@@ -115,10 +231,11 @@ pub const MetaStore = struct {
         @memset(total_heat_buf, 0);
         var i: u32 = 0;
         while (i < cap) : (i += 1) {
-            free_buf[i] = i + 1; // intrusive free list
+            free_buf[i] = i + 1;
         }
         return .{
-            .ptrs = ptrs_buf,
+            .chunk_ids = cid_buf,
+            .offsets = off_buf,
             .generations = gen_buf,
             .sizes = size_buf,
             .states = state_buf,
@@ -129,12 +246,12 @@ pub const MetaStore = struct {
     }
 
     pub fn capacity(ms: *const MetaStore) u32 {
-        return @intCast(ms.ptrs.len);
+        return @intCast(ms.chunk_ids.len);
     }
 };
 
-/// HandleTable = source of truth.
-/// Arena is a dumb byte provider. Tier is derived from pointer address.
+/// HandleTable = source of truth for slot metadata.
+/// Tier is derived from chunk_id → Chunk.tier, NOT from pointer address.
 pub const HandleTable = struct {
     meta: MetaStore,
     free_head: u32,
@@ -152,10 +269,8 @@ pub const HandleTable = struct {
         return ht.meta.capacity();
     }
 
-    // ── 3 validation functions — ONLY entry points for invariant checks ──
+    // ── Validation ──
 
-    /// Validate that a handle is internally consistent:
-    /// slot in range, slot is Used, generation matches.
     pub fn validateHandle(ht: *const HandleTable, handle: Handle) void {
         assertInvariant(handle.isValid(), .INVALID_HANDLE);
         assertInvariant(handle.slot < ht.capacity(), .INVALID_HANDLE);
@@ -163,19 +278,11 @@ pub const HandleTable = struct {
         assertInvariant(ht.meta.generations[handle.slot] == handle.generation, .INVALID_HANDLE);
     }
 
-    /// Validate handle + pointer consistency (ptr must be non-null).
-    pub fn validateAccess(ht: *const HandleTable, handle: Handle) void {
-        validateHandle(ht, handle);
-        assertInvariant(ht.meta.ptrs[handle.slot] != null, .INVALID_HANDLE);
-    }
-
     // ── Operations ──
 
-    /// O(1) alloc from free list.
-    pub fn alloc(ht: *HandleTable, ptr: ?*anyopaque, size: u32) Handle {
+    pub fn alloc(ht: *HandleTable, chunk_id: u32, offset: u32, size: u32) Handle {
         const cap = ht.capacity();
         const slot = ht.free_head;
-        // precondition: free_head is valid
         if (slot >= cap) unreachable;
         if (ht.meta.states[slot] != .Free) unreachable;
 
@@ -183,7 +290,8 @@ pub const HandleTable = struct {
         const next_gen = ht.meta.generations[slot] +% 1;
         const gen: u32 = if (next_gen == 0) 1 else next_gen;
 
-        ht.meta.ptrs[slot] = ptr;
+        ht.meta.chunk_ids[slot] = chunk_id;
+        ht.meta.offsets[slot] = offset;
         ht.meta.generations[slot] = gen;
         ht.meta.sizes[slot] = size;
         ht.meta.states[slot] = .Used;
@@ -192,11 +300,16 @@ pub const HandleTable = struct {
         return .{ .slot = slot, .generation = gen };
     }
 
-    /// O(1) release: push slot back to free list.
-    pub fn release(ht: *HandleTable, handle: Handle) void {
+    pub fn release(ht: *HandleTable, handle: Handle, chunk_store: *ChunkStore) void {
         validateHandle(ht, handle);
         const slot = handle.slot;
-        ht.meta.ptrs[slot] = null;
+        const chunk_id = ht.meta.chunk_ids[slot];
+        if (chunk_id < chunk_store.count) {
+            const ch = &chunk_store.chunks[chunk_id];
+            if (ch.slot_count > 0) ch.slot_count -= 1;
+        }
+        ht.meta.chunk_ids[slot] = 0xFFFFFFFF;
+        ht.meta.offsets[slot] = 0;
         ht.meta.states[slot] = .Free;
         ht.meta.sizes[slot] = 0;
         ht.meta.heats[slot] = 0;
@@ -205,28 +318,19 @@ pub const HandleTable = struct {
         ht.count -= 1;
     }
 
-    /// Invalidate a single slot (used on arena reset).
-    /// Generation INCREMENTS so old handles stay invalid.
     pub fn invalidateSlot(ht: *HandleTable, slot: u32) void {
         if (slot >= ht.capacity()) return;
         if (ht.meta.states[slot] != .Used) return;
         const next_gen = ht.meta.generations[slot] +% 1;
         ht.meta.generations[slot] = if (next_gen == 0) 1 else next_gen;
-        ht.meta.ptrs[slot] = null;
+        ht.meta.chunk_ids[slot] = 0xFFFFFFFF;
+        ht.meta.offsets[slot] = 0;
         ht.meta.states[slot] = .Free;
         ht.meta.sizes[slot] = 0;
         ht.meta.heats[slot] = 0;
         ht.meta.free_next[slot] = ht.free_head;
         ht.free_head = slot;
         ht.count -= 1;
-    }
-
-    /// Access handle payload. Returns `[]u8` for the stored size.
-    pub fn access(ht: *const HandleTable, handle: Handle) []u8 {
-        validateAccess(ht, handle);
-        const slot = handle.slot;
-        const size = ht.meta.sizes[slot];
-        return @as([*]u8, @ptrCast(ht.meta.ptrs[slot].?))[0..size];
     }
 
     pub fn touch(ht: *HandleTable, handle: Handle) void {
@@ -284,13 +388,6 @@ pub const Arena = struct {
         return arena.end_addr - arena.cursor_addr;
     }
 
-    pub fn containsAddr(arena: *const Arena, addr: usize) bool {
-        return addr >= arena.base_addr and addr < arena.end_addr;
-    }
-
-    pub fn containsPtr(arena: *const Arena, ptr: [*]u8) bool {
-        return containsAddr(arena, @intFromPtr(ptr));
-    }
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -353,7 +450,7 @@ pub const RingLogger = struct {
 };
 
 // ═══════════════════════════════════════════════════════════════════
-// 6. TieredRuntime — hardened Stage 1 kernel
+// 6. TieredRuntime — Stage 2: chunk-based memory physics
 // ═══════════════════════════════════════════════════════════════════
 
 pub const TieredRuntime = struct {
@@ -361,15 +458,10 @@ pub const TieredRuntime = struct {
     l2: Arena,
     l3: Arena,
     handles: HandleTable,
+    chunks: ChunkStore,
     logger: RingLogger,
     epoch: u64,
     retired_count: u32,
-
-    pub const Transition = struct {
-        handle: Handle,
-        src_tier: Tier,
-        dst_tier: Tier,
-    };
 
     pub const MigrationResult = enum {
         success,
@@ -383,8 +475,11 @@ pub const TieredRuntime = struct {
         heats: []u32,
         total_heats: []u32,
         states: []SlotState,
-        ptrs: []?*anyopaque,
+        chunk_ids: []u32,
+        offsets: []u32,
         gens: []u32,
+        chunk_tiers: []Tier,
+        chunk_heats: []u32,
         epoch: u64,
         retired_count: u32,
         arena_used_l1: usize,
@@ -393,17 +488,37 @@ pub const TieredRuntime = struct {
 
         pub fn capture(tr: *const TieredRuntime, allocator: std.mem.Allocator) !Snapshot {
             const cap = tr.handles.capacity();
+            const cc = tr.chunks.capacity();
             const tiers = try allocator.alloc(Tier, cap);
-            for (tr.handles.meta.ptrs, 0..) |p, i| {
-                tiers[i] = tr.classifyPtr(p) orelse @as(Tier, .DISK);
+            for (0..cap) |i| {
+                if (tr.handles.meta.states[i] == .Used) {
+                    const cid = tr.handles.meta.chunk_ids[i];
+                    tiers[i] = tr.chunks.chunks[cid].tier;
+                } else {
+                    tiers[i] = .DISK;
+                }
+            }
+            const chunk_tiers = try allocator.alloc(Tier, cc);
+            const chunk_heats = try allocator.alloc(u32, cc);
+            for (0..cc) |i| {
+                if (i < tr.chunks.count) {
+                    chunk_tiers[i] = tr.chunks.chunks[i].tier;
+                    chunk_heats[i] = tr.chunks.chunks[i].heat;
+                } else {
+                    chunk_tiers[i] = .DISK;
+                    chunk_heats[i] = 0;
+                }
             }
             return Snapshot{
                 .tiers = tiers,
                 .heats = try allocator.dupe(u32, tr.handles.meta.heats[0..]),
                 .total_heats = try allocator.dupe(u32, tr.handles.meta.total_heats[0..]),
                 .states = try allocator.dupe(SlotState, tr.handles.meta.states[0..]),
-                .ptrs = try allocator.dupe(?*anyopaque, tr.handles.meta.ptrs[0..]),
+                .chunk_ids = try allocator.dupe(u32, tr.handles.meta.chunk_ids[0..]),
+                .offsets = try allocator.dupe(u32, tr.handles.meta.offsets[0..]),
                 .gens = try allocator.dupe(u32, tr.handles.meta.generations[0..]),
+                .chunk_tiers = chunk_tiers,
+                .chunk_heats = chunk_heats,
                 .epoch = tr.epoch,
                 .retired_count = tr.retired_count,
                 .arena_used_l1 = tr.l1.used(),
@@ -417,8 +532,11 @@ pub const TieredRuntime = struct {
             allocator.free(s.heats);
             allocator.free(s.total_heats);
             allocator.free(s.states);
-            allocator.free(s.ptrs);
+            allocator.free(s.chunk_ids);
+            allocator.free(s.offsets);
             allocator.free(s.gens);
+            allocator.free(s.chunk_tiers);
+            allocator.free(s.chunk_heats);
         }
 
         pub fn tierOfSlot(s: *const Snapshot, slot: u32) ?Tier {
@@ -433,56 +551,52 @@ pub const TieredRuntime = struct {
         l3_buf: []u8,
         meta_store: MetaStore,
         log_buf: []RuntimeEvent,
+        chunk_buf: []Chunk,
     ) TieredRuntime {
         return .{
             .l1 = Arena.init(l1_buf),
             .l2 = Arena.init(l2_buf),
             .l3 = Arena.init(l3_buf),
             .handles = HandleTable.init(meta_store),
+            .chunks = ChunkStore.init(chunk_buf),
             .logger = RingLogger.init(log_buf),
             .epoch = 0,
             .retired_count = 0,
         };
     }
 
-    // ── Tier derivation (single source of truth for address → Tier) ──
+    // ── Tier derivation ──
 
-    /// Central classifier: any pointer → Tier | null.
-    /// This is THE ONLY function that maps addresses to tiers.
-    pub fn classifyPtr(tr: *const TieredRuntime, ptr: ?*anyopaque) ?Tier {
-        const addr = @intFromPtr(ptr);
-        if (tr.l1.containsAddr(addr)) return .L1;
-        if (tr.l2.containsAddr(addr)) return .L2;
-        if (tr.l3.containsAddr(addr)) return .L3;
-        return null;
-    }
-
-    /// Resolve handle to its tier via MetaStore → classifyPtr.
     pub fn tierOfHandle(tr: *const TieredRuntime, handle: Handle) Tier {
         tr.handles.validateHandle(handle);
-        const t = tr.classifyPtr(tr.handles.meta.ptrs[handle.slot]) orelse {
-            assertInvariant(false, .INVALID_TIER);
-            unreachable;
-        };
-        return t;
+        const cid = tr.handles.meta.chunk_ids[handle.slot];
+        return tr.chunks.chunks[cid].tier;
     }
 
-    // ── Tier validation ──
-
-    pub fn validateTier(tr: *const TieredRuntime, handle: Handle, expected: Tier) void {
-        tr.handles.validateHandle(handle);
-        const actual = tr.tierOfPtr(tr.handles.meta.ptrs[handle.slot]) orelse {
-            assertInvariant(false, .INVALID_TIER);
-            unreachable;
-        };
-        assertInvariant(actual == expected, .INVALID_TIER);
-    }
-
-    // ── Allocation (HandleTable owns, Arena provides) ──
+    // ── Allocation (chunk-aware) ──
 
     fn allocInArena(tr: *TieredRuntime, arena: *Arena, size: u32, tier: Tier) Handle {
-        const ptr = arena.alloc(size) orelse return Handle.invalid();
-        const h = tr.handles.alloc(ptr, size);
+        // Find existing chunk with space
+        if (tr.chunks.findChunkWithSpace(tier, size)) |chunk_id| {
+            const chunk = &tr.chunks.chunks[chunk_id];
+            const offset = chunk.used;
+            chunk.used += size;
+            chunk.slot_count += 1;
+            const h = tr.handles.alloc(chunk_id, offset, size);
+            const tier_bits = @as(u32, @intCast(@intFromEnum(tier))) << 24;
+            tr.logger.log(.ALLOC, h.slot, h.generation, size | tier_bits);
+            return h;
+        }
+        // No chunk with space: allocate a new chunk from arena
+        const mem = arena.alloc(CHUNK_SIZE) orelse return Handle.invalid();
+        const arena_offset = @as(u32, @intCast(@intFromPtr(mem) - arena.base_addr));
+        const chunk_id = tr.chunks.allocChunk(tier, arena.base_addr, arena_offset) orelse return Handle.invalid();
+        {
+            const chunk = &tr.chunks.chunks[chunk_id];
+            chunk.used = size;
+            chunk.slot_count = 1;
+        }
+        const h = tr.handles.alloc(chunk_id, 0, size);
         const tier_bits = @as(u32, @intCast(@intFromEnum(tier))) << 24;
         tr.logger.log(.ALLOC, h.slot, h.generation, size | tier_bits);
         return h;
@@ -506,63 +620,82 @@ pub const TieredRuntime = struct {
         const gen = tr.handles.meta.generations[slot];
         const size = tr.handles.meta.sizes[slot];
         tr.logger.log(.RELEASE, slot, gen, size);
-        tr.handles.release(handle);
+        tr.handles.release(handle, &tr.chunks);
     }
 
     // ── Access ──
 
     pub fn access(tr: *TieredRuntime, handle: Handle) []u8 {
-        tr.handles.touch(handle);
-        return tr.handles.access(handle);
-    }
-
-    pub fn accessUntouched(tr: *const TieredRuntime, handle: Handle) []u8 {
-        return tr.handles.access(handle);
-    }
-
-    // ── Tier migration (copy → validate → swap → retire) ──
-
-    fn migrate(tr: *TieredRuntime, t: Transition) MigrationResult {
-        if (!t.handle.isValid()) return .invalid_handle;
-        tr.handles.validateAccess(t.handle);
-        const slot = t.handle.slot;
+        tr.handles.validateHandle(handle);
+        const slot = handle.slot;
         const size = tr.handles.meta.sizes[slot];
-        const src_ptr = tr.handles.meta.ptrs[slot] orelse return .invalid_handle;
-        const dst_arena = tr.arenaForTier(t.dst_tier);
-        const dst_ptr = dst_arena.alloc(size) orelse return .dst_full;
 
-        @memcpy(@as([*]u8, @ptrCast(dst_ptr))[0..size], @as([*]u8, @ptrCast(src_ptr))[0..size]);
+        tr.handles.touch(handle);
 
-        tr.handles.meta.ptrs[slot] = dst_ptr;
+        const chunk_id = tr.handles.meta.chunk_ids[slot];
+        const chunk = &tr.chunks.chunks[chunk_id];
+        if (chunk.heat < std.math.maxInt(u32)) chunk.heat += 1;
+
+        const offset = tr.handles.meta.offsets[slot];
+        const ptr = @as([*]u8, @ptrFromInt(chunk.arena_base + chunk.arena_offset + offset));
+        return ptr[0..size];
+    }
+
+    pub fn accessUntouched(tr: *TieredRuntime, handle: Handle) []u8 {
+        tr.handles.validateHandle(handle);
+        const slot = handle.slot;
+        const size = tr.handles.meta.sizes[slot];
+        const chunk_id = tr.handles.meta.chunk_ids[slot];
+        const chunk = &tr.chunks.chunks[chunk_id];
+        const offset = tr.handles.meta.offsets[slot];
+        const ptr = @as([*]u8, @ptrFromInt(chunk.arena_base + chunk.arena_offset + offset));
+        return ptr[0..size];
+    }
+
+    // ── Chunk migration (tier switch + physical byte copy) ──
+
+    pub fn migrateChunk(tr: *TieredRuntime, chunk_id: u32, dst_tier: Tier) MigrationResult {
+        if (chunk_id >= tr.chunks.count) return .invalid_handle;
+        const chunk = &tr.chunks.chunks[chunk_id];
+        if (!chunk.tier.isValidTransition(dst_tier)) return .at_boundary;
+        const src_tier = chunk.tier;
+
+        // Allocate destination memory in the target arena
+        const dst_arena = tr.arenaForTier(dst_tier);
+        const dst_mem = dst_arena.alloc(CHUNK_SIZE) orelse return .dst_full;
+        const dst_arena_offset = @as(u32, @intCast(@intFromPtr(dst_mem) - dst_arena.base_addr));
+
+        // Copy used bytes from source to destination
+        const src_ptr = @as([*]u8, @ptrFromInt(chunk.arena_base + chunk.arena_offset));
+        const dst_ptr = @as([*]u8, @ptrFromInt(dst_arena.base_addr + dst_arena_offset));
+        @memcpy(dst_ptr[0..chunk.used], src_ptr[0..chunk.used]);
+
+        // Update chunk metadata to point to new location
+        chunk.arena_base = dst_arena.base_addr;
+        chunk.arena_offset = dst_arena_offset;
+        chunk.tier = dst_tier;
+        chunk.heat >>= 1;
 
         tr.retired_count += 1;
-        const tier_bits = @as(u32, @intCast(@intFromEnum(t.dst_tier))) << 24;
-        tr.logger.log(.MIGRATE, slot, tr.handles.meta.generations[slot], size | tier_bits);
+        const tier_bits = @as(u32, @intCast(@intFromEnum(src_tier))) << 24 | @as(u32, @intCast(@intFromEnum(dst_tier))) << 16;
+        tr.logger.log(.MIGRATE, chunk_id, 0, tier_bits);
         return .success;
     }
 
-    fn applyMigration(tr: *TieredRuntime, t: Transition) MigrationResult {
-        return tr.migrate(t);
-    }
-
     pub fn moveHotter(tr: *TieredRuntime, handle: Handle) MigrationResult {
-        const src_tier = tr.tierOfHandle(handle);
+        tr.handles.validateHandle(handle);
+        const chunk_id = tr.handles.meta.chunk_ids[handle.slot];
+        const src_tier = tr.chunks.chunks[chunk_id].tier;
         const dst_tier = src_tier.moveHotter() orelse return .at_boundary;
-        return tr.applyMigration(.{
-            .handle = handle,
-            .src_tier = src_tier,
-            .dst_tier = dst_tier,
-        });
+        return tr.migrateChunk(chunk_id, dst_tier);
     }
 
     pub fn moveColder(tr: *TieredRuntime, handle: Handle) MigrationResult {
-        const src_tier = tr.tierOfHandle(handle);
+        tr.handles.validateHandle(handle);
+        const chunk_id = tr.handles.meta.chunk_ids[handle.slot];
+        const src_tier = tr.chunks.chunks[chunk_id].tier;
         const dst_tier = src_tier.moveColder() orelse return .at_boundary;
-        return tr.applyMigration(.{
-            .handle = handle,
-            .src_tier = src_tier,
-            .dst_tier = dst_tier,
-        });
+        return tr.migrateChunk(chunk_id, dst_tier);
     }
 
     fn arenaForTier(tr: *TieredRuntime, tier: Tier) *Arena {
@@ -577,22 +710,7 @@ pub const TieredRuntime = struct {
     // ── Arena reset ──
 
     fn resetArena(tr: *TieredRuntime, arena: *Arena, tier: Tier) void {
-        const base = arena.base_addr;
-        const end = arena.end_addr;
-        const cap = tr.handles.capacity();
-        var i: u32 = 0;
-        while (i < cap) : (i += 1) {
-            if (tr.handles.meta.states[i] == .Used) {
-                if (tr.handles.meta.ptrs[i]) |ptr| {
-                    const addr = @intFromPtr(ptr);
-                    if (addr >= base and addr < end) {
-                        const gen = tr.handles.meta.generations[i];
-                        tr.logger.log(.RESET_INVALIDATE, i, gen, @intCast(@intFromEnum(tier)));
-                        tr.handles.invalidateSlot(i);
-                    }
-                }
-            }
-        }
+        tr.chunks.releaseHandlesInTier(tier, &tr.handles);
         arena.reset();
         tr.logger.log(.RESET_INVALIDATE, 0, 0, @intCast(@intFromEnum(tier)));
     }
@@ -611,46 +729,51 @@ pub const TieredRuntime = struct {
         tr.epoch += 1;
         tr.logger.tick();
 
-        // 1. Heat decay + collect migration candidates
+        // 1. Decay chunk heat + handle heat
+        var ci: u32 = 0;
+        while (ci < tr.chunks.count) : (ci += 1) {
+            tr.chunks.chunks[ci].heat >>= 1;
+        }
         const cap = tr.handles.capacity();
-        var candidates: [MIGRATION_BUDGET]struct { slot: u32, promote: bool } = undefined;
-        var n_candidates: u32 = 0;
-
         for (0..cap) |i| {
-            if (tr.handles.meta.states[i] != .Used) continue;
-            const slot: u32 = @intCast(i);
-
-            // Decay: heat >>= 1
-            tr.handles.meta.heats[slot] >>= 1;
-
-            if (n_candidates >= MIGRATION_BUDGET) continue;
-            const heat = tr.handles.meta.heats[slot];
-            const ptr = tr.handles.meta.ptrs[slot] orelse continue;
-            const current = tr.classifyPtr(ptr) orelse continue;
-
-            if (heat > PROMOTE_THRESH and current != .L1) {
-                candidates[n_candidates] = .{ .slot = slot, .promote = true };
-                n_candidates += 1;
-            } else if (heat < DEMOTE_THRESH and current != .L3) {
-                candidates[n_candidates] = .{ .slot = slot, .promote = false };
-                n_candidates += 1;
+            if (tr.handles.meta.states[i] == .Used) {
+                tr.handles.meta.heats[i] >>= 1;
+                tr.handles.meta.total_heats[i] >>= 1;
             }
         }
 
-        // 2. Apply migrations within budget
-        var migrated: u32 = 0;
-        var mig_fails: [3]u32 = .{0, 0, 0};
-        for (0..n_candidates) |j| {
-            const c = candidates[j];
-            const gen = tr.handles.meta.generations[c.slot];
-            const handle = Handle{ .slot = c.slot, .generation = gen };
-            const result = if (c.promote) tr.moveHotter(handle) else tr.moveColder(handle);
-            switch (result) {
-                .success => migrated += 1,
-                .dst_full => mig_fails[0] += 1,
-                .invalid_handle => mig_fails[1] += 1,
-                .at_boundary => mig_fails[2] += 1,
+        // 2. Collect migration candidates (chunks)
+        var promote_cands: [MIGRATION_BUDGET]u32 = undefined;
+        var demote_cands: [MIGRATION_BUDGET]u32 = undefined;
+        var np: u32 = 0;
+        var nd: u32 = 0;
+
+        ci = 0;
+        while (ci < tr.chunks.count and (np < MIGRATION_BUDGET or nd < MIGRATION_BUDGET)) : (ci += 1) {
+            const ch = &tr.chunks.chunks[ci];
+            if (ch.slot_count == 0) continue;
+            if (ch.heat > PROMOTE_THRESH and ch.tier != .L1 and np < MIGRATION_BUDGET) {
+                promote_cands[np] = ci;
+                np += 1;
+            } else if (ch.heat < DEMOTE_THRESH and ch.tier != .L3 and nd < MIGRATION_BUDGET) {
+                demote_cands[nd] = ci;
+                nd += 1;
             }
+        }
+
+        // 3. Apply migrations
+        var migrated: u32 = 0;
+        var i: u32 = 0;
+        while (i < np) : (i += 1) {
+            const ch = &tr.chunks.chunks[promote_cands[i]];
+            const dst = ch.tier.moveHotter() orelse continue;
+            if (tr.migrateChunk(promote_cands[i], dst) == .success) migrated += 1;
+        }
+        i = 0;
+        while (i < nd) : (i += 1) {
+            const ch = &tr.chunks.chunks[demote_cands[i]];
+            const dst = ch.tier.moveColder() orelse continue;
+            if (tr.migrateChunk(demote_cands[i], dst) == .success) migrated += 1;
         }
 
         tr.logger.log(.TICK, 0, 0, migrated);
