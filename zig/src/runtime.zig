@@ -98,10 +98,11 @@ pub const ChunkStore = struct {
     }
 
     pub fn allocChunk(cs: *ChunkStore, tier: Tier, arena_base: usize, arena_offset: u32) ?u32 {
-        // Reuse from free list first
-        if (cs.free_count > 0) {
+        // Reuse from free list first — skip stale entries (slot_count != 0)
+        while (cs.free_count > 0) {
             cs.free_count -= 1;
             const id = cs.free_list[cs.free_count];
+            if (cs.chunks[id].slot_count != 0) continue; // stale — another alloc grabbed it
             cs.chunks[id] = .{
                 .tier = tier,
                 .arena_base = arena_base,
@@ -128,8 +129,12 @@ pub const ChunkStore = struct {
         return id;
     }
 
+    pub fn isLive(ch: *const Chunk) bool {
+        return ch.slot_count > 0;
+    }
+
     pub fn freeChunk(cs: *ChunkStore, id: u32) void {
-        cs.chunks[id] = undefined;
+        cs.chunks[id].slot_count = 0;
         cs.free_list[cs.free_count] = id;
         cs.free_count += 1;
     }
@@ -146,7 +151,7 @@ pub const ChunkStore = struct {
         var i: u32 = 0;
         while (i < cs.count) : (i += 1) {
             const c = &cs.chunks[i];
-            if (c.tier == tier and c.slot_count > 0 and c.used + size <= CHUNK_SIZE) return i;
+            if (c.tier == tier and isLive(c) and c.used + size <= CHUNK_SIZE) return i;
         }
         return null;
     }
@@ -177,8 +182,8 @@ pub const ChunkStore = struct {
                     handles.invalidateSlot(si);
                 }
             }
-            // Clear chunk
-            cs.chunks[chunk_id] = undefined;
+            // Mark freed (slot_count = 0, but don't clear — keep metadata for debug)
+            cs.chunks[chunk_id].slot_count = 0;
         }
         // Compact chunks: shift remaining chunks down
         if (n > 0) {
@@ -893,22 +898,51 @@ pub const TieredRuntime = struct {
         }
     }
 
+    fn verifyCompaction(tr: *TieredRuntime, live_ids: []const u32, arena: *const Arena, tier: Tier) void {
+        _ = arena;
+        // Debug-only: verify no live chunk overlaps, all have slot_count > 0
+        var ci: u32 = 0;
+        while (ci < tr.chunks.count) : (ci += 1) {
+            const ch = &tr.chunks.chunks[ci];
+            if (ch.tier == tier and ChunkStore.isLive(ch)) {
+                // Must be in live_ids
+                var found = false;
+                for (live_ids) |id| {
+                    if (id == ci) { found = true; break; }
+                }
+                assertInvariant(found, .INVALID_HANDLE);
+            }
+        }
+        // Verify no overlapping allocations in live set
+        for (live_ids, 0..) |a_id, ai| {
+            const a = &tr.chunks.chunks[a_id];
+            for (live_ids[ai + 1 ..]) |b_id| {
+                const b = &tr.chunks.chunks[b_id];
+                const a_start = a.arena_offset;
+                const a_end = a_start + a.used;
+                const b_start = b.arena_offset;
+                const b_end = b_start + b.used;
+                assertInvariant(a_end <= b_start or b_end <= a_start, .INVALID_HANDLE);
+            }
+        }
+    }
+
     fn compactArena(tr: *TieredRuntime, arena: *Arena, tier: Tier, allocator: std.mem.Allocator) void {
-        // 1. Collect live chunks in this tier
+        // STEP 1: collect only live chunks (slot_count > 0)
         var live_ids = std.ArrayList(u32).init(allocator);
         defer live_ids.deinit();
         {
             var ci: u32 = 0;
             while (ci < tr.chunks.count) : (ci += 1) {
                 const ch = &tr.chunks.chunks[ci];
-                if (ch.tier == tier and ch.slot_count > 0) {
+                if (ch.tier == tier and ChunkStore.isLive(ch)) {
                     live_ids.append(ci) catch return;
                 }
             }
         }
         if (live_ids.items.len == 0) return;
 
-        // 2. Save all live data to a temp buffer
+        // STEP 2: snapshot — copy all live data to temp buffer BEFORE reset
         var data = std.ArrayList(u8).init(allocator);
         defer data.deinit();
         var saved_offsets = std.ArrayList(u32).init(allocator);
@@ -917,21 +951,30 @@ pub const TieredRuntime = struct {
         for (live_ids.items) |cid| {
             const ch = &tr.chunks.chunks[cid];
             saved_offsets.append(@intCast(data.items.len)) catch return;
-            const slice = @as([*]u8, @ptrFromInt(ch.arena_base + ch.arena_offset))[0..ch.used];
-            data.appendSlice(slice) catch return;
+            const src_base = @as([*]u8, @ptrFromInt(ch.arena_base + ch.arena_offset));
+            data.appendSlice(src_base[0..ch.used]) catch return;
         }
 
-        // 3. Reset the arena
+        // STEP 3: reset arena after all data is safely in temp buffer
         arena.reset();
 
-        // 4. Re-allocate chunks sequentially, copy data back
+        // STEP 4: restore — re-allocate chunks sequentially at arena start
         for (live_ids.items, 0..) |cid, idx| {
             const ch = &tr.chunks.chunks[cid];
+            // Save old used/slot_count before overwriting arena metadata
+            const ch_used = ch.used;
+            _ = ch_used; // use below
             const mem = arena.alloc(CHUNK_SIZE) orelse return;
             ch.arena_base = arena.base_addr;
             ch.arena_offset = @intCast(@intFromPtr(mem) - arena.base_addr);
-            const dst = @as([*]u8, @ptrFromInt(ch.arena_base + ch.arena_offset));
-            @memcpy(dst[0..ch.used], data.items[saved_offsets.items[idx]..][0..ch.used]);
+            const dst_base = @as([*]u8, @ptrFromInt(ch.arena_base + ch.arena_offset));
+            const src_start = saved_offsets.items[idx];
+            @memcpy(dst_base[0..ch.used], data.items[src_start..][0..ch.used]);
+        }
+
+        // STEP 5: verify (debug only)
+        if (std.debug.runtime_safety) {
+            verifyCompaction(tr, live_ids.items, arena, tier);
         }
     }
 
@@ -940,6 +983,8 @@ pub const TieredRuntime = struct {
             const arena = tr.arenaForTier(tier);
             tr.compactArena(arena, tier, allocator);
         }
+        // Free-list entries remain valid — freed chunks have slot_count == 0
+        // and will have their metadata overwritten on re-allocation.
     }
 };
 
