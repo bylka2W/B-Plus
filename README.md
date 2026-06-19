@@ -490,8 +490,12 @@ zig/                    — компилятор (Zig, активная разр
   src/
     main.zig            — точка входа, CLI, оркестрация
     runtime.zig          — Stage 2 runtime kernel (handle table, arena, FSM, migration, Snapshot)
-    runtime_test.zig     — 28 unit tests: alloc, release, tick, migration, decay, budget
+    runtime_test.zig     — 40 unit tests: alloc, release, tick, migration, decay, budget, memory layer
     stress_test.zig      — stress test: 100k ops with snapshot-based formal invariant verification
+    cpu.zig              — Stage 7.0a CPU topology detection (Windows kernel32 extern)
+    latency.zig          — Stage 7.3 LatencyProfile, CoreStats, LoadState (adaptive thresholds)
+    scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
+    scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
     parser.zig          — лексер + парсер .b+
     ast.zig             — типы AST (состояния, переходы и т.д.)
     x64gen.zig          — генератор машинного кода x64 (+ Intrinsic binding к runtime)
@@ -611,7 +615,67 @@ migrateChunk → tier switch + memcpy used bytes (физическое копи�
 - **API**: `setAllocator(allocator)` включает компакшен. Без него — только free-list.
 - **Stress stable** — fingerprint обновлён из-за переиспользования chunk_id.
 
-### Компоненты
+### Stage 7: Architecture-Aware Runtime Scheduler
+
+`src/scheduler.zig` — упреждающий планировщик с NUMA-локали, латентностной защитой и per-core адаптивными порогами.
+
+```text
+Job → WorkerPool → worker[N] (per-core LIFO queue)
+         ↓
+    steal(neighbor) ← cost-benefit → migrate(job)
+         ↓
+    load_state (NORMAL ↔ MEDIUM ↔ OVERLOAD)
+```
+
+#### 7.0a CPU topology detection (`src/cpu.zig`)
+
+- **`CpuTopology`**: logical/physical cores, HT siblings, кеш-иерархия (дедупликация), NUMA nodes, CPU-класс (tiny/pc/workstation/manycore).
+- **Windows kernel32 extern**: `GetLogicalProcessorInformationEx` (primary) + `GetLogicalProcessorInformation` (fallback).
+- **Cache dedup**: одна запись на уникальный уровень/размер кеша, не per-core.
+
+#### 7.3 Latency Protection layer
+
+**Core model**:
+- **`LatencyProfile`**: матрица стоимости миграции, NUMA-пенальти, кеш-дистанция, per-core NUMA.
+- **Score**: `load × LOAD_PENALTY + migrationCost + cacheDistance × SCALE + numaPenalty`.
+- **Cost heuristics**: HT-sibling=50ns, same-NUMA=200ns, cross-NUMA=1000ns.
+
+**Per-core adaptive steal threshold**:
+- Каждое ядро ведёт `CoreStats` (attempts, successes, EMA cost/benefit).
+- Порог = `avg_cost + avg_cost × fail_ratio / 2` — ядро само учится, какие steal выгодны.
+- `fail_ratio = (attempts − succ) / attempts` (fixed-point, α=1/16).
+- Холодный старт: `cost × 2` при attempts < 4.
+
+**Sticky core + hysteresis**:
+- `Job.sticky_core` / `stickiness` — задача остаётся на своём ядре при steal-попытке.
+- `migration_cooldown_ns=50ms` — запрет ping-pong миграций.
+
+**Load state machine (трёхуровневая с гистерезисом)**:
+```
+                   smoothed ≥ 4 (MEDIUM_ENTER)
+     NORMAL ─────────────────────────────► MEDIUM
+         ◄───────────────────────────────
+         smoothed ≤ 2 (MEDIUM_EXIT)
+
+                   smoothed ≥ 8 (OVERLOAD_ENTER)
+     MEDIUM ─────────────────────────────► OVERLOAD
+         ◄───────────────────────────────
+         smoothed ≤ 5 (OVERLOAD_EXIT)
+```
+- **`smoothed_load`**: EMA очереди ядра (α=1/8) — защита от burst noise.
+- **NORMAL**: строгий cost-benefit + adaptive threshold + sticky honored + cooldown.
+- **MEDIUM**: relaxed (cost-benefit пропущен) + sticky honored + cooldown.
+- **OVERLOAD**: bypass всего — steal без условий, sticky отключён, cooldown отключён.
+
+**Overload escape**: при OVERLOAD-состоянии жертвы — все ограничения locality снимаются, предотвращая biased locality trap.
+
+#### Тестирование
+
+```bash
+zig test src\scheduler_test.zig   # 16 tests (sync/threaded/priority/steal/latency/state-machine)
+zig test src\latency_test.zig     # 5 tests (matrix build, NUMA, migration log, score)
+zig test src\cpu_test.zig         # 1 test (topology detection)
+```
 
 | Компонент | Описание |
 |-----------|----------|
@@ -628,8 +692,9 @@ migrateChunk → tier switch + memcpy used bytes (физическое копи�
 ### Тестирование
 
 ```bash
-zig test src\runtime_test.zig   # 39 unit tests (chunk-модель + cooldown + top-K + cost + memory layer)
+zig test src\runtime_test.zig   # 40 unit tests (chunk-модель + cooldown + top-K + cost + memory layer)
 zig test src\stress_test.zig    # 100k ops: 3817 миграций, фингерпринт детерминирован
+zig test src\scheduler_test.zig # 16 tests: sync/threaded/priority/steal/latency/state-machine
 ```
 
 ### Intrinsic binding
@@ -1159,8 +1224,12 @@ zig/                    — compiler (Zig, active development)
   src/
     main.zig            — entry point, CLI, orchestration
     runtime.zig          — Stage 2 runtime kernel (handle table, arena, FSM, migration, Snapshot)
-    runtime_test.zig     — 28 unit tests: alloc, release, tick, migration, decay, budget
+    runtime_test.zig     — 40 unit tests: alloc, release, tick, migration, decay, budget, memory layer
     stress_test.zig      — stress test: 100k ops with snapshot-based formal invariant verification
+    cpu.zig              — Stage 7.0a CPU topology detection (Windows kernel32 extern)
+    latency.zig          — Stage 7.3 LatencyProfile, CoreStats, LoadState (adaptive thresholds)
+    scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
+    scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
     parser.zig          — lexer + parser for .b+
     ast.zig             — AST types (states, transitions, etc.)
     x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime).
@@ -1284,7 +1353,67 @@ migrateChunk → tier switch + memcpy used bytes (physical copy)
 - **API**: `setAllocator(allocator)` enables compaction. Without it — free-list only.
 - **Stress stable** — fingerprint updated due to chunk_id reuse.
 
-### Components
+### Stage 7: Architecture-Aware Runtime Scheduler
+
+`src/scheduler.zig` — preemptive scheduler with NUMA locality, latency protection, and per-core adaptive thresholds.
+
+```text
+Job → WorkerPool → worker[N] (per-core LIFO queue)
+         ↓
+    steal(neighbor) ← cost-benefit → migrate(job)
+         ↓
+    load_state (NORMAL ↔ MEDIUM ↔ OVERLOAD)
+```
+
+#### 7.0a CPU topology detection (`src/cpu.zig`)
+
+- **`CpuTopology`**: logical/physical cores, HT siblings, cache hierarchy (deduplicated), NUMA nodes, CPU class (tiny/pc/workstation/manycore).
+- **Windows kernel32 extern**: `GetLogicalProcessorInformationEx` (primary) + `GetLogicalProcessorInformation` (fallback).
+- **Cache dedup**: one entry per unique cache level/size, not per-core duplicates.
+
+#### 7.3 Latency Protection layer
+
+**Core model**:
+- **`LatencyProfile`**: migration cost matrix, NUMA penalty, cache distance, per-core NUMA.
+- **Score**: `load × LOAD_PENALTY + migrationCost + cacheDistance × SCALE + numaPenalty`.
+- **Cost heuristics**: HT-sibling=50ns, same-NUMA=200ns, cross-NUMA=1000ns.
+
+**Per-core adaptive steal threshold**:
+- Each core maintains `CoreStats` (attempts, successes, EMA cost/benefit).
+- Threshold = `avg_cost + avg_cost × fail_ratio / 2` — core learns which steals are profitable.
+- `fail_ratio = (attempts − succ) / attempts` (fixed-point, α=1/16).
+- Cold start: `cost × 2` when attempts < 4.
+
+**Sticky core + hysteresis**:
+- `Job.sticky_core` / `stickiness` — job stays on its core when steal is attempted.
+- `migration_cooldown_ns=50ms` — prevents ping-pong migrations.
+
+**Load state machine (three-state hysteresis)**:
+```
+                   smoothed ≥ 4 (MEDIUM_ENTER)
+     NORMAL ─────────────────────────────► MEDIUM
+         ◄───────────────────────────────
+         smoothed ≤ 2 (MEDIUM_EXIT)
+
+                   smoothed ≥ 8 (OVERLOAD_ENTER)
+     MEDIUM ─────────────────────────────► OVERLOAD
+         ◄───────────────────────────────
+         smoothed ≤ 5 (OVERLOAD_EXIT)
+```
+- **`smoothed_load`**: EMA of queue length (α=1/8) — shields against burst noise.
+- **NORMAL**: strict cost-benefit + adaptive threshold + sticky honored + cooldown.
+- **MEDIUM**: relaxed (cost-benefit skipped) + sticky honored + cooldown.
+- **OVERLOAD**: unconditional steal — sticky bypassed, cooldown bypassed.
+
+**Overload escape**: at OVERLOAD victim state — all locality constraints are removed, preventing biased locality trap.
+
+#### Testing
+
+```bash
+zig test src\scheduler_test.zig   # 16 tests (sync/threaded/priority/steal/latency/state-machine)
+zig test src\latency_test.zig     # 5 tests (matrix build, NUMA, migration log, score)
+zig test src\cpu_test.zig         # 1 test (topology detection)
+```
 
 | Component | Description |
 |-----------|-------------|
@@ -1301,8 +1430,9 @@ migrateChunk → tier switch + memcpy used bytes (physical copy)
 ### Testing
 
 ```bash
-zig test src\runtime_test.zig   # 39 unit tests (chunk model + cooldown + top-K + cost + memory layer)
+zig test src\runtime_test.zig   # 40 unit tests (chunk model + cooldown + top-K + cost + memory layer)
 zig test src\stress_test.zig    # 100k ops: 3817 migrations, deterministic fingerprint
+zig test src\scheduler_test.zig # 16 tests: sync/threaded/priority/steal/latency/state-machine
 ```
 
 ### Intrinsic binding
