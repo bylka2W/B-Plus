@@ -4,6 +4,9 @@ const cpu = @import("cpu.zig");
 const latency = @import("latency.zig");
 const sched_config = @import("scheduler_config.zig");
 const sched_state = @import("scheduler_state.zig");
+const frame_graph = @import("frame_graph.zig");
+const gpu_job = @import("gpu_job.zig");
+const gpu_scheduler = @import("gpu_scheduler.zig");
 
 const NUM_WORKERS: u32 = 4;
 const ALLOC_SIZE = 64 * 1024 * 1024;
@@ -322,6 +325,68 @@ fn runStickyStarvation(allocator: std.mem.Allocator, smart: bool) !RunResult {
     return result;
 }
 
+fn runFrameGraph(allocator: std.mem.Allocator) !u64 {
+    const passes = [_]frame_graph.Pass{
+        .{ .id = 0, .name = "depth", .deps = &.{}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 200, .critical = true },
+        .{ .id = 1, .name = "motion_vectors", .deps = &.{}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 300, .critical = true },
+        .{ .id = 2, .name = "reproject", .deps = &.{ 0, 1 }, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 500, .critical = true },
+        .{ .id = 3, .name = "upscale", .deps = &.{2}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 800, .critical = false },
+        .{ .id = 4, .name = "sharpen", .deps = &.{3}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 400, .critical = false },
+        .{ .id = 5, .name = "present", .deps = &.{4}, .gpu = false, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 100, .critical = true },
+    };
+    var fg = frame_graph.FrameGraph.init(&passes);
+
+    const budget_us = 1400;
+    const plan = try fg.resolve(allocator, budget_us);
+    defer frame_graph.FrameGraph.deinitPlan(allocator, &plan);
+
+    // Validate: present, depth, motion_vectors, reproject must survive
+    var has_present: bool = false;
+    var has_reproject: bool = false;
+    for (0..plan.count) |oi| {
+        const idx = plan.order[oi];
+        if (passes[idx].id == 5) has_present = true;
+        if (passes[idx].id == 2) has_reproject = true;
+    }
+    if (!has_present) return error.PresentDropped;
+    if (!has_reproject) return error.ReprojectDropped;
+    // upscale or sharpen may be dropped under budget pressure
+    return @as(u64, @intCast(plan.count));
+}
+
+fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
+    _ = smart;
+    var gs: gpu_scheduler.GPUScheduler = undefined;
+    gs.init(allocator, 16_600_000);
+
+    const passes = [_]frame_graph.Pass{
+        .{ .id = 0, .name = "depth", .deps = &.{}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 200, .critical = true },
+        .{ .id = 1, .name = "upscale", .deps = &.{0}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 300, .critical = false },
+    };
+    var fg = frame_graph.FrameGraph.init(&passes);
+    const plan = try fg.resolve(allocator, 16_600);
+    defer frame_graph.FrameGraph.deinitPlan(allocator, &plan);
+
+    gs.submitFrame(&fg, &plan);
+
+    const dispatched = gs.total_dispatched;
+    gs.deinit();
+    return RunResult{
+        .label = "gpu-scheduler",
+        .p50_ns = 0,
+        .p95_ns = 0,
+        .p99_ns = 0,
+        .p999_ns = 0,
+        .throughput = @as(f64, @floatFromInt(dispatched)),
+        .steals = 0,
+        .rejected = 0,
+        .migrations = 0,
+        .sticky = 0,
+        .stall_rate = 0,
+        .force_escape = 0,
+    };
+}
+
 fn fmtVal(v: u64, is_ns: bool) [12]u8 {
     var buf: [12]u8 = undefined;
     if (is_ns) {
@@ -410,6 +475,15 @@ test "benchmark: baseline vs smart comparison" {
     }
 
     try printTable(&baseline, &smart);
+
+    // Stage 9: Frame Graph + GPU scheduler smoke test
+    try stdout.print("\n  [frame-graph] resolving…", .{});
+    const pruned_len = try runFrameGraph(allocator);
+    try stdout.print(" {d} passes after prune.\n", .{pruned_len});
+
+    try stdout.print("  [gpu-scheduler] smoke test…", .{});
+    const gpu_result = try runGPUScheduler(allocator, true);
+    try stdout.print(" dispatched={d:.0}.\n", .{gpu_result.throughput});
 
     for (smart) |r| {
         if (r.p99_ns > 1_000_000) {

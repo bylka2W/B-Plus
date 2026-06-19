@@ -2,6 +2,9 @@ const std = @import("std");
 const latency = @import("latency.zig");
 const sched_config = @import("scheduler_config.zig");
 const sched_state = @import("scheduler_state.zig");
+const gpu_job_mod = @import("gpu_job.zig");
+const gpu_sched_mod = @import("gpu_scheduler.zig");
+const frame_graph = @import("frame_graph.zig");
 
 pub const Priority = enum(u8) {
     Critical = 0,
@@ -75,6 +78,11 @@ const SharedQueue = struct {
     count: u32,
 };
 
+pub const UnifiedJob = union(enum) {
+    cpu: *Job,
+    gpu: gpu_job_mod.GPUJob,
+};
+
 pub const Metrics = struct {
     migrations: std.atomic.Value(u64),
     steals: std.atomic.Value(u64),
@@ -128,6 +136,7 @@ pub const WorkerPool = struct {
     metrics: Metrics,
     config: sched_config.SchedulerConfig,
     global_state: ?*sched_state.GlobalSchedulerState,
+    gpu_sched: ?*gpu_sched_mod.GPUScheduler,
 
     pub fn init(pool: *WorkerPool, allocator: std.mem.Allocator, num_workers: u32) !void {
         try initWithTopo(pool, allocator, num_workers, null);
@@ -198,6 +207,7 @@ pub const WorkerPool = struct {
             .metrics = Metrics.init(),
             .config = sched_config.SchedulerConfig.default(),
             .global_state = null,
+            .gpu_sched = null,
         };
     }
 
@@ -231,6 +241,46 @@ pub const WorkerPool = struct {
 
     pub fn setGlobalState(pool: *WorkerPool, gs: *sched_state.GlobalSchedulerState) void {
         pool.global_state = gs;
+    }
+
+    pub fn setGPUScheduler(pool: *WorkerPool, gs: *gpu_sched_mod.GPUScheduler) void {
+        pool.gpu_sched = gs;
+    }
+
+    pub fn submitJob(pool: *WorkerPool, uj: UnifiedJob) void {
+        switch (uj) {
+            .cpu => |j| pool.submit(j),
+            .gpu => |gj| {
+                if (pool.gpu_sched) |gs| {
+                    gs.submit(gj);
+                }
+            },
+        }
+    }
+
+    /// Submit an entire frame plan: CPU passes go to WorkerPool, GPU passes go to GPUScheduler.
+    pub fn submitFrame(pool: *WorkerPool, fg: *const frame_graph.FrameGraph, plan: *const frame_graph.ExecutionPlan) void {
+        for (0..plan.count) |oi| { const idx = plan.order[oi];
+            const pass = &fg.passes[idx];
+            if (pass.gpu) {
+                if (pool.gpu_sched) |gs| {
+                    const gj = frame_graph.FrameGraph.passToGPUJob(pass);
+                    gs.submit(gj);
+                }
+            } else {
+                // CPU pass: submit via a generic no-op stub for now
+                const Dummy = struct {
+                    fn run(_: *anyopaque) void {}
+                };
+                var stub = Job{
+                    .func = Dummy.run,
+                    .ctx = undefined,
+                    .priority = if (pass.critical) .Critical else .Normal,
+                    .next = null,
+                };
+                pool.submit(&stub);
+            }
+        }
     }
 
     fn buildDecisionContext(pool: *const WorkerPool, job: *const Job) DecisionContext {
@@ -662,5 +712,26 @@ pub const Scheduler = struct {
 
     pub fn setPoolGlobalState(s: *Scheduler, gs: *sched_state.GlobalSchedulerState) void {
         if (s.pool) |*p| p.setGlobalState(gs);
+    }
+
+    pub fn setPoolGPUScheduler(s: *Scheduler, gs: *gpu_sched_mod.GPUScheduler) void {
+        if (s.pool) |*p| p.setGPUScheduler(gs);
+    }
+
+    pub fn submitJob(s: *Scheduler, uj: UnifiedJob) void {
+        if (s.pool) |*p| {
+            p.submitJob(uj);
+        } else {
+            switch (uj) {
+                .cpu => |j| j.func(j.ctx),
+                .gpu => {},
+            }
+        }
+    }
+
+    pub fn submitFrame(s: *Scheduler, fg: *const frame_graph.FrameGraph, plan: *const frame_graph.ExecutionPlan) void {
+        if (s.pool) |*p| {
+            p.submitFrame(fg, plan);
+        }
     }
 };
