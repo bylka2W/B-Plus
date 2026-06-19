@@ -602,13 +602,22 @@ migrateChunk → tier switch + memcpy used bytes (физическое копи�
 - **35 unit tests**: +3 cost-specific (дорогой блок, дешёвый проходит, promote работает).
 - **Stress fingerprint стабилен** — cost не меняет top-K порядок для горячих чанков.
 
+### Stage 6: Memory Layer (foundation release)
+
+- **6.1 Free-list**: `ChunkStore.free_list[]` + `free_count`. При `slot_count == 0` chunk_id попадает в free-list. `allocChunk` сначала проверяет free-list, потом линейный аллок.
+- **6.2 Compaction**: `runCompaction()` раз в `COMPACT_INTERVAL=1000` тиков. Собирает живые chunk'и, сохраняет данные, сбрасывает арену, переаллоцирует последовательно.
+- **6.3 Indirection**: `Handle → chunk_id → chunk.arena_base + arena_offset + slot_offset`. Компакшен обновляет только `chunk.arena_base`/`arena_offset` — handle'ы не трогаются.
+- **39 unit tests**: +4 Stage 6 (free-list reuse, multiple freed IDs, compaction single-tier, compaction multi-tier).
+- **API**: `setAllocator(allocator)` включает компакшен. Без него — только free-list.
+- **Stress stable** — fingerprint обновлён из-за переиспользования chunk_id.
+
 ### Компоненты
 
 | Компонент | Описание |
 |-----------|----------|
 | `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
 | `Chunk` | 64KB регион: tier, arena_base, heat, used, arena_offset, slot_count, last_migration_tick |
-| `ChunkStore` | Массив chunk'ов, alloc/find/release-by-tier |
+| `ChunkStore` | Массив chunk'ов + free-list, alloc/find/release-by-tier |
 | `Handle` | Поколенческий идентификатор: slot + generation |
 | `HandleTable` | Состояния слотов (Used/Free), free-лист O(1), инвалидация через generation |
 | `MetaStore` | SoA: chunk_ids, offsets, sizes, generations, heats, total_heats, states |
@@ -619,7 +628,7 @@ migrateChunk → tier switch + memcpy used bytes (физическое копи�
 ### Тестирование
 
 ```bash
-zig test src\runtime_test.zig   # 32 unit tests (chunk-модель + cooldown + top-K)
+zig test src\runtime_test.zig   # 39 unit tests (chunk-модель + cooldown + top-K + cost + memory layer)
 zig test src\stress_test.zig    # 100k ops: 3817 миграций, фингерпринт детерминирован
 ```
 
@@ -1266,13 +1275,22 @@ migrateChunk → tier switch + memcpy used bytes (physical copy)
 - **35 unit tests**: +3 cost-specific (expensive blocked, cheap passes, promote works).
 - **Stress fingerprint stable** — cost doesn't affect top-K order for hot chunks.
 
+### Stage 6: Memory Layer (foundation release)
+
+- **6.1 Free-list**: `ChunkStore.free_list[]` + `free_count`. When `slot_count == 0` the chunk_id is pushed to the free list. `allocChunk` checks free list first, then linear alloc.
+- **6.2 Compaction**: `runCompaction()` every `COMPACT_INTERVAL=1000` ticks. Collects live chunks, saves data, resets arena, re-allocates sequentially.
+- **6.3 Indirection**: `Handle → chunk_id → chunk.arena_base + arena_offset + slot_offset`. Compaction updates only `chunk.arena_base`/`arena_offset` — handles are untouched.
+- **39 unit tests**: +4 Stage 6 (free-list reuse, multiple freed IDs, compaction single-tier, compaction multi-tier).
+- **API**: `setAllocator(allocator)` enables compaction. Without it — free-list only.
+- **Stress stable** — fingerprint updated due to chunk_id reuse.
+
 ### Components
 
 | Component | Description |
 |-----------|-------------|
 | `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
 | `Chunk` | 64KB region: tier, arena_base, heat, used, arena_offset, slot_count, last_migration_tick |
-| `ChunkStore` | Chunk array, alloc/find/release-by-tier |
+| `ChunkStore` | Chunk array + free-list, alloc/find/release-by-tier |
 | `Handle` | Generational slot identifier: slot + generation |
 | `HandleTable` | Slot states (Used/Free), O(1) free-list, invalidation via generation |
 | `MetaStore` | SoA: chunk_ids, offsets, sizes, generations, heats, total_heats, states |
@@ -1283,7 +1301,7 @@ migrateChunk → tier switch + memcpy used bytes (physical copy)
 ### Testing
 
 ```bash
-zig test src\runtime_test.zig   # 32 unit tests (chunk model + cooldown + top-K)
+zig test src\runtime_test.zig   # 39 unit tests (chunk model + cooldown + top-K + cost + memory layer)
 zig test src\stress_test.zig    # 100k ops: 3817 migrations, deterministic fingerprint
 ```
 

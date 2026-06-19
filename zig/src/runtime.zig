@@ -81,9 +81,16 @@ pub const Chunk = struct {
 pub const ChunkStore = struct {
     chunks: []Chunk,
     count: u32,
+    free_list: []u32,
+    free_count: u32,
 
-    pub fn init(buf: []Chunk) ChunkStore {
-        return .{ .chunks = buf, .count = 0 };
+    pub fn init(chunk_buf: []Chunk, free_list_buf: []u32) ChunkStore {
+        return .{
+            .chunks = chunk_buf,
+            .count = 0,
+            .free_list = free_list_buf,
+            .free_count = 0,
+        };
     }
 
     pub fn capacity(cs: *const ChunkStore) u32 {
@@ -91,6 +98,21 @@ pub const ChunkStore = struct {
     }
 
     pub fn allocChunk(cs: *ChunkStore, tier: Tier, arena_base: usize, arena_offset: u32) ?u32 {
+        // Reuse from free list first
+        if (cs.free_count > 0) {
+            cs.free_count -= 1;
+            const id = cs.free_list[cs.free_count];
+            cs.chunks[id] = .{
+                .tier = tier,
+                .arena_base = arena_base,
+                .heat = 0,
+                .used = 0,
+                .arena_offset = arena_offset,
+                .slot_count = 0,
+                .last_migration_tick = 0,
+            };
+            return id;
+        }
         if (cs.count >= cs.capacity()) return null;
         const id = cs.count;
         cs.count += 1;
@@ -106,6 +128,12 @@ pub const ChunkStore = struct {
         return id;
     }
 
+    pub fn freeChunk(cs: *ChunkStore, id: u32) void {
+        cs.chunks[id] = undefined;
+        cs.free_list[cs.free_count] = id;
+        cs.free_count += 1;
+    }
+
     pub fn get(cs: *const ChunkStore, id: u32) *const Chunk {
         return &cs.chunks[id];
     }
@@ -118,7 +146,7 @@ pub const ChunkStore = struct {
         var i: u32 = 0;
         while (i < cs.count) : (i += 1) {
             const c = &cs.chunks[i];
-            if (c.tier == tier and c.used + size <= CHUNK_SIZE) return i;
+            if (c.tier == tier and c.slot_count > 0 and c.used + size <= CHUNK_SIZE) return i;
         }
         return null;
     }
@@ -309,6 +337,7 @@ pub const HandleTable = struct {
         if (chunk_id < chunk_store.count) {
             const ch = &chunk_store.chunks[chunk_id];
             if (ch.slot_count > 0) ch.slot_count -= 1;
+            if (ch.slot_count == 0) chunk_store.freeChunk(chunk_id);
         }
         ht.meta.chunk_ids[slot] = 0xFFFFFFFF;
         ht.meta.offsets[slot] = 0;
@@ -464,6 +493,7 @@ pub const TieredRuntime = struct {
     logger: RingLogger,
     epoch: u64,
     retired_count: u32,
+    allocator: ?std.mem.Allocator,
 
     pub const MigrationResult = enum {
         success,
@@ -555,16 +585,18 @@ pub const TieredRuntime = struct {
         meta_store: MetaStore,
         log_buf: []RuntimeEvent,
         chunk_buf: []Chunk,
+        free_list_buf: []u32,
     ) TieredRuntime {
         return .{
             .l1 = Arena.init(l1_buf),
             .l2 = Arena.init(l2_buf),
             .l3 = Arena.init(l3_buf),
             .handles = HandleTable.init(meta_store),
-            .chunks = ChunkStore.init(chunk_buf),
+            .chunks = ChunkStore.init(chunk_buf, free_list_buf),
             .logger = RingLogger.init(log_buf),
             .epoch = 0,
             .retired_count = 0,
+            .allocator = null,
         };
     }
 
@@ -729,6 +761,12 @@ pub const TieredRuntime = struct {
     pub fn resetL2(tr: *TieredRuntime) void { tr.resetArena(&tr.l2, .L2); }
     pub fn resetL3(tr: *TieredRuntime) void { tr.resetArena(&tr.l3, .L3); }
 
+    pub fn setAllocator(tr: *TieredRuntime, a: std.mem.Allocator) void {
+        tr.allocator = a;
+    }
+
+    pub const COMPACT_INTERVAL: u32 = 1000;
+
     // ── Tick / heat ──
 
     const PROMOTE_THRESH: u32 = 100;
@@ -846,6 +884,62 @@ pub const TieredRuntime = struct {
 
         tr.logger.log(.TICK, 0, 0, migrated);
         tr.retired_count = 0;
+
+        // Stage 6: periodic compaction
+        if (tr.allocator) |a| {
+            if (tr.epoch % COMPACT_INTERVAL == 0) {
+                tr.runCompaction(a);
+            }
+        }
+    }
+
+    fn compactArena(tr: *TieredRuntime, arena: *Arena, tier: Tier, allocator: std.mem.Allocator) void {
+        // 1. Collect live chunks in this tier
+        var live_ids = std.ArrayList(u32).init(allocator);
+        defer live_ids.deinit();
+        {
+            var ci: u32 = 0;
+            while (ci < tr.chunks.count) : (ci += 1) {
+                const ch = &tr.chunks.chunks[ci];
+                if (ch.tier == tier and ch.slot_count > 0) {
+                    live_ids.append(ci) catch return;
+                }
+            }
+        }
+        if (live_ids.items.len == 0) return;
+
+        // 2. Save all live data to a temp buffer
+        var data = std.ArrayList(u8).init(allocator);
+        defer data.deinit();
+        var saved_offsets = std.ArrayList(u32).init(allocator);
+        defer saved_offsets.deinit();
+
+        for (live_ids.items) |cid| {
+            const ch = &tr.chunks.chunks[cid];
+            saved_offsets.append(@intCast(data.items.len)) catch return;
+            const slice = @as([*]u8, @ptrFromInt(ch.arena_base + ch.arena_offset))[0..ch.used];
+            data.appendSlice(slice) catch return;
+        }
+
+        // 3. Reset the arena
+        arena.reset();
+
+        // 4. Re-allocate chunks sequentially, copy data back
+        for (live_ids.items, 0..) |cid, idx| {
+            const ch = &tr.chunks.chunks[cid];
+            const mem = arena.alloc(CHUNK_SIZE) orelse return;
+            ch.arena_base = arena.base_addr;
+            ch.arena_offset = @intCast(@intFromPtr(mem) - arena.base_addr);
+            const dst = @as([*]u8, @ptrFromInt(ch.arena_base + ch.arena_offset));
+            @memcpy(dst[0..ch.used], data.items[saved_offsets.items[idx]..][0..ch.used]);
+        }
+    }
+
+    fn runCompaction(tr: *TieredRuntime, allocator: std.mem.Allocator) void {
+        inline for (comptime [_]Tier{ .L1, .L2, .L3 }) |tier| {
+            const arena = tr.arenaForTier(tier);
+            tr.compactArena(arena, tier, allocator);
+        }
     }
 };
 

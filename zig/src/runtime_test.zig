@@ -4,6 +4,8 @@ const rt = @import("runtime.zig");
 const CAP = 8;
 const CHUNK_CAP = 32;
 
+var runtime_test_free_list: [CHUNK_CAP]u32 = undefined;
+
 fn makeMetaStore(
     cids: *[CAP]u32,
     offs: *[CAP]u32,
@@ -18,7 +20,8 @@ fn makeMetaStore(
 }
 
 fn makeRuntime(l1: *[4096]u8, l2: *[4096]u8, l3: *[4096]u8, ms: rt.MetaStore, log: *[64]rt.RuntimeEvent, chunks: *[CHUNK_CAP]rt.Chunk) rt.TieredRuntime {
-    return rt.TieredRuntime.init(l1, l2, l3, ms, log, chunks);
+    @memset(&runtime_test_free_list, 0);
+    return rt.TieredRuntime.init(l1, l2, l3, ms, log, chunks, &runtime_test_free_list);
 }
 
 test "HandleTable alloc returns valid handle" {
@@ -52,7 +55,7 @@ test "HandleTable alloc reuses freed slot" {
 
     const h1 = ht.alloc(0, 0, 16);
     try std.testing.expectEqual(@as(u32, 0), h1.slot);
-    { var dummy_cs: [1]rt.Chunk = undefined; var cs = rt.ChunkStore.init(&dummy_cs); ht.release(h1, &cs); }
+    { var dummy_cs: [1]rt.Chunk = undefined; var dummy_fl: [1]u32 = undefined; var cs = rt.ChunkStore.init(&dummy_cs, &dummy_fl); ht.release(h1, &cs); }
     const h2 = ht.alloc(1, 0, 32);
     try std.testing.expectEqual(@as(u32, 0), h2.slot);
     try std.testing.expectEqual(@as(u32, 2), h2.generation);
@@ -112,7 +115,7 @@ test "release zeros heat" {
     ht.touch(h);
     ht.touch(h);
     try std.testing.expectEqual(@as(u32, 2), ht.meta.heats[h.slot]);
-    { var dummy_cs: [1]rt.Chunk = undefined; var cs = rt.ChunkStore.init(&dummy_cs); ht.release(h, &cs); }
+    { var dummy_cs: [1]rt.Chunk = undefined; var dummy_fl: [1]u32 = undefined; var cs = rt.ChunkStore.init(&dummy_cs, &dummy_fl); ht.release(h, &cs); }
     try std.testing.expectEqual(@as(u32, 0), ht.meta.heats[h.slot]);
 }
 
@@ -385,8 +388,9 @@ test "budget limits chunk migrations per tick to 4" {
     var big_total_heats: [BIG_CAP]u32 = undefined;
     var big_log: [64]rt.RuntimeEvent = undefined;
     var big_chunks: [32]rt.Chunk = undefined;
+    var big_free_list: [32]u32 = undefined;
     const big_ms = rt.MetaStore.init(&big_cids, &big_offs, &big_gens, &big_sizes, &big_states, &big_free_next, &big_heats, &big_total_heats);
-    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, big_ms, &big_log, &big_chunks);
+    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, big_ms, &big_log, &big_chunks, &big_free_list);
 
     // Allocate 8 handles with 200 bytes each so each gets its own chunk
     // (2*200 = 400 > CHUNK_SIZE=256)
@@ -541,7 +545,7 @@ test "Handle invalid returns INVALID_HANDLE" {
     var ht = rt.HandleTable.init(makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats));
 
     const h = ht.alloc(0, 0, 16);
-    { var dummy_cs: [1]rt.Chunk = undefined; var cs = rt.ChunkStore.init(&dummy_cs); ht.release(h, &cs); }
+    { var dummy_cs: [1]rt.Chunk = undefined; var dummy_fl: [1]u32 = undefined; var cs = rt.ChunkStore.init(&dummy_cs, &dummy_fl); ht.release(h, &cs); }
 
     try std.testing.expectEqual(rt.SlotState.Free, ht.meta.states[h.slot]);
     try std.testing.expectEqual(@as(u32, 1), ht.meta.generations[h.slot]);
@@ -583,8 +587,9 @@ test "full cycle: alloc L2 -> access -> promote -> decay -> demote" {
     var total_heats: [64]u32 = undefined;
     var log: [64]rt.RuntimeEvent = undefined;
     var chunks: [64]rt.Chunk = undefined;
+    var free_list: [64]u32 = undefined;
     const ms = rt.MetaStore.init(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
-    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, ms, &log, &chunks);
+    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, ms, &log, &chunks, &free_list);
 
     const h = tr.allocL2(1024);
     try std.testing.expectEqual(rt.Tier.L2, tr.tierOfHandle(h));
@@ -657,7 +662,7 @@ test "dual-heat: heat=0 after release, total_heat preserved" {
     try std.testing.expectEqual(@as(u32, 10), ht.meta.heats[slot]);
     try std.testing.expectEqual(@as(u32, 10), ht.meta.total_heats[slot]);
 
-    { var dummy_cs: [1]rt.Chunk = undefined; var cs = rt.ChunkStore.init(&dummy_cs); ht.release(h, &cs); }
+    { var dummy_cs: [1]rt.Chunk = undefined; var dummy_fl: [1]u32 = undefined; var cs = rt.ChunkStore.init(&dummy_cs, &dummy_fl); ht.release(h, &cs); }
     try std.testing.expectEqual(@as(u32, 0), ht.meta.heats[slot]);
     try std.testing.expectEqual(@as(u32, 10), ht.meta.total_heats[slot]);
 }
@@ -677,8 +682,9 @@ test "top-K: only hottest chunks promoted within budget" {
     var big_total_heats: [BIG_CAP]u32 = undefined;
     var big_log: [64]rt.RuntimeEvent = undefined;
     var big_chunks: [32]rt.Chunk = undefined;
+    var big_free_list: [32]u32 = undefined;
     const big_ms = rt.MetaStore.init(&big_cids, &big_offs, &big_gens, &big_sizes, &big_states, &big_free_next, &big_heats, &big_total_heats);
-    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, big_ms, &big_log, &big_chunks);
+    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, big_ms, &big_log, &big_chunks, &big_free_list);
 
     // Create 6 chunks with decreasing heat (heat values: 250, 240, 230, 220, 210, 200)
     // Each alloc uses 200B → separate chunk (2*200=400 > CHUNK_SIZE=256)
@@ -722,8 +728,9 @@ test "top-K: tie-breaking by chunk_id for equal heat" {
     var big_total_heats: [BIG_CAP]u32 = undefined;
     var big_log: [64]rt.RuntimeEvent = undefined;
     var big_chunks: [32]rt.Chunk = undefined;
+    var big_free_list: [32]u32 = undefined;
     const big_ms = rt.MetaStore.init(&big_cids, &big_offs, &big_gens, &big_sizes, &big_states, &big_free_next, &big_heats, &big_total_heats);
-    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, big_ms, &big_log, &big_chunks);
+    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, big_ms, &big_log, &big_chunks, &big_free_list);
 
     // Create 5 chunks all with heat=250 → tie needs chunk_id to break
     var handles: [5]rt.Handle = undefined;
@@ -926,4 +933,184 @@ test "cost: promote still works for hot chunk" {
     tr.chunks.chunks[cid].heat = 300;
     tr.tick();
     try std.testing.expectEqual(rt.Tier.L2, tr.tierOfHandle(h));
+}
+
+// ═══════════════════════════════════════════════
+// Stage 6: Memory Layer (free-list + compaction)
+// ═══════════════════════════════════════════════
+
+test "Stage 6: free list reuses chunk IDs after release empties chunk" {
+    var l1: [4096]u8 = undefined;
+    var l2: [4096]u8 = undefined;
+    var l3: [4096]u8 = undefined;
+    var cids: [CAP]u32 = undefined;
+    var offs: [CAP]u32 = undefined;
+    var gens: [CAP]u32 = undefined;
+    var sizes: [CAP]u32 = undefined;
+    var states: [CAP]rt.SlotState = undefined;
+    var free_next: [CAP]u32 = undefined;
+    var heats: [CAP]u32 = undefined;
+    var total_heats: [CAP]u32 = undefined;
+    var log: [64]rt.RuntimeEvent = undefined;
+    var chunks: [CHUNK_CAP]rt.Chunk = undefined;
+    const ms = makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = makeRuntime(&l1, &l2, &l3, ms, &log, &chunks);
+
+    const h1 = tr.allocL2(200);
+    const cid1 = tr.handles.meta.chunk_ids[h1.slot];
+
+    // Release — chunk has 1 slot so it becomes empty
+    tr.release(h1);
+
+    // Allocate again — should reuse freed chunk_id
+    const h2 = tr.allocL2(200);
+    const cid2 = tr.handles.meta.chunk_ids[h2.slot];
+    try std.testing.expectEqual(cid1, cid2);
+}
+
+test "Stage 6: free list maintains multiple freed chunk IDs" {
+    var l1: [8192]u8 = undefined;
+    var l2: [16384]u8 = undefined;
+    var l3: [8192]u8 = undefined;
+    const BIG_CAP = 64;
+    var big_cids: [BIG_CAP]u32 = undefined;
+    var big_offs: [BIG_CAP]u32 = undefined;
+    var big_gens: [BIG_CAP]u32 = undefined;
+    var big_sizes: [BIG_CAP]u32 = undefined;
+    var big_states: [BIG_CAP]rt.SlotState = undefined;
+    var big_free_next: [BIG_CAP]u32 = undefined;
+    var big_heats: [BIG_CAP]u32 = undefined;
+    var big_total_heats: [BIG_CAP]u32 = undefined;
+    var big_log: [64]rt.RuntimeEvent = undefined;
+    var big_chunks: [32]rt.Chunk = undefined;
+    var big_free_list: [32]u32 = undefined;
+    const big_ms = rt.MetaStore.init(&big_cids, &big_offs, &big_gens, &big_sizes, &big_states, &big_free_next, &big_heats, &big_total_heats);
+    var tr = rt.TieredRuntime.init(&l1, &l2, &l3, big_ms, &big_log, &big_chunks, &big_free_list);
+
+    // Allocate 3 chunks, each 200 bytes (separate chunks because 2*200 > 256)
+    var handles: [3]rt.Handle = undefined;
+    for (&handles, 0..) |*h, i| {
+        h.* = tr.allocL2(200);
+        const slice = tr.access(h.*);
+        for (0..200) |j| slice[j] = @intCast((i * 200 + j) & 0xFF);
+    }
+
+    for (handles, 0..) |h, i| {
+        const slice = tr.access(h);
+        try std.testing.expectEqual(@as(u8, @intCast((i * 200) & 0xFF)), slice[0]);
+    }
+
+    // Release all handles (reverse order to test LIFO free stack)
+    var released_cids: [3]u32 = undefined;
+    for (&released_cids, handles, 0..) |*rc, h, i| {
+        rc.* = tr.handles.meta.chunk_ids[h.slot];
+        tr.release(h);
+        // After release, chunk is freed
+        _ = i;
+    }
+
+    // Allocate again — should reuse freed IDs (LIFO: last freed first)
+    var new_handles: [3]rt.Handle = undefined;
+    for (&new_handles) |*h| h.* = tr.allocL2(200);
+
+    // The last freed chunk_id should be reused first
+    const new_cid0 = tr.handles.meta.chunk_ids[new_handles[0].slot];
+    try std.testing.expectEqual(released_cids[2], new_cid0);
+}
+
+test "Stage 6: compaction preserves data integrity" {
+    var l1: [4096]u8 = undefined;
+    var l2: [4096]u8 = undefined;
+    var l3: [4096]u8 = undefined;
+    var cids: [CAP]u32 = undefined;
+    var offs: [CAP]u32 = undefined;
+    var gens: [CAP]u32 = undefined;
+    var sizes: [CAP]u32 = undefined;
+    var states: [CAP]rt.SlotState = undefined;
+    var free_next: [CAP]u32 = undefined;
+    var heats: [CAP]u32 = undefined;
+    var total_heats: [CAP]u32 = undefined;
+    var log: [64]rt.RuntimeEvent = undefined;
+    var chunks: [CHUNK_CAP]rt.Chunk = undefined;
+    const ms = makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = makeRuntime(&l1, &l2, &l3, ms, &log, &chunks);
+
+    const h = tr.allocL2(128);
+    const cid = tr.handles.meta.chunk_ids[h.slot];
+    const slice = tr.access(h);
+    for (0..128) |j| slice[j] = @intCast(j ^ 0xAB);
+
+    // Set heat in stable range (30-100) so tick doesn't migrate
+    tr.chunks.chunks[cid].heat = 90;
+
+    // Force compaction by setting epoch to COMPACT_INTERVAL-1 then ticking
+    tr.setAllocator(std.testing.allocator);
+    tr.epoch = rt.TieredRuntime.COMPACT_INTERVAL - 1;
+    tr.tick();
+
+    // Verify data survived compaction
+    const slice2 = tr.access(h);
+    try std.testing.expectEqual(@as(usize, 128), slice2.len);
+    for (0..128) |j| {
+        try std.testing.expectEqual(@as(u8, @intCast(j ^ 0xAB)), slice2[j]);
+    }
+    // Tier unchanged (heat 90→45 after decay, still in stable range)
+    try std.testing.expectEqual(rt.Tier.L2, tr.tierOfHandle(h));
+}
+
+test "Stage 6: compaction across multiple tiers" {
+    var l1: [4096]u8 = undefined;
+    var l2: [4096]u8 = undefined;
+    var l3: [4096]u8 = undefined;
+    var cids: [CAP]u32 = undefined;
+    var offs: [CAP]u32 = undefined;
+    var gens: [CAP]u32 = undefined;
+    var sizes: [CAP]u32 = undefined;
+    var states: [CAP]rt.SlotState = undefined;
+    var free_next: [CAP]u32 = undefined;
+    var heats: [CAP]u32 = undefined;
+    var total_heats: [CAP]u32 = undefined;
+    var log: [64]rt.RuntimeEvent = undefined;
+    var chunks: [CHUNK_CAP]rt.Chunk = undefined;
+    const ms = makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = makeRuntime(&l1, &l2, &l3, ms, &log, &chunks);
+
+    const h1 = tr.allocL1(64);
+    const h2 = tr.allocL2(64);
+    const h3 = tr.allocL3(64);
+
+    // Set heats in stable range so tick doesn't migrate
+    {
+        const c1 = tr.handles.meta.chunk_ids[h1.slot];
+        const c2 = tr.handles.meta.chunk_ids[h2.slot];
+        const c3 = tr.handles.meta.chunk_ids[h3.slot];
+        tr.chunks.chunks[c1].heat = 90;
+        tr.chunks.chunks[c2].heat = 90;
+        tr.chunks.chunks[c3].heat = 90;
+    }
+
+    // Write distinct patterns
+    var s1 = tr.access(h1);
+    var s2 = tr.access(h2);
+    var s3 = tr.access(h3);
+    for (0..64) |j| {
+        s1[j] = @intCast(0x10 + j);
+        s2[j] = @intCast(0x20 + j);
+        s3[j] = @intCast(0x30 + j);
+    }
+
+    // Force compaction
+    tr.setAllocator(std.testing.allocator);
+    tr.epoch = rt.TieredRuntime.COMPACT_INTERVAL - 1;
+    tr.tick();
+
+    // Verify all three patterns survived
+    const r1 = tr.access(h1);
+    const r2 = tr.access(h2);
+    const r3 = tr.access(h3);
+    for (0..64) |j| {
+        try std.testing.expectEqual(@as(u8, @intCast(0x10 + j)), r1[j]);
+        try std.testing.expectEqual(@as(u8, @intCast(0x20 + j)), r2[j]);
+        try std.testing.expectEqual(@as(u8, @intCast(0x30 + j)), r3[j]);
+    }
 }

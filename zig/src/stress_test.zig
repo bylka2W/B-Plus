@@ -47,8 +47,10 @@ test "deterministic stress: 100k ops with migration, budget, heat" {
     const total_chunks = (l1.len + l2.len + l3.len) / rt.CHUNK_SIZE + 1;
     const chunk_buf = try std.testing.allocator.alloc(rt.Chunk, total_chunks);
     defer std.testing.allocator.free(chunk_buf);
+    const free_list_buf = try std.testing.allocator.alloc(u32, total_chunks);
+    defer std.testing.allocator.free(free_list_buf);
     const ms = rt.MetaStore.init(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
-    var tr = rt.TieredRuntime.init(l1, l2, l3, ms, &log, chunk_buf);
+    var tr = rt.TieredRuntime.init(l1, l2, l3, ms, &log, chunk_buf, free_list_buf);
 
     var handles = std.ArrayList(rt.Handle).init(std.testing.allocator);
     defer handles.deinit();
