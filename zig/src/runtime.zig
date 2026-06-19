@@ -78,6 +78,10 @@ pub const Chunk = struct {
     last_migration_tick: u32,
 };
 
+fn isLive(ch: *const Chunk) bool {
+    return ch.slot_count > 0;
+}
+
 pub const ChunkStore = struct {
     chunks: []Chunk,
     count: u32,
@@ -98,11 +102,9 @@ pub const ChunkStore = struct {
     }
 
     pub fn allocChunk(cs: *ChunkStore, tier: Tier, arena_base: usize, arena_offset: u32) ?u32 {
-        // Reuse from free list first — skip stale entries (slot_count != 0)
-        while (cs.free_count > 0) {
+        if (cs.free_count > 0) {
             cs.free_count -= 1;
             const id = cs.free_list[cs.free_count];
-            if (cs.chunks[id].slot_count != 0) continue; // stale — another alloc grabbed it
             cs.chunks[id] = .{
                 .tier = tier,
                 .arena_base = arena_base,
@@ -129,12 +131,11 @@ pub const ChunkStore = struct {
         return id;
     }
 
-    pub fn isLive(ch: *const Chunk) bool {
-        return ch.slot_count > 0;
-    }
-
     pub fn freeChunk(cs: *ChunkStore, id: u32) void {
-        cs.chunks[id].slot_count = 0;
+        const ch = &cs.chunks[id];
+        ch.slot_count = 0;
+        ch.used = 0;
+        ch.heat = 0;
         cs.free_list[cs.free_count] = id;
         cs.free_count += 1;
     }
@@ -904,7 +905,7 @@ pub const TieredRuntime = struct {
         var ci: u32 = 0;
         while (ci < tr.chunks.count) : (ci += 1) {
             const ch = &tr.chunks.chunks[ci];
-            if (ch.tier == tier and ChunkStore.isLive(ch)) {
+            if (ch.tier == tier and isLive(ch)) {
                 // Must be in live_ids
                 var found = false;
                 for (live_ids) |id| {
@@ -935,7 +936,7 @@ pub const TieredRuntime = struct {
             var ci: u32 = 0;
             while (ci < tr.chunks.count) : (ci += 1) {
                 const ch = &tr.chunks.chunks[ci];
-                if (ch.tier == tier and ChunkStore.isLive(ch)) {
+                if (ch.tier == tier and isLive(ch)) {
                     live_ids.append(ci) catch return;
                 }
             }
@@ -961,9 +962,6 @@ pub const TieredRuntime = struct {
         // STEP 4: restore — re-allocate chunks sequentially at arena start
         for (live_ids.items, 0..) |cid, idx| {
             const ch = &tr.chunks.chunks[cid];
-            // Save old used/slot_count before overwriting arena metadata
-            const ch_used = ch.used;
-            _ = ch_used; // use below
             const mem = arena.alloc(CHUNK_SIZE) orelse return;
             ch.arena_base = arena.base_addr;
             ch.arena_offset = @intCast(@intFromPtr(mem) - arena.base_addr);
