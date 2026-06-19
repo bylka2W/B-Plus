@@ -12,27 +12,30 @@ pub const Pass = struct {
     critical: bool,
 };
 
-/// Fully materialized execution unit for a GPU pass.
-pub const GPUExec = struct {
-    pass_id: u32,
-    job: gpu_job.GPUJob,
+pub const NodeKind = union(enum) {
+    cpu: struct { pass_id: u32 },
+    gpu: struct { pass_id: u32, job: gpu_job.GPUJob },
 };
 
-/// Lightweight dependency edge between GPUExecs (indices into plan.gpu[]).
-/// Preserved at runtime so GPU scheduler can reorder within constraints.
+/// A node in the unified compute graph.
+pub const ExecutionNode = struct {
+    id: u32,
+    name: []const u8,
+    kind: NodeKind,
+};
+
+/// Lightweight dependency edge between ExecutionNodes (indices into plan.nodes[]).
 pub const DependencyEdge = struct {
     from: u32,
     to: u32,
 };
 
-/// ExecutionPlan — compiler output with lightweight DAG hints.
-/// `cpu`: ordered CPU pass indices. `gpu`: materialized GPUExecs.
-/// `gpu_edges`: GPU→GPU dependency edges for runtime reordering.
-/// Owned by caller; use FrameGraph.deinitPlan() to free.
+/// ExecutionPlan — partially-ordered unified compute graph.
+/// `nodes`: all CPU and GPU execution units.
+/// `edges`: dependency edges preserving producer→consumer causality.
 pub const ExecutionPlan = struct {
-    cpu: []u32,
-    gpu: []GPUExec,
-    gpu_edges: []DependencyEdge,
+    nodes: []ExecutionNode,
+    edges: []DependencyEdge,
     budget_us: u32,
 };
 
@@ -43,8 +46,6 @@ pub const FrameGraph = struct {
         return FrameGraph{ .passes = passes };
     }
 
-    /// Compile: topological sort + budget + GPUExec materialization + edge emission.
-    /// GPU scheduler receives both execs and edges — can reorder within DAG constraints.
     pub fn compile(self: *const FrameGraph, allocator: std.mem.Allocator, budget_us: u32) !ExecutionPlan {
         const n = self.passes.len;
 
@@ -123,70 +124,75 @@ pub const FrameGraph = struct {
             }
         }
 
-        // Separate CPU indices from GPU materialized execs + emit edges
-        var gpu_list = std.ArrayList(GPUExec).init(allocator);
-        defer gpu_list.deinit();
+        // Build unified nodes and edges; order no longer needed after this
+        defer allocator.free(order);
 
-        var pass_to_gpu = try allocator.alloc(?u32, n);
-        defer allocator.free(pass_to_gpu);
-        @memset(pass_to_gpu, null);
+        var pass_to_node = try allocator.alloc(?u32, n);
+        defer allocator.free(pass_to_node);
+        @memset(pass_to_node, null);
 
-        var cpu_end: usize = 0;
+        var node_list = std.ArrayList(ExecutionNode).init(allocator);
+        defer node_list.deinit();
+
         for (0..written) |oi| {
             const idx = order[oi];
             const p = &self.passes[idx];
+            const ni = @as(u32, @intCast(node_list.items.len));
+            pass_to_node[idx] = ni;
+
             if (p.gpu) {
-                const gi = @as(u32, @intCast(gpu_list.items.len));
-                pass_to_gpu[idx] = gi;
-                try gpu_list.append(GPUExec{
-                    .pass_id = p.id,
-                    .job = .{
-                        .id = p.id,
-                        .pipeline_id = p.id,
-                        .dispatch_x = 64,
-                        .dispatch_y = 64,
-                        .dispatch_z = 1,
-                        .wait_semaphore = if (p.gpu_wait_for.len > 0) p.gpu_wait_for[0] else 0,
-                        .signal_semaphore = if (p.gpu_signal.len > 0) p.gpu_signal[0] else 0,
-                        .deadline_ns = 0,
-                        .priority = if (p.critical) 0 else 1,
-                        .dropable = !p.critical,
-                    },
+                try node_list.append(ExecutionNode{
+                    .id = p.id,
+                    .name = p.name,
+                    .kind = NodeKind{ .gpu = .{
+                        .pass_id = p.id,
+                        .job = .{
+                            .id = p.id,
+                            .pipeline_id = p.id,
+                            .dispatch_x = 64,
+                            .dispatch_y = 64,
+                            .dispatch_z = 1,
+                            .wait_semaphore = if (p.gpu_wait_for.len > 0) p.gpu_wait_for[0] else 0,
+                            .signal_semaphore = if (p.gpu_signal.len > 0) p.gpu_signal[0] else 0,
+                            .deadline_ns = 0,
+                            .priority = if (p.critical) 0 else 1,
+                            .dropable = !p.critical,
+                        },
+                    }},
                 });
             } else {
-                order[cpu_end] = idx;
-                cpu_end += 1;
+                try node_list.append(ExecutionNode{
+                    .id = p.id,
+                    .name = p.name,
+                    .kind = NodeKind{ .cpu = .{ .pass_id = p.id } },
+                });
             }
         }
 
-        // Emit GPU→GPU dependency edges
         var edge_list = std.ArrayList(DependencyEdge).init(allocator);
         defer edge_list.deinit();
 
         for (order[0..written]) |idx| {
             const p = &self.passes[idx];
-            if (!p.gpu) continue;
-            const to_gi = pass_to_gpu[idx] orelse continue;
+            const to_ni = pass_to_node[idx] orelse continue;
             for (p.deps) |dep_pid| {
                 if (dep_pid < n) {
-                    if (pass_to_gpu[dep_pid]) |from_gi| {
-                        try edge_list.append(DependencyEdge{ .from = from_gi, .to = to_gi });
+                    if (pass_to_node[dep_pid]) |from_ni| {
+                        try edge_list.append(DependencyEdge{ .from = from_ni, .to = to_ni });
                     }
                 }
             }
         }
 
         return ExecutionPlan{
-            .cpu = try allocator.realloc(order, cpu_end),
-            .gpu = try gpu_list.toOwnedSlice(),
-            .gpu_edges = try edge_list.toOwnedSlice(),
+            .nodes = try node_list.toOwnedSlice(),
+            .edges = try edge_list.toOwnedSlice(),
             .budget_us = budget_us,
         };
     }
 
     pub fn deinitPlan(allocator: std.mem.Allocator, plan: *const ExecutionPlan) void {
-        allocator.free(plan.cpu);
-        allocator.free(plan.gpu);
-        allocator.free(plan.gpu_edges);
+        allocator.free(plan.nodes);
+        allocator.free(plan.edges);
     }
 };

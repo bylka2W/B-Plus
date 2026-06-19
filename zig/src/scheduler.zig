@@ -258,21 +258,69 @@ pub const WorkerPool = struct {
         }
     }
 
-    /// Submit a fully materialized ExecutionPlan.
-    /// CPU passes → WorkerPool, GPU passes → GPUScheduler.
-    /// No FrameGraph reference — all materialization happened at compile time.
+    /// Submit a fully materialized ExecutionPlan (unified compute graph).
+    /// Runs Kahn's algorithm over all nodes: CPU → WorkerPool, GPU → GPUScheduler.
+    /// Wave-by-wave dispatch within DAG constraints.
     pub fn submitFrame(pool: *WorkerPool, plan: *const frame_graph.ExecutionPlan) void {
-        {
-            const Dummy = struct {
-                fn run(_: *anyopaque) void {}
-            };
-            for (0..plan.cpu.len) |_| {
-                var stub = Job{ .func = Dummy.run, .ctx = undefined, .priority = .Normal, .next = null };
-                pool.submit(&stub);
-            }
+        const n = plan.nodes.len;
+        if (n == 0) return;
+
+        var in_degree = pool.allocator.alloc(u32, n) catch return;
+        defer pool.allocator.free(in_degree);
+        @memset(in_degree, 0);
+
+        for (plan.edges) |e| {
+            if (e.to < n) in_degree[e.to] += 1;
         }
-        if (pool.gpu_sched) |gs| {
-            gs.submitFrame(plan);
+
+        var processed = pool.allocator.alloc(bool, n) catch return;
+        defer pool.allocator.free(processed);
+        @memset(processed, false);
+
+        var cpu_stubs = pool.allocator.alloc(Job, n) catch return;
+        defer pool.allocator.free(cpu_stubs);
+
+        const Dummy = struct {
+            fn run(_: *anyopaque) void {}
+        };
+
+        var remaining: usize = n;
+        while (remaining > 0) {
+            var ready = std.ArrayList(u32).init(pool.allocator);
+            defer ready.deinit();
+
+            for (0..n) |i| {
+                if (!processed[i] and in_degree[i] == 0) {
+                    ready.append(@intCast(i)) catch {};
+                }
+            }
+            if (ready.items.len == 0) break;
+
+            var cpu_count: usize = 0;
+            for (ready.items) |idx| {
+                const node = &plan.nodes[idx];
+                switch (node.kind) {
+                    .cpu => {
+                        cpu_stubs[cpu_count] = Job{ .func = Dummy.run, .ctx = undefined, .priority = .Normal, .next = null };
+                        pool.submit(&cpu_stubs[cpu_count]);
+                        cpu_count += 1;
+                    },
+                    .gpu => {
+                        if (pool.gpu_sched) |gs| gs.submit(node.kind.gpu.job);
+                    },
+                }
+            }
+
+            if (cpu_count > 0) pool.waitAll();
+            if (pool.gpu_sched) |gs| gs.tick();
+
+            for (ready.items) |idx| {
+                processed[idx] = true;
+                remaining -= 1;
+                for (plan.edges) |e| {
+                    if (e.from == idx and e.to < n) in_degree[e.to] -= 1;
+                }
+            }
         }
     }
 

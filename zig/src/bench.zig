@@ -340,33 +340,33 @@ fn runFrameGraph(allocator: std.mem.Allocator) !u64 {
     const plan = try fg.compile(allocator, budget_us);
     defer frame_graph.FrameGraph.deinitPlan(allocator, &plan);
 
-    // Validate: present (5) is CPU pass → in plan.cpu; reproject (2) is GPU → in plan.gpu
+    // Validate: present (5) is CPU node; reproject (2) is GPU node
     var has_present: bool = false;
-    for (plan.cpu) |idx| {
-        if (passes[idx].id == 5) has_present = true;
-    }
     var has_reproject: bool = false;
-    for (plan.gpu) |*ge| {
-        if (ge.pass_id == 2) has_reproject = true;
+    for (plan.nodes) |*node| {
+        switch (node.kind) {
+            .cpu => |c| { if (c.pass_id == 5) has_present = true; },
+            .gpu => |g| { if (g.pass_id == 2) has_reproject = true; },
+        }
     }
     if (!has_present) return error.PresentDropped;
     if (!has_reproject) return error.ReprojectDropped;
 
-    // Validate edges: reproject (gpu[2]) ← depth (gpu[0]), motion_vectors (gpu[1])
-    if (plan.gpu.len >= 3) {
+    // Validate edges: reproject ← depth, motion_vectors; upscale ← reproject
+    if (plan.nodes.len >= 3) {
         var edge_depth: bool = false;
         var edge_mv: bool = false;
         var edge_upscale: bool = false;
-        for (plan.gpu_edges) |e| {
+        for (plan.edges) |e| {
             if (e.from == 0 and e.to == 2) edge_depth = true;
             if (e.from == 1 and e.to == 2) edge_mv = true;
             if (e.from == 2 and e.to == 3) edge_upscale = true;
         }
         if (!edge_depth) return error.MissingEdgeDepth;
         if (!edge_mv) return error.MissingEdgeMV;
-        if (plan.gpu.len > 3 and !edge_upscale) return error.MissingEdgeUpscale;
+        if (plan.nodes.len > 3 and !edge_upscale) return error.MissingEdgeUpscale;
     }
-    return @as(u64, @intCast(plan.cpu.len + plan.gpu.len));
+    return @as(u64, @intCast(plan.nodes.len));
 }
 
 fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
@@ -382,14 +382,12 @@ fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
     const plan = try fg.compile(allocator, 16_600);
     defer frame_graph.FrameGraph.deinitPlan(allocator, &plan);
 
-    // Validate edge: upscale (gpu[1]) ← depth (gpu[0])
-    if (plan.gpu.len >= 2) {
-        var has_edge: bool = false;
-        for (plan.gpu_edges) |e| {
-            if (e.from == 0 and e.to == 1) has_edge = true;
-        }
-        if (!has_edge) return error.MissingEdgeInGPUScheduler;
+    // Validate edge: upscale (node[1]) ← depth (node[0])
+    var has_edge: bool = false;
+    for (plan.edges) |e| {
+        if (e.from == 0 and e.to == 1) has_edge = true;
     }
+    if (!has_edge) return error.MissingEdgeInGPUScheduler;
 
     gs.submitFrame(&plan);
 

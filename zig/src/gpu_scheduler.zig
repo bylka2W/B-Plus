@@ -2,6 +2,8 @@ const std = @import("std");
 const gpu_job = @import("gpu_job.zig");
 const frame_graph = @import("frame_graph.zig");
 
+/// GPU dispatch queue. No longer owns Kahn scheduling — that lives in the
+/// unified scheduler. This is a simple dispatch accumulator with budget awareness.
 pub const GPUScheduler = struct {
     gpu_queue: std.ArrayList(gpu_job.GPUJob),
     frame_budget_ns: u64,
@@ -38,22 +40,15 @@ pub const GPUScheduler = struct {
     pub fn submit(self: *GPUScheduler, job: gpu_job.GPUJob) void {
         self.gpu_pressure = self.computeGPUPressure();
 
-        if (self.gpu_pressure > 1.0 and job.dropable) {
-            return;
-        }
-
-        if (job.deadline_ns > 0 and job.deadline_ns < @as(u64, @intCast(std.time.nanoTimestamp()))) {
-            return;
-        }
+        if (self.gpu_pressure > 1.0 and job.dropable) return;
+        if (job.deadline_ns > 0 and job.deadline_ns < @as(u64, @intCast(std.time.nanoTimestamp()))) return;
 
         self.gpu_queue.append(job) catch {};
     }
 
     pub fn tick(self: *GPUScheduler) void {
         while (self.gpu_queue.items.len > 0) {
-            if (self.remainingBudget() < 200_000) {
-                break;
-            }
+            if (self.remainingBudget() < 200_000) break;
             const job = self.gpu_queue.orderedRemove(0);
             self.dispatchToGPU(job);
         }
@@ -68,63 +63,16 @@ pub const GPUScheduler = struct {
         self.frame_start_ns = @intCast(std.time.nanoTimestamp());
     }
 
-    /// Submit an ExecutionPlan with runtime DAG reordering.
-    /// Uses Kahn's algorithm on gpu_edges — dispatches ready execs first,
-    /// reorders under pressure by priority/criticality within edge constraints.
+    /// Submit a batch of GPU nodes from the unified ExecutionPlan.
+    /// Called by the main scheduler's Kahn loop for ready GPU nodes.
     pub fn submitFrame(self: *GPUScheduler, plan: *const frame_graph.ExecutionPlan) void {
         self.frameStart();
-
-        const ngpu = plan.gpu.len;
-        if (ngpu == 0) return;
-
-        var in_degree = self.allocator.alloc(u32, ngpu) catch return;
-        defer self.allocator.free(in_degree);
-        @memset(in_degree, 0);
-
-        for (plan.gpu_edges) |e| {
-            if (e.to < ngpu) in_degree[e.to] += 1;
-        }
-
-        var ready = std.ArrayList(u32).init(self.allocator);
-        defer ready.deinit();
-
-        for (0..ngpu) |i| {
-            if (in_degree[i] == 0) ready.append(@intCast(i)) catch {};
-        }
-
-        // Pressure-based ordering: under load prefer critical/high-priority execs
-        self.gpu_pressure = @as(f32, @floatFromInt(ready.items.len)) / @max(@as(f32, @floatFromInt(ngpu)), 1.0);
-
-        while (ready.items.len > 0) {
-            if (self.remainingBudget() < 200_000) break;
-
-            // Under high pressure, sort ready queue: critical first, then priority
-            if (self.gpu_pressure > 0.8 and ready.items.len > 1) {
-                std.sort.block(u32, ready.items, plan.gpu, struct {
-                    fn less(gpu: []const frame_graph.GPUExec, p1: u32, p2: u32) bool {
-                        const a = gpu[p1].job.priority;
-                        const b = gpu[p2].job.priority;
-                        if (a != b) return a < b;
-                        return gpu[p1].pass_id < gpu[p2].pass_id;
-                    }
-                }.less);
-            }
-
-            const idx = ready.orderedRemove(0);
-            const ge = &plan.gpu[idx];
-
-            var gj = ge.job;
-            gj.deadline_ns = @as(u64, @intCast(std.time.nanoTimestamp())) + @as(u64, @intCast(self.remainingBudget()));
-            self.gpu_queue.append(gj) catch {};
-
-            for (plan.gpu_edges) |e| {
-                if (e.from == idx and e.to < ngpu) {
-                    in_degree[e.to] -= 1;
-                    if (in_degree[e.to] == 0) ready.append(e.to) catch {};
-                }
+        for (plan.nodes) |*node| {
+            switch (node.kind) {
+                .gpu => |*gpu| self.submit(gpu.job),
+                else => {},
             }
         }
-
         self.tick();
     }
 };
