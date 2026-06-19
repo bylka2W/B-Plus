@@ -1233,7 +1233,12 @@ zig/                    — compiler (Zig, active development)
     latency.zig          — Stage 7.3 LatencyProfile, CoreStats, LoadState (adaptive thresholds)
     scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
     scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
-    bench.zig            — Stage 7 A/B benchmark: baseline vs smart scheduler (4 patterns)
+    bench.zig            — Stage 7+ A/B benchmark: baseline vs smart scheduler (4 patterns) + Stage 9 smoke tests
+    scheduler_config.zig — Stage 8 SchedulerConfig (max_sticky_ns, max_queue_len, imbalance thresholds)
+    scheduler_state.zig  — Stage 8 GlobalSchedulerState (SystemLoad, adjustDecision)
+    frame_graph.zig      — Stage 9 FrameGraph: Pass, GPUExec, ExecutionPlan, compile() with topo sort + budget
+    gpu_job.zig          — Stage 9 GPUJob dispatch descriptor
+    gpu_scheduler.zig    — Stage 9 GPUScheduler: frame budget, pressure model, submitFrame()
     parser.zig          — lexer + parser for .b+
     ast.zig             — AST types (states, transitions, etc.)
     x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime).
@@ -1411,13 +1416,53 @@ Job → WorkerPool → worker[N] (per-core LIFO queue)
 
 **Overload escape**: at OVERLOAD victim state — all locality constraints are removed, preventing biased locality trap.
 
+### Stage 8: Starvation escape + global imbalance correction
+
+- **`SchedulerConfig`** (`scheduler_config.zig`): `max_sticky_ns=50ms`, `max_queue_len=64`, `imbalance_soft=2.0`, `imbalance_hard=3.0`.
+- **`GlobalSchedulerState`** (`scheduler_state.zig`): `last_system_load` + `adjustDecision()` — force_steal at ratio > 3.0, override prefer_affinity at ratio > 2.0.
+- **3-layer pipeline**: `localPolicy()` → `safetyOverride()` → `applyGlobal()`.
+- **Starvation escape**: steal loop checks `wait_ns > max_sticky_ns` for sticky jobs → force-migrate (`force_migrate_escape` counter).
+- **`SystemLoad`** (`latency.zig`): `avg_queue`, `max_queue`, `min_queue`, `imbalance_ratio`; `computeSystemLoad()`, `isSystemUnderPressure()`.
+
+### Stage 9: GPU Frame Graph Runtime
+
+`src/frame_graph.zig` — frame compiler producing a fully materialized `ExecutionPlan`.
+
+```text
+Pass[] → FrameGraph.compile() → ExecutionPlan { cpu, gpu, budget }
+                                          ↓
+                               WorkerPool (CPU stubs)
+                               GPUScheduler (GPUExecs)
+```
+
+**GPUExec** (`frame_graph.zig`): `pass_id + GPUJob` — first-class IR node, fully materialized at compile time.
+
+**GPUJob** (`gpu_job.zig`): dispatch descriptor with pipeline_id, dispatch grid, semaphore chain, deadline, priority, dropable.
+
+**GPUScheduler** (`gpu_scheduler.zig`): frame budget enforcement, GPU pressure model (queue/64), deadline expiry, drop policy. `submitFrame(plan)` — no FrameGraph reference, pure executor.
+
+**ExecutionPlan** (`frame_graph.zig`): `cpu[]u32` + `gpu[]GPUExec` + `budget_us`. Compiler output only — runtime never sees Pass metadata.
+
+**Budget enforcement**: `compile()` does hard pruning inside topological sort: non-critical passes dropped from end until total ≤ budget. GPU scheduler also enforces `remainingBudget() < 200us` cutoff.
+
+#### Key architectural boundary
+
+```
+FrameGraph.compile()    →  compiler IR (Pass → GPUExec)
+ExecutionPlan           →  executable frame bytecode
+WorkerPool              →  CPU VM
+GPUScheduler            →  GPU VM
+```
+
+No pass metadata at runtime. No GPU logic in compiler. Clean separation.
+
 #### Testing
 
 ```bash
 zig test src\scheduler_test.zig   # 16 tests (sync/threaded/priority/steal/latency/state-machine)
 zig test src\latency_test.zig     # 5 tests (matrix build, NUMA, migration log, score)
 zig test src\cpu_test.zig         # 1 test (topology detection)
-zig test src\bench.zig            # 7 tests + A/B benchmark output
+zig test src\bench.zig            # 7 tests + A/B benchmark + frame-graph + gpu-scheduler smoke tests
 ```
 
 
