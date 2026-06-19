@@ -37,22 +37,6 @@
 
 ---
 
-```text
-C:\B-Plus\zig>powershell -Command "$bytes = [System.IO.File]::ReadAllBytes('game_ai.exe'); for($i=0x200; $i -lt 0x2C0; $i+=16) { $hex = ($bytes[$i..($i+15)] | ForEach-Object { '{0:X2}' -f $_ }) -join ' '; Write-Host ('{0:X4}: {1}' -f $i, $hex) }"
-0200: 55 48 8B EC 53 41 54 41 55 41 56 41 57 48 81 EC
-0210: 40 20 00 00 48 8D 85 5C F6 FF FF 48 89 45 A4 48
-0220: 89 45 9C 48 81 C0 00 08 00 00 48 89 45 94 48 8D
-0230: 85 5C EE FF FF 48 89 45 8C 48 89 45 84 48 81 C0
-0240: 00 08 00 00 48 89 85 7C FF FF FF 48 8D 85 5C E6
-0250: FF FF 48 89 85 74 FF FF FF 48 89 85 6C FF FF FF
-0260: 48 81 C0 00 08 00 00 48 89 85 64 FF FF FF 48 31
-0270: C0 48 89 45 D8 48 89 85 5C E6 FF FF 48 8D BD D4
-0280: DF FF FF B9 80 06 00 00 F3 AA 33 C9 48 81 F9 40
-0290: 00 00 00 0F 83 3B 00 00 00 4C 8D 9D D4 E1 FF FF
-02A0: 4C 8B D1 49 C1 E2 02 4D 01 D3 4C 8D 51 01 49 81
-02B0: FA 40 00 00 00 0F 83 08 00 00 00 45 89 13 E9 09
-```
-
 ## 1. Быстрый старт
 
 ```bash
@@ -145,7 +129,7 @@ bpc run hello.b+      — компилирует и сразу запускае�
 
 ### 3.1 Состояния
 
-```text
+```bplus
 state <Имя> {
     ...
 }
@@ -153,7 +137,7 @@ state <Имя> {
 
 Состояние — базовый строительный блок. Внутри могут быть переменные, переходы, entry/exit-блоки.
 
-```text
+```bplus
 state Red {
     on timer -> Green
     entry { print("RED\n") }
@@ -162,13 +146,13 @@ state Red {
 
 ### 3.2 Переходы (on)
 
-```text
+```bplus
 on <событие> -> <ЦелевоеСостояние>
 ```
 
 Когда приходит событие (строка из stdin), автомат переходит в указанное состояние.
 
-```text
+```bplus
 state Green {
     on timer -> Yellow
     on pedestrian -> Red
@@ -177,13 +161,13 @@ state Green {
 
 ### 3.3 Безусловные переходы (always)
 
-```text
+```bplus
 always -> <ЦелевоеСостояние>
 ```
 
 Переход происходит сразу при входе в состояние, без ожидания события.
 
-```text
+```bplus
 state Init {
     always -> Menu
 }
@@ -191,7 +175,7 @@ state Init {
 
 ### 3.4 Вход и выход (entry / exit)
 
-```text
+```bplus
 state Door {
     entry { print("entered\n") }
     exit  { print("exited\n") }
@@ -204,13 +188,13 @@ state Door {
 
 ### 3.5 Переменные
 
-```text
+```bplus
 var <имя>: <тип> [= <значение>]
 ```
 
 Объявляются внутри состояния. Типы: int8, int16, int32, int64, u8, u16, u32, u64, byte, bool, short, int, float и т.д.
 
-```text
+```bplus
 state Counter {
     var count: int = 0
     on tick -> Self {
@@ -221,7 +205,7 @@ state Counter {
 
 Можно объявлять несколько переменных через запятую:
 
-```text
+```bplus
 var x: int, y: int, name: int
 ```
 
@@ -229,7 +213,7 @@ var x: int, y: int, name: int
 
 Внутри `entry { }`, `exit { }` или тела перехода:
 
-```text
+```bplus
 var x: int
 
 on event -> Next {
@@ -244,13 +228,13 @@ on event -> Next {
 
 ### 3.7 Печать (print)
 
-```text
+```bplus
 print("строка")
 ```
 
 Печатает строку в stdout. Поддерживаются escape-последовательности `\n`, `\r`, `\t`.
 
-```text
+```bplus
 state Hello {
     entry { print("Hello, world!\n") }
 }
@@ -258,14 +242,14 @@ state Hello {
 
 ### 3.8 Сторожевые условия (guard)
 
-```text
+```bplus
 on <событие> [<условие>] -> <ЦелевоеСостояние>
 ```
 
 Переход происходит только если условие истинно. Поддерживаются операторы:
 `==`, `!=`, `>`, `<`, `>=`, `<=`
 
-```text
+```bplus
 state Crosswalk {
     var cars_waiting: bool
     on timer [cars_waiting == 0] -> Walk
@@ -275,7 +259,7 @@ state Crosswalk {
 
 ### 3.9 global entry
 
-```text
+```bplus
 entry <Имя> {
     ...
 }
@@ -283,7 +267,7 @@ entry <Имя> {
 
 Глобальная точка входа — выполняется один раз при старте программы. Можно использовать для инициализации.
 
-```text
+```bplus
 entry main {
     print("Starting...\n")
 }
@@ -291,7 +275,7 @@ entry main {
 
 ### 3.10 Контекст (context)
 
-```text
+```bplus
 context {
     var <имя>: <тип>
     ...
@@ -300,7 +284,7 @@ context {
 
 Контекстные переменные — глобальные для всей программы, видимы во всех состояниях.
 
-```text
+```bplus
 context {
     var global_count: int
 }
@@ -323,7 +307,7 @@ context {
 | `@no_inline` | Не встраивать |
 | `@owned` / `@borrowed` | Владение памятью |
 
-```text
+```bplus
 @hot
 @cache(L1)
 state FastPath {
@@ -340,7 +324,7 @@ on critical @hot(0.95) -> Shutdown
 
 ### 3.12 Перечисления (enum)
 
-```text
+```bplus
 enum <Имя> {
     Член1,
     Член2,
@@ -350,7 +334,7 @@ enum <Имя> {
 
 Глобальное объявление перечисления.
 
-```text
+```bplus
 enum Color {
     Red,
     Yellow,
@@ -360,7 +344,7 @@ enum Color {
 
 ### 3.13 Параллельные блоки (parallel)
 
-```text
+```bplus
 parallel <Имя> {
     state A { ... }
     state B { ... }
@@ -371,31 +355,31 @@ parallel <Имя> {
 
 ### 3.14 Kernel-функции
 
-```text
+```bplus
 kernel <имя>(<параметр>: <тип>, ...) -> <тип>
 ```
 
 Объявление kernel-функции (для генерации кода на стороне GPU/металла).
 
-```text
+```bplus
 kernel matrixMul(a: int, b: int) -> int
 ```
 
 ### 3.15 Внешние функции (extern)
 
-```text
+```bplus
 extern "dllname.dll" fn <имя>(<парам>: <тип>, ...) -> <тип>
 ```
 
 Объявление внешней функции из DLL.
 
-```text
+```bplus
 extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType: int) -> int
 ```
 
 ### 3.16 Комментарии
 
-```text
+```bplus
 // однострочный комментарий
 -- тоже комментарий
 ```
@@ -417,7 +401,7 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ### Светофор
 
-```text
+```bplus
 state Green {
     on timer -> Yellow
     entry { print("GREEN\n") }
@@ -438,7 +422,7 @@ state Red {
 
 ### Счётчик
 
-```text
+```bplus
 context {
     var total: int
 }
@@ -457,7 +441,7 @@ state Show {
 
 ### Охраняемый переход
 
-```text
+```bplus
 state Door {
     on open [key == 1] -> Opened
     entry { print("locked\n") }
@@ -771,7 +755,7 @@ bpc run hello.b+      — compiles and runs immediately
 
 ### 3.1 States
 
-```text
+```bplus
 state <Name> {
     ...
 }
@@ -779,7 +763,7 @@ state <Name> {
 
 A state is the basic building block. It can contain variables, transitions, and entry/exit blocks.
 
-```text
+```bplus
 state Red {
     on timer -> Green
     entry { print("RED\n") }
@@ -788,13 +772,13 @@ state Red {
 
 ### 3.2 Transitions (on)
 
-```text
+```bplus
 on <event> -> <TargetState>
 ```
 
 When an event (a string from stdin) arrives, the machine transitions to the specified state.
 
-```text
+```bplus
 state Green {
     on timer -> Yellow
     on pedestrian -> Red
@@ -803,13 +787,13 @@ state Green {
 
 ### 3.3 Unconditional Transitions (always)
 
-```text
+```bplus
 always -> <TargetState>
 ```
 
 The transition happens immediately upon entering the state, without waiting for an event.
 
-```text
+```bplus
 state Init {
     always -> Menu
 }
@@ -817,7 +801,7 @@ state Init {
 
 ### 3.4 Entry and Exit (entry / exit)
 
-```text
+```bplus
 state Door {
     entry { print("entered\n") }
     exit  { print("exited\n") }
@@ -830,13 +814,13 @@ state Door {
 
 ### 3.5 Variables
 
-```text
+```bplus
 var <name>: <type> [= <value>]
 ```
 
 Declared inside a state. Types: int8, int16, int32, int64, u8, u16, u32, u64, byte, bool, short, int, float, etc.
 
-```text
+```bplus
 state Counter {
     var count: int = 0
     on tick -> Self {
@@ -847,7 +831,7 @@ state Counter {
 
 Multiple variables can be declared separated by commas:
 
-```text
+```bplus
 var x: int, y: int, name: int
 ```
 
@@ -855,7 +839,7 @@ var x: int, y: int, name: int
 
 Inside `entry { }`, `exit { }` or a transition body:
 
-```text
+```bplus
 var x: int
 
 on event -> Next {
@@ -870,13 +854,13 @@ The right side can use numbers and variable names.
 
 ### 3.7 Print (print)
 
-```text
+```bplus
 print("string")
 ```
 
 Prints a string to stdout. Supports escape sequences `\n`, `\r`, `\t`.
 
-```text
+```bplus
 state Hello {
     entry { print("Hello, world!\n") }
 }
@@ -884,14 +868,14 @@ state Hello {
 
 ### 3.8 Guard Conditions (guard)
 
-```text
+```bplus
 on <event> [<condition>] -> <TargetState>
 ```
 
 The transition only occurs if the condition is true. Supported operators:
 `==`, `!=`, `>`, `<`, `>=`, `<=`
 
-```text
+```bplus
 state Crosswalk {
     var cars_waiting: bool
     on timer [cars_waiting == 0] -> Walk
@@ -901,7 +885,7 @@ state Crosswalk {
 
 ### 3.9 global entry
 
-```text
+```bplus
 entry <Name> {
     ...
 }
@@ -909,7 +893,7 @@ entry <Name> {
 
 A global entry point — executed once at program startup. Can be used for initialization.
 
-```text
+```bplus
 entry main {
     print("Starting...\n")
 }
@@ -917,7 +901,7 @@ entry main {
 
 ### 3.10 Context (context)
 
-```text
+```bplus
 context {
     var <name>: <type>
     ...
@@ -926,7 +910,7 @@ context {
 
 Context variables are global across the entire program, visible in all states.
 
-```text
+```bplus
 context {
     var global_count: int
 }
@@ -949,7 +933,7 @@ Annotations are placed before a state or transition.
 | `@no_inline` | Do not inline |
 | `@owned` / `@borrowed` | Memory ownership |
 
-```text
+```bplus
 @hot
 @cache(L1)
 state FastPath {
@@ -966,7 +950,7 @@ on critical @hot(0.95) -> Shutdown
 
 ### 3.12 Enums (enum)
 
-```text
+```bplus
 enum <Name> {
     Member1,
     Member2,
@@ -976,7 +960,7 @@ enum <Name> {
 
 A global enum declaration.
 
-```text
+```bplus
 enum Color {
     Red,
     Yellow,
@@ -986,7 +970,7 @@ enum Color {
 
 ### 3.13 Parallel Blocks (parallel)
 
-```text
+```bplus
 parallel <Name> {
     state A { ... }
     state B { ... }
@@ -997,31 +981,31 @@ Groups states into a parallel block (states don't affect each other).
 
 ### 3.14 Kernel Functions
 
-```text
+```bplus
 kernel <name>(<param>: <type>, ...) -> <type>
 ```
 
 Declares a kernel function (for GPU/metal code generation).
 
-```text
+```bplus
 kernel matrixMul(a: int, b: int) -> int
 ```
 
 ### 3.15 External Functions (extern)
 
-```text
+```bplus
 extern "dllname.dll" fn <name>(<param>: <type>, ...) -> <type>
 ```
 
 Declares an external function from a DLL.
 
-```text
+```bplus
 extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType: int) -> int
 ```
 
 ### 3.16 Comments
 
-```text
+```bplus
 // single-line comment
 -- also a comment
 ```
@@ -1043,7 +1027,7 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ### Traffic Light
 
-```text
+```bplus
 state Green {
     on timer -> Yellow
     entry { print("GREEN\n") }
@@ -1064,7 +1048,7 @@ Input: `timer\n` cycles through states.
 
 ### Counter
 
-```text
+```bplus
 context {
     var total: int
 }
@@ -1083,7 +1067,7 @@ state Show {
 
 ### Guarded Transition
 
-```text
+```bplus
 state Door {
     on open [key == 1] -> Opened
     entry { print("locked\n") }
