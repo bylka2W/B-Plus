@@ -582,7 +582,7 @@ migrateChunk → tier switch + memcpy used bytes (физическое копи�
 
 ### Stage 4: priority scheduling (top-K selection)
 
-- **Полный сбор**: все кандидаты собираются без budget-лимита (буфер 4096).
+- **Partial top-K**: O(n) scan, без глобального буфера — поддерживается топ MIGRATION_BUDGET=4 кандидатов через замену слабейшего при проходе.
 - **Сортировка**: promote — `heat desc` (самые горячие первыми), demote — `heat asc` (самые холодные первыми).
 - **Tie-break**: `chunk_id asc` — строгий детерминизм при равном heat.
 - **Top-K**: `MIGRATION_BUDGET=4` применяется *после* ранжирования, а не во время сбора.
@@ -1235,7 +1235,7 @@ migrateChunk → tier switch + memcpy used bytes (physical copy)
 
 ### Stage 4: priority scheduling (top-K selection)
 
-- **Full scan**: all candidates collected without budget limit (buffer 4096).
+- **Partial top-K**: O(n) scan, no global buffer — maintains top MIGRATION_BUDGET=4 candidates via weakest-replacement during pass.
 - **Sorting**: promote — `heat desc` (hottest first), demote — `heat asc` (coldest first).
 - **Tie-break**: `chunk_id asc` — strict determinism for equal heat.
 - **Top-K**: `MIGRATION_BUDGET=4` applied *after* ranking, not during collection.

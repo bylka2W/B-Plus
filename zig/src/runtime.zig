@@ -740,6 +740,24 @@ pub const TieredRuntime = struct {
         tr.epoch += 1;
         tr.logger.tick();
 
+        const promoteCmp = struct {
+            fn lessThan(chunks: *ChunkStore, a: u32, b: u32) bool {
+                const ha = chunks.chunks[a].heat;
+                const hb = chunks.chunks[b].heat;
+                if (ha != hb) return ha > hb;
+                return a < b;
+            }
+        }.lessThan;
+
+        const demoteCmp = struct {
+            fn lessThan(chunks: *ChunkStore, a: u32, b: u32) bool {
+                const ha = chunks.chunks[a].heat;
+                const hb = chunks.chunks[b].heat;
+                if (ha != hb) return ha < hb;
+                return a < b;
+            }
+        }.lessThan;
+
         // 1. Decay chunk heat + handle heat
         var ci: u32 = 0;
         while (ci < tr.chunks.count) : (ci += 1) {
@@ -753,64 +771,56 @@ pub const TieredRuntime = struct {
             }
         }
 
-        // 2. Collect ALL candidates (full scan, no budget limit)
-        const MAX_CANDS = 4096;
-        var promote_buf: [MAX_CANDS]u32 = undefined;
-        var demote_buf: [MAX_CANDS]u32 = undefined;
+        // 2. Scan all chunks → partial top-K selection (no global buffer)
+        var promote_buf: [MIGRATION_BUDGET]u32 = undefined;
+        var demote_buf: [MIGRATION_BUDGET]u32 = undefined;
         var np: u32 = 0;
         var nd: u32 = 0;
 
         ci = 0;
-        while (ci < tr.chunks.count and (np < MAX_CANDS or nd < MAX_CANDS)) : (ci += 1) {
+        while (ci < tr.chunks.count) : (ci += 1) {
             const ch = &tr.chunks.chunks[ci];
             if (ch.slot_count == 0) continue;
             const cur_tick = @as(u32, @truncate(tr.epoch));
             if (ch.last_migration_tick != 0 and (cur_tick -| ch.last_migration_tick) < COOLDOWN_TICKS) continue;
-            if (ch.heat > PROMOTE_THRESH and ch.tier != .L1 and np < MAX_CANDS) {
-                promote_buf[np] = ci;
-                np += 1;
+
+            if (ch.heat > PROMOTE_THRESH and ch.tier != .L1) {
+                if (np < MIGRATION_BUDGET) {
+                    promote_buf[np] = ci;
+                    np += 1;
+                    if (np == MIGRATION_BUDGET) {
+                        std.mem.sort(u32, promote_buf[0..np], &tr.chunks, promoteCmp);
+                    }
+                } else if (promoteCmp(&tr.chunks, ci, promote_buf[MIGRATION_BUDGET - 1])) {
+                    promote_buf[MIGRATION_BUDGET - 1] = ci;
+                    std.mem.sort(u32, promote_buf[0..MIGRATION_BUDGET], &tr.chunks, promoteCmp);
+                }
             }
-            if (ch.heat < DEMOTE_THRESH and ch.tier != .L3 and nd < MAX_CANDS) {
-                demote_buf[nd] = ci;
-                nd += 1;
+
+            if (ch.heat < DEMOTE_THRESH and ch.tier != .L3) {
+                if (nd < MIGRATION_BUDGET) {
+                    demote_buf[nd] = ci;
+                    nd += 1;
+                    if (nd == MIGRATION_BUDGET) {
+                        std.mem.sort(u32, demote_buf[0..nd], &tr.chunks, demoteCmp);
+                    }
+                } else if (demoteCmp(&tr.chunks, ci, demote_buf[MIGRATION_BUDGET - 1])) {
+                    demote_buf[MIGRATION_BUDGET - 1] = ci;
+                    std.mem.sort(u32, demote_buf[0..MIGRATION_BUDGET], &tr.chunks, demoteCmp);
+                }
             }
         }
 
-        // 3. Sort: promote by heat desc (hottest first), demote by heat asc (coldest first)
-        // Tie-break by chunk_id for deterministic ordering
-        if (np > 1) {
-            std.mem.sort(u32, promote_buf[0..np], &tr.chunks, struct {
-                fn lessThan(chunks: *ChunkStore, a: u32, b: u32) bool {
-                    const ha = chunks.chunks[a].heat;
-                    const hb = chunks.chunks[b].heat;
-                    if (ha != hb) return ha > hb;
-                    return a < b;
-                }
-            }.lessThan);
-        }
-        if (nd > 1) {
-            std.mem.sort(u32, demote_buf[0..nd], &tr.chunks, struct {
-                fn lessThan(chunks: *ChunkStore, a: u32, b: u32) bool {
-                    const ha = chunks.chunks[a].heat;
-                    const hb = chunks.chunks[b].heat;
-                    if (ha != hb) return ha < hb;
-                    return a < b;
-                }
-            }.lessThan);
-        }
-
-        // 4. Apply top-K (budget after ranking)
-        const promote_limit = @min(np, MIGRATION_BUDGET);
-        const demote_limit = @min(nd, MIGRATION_BUDGET);
+        // 3. Apply top-K
         var migrated: u32 = 0;
         var i: u32 = 0;
-        while (i < promote_limit) : (i += 1) {
+        while (i < np) : (i += 1) {
             const cid = promote_buf[i];
             const dst = tr.chunks.chunks[cid].tier.moveHotter() orelse continue;
             if (tr.migrateChunk(cid, dst) == .success) migrated += 1;
         }
         i = 0;
-        while (i < demote_limit) : (i += 1) {
+        while (i < nd) : (i += 1) {
             const cid = demote_buf[i];
             const dst = tr.chunks.chunks[cid].tier.moveColder() orelse continue;
             if (tr.migrateChunk(cid, dst) == .success) migrated += 1;
