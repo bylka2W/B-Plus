@@ -129,7 +129,7 @@ bpc run hello.b+      — компилирует и сразу запускае�
 
 ### 3.1 Состояния
 
-```bplus
+```rust
 state <Имя> {
     ...
 }
@@ -137,7 +137,7 @@ state <Имя> {
 
 Состояние — базовый строительный блок. Внутри могут быть переменные, переходы, entry/exit-блоки.
 
-```bplus
+```rust
 state Red {
     on timer -> Green
     entry { print("RED\n") }
@@ -146,13 +146,13 @@ state Red {
 
 ### 3.2 Переходы (on)
 
-```bplus
+```rust
 on <событие> -> <ЦелевоеСостояние>
 ```
 
 Когда приходит событие (строка из stdin), автомат переходит в указанное состояние.
 
-```bplus
+```rust
 state Green {
     on timer -> Yellow
     on pedestrian -> Red
@@ -161,13 +161,13 @@ state Green {
 
 ### 3.3 Безусловные переходы (always)
 
-```bplus
+```rust
 always -> <ЦелевоеСостояние>
 ```
 
 Переход происходит сразу при входе в состояние, без ожидания события.
 
-```bplus
+```rust
 state Init {
     always -> Menu
 }
@@ -175,7 +175,7 @@ state Init {
 
 ### 3.4 Вход и выход (entry / exit)
 
-```bplus
+```rust
 state Door {
     entry { print("entered\n") }
     exit  { print("exited\n") }
@@ -188,13 +188,13 @@ state Door {
 
 ### 3.5 Переменные
 
-```bplus
+```rust
 var <имя>: <тип> [= <значение>]
 ```
 
 Объявляются внутри состояния. Типы: int8, int16, int32, int64, u8, u16, u32, u64, byte, bool, short, int, float и т.д.
 
-```bplus
+```rust
 state Counter {
     var count: int = 0
     on tick -> Self {
@@ -205,7 +205,7 @@ state Counter {
 
 Можно объявлять несколько переменных через запятую:
 
-```bplus
+```rust
 var x: int, y: int, name: int
 ```
 
@@ -213,7 +213,7 @@ var x: int, y: int, name: int
 
 Внутри `entry { }`, `exit { }` или тела перехода:
 
-```bplus
+```rust
 var x: int
 
 on event -> Next {
@@ -228,13 +228,13 @@ on event -> Next {
 
 ### 3.7 Печать (print)
 
-```bplus
+```rust
 print("строка")
 ```
 
 Печатает строку в stdout. Поддерживаются escape-последовательности `\n`, `\r`, `\t`.
 
-```bplus
+```rust
 state Hello {
     entry { print("Hello, world!\n") }
 }
@@ -242,14 +242,14 @@ state Hello {
 
 ### 3.8 Сторожевые условия (guard)
 
-```bplus
+```rust
 on <событие> [<условие>] -> <ЦелевоеСостояние>
 ```
 
 Переход происходит только если условие истинно. Поддерживаются операторы:
 `==`, `!=`, `>`, `<`, `>=`, `<=`
 
-```bplus
+```rust
 state Crosswalk {
     var cars_waiting: bool
     on timer [cars_waiting == 0] -> Walk
@@ -259,7 +259,7 @@ state Crosswalk {
 
 ### 3.9 global entry
 
-```bplus
+```rust
 entry <Имя> {
     ...
 }
@@ -267,7 +267,7 @@ entry <Имя> {
 
 Глобальная точка входа — выполняется один раз при старте программы. Можно использовать для инициализации.
 
-```bplus
+```rust
 entry main {
     print("Starting...\n")
 }
@@ -275,7 +275,7 @@ entry main {
 
 ### 3.10 Контекст (context)
 
-```bplus
+```rust
 context {
     var <имя>: <тип>
     ...
@@ -284,7 +284,7 @@ context {
 
 Контекстные переменные — глобальные для всей программы, видимы во всех состояниях.
 
-```bplus
+```rust
 context {
     var global_count: int
 }
@@ -307,7 +307,7 @@ context {
 | `@no_inline` | Не встраивать |
 | `@owned` / `@borrowed` | Владение памятью |
 
-```bplus
+```rust
 @hot
 @cache(L1)
 state FastPath {
@@ -324,7 +324,7 @@ on critical @hot(0.95) -> Shutdown
 
 ### 3.12 Перечисления (enum)
 
-```bplus
+```rust
 enum <Имя> {
     Член1,
     Член2,
@@ -334,7 +334,7 @@ enum <Имя> {
 
 Глобальное объявление перечисления.
 
-```bplus
+```rust
 enum Color {
     Red,
     Yellow,
@@ -344,7 +344,7 @@ enum Color {
 
 ### 3.13 Параллельные блоки (parallel)
 
-```bplus
+```rust
 parallel <Имя> {
     state A { ... }
     state B { ... }
@@ -355,31 +355,31 @@ parallel <Имя> {
 
 ### 3.14 Kernel-функции
 
-```bplus
+```rust
 kernel <имя>(<параметр>: <тип>, ...) -> <тип>
 ```
 
 Объявление kernel-функции (для генерации кода на стороне GPU/металла).
 
-```bplus
+```rust
 kernel matrixMul(a: int, b: int) -> int
 ```
 
 ### 3.15 Внешние функции (extern)
 
-```bplus
+```rust
 extern "dllname.dll" fn <имя>(<парам>: <тип>, ...) -> <тип>
 ```
 
 Объявление внешней функции из DLL.
 
-```bplus
+```rust
 extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType: int) -> int
 ```
 
 ### 3.16 Комментарии
 
-```bplus
+```rust
 // однострочный комментарий
 -- тоже комментарий
 ```
@@ -401,7 +401,7 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ### Светофор
 
-```bplus
+```rust
 state Green {
     on timer -> Yellow
     entry { print("GREEN\n") }
@@ -422,7 +422,7 @@ state Red {
 
 ### Счётчик
 
-```bplus
+```rust
 context {
     var total: int
 }
@@ -441,7 +441,7 @@ state Show {
 
 ### Охраняемый переход
 
-```bplus
+```rust
 state Door {
     on open [key == 1] -> Opened
     entry { print("locked\n") }
@@ -755,7 +755,7 @@ bpc run hello.b+      — compiles and runs immediately
 
 ### 3.1 States
 
-```bplus
+```rust
 state <Name> {
     ...
 }
@@ -763,7 +763,7 @@ state <Name> {
 
 A state is the basic building block. It can contain variables, transitions, and entry/exit blocks.
 
-```bplus
+```rust
 state Red {
     on timer -> Green
     entry { print("RED\n") }
@@ -772,13 +772,13 @@ state Red {
 
 ### 3.2 Transitions (on)
 
-```bplus
+```rust
 on <event> -> <TargetState>
 ```
 
 When an event (a string from stdin) arrives, the machine transitions to the specified state.
 
-```bplus
+```rust
 state Green {
     on timer -> Yellow
     on pedestrian -> Red
@@ -787,13 +787,13 @@ state Green {
 
 ### 3.3 Unconditional Transitions (always)
 
-```bplus
+```rust
 always -> <TargetState>
 ```
 
 The transition happens immediately upon entering the state, without waiting for an event.
 
-```bplus
+```rust
 state Init {
     always -> Menu
 }
@@ -801,7 +801,7 @@ state Init {
 
 ### 3.4 Entry and Exit (entry / exit)
 
-```bplus
+```rust
 state Door {
     entry { print("entered\n") }
     exit  { print("exited\n") }
@@ -814,13 +814,13 @@ state Door {
 
 ### 3.5 Variables
 
-```bplus
+```rust
 var <name>: <type> [= <value>]
 ```
 
 Declared inside a state. Types: int8, int16, int32, int64, u8, u16, u32, u64, byte, bool, short, int, float, etc.
 
-```bplus
+```rust
 state Counter {
     var count: int = 0
     on tick -> Self {
@@ -831,7 +831,7 @@ state Counter {
 
 Multiple variables can be declared separated by commas:
 
-```bplus
+```rust
 var x: int, y: int, name: int
 ```
 
@@ -839,7 +839,7 @@ var x: int, y: int, name: int
 
 Inside `entry { }`, `exit { }` or a transition body:
 
-```bplus
+```rust
 var x: int
 
 on event -> Next {
@@ -854,13 +854,13 @@ The right side can use numbers and variable names.
 
 ### 3.7 Print (print)
 
-```bplus
+```rust
 print("string")
 ```
 
 Prints a string to stdout. Supports escape sequences `\n`, `\r`, `\t`.
 
-```bplus
+```rust
 state Hello {
     entry { print("Hello, world!\n") }
 }
@@ -868,14 +868,14 @@ state Hello {
 
 ### 3.8 Guard Conditions (guard)
 
-```bplus
+```rust
 on <event> [<condition>] -> <TargetState>
 ```
 
 The transition only occurs if the condition is true. Supported operators:
 `==`, `!=`, `>`, `<`, `>=`, `<=`
 
-```bplus
+```rust
 state Crosswalk {
     var cars_waiting: bool
     on timer [cars_waiting == 0] -> Walk
@@ -885,7 +885,7 @@ state Crosswalk {
 
 ### 3.9 global entry
 
-```bplus
+```rust
 entry <Name> {
     ...
 }
@@ -893,7 +893,7 @@ entry <Name> {
 
 A global entry point — executed once at program startup. Can be used for initialization.
 
-```bplus
+```rust
 entry main {
     print("Starting...\n")
 }
@@ -901,7 +901,7 @@ entry main {
 
 ### 3.10 Context (context)
 
-```bplus
+```rust
 context {
     var <name>: <type>
     ...
@@ -910,7 +910,7 @@ context {
 
 Context variables are global across the entire program, visible in all states.
 
-```bplus
+```rust
 context {
     var global_count: int
 }
@@ -933,7 +933,7 @@ Annotations are placed before a state or transition.
 | `@no_inline` | Do not inline |
 | `@owned` / `@borrowed` | Memory ownership |
 
-```bplus
+```rust
 @hot
 @cache(L1)
 state FastPath {
@@ -950,7 +950,7 @@ on critical @hot(0.95) -> Shutdown
 
 ### 3.12 Enums (enum)
 
-```bplus
+```rust
 enum <Name> {
     Member1,
     Member2,
@@ -960,7 +960,7 @@ enum <Name> {
 
 A global enum declaration.
 
-```bplus
+```rust
 enum Color {
     Red,
     Yellow,
@@ -970,7 +970,7 @@ enum Color {
 
 ### 3.13 Parallel Blocks (parallel)
 
-```bplus
+```rust
 parallel <Name> {
     state A { ... }
     state B { ... }
@@ -981,31 +981,31 @@ Groups states into a parallel block (states don't affect each other).
 
 ### 3.14 Kernel Functions
 
-```bplus
+```rust
 kernel <name>(<param>: <type>, ...) -> <type>
 ```
 
 Declares a kernel function (for GPU/metal code generation).
 
-```bplus
+```rust
 kernel matrixMul(a: int, b: int) -> int
 ```
 
 ### 3.15 External Functions (extern)
 
-```bplus
+```rust
 extern "dllname.dll" fn <name>(<param>: <type>, ...) -> <type>
 ```
 
 Declares an external function from a DLL.
 
-```bplus
+```rust
 extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType: int) -> int
 ```
 
 ### 3.16 Comments
 
-```bplus
+```rust
 // single-line comment
 -- also a comment
 ```
@@ -1027,7 +1027,7 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ### Traffic Light
 
-```bplus
+```rust
 state Green {
     on timer -> Yellow
     entry { print("GREEN\n") }
@@ -1048,7 +1048,7 @@ Input: `timer\n` cycles through states.
 
 ### Counter
 
-```bplus
+```rust
 context {
     var total: int
 }
@@ -1067,7 +1067,7 @@ state Show {
 
 ### Guarded Transition
 
-```bplus
+```rust
 state Door {
     on open [key == 1] -> Opened
     entry { print("locked\n") }
