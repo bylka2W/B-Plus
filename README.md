@@ -3,7 +3,7 @@
 **B+** транслирует `.b+` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор написан с нуля на Zig.
 
-Встроенный runtime-уровень (Stage 1) — детерминированная машина состояний с формальной моделью переходов, трёхуровневой иерархией памяти (L1/L2/L3), поколенческими handle и единственной точкой исполнения миграций (`applyMigration`).
+Встроенный runtime-уровень (Stage 2) — детерминированная машина состояний с формальной моделью переходов, трёхуровневой иерархией памяти (L1/L2/L3), поколенческими handle и единственной точкой исполнения миграций (`applyMigration`).
 
 ---
 
@@ -36,6 +36,8 @@
 9. [Контакты](#9-контакты)
 
 ---
+
+```text
 C:\B-Plus\zig>powershell -Command "$bytes = [System.IO.File]::ReadAllBytes('game_ai.exe'); for($i=0x200; $i -lt 0x2C0; $i+=16) { $hex = ($bytes[$i..($i+15)] | ForEach-Object { '{0:X2}' -f $_ }) -join ' '; Write-Host ('{0:X4}: {1}' -f $i, $hex) }"
 0200: 55 48 8B EC 53 41 54 41 55 41 56 41 57 48 81 EC
 0210: 40 20 00 00 48 8D 85 5C F6 FF FF 48 89 45 A4 48
@@ -49,10 +51,11 @@ C:\B-Plus\zig>powershell -Command "$bytes = [System.IO.File]::ReadAllBytes('game
 0290: 00 00 00 0F 83 3B 00 00 00 4C 8D 9D D4 E1 FF FF
 02A0: 4C 8B D1 49 C1 E2 02 4D 01 D3 4C 8D 51 01 49 81
 02B0: FA 40 00 00 00 0F 83 08 00 00 00 45 89 13 E9 09
+```
 
 ## 1. Быстрый старт
 
-```
+```bash
 bpc.exe build hello.b+
 .\hello.exe
 ```
@@ -62,7 +65,7 @@ bpc.exe build hello.b+
 
 Можно совместить:
 
-```
+```bash
 bpc.exe run hello.b+
 ```
 
@@ -72,7 +75,7 @@ bpc.exe run hello.b+
 
 ### Синтаксис
 
-```
+```text
 bpc build <входной.b+>              — скомпилировать в <входной>.exe
 bpc build <входной.b+> -o <выход.exe> — скомпилировать с указанием имени
 bpc run   <входной.b+>              — скомпилировать и сразу запустить
@@ -98,7 +101,7 @@ bpc run   <входной.b+>              — скомпилировать и �
 Если `-o` не указан, имя выходного файла = имя входного с расширением `.exe`.
 
 **Примеры:**
-```
+```bash
 bpc build traffic.b+              → traffic.exe
 bpc build traffic.b+ -o light.exe → light.exe
 bpc build source.b+               → source.exe
@@ -116,7 +119,7 @@ bpc build source.b+               → source.exe
 | 4 | Возвращает код завершения программы |
 
 **Примеры:**
-```
+```bash
 bpc run traffic.b+    — компилирует и сразу запускает
 bpc run hello.b+      — компилирует и сразу запускает
 ```
@@ -142,7 +145,7 @@ bpc run hello.b+      — компилирует и сразу запускае�
 
 ### 3.1 Состояния
 
-```
+```text
 state <Имя> {
     ...
 }
@@ -150,7 +153,7 @@ state <Имя> {
 
 Состояние — базовый строительный блок. Внутри могут быть переменные, переходы, entry/exit-блоки.
 
-```
+```text
 state Red {
     on timer -> Green
     entry { print("RED\n") }
@@ -159,13 +162,13 @@ state Red {
 
 ### 3.2 Переходы (on)
 
-```
+```text
 on <событие> -> <ЦелевоеСостояние>
 ```
 
 Когда приходит событие (строка из stdin), автомат переходит в указанное состояние.
 
-```
+```text
 state Green {
     on timer -> Yellow
     on pedestrian -> Red
@@ -174,13 +177,13 @@ state Green {
 
 ### 3.3 Безусловные переходы (always)
 
-```
+```text
 always -> <ЦелевоеСостояние>
 ```
 
 Переход происходит сразу при входе в состояние, без ожидания события.
 
-```
+```text
 state Init {
     always -> Menu
 }
@@ -188,7 +191,7 @@ state Init {
 
 ### 3.4 Вход и выход (entry / exit)
 
-```
+```text
 state Door {
     entry { print("entered\n") }
     exit  { print("exited\n") }
@@ -201,13 +204,13 @@ state Door {
 
 ### 3.5 Переменные
 
-```
+```text
 var <имя>: <тип> [= <значение>]
 ```
 
 Объявляются внутри состояния. Типы: int8, int16, int32, int64, u8, u16, u32, u64, byte, bool, short, int, float и т.д.
 
-```
+```text
 state Counter {
     var count: int = 0
     on tick -> Self {
@@ -218,7 +221,7 @@ state Counter {
 
 Можно объявлять несколько переменных через запятую:
 
-```
+```text
 var x: int, y: int, name: int
 ```
 
@@ -226,7 +229,7 @@ var x: int, y: int, name: int
 
 Внутри `entry { }`, `exit { }` или тела перехода:
 
-```
+```text
 var x: int
 
 on event -> Next {
@@ -241,13 +244,13 @@ on event -> Next {
 
 ### 3.7 Печать (print)
 
-```
+```text
 print("строка")
 ```
 
 Печатает строку в stdout. Поддерживаются escape-последовательности `\n`, `\r`, `\t`.
 
-```
+```text
 state Hello {
     entry { print("Hello, world!\n") }
 }
@@ -255,14 +258,14 @@ state Hello {
 
 ### 3.8 Сторожевые условия (guard)
 
-```
+```text
 on <событие> [<условие>] -> <ЦелевоеСостояние>
 ```
 
 Переход происходит только если условие истинно. Поддерживаются операторы:
 `==`, `!=`, `>`, `<`, `>=`, `<=`
 
-```
+```text
 state Crosswalk {
     var cars_waiting: bool
     on timer [cars_waiting == 0] -> Walk
@@ -272,7 +275,7 @@ state Crosswalk {
 
 ### 3.9 global entry
 
-```
+```text
 entry <Имя> {
     ...
 }
@@ -280,7 +283,7 @@ entry <Имя> {
 
 Глобальная точка входа — выполняется один раз при старте программы. Можно использовать для инициализации.
 
-```
+```text
 entry main {
     print("Starting...\n")
 }
@@ -288,7 +291,7 @@ entry main {
 
 ### 3.10 Контекст (context)
 
-```
+```text
 context {
     var <имя>: <тип>
     ...
@@ -297,7 +300,7 @@ context {
 
 Контекстные переменные — глобальные для всей программы, видимы во всех состояниях.
 
-```
+```text
 context {
     var global_count: int
 }
@@ -320,7 +323,7 @@ context {
 | `@no_inline` | Не встраивать |
 | `@owned` / `@borrowed` | Владение памятью |
 
-```
+```text
 @hot
 @cache(L1)
 state FastPath {
@@ -337,7 +340,7 @@ on critical @hot(0.95) -> Shutdown
 
 ### 3.12 Перечисления (enum)
 
-```
+```text
 enum <Имя> {
     Член1,
     Член2,
@@ -347,7 +350,7 @@ enum <Имя> {
 
 Глобальное объявление перечисления.
 
-```
+```text
 enum Color {
     Red,
     Yellow,
@@ -357,7 +360,7 @@ enum Color {
 
 ### 3.13 Параллельные блоки (parallel)
 
-```
+```text
 parallel <Имя> {
     state A { ... }
     state B { ... }
@@ -368,31 +371,31 @@ parallel <Имя> {
 
 ### 3.14 Kernel-функции
 
-```
+```text
 kernel <имя>(<параметр>: <тип>, ...) -> <тип>
 ```
 
 Объявление kernel-функции (для генерации кода на стороне GPU/металла).
 
-```
+```text
 kernel matrixMul(a: int, b: int) -> int
 ```
 
 ### 3.15 Внешние функции (extern)
 
-```
+```text
 extern "dllname.dll" fn <имя>(<парам>: <тип>, ...) -> <тип>
 ```
 
 Объявление внешней функции из DLL.
 
-```
+```text
 extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType: int) -> int
 ```
 
 ### 3.16 Комментарии
 
-```
+```text
 // однострочный комментарий
 -- тоже комментарий
 ```
@@ -414,7 +417,7 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ### Светофор
 
-```
+```text
 state Green {
     on timer -> Yellow
     entry { print("GREEN\n") }
@@ -435,7 +438,7 @@ state Red {
 
 ### Счётчик
 
-```
+```text
 context {
     var total: int
 }
@@ -454,7 +457,7 @@ state Show {
 
 ### Охраняемый переход
 
-```
+```text
 state Door {
     on open [key == 1] -> Opened
     entry { print("locked\n") }
@@ -476,21 +479,21 @@ context {
 
 Требуется [Zig](https://ziglang.org/) (master, >= 0.14).
 
-```
+```bash
 cd zig
 zig build
 ```
 
 Или напрямую:
 
-```
+```bash
 cd zig
 zig build-exe src/main.zig -femit-bin=bpc.exe
 ```
 
 После сборки:
 
-```
+```bash
 bpc.exe run example.b+
 ```
 
@@ -498,7 +501,7 @@ bpc.exe run example.b+
 
 ## 7. Структура проекта
 
-```
+```text
 zig/                    — компилятор (Zig, активная разработка)
   src/
     main.zig            — точка входа, CLI, оркестрация
@@ -519,7 +522,7 @@ zig/                    — компилятор (Zig, активная разр
 
 MIT License
 
-```
+```text
 MIT License
 
 Copyright (c) 2025 bylka2W
@@ -557,7 +560,7 @@ SOFTWARE.
 
 `src/runtime.zig` — детерминированная машина памяти, формальная модель переходов.
 
-```
+```text
 Handle → MetaStore → ptr → address → Tier (single source of truth: classifyPtr)
                                 ↓
 moveHotter/moveColder → Tier.moveHotter/?Tier (pure FSM)
@@ -597,7 +600,7 @@ applyMigration → migrate (единственный execution boundary)
 
 ### Тестирование
 
-```
+```bash
 zig test src\runtime_test.zig   # 28 unit tests
 zig test src\stress_test.zig    # 100k ops stress test
 ```
@@ -642,7 +645,7 @@ zig test src\stress_test.zig    # 100k ops stress test
 **B+** compiles `.b+` files directly to x64 machine code and packages them into Windows PE executables (.exe).
 No assemblers, linkers, or LLVM — the entire code generator is written from scratch in Zig.
 
-Built-in runtime layer (Stage 1) — a deterministic state machine with a formal transition model, three-level memory hierarchy (L1/L2/L3), generational handles, and a single migration execution point (`applyMigration`).
+Built-in runtime layer (Stage 2) — a deterministic state machine with a formal transition model, three-level memory hierarchy (L1/L2/L3), generational handles, and a single migration execution point (`applyMigration`).
 
 ---
 
@@ -678,7 +681,7 @@ Built-in runtime layer (Stage 1) — a deterministic state machine with a formal
 
 ## 1. Quick Start
 
-```
+```bash
 bpc.exe build hello.b+
 .\hello.exe
 ```
@@ -688,7 +691,7 @@ The second runs it.
 
 Or combine both:
 
-```
+```bash
 bpc.exe run hello.b+
 ```
 
@@ -698,7 +701,7 @@ bpc.exe run hello.b+
 
 ### Syntax
 
-```
+```text
 bpc build <input.b+>              — compile to <input>.exe
 bpc build <input.b+> -o <out.exe> — compile with custom output name
 bpc run   <input.b+>              — compile and run immediately
@@ -724,7 +727,7 @@ What it does:
 If `-o` is omitted, the output name = input name with `.exe` extension.
 
 **Examples:**
-```
+```bash
 bpc build traffic.b+              → traffic.exe
 bpc build traffic.b+ -o light.exe → light.exe
 bpc build source.b+               → source.exe
@@ -742,7 +745,7 @@ What it does:
 | 4 | Returns the program exit code |
 
 **Examples:**
-```
+```bash
 bpc run traffic.b+    — compiles and runs immediately
 bpc run hello.b+      — compiles and runs immediately
 ```
@@ -768,7 +771,7 @@ bpc run hello.b+      — compiles and runs immediately
 
 ### 3.1 States
 
-```
+```text
 state <Name> {
     ...
 }
@@ -776,7 +779,7 @@ state <Name> {
 
 A state is the basic building block. It can contain variables, transitions, and entry/exit blocks.
 
-```
+```text
 state Red {
     on timer -> Green
     entry { print("RED\n") }
@@ -785,13 +788,13 @@ state Red {
 
 ### 3.2 Transitions (on)
 
-```
+```text
 on <event> -> <TargetState>
 ```
 
 When an event (a string from stdin) arrives, the machine transitions to the specified state.
 
-```
+```text
 state Green {
     on timer -> Yellow
     on pedestrian -> Red
@@ -800,13 +803,13 @@ state Green {
 
 ### 3.3 Unconditional Transitions (always)
 
-```
+```text
 always -> <TargetState>
 ```
 
 The transition happens immediately upon entering the state, without waiting for an event.
 
-```
+```text
 state Init {
     always -> Menu
 }
@@ -814,7 +817,7 @@ state Init {
 
 ### 3.4 Entry and Exit (entry / exit)
 
-```
+```text
 state Door {
     entry { print("entered\n") }
     exit  { print("exited\n") }
@@ -827,13 +830,13 @@ state Door {
 
 ### 3.5 Variables
 
-```
+```text
 var <name>: <type> [= <value>]
 ```
 
 Declared inside a state. Types: int8, int16, int32, int64, u8, u16, u32, u64, byte, bool, short, int, float, etc.
 
-```
+```text
 state Counter {
     var count: int = 0
     on tick -> Self {
@@ -844,7 +847,7 @@ state Counter {
 
 Multiple variables can be declared separated by commas:
 
-```
+```text
 var x: int, y: int, name: int
 ```
 
@@ -852,7 +855,7 @@ var x: int, y: int, name: int
 
 Inside `entry { }`, `exit { }` or a transition body:
 
-```
+```text
 var x: int
 
 on event -> Next {
@@ -867,13 +870,13 @@ The right side can use numbers and variable names.
 
 ### 3.7 Print (print)
 
-```
+```text
 print("string")
 ```
 
 Prints a string to stdout. Supports escape sequences `\n`, `\r`, `\t`.
 
-```
+```text
 state Hello {
     entry { print("Hello, world!\n") }
 }
@@ -881,14 +884,14 @@ state Hello {
 
 ### 3.8 Guard Conditions (guard)
 
-```
+```text
 on <event> [<condition>] -> <TargetState>
 ```
 
 The transition only occurs if the condition is true. Supported operators:
 `==`, `!=`, `>`, `<`, `>=`, `<=`
 
-```
+```text
 state Crosswalk {
     var cars_waiting: bool
     on timer [cars_waiting == 0] -> Walk
@@ -898,7 +901,7 @@ state Crosswalk {
 
 ### 3.9 global entry
 
-```
+```text
 entry <Name> {
     ...
 }
@@ -906,7 +909,7 @@ entry <Name> {
 
 A global entry point — executed once at program startup. Can be used for initialization.
 
-```
+```text
 entry main {
     print("Starting...\n")
 }
@@ -914,7 +917,7 @@ entry main {
 
 ### 3.10 Context (context)
 
-```
+```text
 context {
     var <name>: <type>
     ...
@@ -923,7 +926,7 @@ context {
 
 Context variables are global across the entire program, visible in all states.
 
-```
+```text
 context {
     var global_count: int
 }
@@ -946,7 +949,7 @@ Annotations are placed before a state or transition.
 | `@no_inline` | Do not inline |
 | `@owned` / `@borrowed` | Memory ownership |
 
-```
+```text
 @hot
 @cache(L1)
 state FastPath {
@@ -963,7 +966,7 @@ on critical @hot(0.95) -> Shutdown
 
 ### 3.12 Enums (enum)
 
-```
+```text
 enum <Name> {
     Member1,
     Member2,
@@ -973,7 +976,7 @@ enum <Name> {
 
 A global enum declaration.
 
-```
+```text
 enum Color {
     Red,
     Yellow,
@@ -983,7 +986,7 @@ enum Color {
 
 ### 3.13 Parallel Blocks (parallel)
 
-```
+```text
 parallel <Name> {
     state A { ... }
     state B { ... }
@@ -994,31 +997,31 @@ Groups states into a parallel block (states don't affect each other).
 
 ### 3.14 Kernel Functions
 
-```
+```text
 kernel <name>(<param>: <type>, ...) -> <type>
 ```
 
 Declares a kernel function (for GPU/metal code generation).
 
-```
+```text
 kernel matrixMul(a: int, b: int) -> int
 ```
 
 ### 3.15 External Functions (extern)
 
-```
+```text
 extern "dllname.dll" fn <name>(<param>: <type>, ...) -> <type>
 ```
 
 Declares an external function from a DLL.
 
-```
+```text
 extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType: int) -> int
 ```
 
 ### 3.16 Comments
 
-```
+```text
 // single-line comment
 -- also a comment
 ```
@@ -1040,7 +1043,7 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ### Traffic Light
 
-```
+```text
 state Green {
     on timer -> Yellow
     entry { print("GREEN\n") }
@@ -1061,7 +1064,7 @@ Input: `timer\n` cycles through states.
 
 ### Counter
 
-```
+```text
 context {
     var total: int
 }
@@ -1080,7 +1083,7 @@ state Show {
 
 ### Guarded Transition
 
-```
+```text
 state Door {
     on open [key == 1] -> Opened
     entry { print("locked\n") }
@@ -1102,21 +1105,21 @@ context {
 
 Requires [Zig](https://ziglang.org/) (master, >= 0.14).
 
-```
+```bash
 cd zig
 zig build
 ```
 
 Or directly:
 
-```
+```bash
 cd zig
 zig build-exe src/main.zig -femit-bin=bpc.exe
 ```
 
 After building:
 
-```
+```bash
 bpc.exe run example.b+
 ```
 
@@ -1124,7 +1127,7 @@ bpc.exe run example.b+
 
 ## 7. Project Structure
 
-```
+```text
 zig/                    — compiler (Zig, active development)
   src/
     main.zig            — entry point, CLI, orchestration
@@ -1149,7 +1152,7 @@ zig/                    — compiler (Zig, active development)
 
 MIT License
 
-```
+```text
 MIT License
 
 Copyright (c) 2025 bylka2W
@@ -1187,7 +1190,7 @@ SOFTWARE.
 
 `src/runtime.zig` — deterministic memory machine with a formal transition model.
 
-```
+```text
 Handle → MetaStore → ptr → address → Tier (single source of truth: classifyPtr)
                                 ↓
 moveHotter/moveColder → Tier.moveHotter/?Tier (pure FSM)
@@ -1227,7 +1230,7 @@ applyMigration → migrate (sole execution boundary)
 
 ### Testing
 
-```
+```bash
 zig test src\runtime_test.zig   # 28 unit tests
 zig test src\stress_test.zig    # 100k ops stress test
 ```
@@ -1339,5 +1342,3 @@ linear scans. Built once at initialization after parsing.
 - Minimal error messages.
 - Reads input from stdin (one line = one event).
 - No LLVM, WASM, GPU, LSP, DISK tier support.
-
-
