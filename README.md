@@ -549,10 +549,13 @@ Handle → MetaStore → chunk_id → Chunk.tier (O(1), без эвристик)
                                 ↓
 moveHotter/moveColder → Chunk.tier.moveHotter/?Tier (pure FSM)
                                 ↓
+cooldown gate → last_migration_tick + 3 тика (Stage 3)
+                                ↓
 migrateChunk → tier switch + memcpy used bytes (физическое копирование)
     └─ dst_arena.alloc(CHUNK_SIZE)
     └─ @memcpy (src → dst, только chunk.used байт)
     └─ update chunk.arena_base / chunk.arena_offset
+    └─ chunk.last_migration_tick = current_tick
     └─ log .MIGRATE
 ```
 
@@ -565,15 +568,24 @@ migrateChunk → tier switch + memcpy used bytes (физическое копи�
 - **Физическое копирование**: при миграции — `dst_arena.alloc(CHUNK_SIZE)`, `@memcpy(chunk.used bytes)`, обновление адреса.
 - **Heat per-chunk**: аккумулируется на `access()`, тик оперирует chunk'ами (не handle'ами).
 - **`Snapshot`**: слепок per-slot (tiers из chunk.tier) + per-chunk (tiers, heats).
-- **`MigrationResult`**: `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary`.
+- **`MigrationResult`**: `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary` / `.cooldown`.
 - **slot_count**: декремент при release — пустые chunk'и не участвуют в миграциях.
+
+### Stage 3: cooldown tracking
+
+- **`Chunk.last_migration_tick`**: тик последней миграции (0 = never migrated).
+- **`COOLDOWN_TICKS = 3`**: минимальное число тиков между миграциями одного чанка.
+- **Гейт в `migrateChunk`**: `current_tick - last_migration_tick < COOLDOWN_TICKS` → `.cooldown`.
+- **Гейт в `tick()`**: чанки в cooldown не тратят бюджет на сбор кандидатов.
+- **Cooldown не заменяет heat-логику**: heat решает *нужна ли* миграция, cooldown решает *можно ли сейчас*.
+- **30 unit tests**: cooldown fresh chunk, immediate block, window (1–3–4 тика), tick integration.
 
 ### Компоненты
 
 | Компонент | Описание |
 |-----------|----------|
 | `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
-| `Chunk` | 64KB регион: tier, arena_base, heat, used, arena_offset, slot_count |
+| `Chunk` | 64KB регион: tier, arena_base, heat, used, arena_offset, slot_count, last_migration_tick |
 | `ChunkStore` | Массив chunk'ов, alloc/find/release-by-tier |
 | `Handle` | Поколенческий идентификатор: slot + generation |
 | `HandleTable` | Состояния слотов (Used/Free), free-лист O(1), инвалидация через generation |
@@ -585,7 +597,7 @@ migrateChunk → tier switch + memcpy used bytes (физическое копи�
 ### Тестирование
 
 ```bash
-zig test src\runtime_test.zig   # 27 unit tests (chunk-модель)
+zig test src\runtime_test.zig   # 30 unit tests (chunk-модель + cooldown)
 zig test src\stress_test.zig    # 100k ops: 3817 миграций, фингерпринт детерминирован
 ```
 
@@ -1179,10 +1191,13 @@ Handle → MetaStore → chunk_id → Chunk.tier (O(1), no heuristics)
                                 ↓
 moveHotter/moveColder → Chunk.tier.moveHotter/?Tier (pure FSM)
                                 ↓
+cooldown gate → last_migration_tick + 3 ticks (Stage 3)
+                                ↓
 migrateChunk → tier switch + memcpy used bytes (physical copy)
     └─ dst_arena.alloc(CHUNK_SIZE)
     └─ @memcpy (src → dst, only chunk.used bytes)
     └─ update chunk.arena_base / chunk.arena_offset
+    └─ chunk.last_migration_tick = current_tick
     └─ log .MIGRATE
 ```
 
@@ -1195,15 +1210,24 @@ migrateChunk → tier switch + memcpy used bytes (physical copy)
 - **Physical byte copy**: on migration — `dst_arena.alloc(CHUNK_SIZE)`, `@memcpy(chunk.used bytes)`, pointer update.
 - **Heat per-chunk**: accumulated on `access()`, tick operates on chunks (not handles).
 - **`Snapshot`**: per-slot tiers (from chunk.tier) + per-chunk arrays (tiers, heats).
-- **`MigrationResult`**: `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary`.
+- **`MigrationResult`**: `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary` / `.cooldown`.
 - **slot_count**: decremented on release — empty chunks excluded from migration decisions.
+
+### Stage 3: cooldown tracking
+
+- **`Chunk.last_migration_tick`**: tick of last migration (0 = never migrated).
+- **`COOLDOWN_TICKS = 3`**: minimum ticks between migrations for the same chunk.
+- **Gate in `migrateChunk`**: `current_tick - last_migration_tick < COOLDOWN_TICKS` → `.cooldown`.
+- **Gate in `tick()`**: chunks in cooldown don't consume budget during candidate collection.
+- **Cooldown does not replace heat logic**: heat decides *if* migration is needed, cooldown decides *if it's allowed now*.
+- **30 unit tests**: fresh chunk bypass, immediate block, window (1–3–4 ticks), tick integration.
 
 ### Components
 
 | Component | Description |
 |-----------|-------------|
 | `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
-| `Chunk` | 64KB region: tier, arena_base, heat, used, arena_offset, slot_count |
+| `Chunk` | 64KB region: tier, arena_base, heat, used, arena_offset, slot_count, last_migration_tick |
 | `ChunkStore` | Chunk array, alloc/find/release-by-tier |
 | `Handle` | Generational slot identifier: slot + generation |
 | `HandleTable` | Slot states (Used/Free), O(1) free-list, invalidation via generation |
@@ -1215,7 +1239,7 @@ migrateChunk → tier switch + memcpy used bytes (physical copy)
 ### Testing
 
 ```bash
-zig test src\runtime_test.zig   # 27 unit tests (chunk model)
+zig test src\runtime_test.zig   # 30 unit tests (chunk model + cooldown)
 zig test src\stress_test.zig    # 100k ops: 3817 migrations, deterministic fingerprint
 ```
 

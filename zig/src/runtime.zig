@@ -75,6 +75,7 @@ pub const Chunk = struct {
     used: u32,
     arena_offset: u32,
     slot_count: u16,
+    last_migration_tick: u32,
 };
 
 pub const ChunkStore = struct {
@@ -100,6 +101,7 @@ pub const ChunkStore = struct {
             .used = 0,
             .arena_offset = arena_offset,
             .slot_count = 0,
+            .last_migration_tick = 0,
         };
         return id;
     }
@@ -468,6 +470,7 @@ pub const TieredRuntime = struct {
         dst_full,
         invalid_handle,
         at_boundary,
+        cooldown,
     };
 
     pub const Snapshot = struct {
@@ -658,6 +661,12 @@ pub const TieredRuntime = struct {
         if (chunk_id >= tr.chunks.count) return .invalid_handle;
         const chunk = &tr.chunks.chunks[chunk_id];
         if (!chunk.tier.isValidTransition(dst_tier)) return .at_boundary;
+
+        const current_tick = @as(u32, @truncate(tr.epoch));
+        if (chunk.last_migration_tick != 0 and (current_tick -| chunk.last_migration_tick) < COOLDOWN_TICKS) {
+            return .cooldown;
+        }
+
         const src_tier = chunk.tier;
 
         // Allocate destination memory in the target arena
@@ -675,6 +684,7 @@ pub const TieredRuntime = struct {
         chunk.arena_offset = dst_arena_offset;
         chunk.tier = dst_tier;
         chunk.heat >>= 1;
+        chunk.last_migration_tick = current_tick;
 
         tr.retired_count += 1;
         const tier_bits = @as(u32, @intCast(@intFromEnum(src_tier))) << 24 | @as(u32, @intCast(@intFromEnum(dst_tier))) << 16;
@@ -724,6 +734,7 @@ pub const TieredRuntime = struct {
     const PROMOTE_THRESH: u32 = 100;
     const DEMOTE_THRESH: u32 = 30;
     const MIGRATION_BUDGET: u32 = 4;
+    const COOLDOWN_TICKS: u32 = 3;
 
     pub fn tick(tr: *TieredRuntime) void {
         tr.epoch += 1;
@@ -752,6 +763,8 @@ pub const TieredRuntime = struct {
         while (ci < tr.chunks.count and (np < MIGRATION_BUDGET or nd < MIGRATION_BUDGET)) : (ci += 1) {
             const ch = &tr.chunks.chunks[ci];
             if (ch.slot_count == 0) continue;
+            const cur_tick = @as(u32, @truncate(tr.epoch));
+            if (ch.last_migration_tick != 0 and (cur_tick -| ch.last_migration_tick) < COOLDOWN_TICKS) continue;
             if (ch.heat > PROMOTE_THRESH and ch.tier != .L1 and np < MIGRATION_BUDGET) {
                 promote_cands[np] = ci;
                 np += 1;

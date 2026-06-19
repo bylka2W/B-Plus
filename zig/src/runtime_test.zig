@@ -661,3 +661,106 @@ test "dual-heat: heat=0 after release, total_heat preserved" {
     try std.testing.expectEqual(@as(u32, 0), ht.meta.heats[slot]);
     try std.testing.expectEqual(@as(u32, 10), ht.meta.total_heats[slot]);
 }
+
+test "cooldown: fresh chunk migrates without cooldown" {
+    var l1: [4096]u8 = undefined;
+    var l2: [4096]u8 = undefined;
+    var l3: [4096]u8 = undefined;
+    var cids: [CAP]u32 = undefined;
+    var offs: [CAP]u32 = undefined;
+    var gens: [CAP]u32 = undefined;
+    var sizes: [CAP]u32 = undefined;
+    var states: [CAP]rt.SlotState = undefined;
+    var free_next: [CAP]u32 = undefined;
+    var heats: [CAP]u32 = undefined;
+    var total_heats: [CAP]u32 = undefined;
+    var log: [64]rt.RuntimeEvent = undefined;
+    var chunks: [CHUNK_CAP]rt.Chunk = undefined;
+    const ms = makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = makeRuntime(&l1, &l2, &l3, ms, &log, &chunks);
+
+    tr.tick(); // epoch=1
+    const h = tr.allocL2(16);
+    const cid = tr.handles.meta.chunk_ids[h.slot];
+    try std.testing.expectEqual(.success, tr.migrateChunk(cid, .L1));
+}
+
+test "cooldown blocks re-migration within window" {
+    var l1: [4096]u8 = undefined;
+    var l2: [4096]u8 = undefined;
+    var l3: [4096]u8 = undefined;
+    var cids: [CAP]u32 = undefined;
+    var offs: [CAP]u32 = undefined;
+    var gens: [CAP]u32 = undefined;
+    var sizes: [CAP]u32 = undefined;
+    var states: [CAP]rt.SlotState = undefined;
+    var free_next: [CAP]u32 = undefined;
+    var heats: [CAP]u32 = undefined;
+    var total_heats: [CAP]u32 = undefined;
+    var log: [64]rt.RuntimeEvent = undefined;
+    var chunks: [CHUNK_CAP]rt.Chunk = undefined;
+    const ms = makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = makeRuntime(&l1, &l2, &l3, ms, &log, &chunks);
+
+    tr.tick(); // epoch=1
+    const h = tr.allocL2(16);
+    const cid = tr.handles.meta.chunk_ids[h.slot];
+
+    // Migrate L2→L1 (succeeds)
+    try std.testing.expectEqual(.success, tr.migrateChunk(cid, .L1));
+
+    // Same epoch: cooldown blocks
+    try std.testing.expectEqual(.cooldown, tr.migrateChunk(cid, .L2));
+
+    // 1 tick later (epoch=2): cooldown active (2-1=1 < 3)
+    tr.tick();
+    try std.testing.expectEqual(.cooldown, tr.migrateChunk(cid, .L2));
+
+    // 2 ticks later (epoch=3): cooldown active (3-1=2 < 3)
+    tr.tick();
+    try std.testing.expectEqual(.cooldown, tr.migrateChunk(cid, .L2));
+
+    // 3 ticks later (epoch=4): cooldown expired (4-1=3 >= 3)
+    tr.tick();
+    const r = tr.migrateChunk(cid, .L2);
+    try std.testing.expect(r != .cooldown);
+}
+
+test "cooldown in tick: promoted chunk stays L1 for COOLDOWN_TICKS" {
+    var l1: [4096]u8 = undefined;
+    var l2: [4096]u8 = undefined;
+    var l3: [4096]u8 = undefined;
+    var cids: [CAP]u32 = undefined;
+    var offs: [CAP]u32 = undefined;
+    var gens: [CAP]u32 = undefined;
+    var sizes: [CAP]u32 = undefined;
+    var states: [CAP]rt.SlotState = undefined;
+    var free_next: [CAP]u32 = undefined;
+    var heats: [CAP]u32 = undefined;
+    var total_heats: [CAP]u32 = undefined;
+    var log: [64]rt.RuntimeEvent = undefined;
+    var chunks: [CHUNK_CAP]rt.Chunk = undefined;
+    const ms = makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = makeRuntime(&l1, &l2, &l3, ms, &log, &chunks);
+
+    const h = tr.allocL2(16);
+    const cid = tr.handles.meta.chunk_ids[h.slot];
+    tr.chunks.chunks[cid].heat = 250;
+
+    // Tick 1: promotes L2→L1, cooldown starts
+    tr.tick();
+    try std.testing.expectEqual(rt.Tier.L1, tr.tierOfHandle(h));
+
+    // Tick 2 & 3: cooldown active → heat decays but stays L1
+    tr.tick();
+    try std.testing.expectEqual(rt.Tier.L1, tr.tierOfHandle(h));
+    tr.tick();
+    try std.testing.expectEqual(rt.Tier.L1, tr.tierOfHandle(h));
+
+    // Tick 4: cooldown expired (3 ticks = COOLDOWN_TICKS) + heat below DEMOTE_THRESH → demotes
+    tr.tick();
+    try std.testing.expectEqual(rt.Tier.L2, tr.tierOfHandle(h));
+    // heat after 4 ticks of decay: 250 → 125(t1) → 62(t2) → 31(t3) → 15(t4)
+    // After t4 promote: 125>>1 = 62. After t2: 31. After t3: 15. After t4: 7.
+    // At t4: cooldown expired (4-1=3) + heat 7 < 30 → demote L1→L2
+}
