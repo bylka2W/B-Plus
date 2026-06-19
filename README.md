@@ -498,7 +498,12 @@ zig/                    — компилятор (Zig, активная разр
     latency.zig          — Stage 7.3 LatencyProfile, CoreStats, LoadState (adaptive thresholds)
     scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
     scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
-    bench.zig            — Stage 7 A/B benchmark: baseline vs smart scheduler (4 patterns)
+    bench.zig            — Stage 7+ A/B benchmark: baseline vs smart scheduler (4 patterns) + Stage 9+ smoke tests
+    frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan (unified compute DAG IR)
+    gpu_job.zig          — Stage 9 GPUJob dispatch descriptor
+    gpu_scheduler.zig    — Stage 9+ Pure GPU dispatch sink (no graph awareness)
+    scheduler_config.zig — Stage 8 SchedulerConfig (max_sticky_ns, max_queue_len, imbalance thresholds)
+    scheduler_state.zig  — Stage 8 GlobalSchedulerState (SystemLoad, adjustDecision)
     parser.zig          — лексер + парсер .b+
     ast.zig             — типы AST (состояния, переходы и т.д.)
     x64gen.zig          — генератор машинного кода x64 (+ Intrinsic binding к runtime)
@@ -1237,12 +1242,12 @@ zig/                    — compiler (Zig, active development)
     latency.zig          — Stage 7.3 LatencyProfile, CoreStats, LoadState (adaptive thresholds)
     scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
     scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
-    bench.zig            — Stage 7+ A/B benchmark: baseline vs smart scheduler (4 patterns) + Stage 9 smoke tests
+    bench.zig            — Stage 7+ A/B benchmark: baseline vs smart scheduler (4 patterns) + Stage 9+ smoke tests
     scheduler_config.zig — Stage 8 SchedulerConfig (max_sticky_ns, max_queue_len, imbalance thresholds)
     scheduler_state.zig  — Stage 8 GlobalSchedulerState (SystemLoad, adjustDecision)
-    frame_graph.zig      — Stage 9 FrameGraph: Pass, GPUExec, ExecutionPlan, compile() with topo sort + budget
+    frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan (unified compute DAG IR)
     gpu_job.zig          — Stage 9 GPUJob dispatch descriptor
-    gpu_scheduler.zig    — Stage 9 GPUScheduler: frame budget, pressure model, submitFrame()
+    gpu_scheduler.zig    — Stage 9+ Pure GPU dispatch sink (no graph awareness)
     parser.zig          — lexer + parser for .b+
     ast.zig             — AST types (states, transitions, etc.)
     x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime).
@@ -1428,45 +1433,56 @@ Job → WorkerPool → worker[N] (per-core LIFO queue)
 - **Starvation escape**: steal loop checks `wait_ns > max_sticky_ns` for sticky jobs → force-migrate (`force_migrate_escape` counter).
 - **`SystemLoad`** (`latency.zig`): `avg_queue`, `max_queue`, `min_queue`, `imbalance_ratio`; `computeSystemLoad()`, `isSystemUnderPressure()`.
 
-### Stage 9: GPU Frame Graph Runtime
+### Stage 9–13: Unified Compute DAG Runtime (Graph VM)
 
-`src/frame_graph.zig` — frame compiler producing a fully materialized `ExecutionPlan`.
+`src/frame_graph.zig` — frame compiler producing a unified compute DAG IR (`ExecutionPlan`).
 
 ```text
-Pass[] → FrameGraph.compile() → ExecutionPlan { cpu, gpu, budget }
-                                          ↓
-                               WorkerPool (CPU stubs)
-                               GPUScheduler (GPUExecs)
+Pass[] → FrameGraph.compile()
+                  ↓
+    ExecutionPlan { nodes + edges }     ← unified compute DAG IR
+                  ↓
+    WorkerPool.submitFrame()            ← single queue-driven Kahn O(n+e)
+        ├─ CPU node → WorkerPool.submit()  ← async pool (CPU wave)
+        ├─ barrier: waitAll()
+        └─ GPU node → GPUScheduler.submit() ← pure sink (GPU wave)
 ```
 
-**GPUExec** (`frame_graph.zig`): `pass_id + GPUJob` — first-class IR node, fully materialized at compile time.
+**ExecutionNode** (`frame_graph.zig`): `id + name + kind (cpu | gpu)` — unified IR node, replaces separate CPU/GPU paths.
+
+**ExecutionPlan** (`frame_graph.zig`): `nodes[] + edges[] + budget_us` — partially-ordered DAG. Compiler IR + runtime bytecode in one model.
+
+**DependencyEdge** (`frame_graph.zig`): `{ from, to }` — lightweight edge between node indices. Only the main scheduler (Kahn) processes edges.
 
 **GPUJob** (`gpu_job.zig`): dispatch descriptor with pipeline_id, dispatch grid, semaphore chain, deadline, priority, dropable.
 
-**GPUScheduler** (`gpu_scheduler.zig`): frame budget enforcement, GPU pressure model (queue/64), deadline expiry, drop policy. `submitFrame(plan)` — no FrameGraph reference, pure executor.
+**GPUScheduler** (`gpu_scheduler.zig`): pure GPU dispatch sink — no graph awareness, no Kahn. `submit(job)` + `tick()` only.
 
-**ExecutionPlan** (`frame_graph.zig`): `cpu[]u32` + `gpu[]GPUExec` + `budget_us`. Compiler output only — runtime never sees Pass metadata.
+#### Key architectural decisions (Stage 9–13)
 
-**Budget enforcement**: `compile()` does hard pruning inside topological sort: non-critical passes dropped from end until total ≤ budget. GPU scheduler also enforces `remainingBudget() < 200us` cutoff.
+| Stage | Change |
+|-------|--------|
+| 9 | FrameGraph + GPUExec materialization + budget pruning |
+| 10 | Compiler separation: FrameGraph.compile() → ExecutionPlan, scheduler as pure executor |
+| 11 | DependencyEdge + Kahn in GPU scheduler for runtime reorder within DAG |
+| 12 | Unified ExecutionNode (cpu|gpu) replaces separate cpu/gpu fields — single DAG IR |
+| 13 | Queue-driven Kahn O(n+e), GPUScheduler as pure sink, CPU/GPU wave barrier |
 
-#### Key architectural boundary
+#### Pipeline
 
 ```
-FrameGraph.compile()    →  compiler IR (Pass → GPUExec)
-ExecutionPlan           →  executable frame bytecode
-WorkerPool              →  CPU VM
-GPUScheduler            →  GPU VM
+FrameGraph.compile()    →  compiler (topo sort + budget prune + DAG materialization)
+ExecutionPlan           →  unified DAG IR (nodes + edges)
+WorkerPool              →  Kahn engine (CPU→pool, GPU→sink)
+GPUScheduler            →  pure GPU dispatch sink
 ```
 
-No pass metadata at runtime. No GPU logic in compiler. Clean separation.
+No pass metadata at runtime. Single Kahn engine. No duplicated scheduling paths.
 
 #### Testing
 
 ```bash
-zig test src\scheduler_test.zig   # 16 tests (sync/threaded/priority/steal/latency/state-machine)
-zig test src\latency_test.zig     # 5 tests (matrix build, NUMA, migration log, score)
-zig test src\cpu_test.zig         # 1 test (topology detection)
-zig test src\bench.zig            # 7 tests + A/B benchmark + frame-graph + gpu-scheduler smoke tests
+zig test src\bench.zig            # 7 tests: 4 CPU patterns + frame-graph + gpu-scheduler + metric validation
 ```
 
 
