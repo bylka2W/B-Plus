@@ -260,7 +260,8 @@ pub const WorkerPool = struct {
 
     /// Submit a fully materialized ExecutionPlan (unified compute graph).
     /// Queue-driven Kahn's algorithm O(n+e) — no full re-scan per wave.
-    /// CPU → WorkerPool, GPU → GPUScheduler. Wave-by-wave dispatch within DAG.
+    /// CPU → WorkerPool, GPU → GPUScheduler with sync barrier between them
+    /// per wave: GPU never dispatches ahead of the same wave's CPU completion.
     pub fn submitFrame(pool: *WorkerPool, plan: *const frame_graph.ExecutionPlan) void {
         const n = plan.nodes.len;
         if (n == 0) return;
@@ -275,6 +276,9 @@ pub const WorkerPool = struct {
 
         var cpu_stubs = pool.allocator.alloc(Job, n) catch return;
         defer pool.allocator.free(cpu_stubs);
+
+        var gpu_ready = pool.allocator.alloc(u32, n) catch return;
+        defer pool.allocator.free(gpu_ready);
 
         const Dummy = struct {
             fn run(_: *anyopaque) void {}
@@ -295,22 +299,29 @@ pub const WorkerPool = struct {
         var nxt = &ready_b;
 
         while (cur.items.len > 0 and remaining > 0) {
+            // Phase 1: submit CPU nodes to WorkerPool
             var cpu_count: usize = 0;
+            var gpu_count: usize = 0;
             for (cur.items) |idx| {
                 const node = &plan.nodes[idx];
-                switch (node.kind) {
-                    .cpu => {
-                        cpu_stubs[cpu_count] = Job{ .func = Dummy.run, .ctx = undefined, .priority = .Normal, .next = null };
-                        pool.submit(&cpu_stubs[cpu_count]);
-                        cpu_count += 1;
-                    },
-                    .gpu => {
-                        if (pool.gpu_sched) |gs| gs.submit(node.kind.gpu.job);
-                    },
+                if (node.kind == .cpu) {
+                    cpu_stubs[cpu_count] = Job{ .func = Dummy.run, .ctx = undefined, .priority = .Normal, .next = null };
+                    pool.submit(&cpu_stubs[cpu_count]);
+                    cpu_count += 1;
+                } else {
+                    gpu_ready[gpu_count] = idx;
+                    gpu_count += 1;
                 }
             }
 
+            // Barrier: CPU wave completes before GPU wave of same level
             if (cpu_count > 0) pool.waitAll();
+
+            // Phase 2: submit GPU nodes (guaranteed CPU→GPU ordering per wave)
+            for (0..gpu_count) |gi| {
+                const idx = gpu_ready[gi];
+                if (pool.gpu_sched) |gs| gs.submit(plan.nodes[idx].kind.gpu.job);
+            }
             if (pool.gpu_sched) |gs| gs.tick();
 
             // Build next ready set by scanning only edges from completed nodes
@@ -319,7 +330,7 @@ pub const WorkerPool = struct {
                 remaining -= 1;
                 for (plan.edges) |e| {
                     if (e.from == idx and e.to < n) {
-                        in_degree[e.to] -= 1;
+                        if (in_degree[e.to] > 0) in_degree[e.to] -= 1;
                         if (in_degree[e.to] == 0) nxt.append(e.to) catch {};
                     }
                 }
