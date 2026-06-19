@@ -95,6 +95,7 @@ pub const MetaStore = struct {
     states: []SlotState,
     free_next: []u32,
     heats: []u32,
+    total_heats: []u32,
 
     pub fn init(
         ptrs_buf: []?*anyopaque,
@@ -103,6 +104,7 @@ pub const MetaStore = struct {
         state_buf: []SlotState,
         free_buf: []u32,
         heat_buf: []u32,
+        total_heat_buf: []u32,
     ) MetaStore {
         const cap = ptrs_buf.len;
         @memset(ptrs_buf, null);
@@ -110,6 +112,7 @@ pub const MetaStore = struct {
         @memset(size_buf, 0);
         @memset(state_buf, .Free);
         @memset(heat_buf, 0);
+        @memset(total_heat_buf, 0);
         var i: u32 = 0;
         while (i < cap) : (i += 1) {
             free_buf[i] = i + 1; // intrusive free list
@@ -121,6 +124,7 @@ pub const MetaStore = struct {
             .states = state_buf,
             .free_next = free_buf,
             .heats = heat_buf,
+            .total_heats = total_heat_buf,
         };
     }
 
@@ -227,8 +231,11 @@ pub const HandleTable = struct {
 
     pub fn touch(ht: *HandleTable, handle: Handle) void {
         validateHandle(ht, handle);
-        const h = &ht.meta.heats[handle.slot];
+        const slot = handle.slot;
+        const h = &ht.meta.heats[slot];
         if (h.* < std.math.maxInt(u32)) h.* += 1;
+        const th = &ht.meta.total_heats[slot];
+        if (th.* < std.math.maxInt(u32)) th.* += 1;
     }
 };
 
@@ -249,15 +256,17 @@ pub const Arena = struct {
         };
     }
 
-    pub fn alloc(arena: *Arena, size: usize) [*]u8 {
+    pub fn alloc(arena: *Arena, size: usize) ?[*]u8 {
+        if (arena.cursor_addr + size > arena.end_addr) return null;
         const result = @as([*]u8, @ptrFromInt(arena.cursor_addr));
         arena.cursor_addr += size;
         return result;
     }
 
-    pub fn allocAligned(arena: *Arena, size: usize, alignment: u32) [*]u8 {
+    pub fn allocAligned(arena: *Arena, size: usize, alignment: u32) ?[*]u8 {
         const align_us = @as(usize, @intCast(alignment));
         const aligned = (arena.cursor_addr + align_us - 1) & ~(align_us - 1);
+        if (aligned + size > arena.end_addr) return null;
         const result = @as([*]u8, @ptrFromInt(aligned));
         arena.cursor_addr = aligned + size;
         return result;
@@ -362,6 +371,62 @@ pub const TieredRuntime = struct {
         dst_tier: Tier,
     };
 
+    pub const MigrationResult = enum {
+        success,
+        dst_full,
+        invalid_handle,
+        at_boundary,
+    };
+
+    pub const Snapshot = struct {
+        tiers: []Tier,
+        heats: []u32,
+        total_heats: []u32,
+        states: []SlotState,
+        ptrs: []?*anyopaque,
+        gens: []u32,
+        epoch: u64,
+        retired_count: u32,
+        arena_used_l1: usize,
+        arena_used_l2: usize,
+        arena_used_l3: usize,
+
+        pub fn capture(tr: *const TieredRuntime, allocator: std.mem.Allocator) !Snapshot {
+            const cap = tr.handles.capacity();
+            const tiers = try allocator.alloc(Tier, cap);
+            for (tr.handles.meta.ptrs, 0..) |p, i| {
+                tiers[i] = tr.classifyPtr(p) orelse @as(Tier, .DISK);
+            }
+            return Snapshot{
+                .tiers = tiers,
+                .heats = try allocator.dupe(u32, tr.handles.meta.heats[0..]),
+                .total_heats = try allocator.dupe(u32, tr.handles.meta.total_heats[0..]),
+                .states = try allocator.dupe(SlotState, tr.handles.meta.states[0..]),
+                .ptrs = try allocator.dupe(?*anyopaque, tr.handles.meta.ptrs[0..]),
+                .gens = try allocator.dupe(u32, tr.handles.meta.generations[0..]),
+                .epoch = tr.epoch,
+                .retired_count = tr.retired_count,
+                .arena_used_l1 = tr.l1.used(),
+                .arena_used_l2 = tr.l2.used(),
+                .arena_used_l3 = tr.l3.used(),
+            };
+        }
+
+        pub fn deinit(s: *Snapshot, allocator: std.mem.Allocator) void {
+            allocator.free(s.tiers);
+            allocator.free(s.heats);
+            allocator.free(s.total_heats);
+            allocator.free(s.states);
+            allocator.free(s.ptrs);
+            allocator.free(s.gens);
+        }
+
+        pub fn tierOfSlot(s: *const Snapshot, slot: u32) ?Tier {
+            if (slot >= @as(u32, @intCast(s.tiers.len))) return null;
+            return s.tiers[slot];
+        }
+    };
+
     pub fn init(
         l1_buf: []u8,
         l2_buf: []u8,
@@ -380,24 +445,25 @@ pub const TieredRuntime = struct {
         };
     }
 
-    // ── Tier derivation (pure function of pointer address) ──
+    // ── Tier derivation (single source of truth for address → Tier) ──
 
-    fn tierOfAddr(tr: *const TieredRuntime, addr: usize) ?Tier {
+    /// Central classifier: any pointer → Tier | null.
+    /// This is THE ONLY function that maps addresses to tiers.
+    pub fn classifyPtr(tr: *const TieredRuntime, ptr: ?*anyopaque) ?Tier {
+        const addr = @intFromPtr(ptr);
         if (tr.l1.containsAddr(addr)) return .L1;
         if (tr.l2.containsAddr(addr)) return .L2;
         if (tr.l3.containsAddr(addr)) return .L3;
         return null;
     }
 
-    fn tierOfPtr(tr: *const TieredRuntime, ptr: ?*anyopaque) ?Tier {
-        return tr.tierOfAddr(@intFromPtr(ptr));
-    }
-
-    /// Single source of truth: Handle → MetaStore → ptr → address → Tier.
+    /// Resolve handle to its tier via MetaStore → classifyPtr.
     pub fn tierOfHandle(tr: *const TieredRuntime, handle: Handle) Tier {
         tr.handles.validateHandle(handle);
-        const t = tr.tierOfPtr(tr.handles.meta.ptrs[handle.slot]) orelse
+        const t = tr.classifyPtr(tr.handles.meta.ptrs[handle.slot]) orelse {
             assertInvariant(false, .INVALID_TIER);
+            unreachable;
+        };
         return t;
     }
 
@@ -405,15 +471,17 @@ pub const TieredRuntime = struct {
 
     pub fn validateTier(tr: *const TieredRuntime, handle: Handle, expected: Tier) void {
         tr.handles.validateHandle(handle);
-        const actual = tr.tierOfPtr(tr.handles.meta.ptrs[handle.slot]) orelse
+        const actual = tr.tierOfPtr(tr.handles.meta.ptrs[handle.slot]) orelse {
             assertInvariant(false, .INVALID_TIER);
+            unreachable;
+        };
         assertInvariant(actual == expected, .INVALID_TIER);
     }
 
     // ── Allocation (HandleTable owns, Arena provides) ──
 
     fn allocInArena(tr: *TieredRuntime, arena: *Arena, size: u32, tier: Tier) Handle {
-        const ptr = arena.alloc(size);
+        const ptr = arena.alloc(size) orelse return Handle.invalid();
         const h = tr.handles.alloc(ptr, size);
         const tier_bits = @as(u32, @intCast(@intFromEnum(tier))) << 24;
         tr.logger.log(.ALLOC, h.slot, h.generation, size | tier_bits);
@@ -454,13 +522,14 @@ pub const TieredRuntime = struct {
 
     // ── Tier migration (copy → validate → swap → retire) ──
 
-    fn migrate(tr: *TieredRuntime, t: Transition) void {
+    fn migrate(tr: *TieredRuntime, t: Transition) MigrationResult {
+        if (!t.handle.isValid()) return .invalid_handle;
         tr.handles.validateAccess(t.handle);
         const slot = t.handle.slot;
         const size = tr.handles.meta.sizes[slot];
-        const src_ptr = tr.handles.meta.ptrs[slot].?;
+        const src_ptr = tr.handles.meta.ptrs[slot] orelse return .invalid_handle;
         const dst_arena = tr.arenaForTier(t.dst_tier);
-        const dst_ptr = dst_arena.alloc(size);
+        const dst_ptr = dst_arena.alloc(size) orelse return .dst_full;
 
         @memcpy(@as([*]u8, @ptrCast(dst_ptr))[0..size], @as([*]u8, @ptrCast(src_ptr))[0..size]);
 
@@ -469,26 +538,27 @@ pub const TieredRuntime = struct {
         tr.retired_count += 1;
         const tier_bits = @as(u32, @intCast(@intFromEnum(t.dst_tier))) << 24;
         tr.logger.log(.MIGRATE, slot, tr.handles.meta.generations[slot], size | tier_bits);
+        return .success;
     }
 
-    fn applyMigration(tr: *TieredRuntime, t: Transition) void {
-        tr.migrate(t);
+    fn applyMigration(tr: *TieredRuntime, t: Transition) MigrationResult {
+        return tr.migrate(t);
     }
 
-    pub fn moveHotter(tr: *TieredRuntime, handle: Handle) void {
+    pub fn moveHotter(tr: *TieredRuntime, handle: Handle) MigrationResult {
         const src_tier = tr.tierOfHandle(handle);
-        const dst_tier = src_tier.moveHotter() orelse return;
-        tr.applyMigration(.{
+        const dst_tier = src_tier.moveHotter() orelse return .at_boundary;
+        return tr.applyMigration(.{
             .handle = handle,
             .src_tier = src_tier,
             .dst_tier = dst_tier,
         });
     }
 
-    pub fn moveColder(tr: *TieredRuntime, handle: Handle) void {
+    pub fn moveColder(tr: *TieredRuntime, handle: Handle) MigrationResult {
         const src_tier = tr.tierOfHandle(handle);
-        const dst_tier = src_tier.moveColder() orelse return;
-        tr.applyMigration(.{
+        const dst_tier = src_tier.moveColder() orelse return .at_boundary;
+        return tr.applyMigration(.{
             .handle = handle,
             .src_tier = src_tier,
             .dst_tier = dst_tier,
@@ -556,7 +626,7 @@ pub const TieredRuntime = struct {
             if (n_candidates >= MIGRATION_BUDGET) continue;
             const heat = tr.handles.meta.heats[slot];
             const ptr = tr.handles.meta.ptrs[slot] orelse continue;
-            const current = tr.tierOfPtr(ptr) orelse continue;
+            const current = tr.classifyPtr(ptr) orelse continue;
 
             if (heat > PROMOTE_THRESH and current != .L1) {
                 candidates[n_candidates] = .{ .slot = slot, .promote = true };
@@ -569,12 +639,18 @@ pub const TieredRuntime = struct {
 
         // 2. Apply migrations within budget
         var migrated: u32 = 0;
+        var mig_fails: [3]u32 = .{0, 0, 0};
         for (0..n_candidates) |j| {
             const c = candidates[j];
             const gen = tr.handles.meta.generations[c.slot];
             const handle = Handle{ .slot = c.slot, .generation = gen };
-            if (c.promote) tr.moveHotter(handle) else tr.moveColder(handle);
-            migrated += 1;
+            const result = if (c.promote) tr.moveHotter(handle) else tr.moveColder(handle);
+            switch (result) {
+                .success => migrated += 1,
+                .dst_full => mig_fails[0] += 1,
+                .invalid_handle => mig_fails[1] += 1,
+                .at_boundary => mig_fails[2] += 1,
+            }
         }
 
         tr.logger.log(.TICK, 0, 0, migrated);
