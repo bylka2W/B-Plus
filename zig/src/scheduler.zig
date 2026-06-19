@@ -259,8 +259,8 @@ pub const WorkerPool = struct {
     }
 
     /// Submit a fully materialized ExecutionPlan (unified compute graph).
-    /// Runs Kahn's algorithm over all nodes: CPU → WorkerPool, GPU → GPUScheduler.
-    /// Wave-by-wave dispatch within DAG constraints.
+    /// Queue-driven Kahn's algorithm O(n+e) — no full re-scan per wave.
+    /// CPU → WorkerPool, GPU → GPUScheduler. Wave-by-wave dispatch within DAG.
     pub fn submitFrame(pool: *WorkerPool, plan: *const frame_graph.ExecutionPlan) void {
         const n = plan.nodes.len;
         if (n == 0) return;
@@ -273,10 +273,6 @@ pub const WorkerPool = struct {
             if (e.to < n) in_degree[e.to] += 1;
         }
 
-        var processed = pool.allocator.alloc(bool, n) catch return;
-        defer pool.allocator.free(processed);
-        @memset(processed, false);
-
         var cpu_stubs = pool.allocator.alloc(Job, n) catch return;
         defer pool.allocator.free(cpu_stubs);
 
@@ -284,20 +280,23 @@ pub const WorkerPool = struct {
             fn run(_: *anyopaque) void {}
         };
 
+        // Two ready lists: avoid O(n) re-scan per wave
+        var ready_a = std.ArrayList(u32).init(pool.allocator);
+        defer ready_a.deinit();
+        var ready_b = std.ArrayList(u32).init(pool.allocator);
+        defer ready_b.deinit();
+
+        for (0..n) |i| {
+            if (in_degree[i] == 0) ready_a.append(@intCast(i)) catch {};
+        }
+
         var remaining: usize = n;
-        while (remaining > 0) {
-            var ready = std.ArrayList(u32).init(pool.allocator);
-            defer ready.deinit();
+        var cur = &ready_a;
+        var nxt = &ready_b;
 
-            for (0..n) |i| {
-                if (!processed[i] and in_degree[i] == 0) {
-                    ready.append(@intCast(i)) catch {};
-                }
-            }
-            if (ready.items.len == 0) break;
-
+        while (cur.items.len > 0 and remaining > 0) {
             var cpu_count: usize = 0;
-            for (ready.items) |idx| {
+            for (cur.items) |idx| {
                 const node = &plan.nodes[idx];
                 switch (node.kind) {
                     .cpu => {
@@ -314,13 +313,22 @@ pub const WorkerPool = struct {
             if (cpu_count > 0) pool.waitAll();
             if (pool.gpu_sched) |gs| gs.tick();
 
-            for (ready.items) |idx| {
-                processed[idx] = true;
+            // Build next ready set by scanning only edges from completed nodes
+            nxt.clearRetainingCapacity();
+            for (cur.items) |idx| {
                 remaining -= 1;
                 for (plan.edges) |e| {
-                    if (e.from == idx and e.to < n) in_degree[e.to] -= 1;
+                    if (e.from == idx and e.to < n) {
+                        in_degree[e.to] -= 1;
+                        if (in_degree[e.to] == 0) nxt.append(e.to) catch {};
+                    }
                 }
             }
+
+            // Swap lists
+            const tmp = cur;
+            cur = nxt;
+            nxt = tmp;
         }
     }
 

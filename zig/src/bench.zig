@@ -389,7 +389,14 @@ fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
     }
     if (!has_edge) return error.MissingEdgeInGPUScheduler;
 
-    gs.submitFrame(&plan);
+    gs.frameStart();
+    for (plan.nodes) |*node| {
+        switch (node.kind) {
+            .gpu => |*g| gs.submit(g.job),
+            else => {},
+        }
+    }
+    gs.tick();
 
     const dispatched = gs.total_dispatched;
     gs.deinit();

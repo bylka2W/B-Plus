@@ -1,9 +1,8 @@
 const std = @import("std");
 const gpu_job = @import("gpu_job.zig");
-const frame_graph = @import("frame_graph.zig");
 
-/// GPU dispatch queue. No longer owns Kahn scheduling — that lives in the
-/// unified scheduler. This is a simple dispatch accumulator with budget awareness.
+/// Pure GPU dispatch sink. No graph awareness, no Kahn scheduling.
+/// Called by the unified scheduler with individual ready GPU jobs.
 pub const GPUScheduler = struct {
     gpu_queue: std.ArrayList(gpu_job.GPUJob),
     frame_budget_ns: u64,
@@ -37,15 +36,15 @@ pub const GPUScheduler = struct {
         return @as(f32, @floatFromInt(self.gpu_queue.items.len)) / 64.0;
     }
 
+    /// Submit a single GPU job (called from main scheduler Kahn loop).
     pub fn submit(self: *GPUScheduler, job: gpu_job.GPUJob) void {
         self.gpu_pressure = self.computeGPUPressure();
-
         if (self.gpu_pressure > 1.0 and job.dropable) return;
         if (job.deadline_ns > 0 and job.deadline_ns < @as(u64, @intCast(std.time.nanoTimestamp()))) return;
-
         self.gpu_queue.append(job) catch {};
     }
 
+    /// Flush accumulated GPU jobs within remaining budget.
     pub fn tick(self: *GPUScheduler) void {
         while (self.gpu_queue.items.len > 0) {
             if (self.remainingBudget() < 200_000) break;
@@ -61,18 +60,5 @@ pub const GPUScheduler = struct {
 
     pub fn frameStart(self: *GPUScheduler) void {
         self.frame_start_ns = @intCast(std.time.nanoTimestamp());
-    }
-
-    /// Submit a batch of GPU nodes from the unified ExecutionPlan.
-    /// Called by the main scheduler's Kahn loop for ready GPU nodes.
-    pub fn submitFrame(self: *GPUScheduler, plan: *const frame_graph.ExecutionPlan) void {
-        self.frameStart();
-        for (plan.nodes) |*node| {
-            switch (node.kind) {
-                .gpu => |*gpu| self.submit(gpu.job),
-                else => {},
-            }
-        }
-        self.tick();
     }
 };
