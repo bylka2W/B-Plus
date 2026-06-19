@@ -337,21 +337,21 @@ fn runFrameGraph(allocator: std.mem.Allocator) !u64 {
     var fg = frame_graph.FrameGraph.init(&passes);
 
     const budget_us = 1400;
-    const plan = try fg.resolve(allocator, budget_us);
+    const plan = try fg.compile(allocator, budget_us);
     defer frame_graph.FrameGraph.deinitPlan(allocator, &plan);
 
-    // Validate: present, depth, motion_vectors, reproject must survive
+    // Validate: present (5) is CPU pass → in plan.cpu; reproject (2) is GPU → in plan.gpu
     var has_present: bool = false;
-    var has_reproject: bool = false;
-    for (0..plan.count) |oi| {
-        const idx = plan.order[oi];
+    for (plan.cpu) |idx| {
         if (passes[idx].id == 5) has_present = true;
-        if (passes[idx].id == 2) has_reproject = true;
+    }
+    var has_reproject: bool = false;
+    for (plan.gpu) |*ge| {
+        if (ge.pass_id == 2) has_reproject = true;
     }
     if (!has_present) return error.PresentDropped;
     if (!has_reproject) return error.ReprojectDropped;
-    // upscale or sharpen may be dropped under budget pressure
-    return @as(u64, @intCast(plan.count));
+    return @as(u64, @intCast(plan.cpu.len + plan.gpu.len));
 }
 
 fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
@@ -364,10 +364,10 @@ fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
         .{ .id = 1, .name = "upscale", .deps = &.{0}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 300, .critical = false },
     };
     var fg = frame_graph.FrameGraph.init(&passes);
-    const plan = try fg.resolve(allocator, 16_600);
+    const plan = try fg.compile(allocator, 16_600);
     defer frame_graph.FrameGraph.deinitPlan(allocator, &plan);
 
-    gs.submitFrame(&fg, &plan);
+    gs.submitFrame(&plan);
 
     const dispatched = gs.total_dispatched;
     gs.deinit();

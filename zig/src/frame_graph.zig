@@ -12,12 +12,18 @@ pub const Pass = struct {
     critical: bool,
 };
 
-/// ExecutionPlan — the output of a resolved FrameGraph.
-/// `order` is the topological execution order of passes (indices into FrameGraph.passes).
-/// Owned by the caller; use FrameGraph.deinitPlan() to free.
+/// Fully materialized execution unit for a GPU pass.
+pub const GPUExec = struct {
+    pass_id: u32,
+    job: gpu_job.GPUJob,
+};
+
+/// ExecutionPlan — compiler output, fully materialized.
+/// `cpu`: ordered CPU pass indices. `gpu`: materialized GPUExecs.
+/// Owned by caller; use FrameGraph.deinitPlan() to free.
 pub const ExecutionPlan = struct {
-    order: []u32,
-    count: usize,
+    cpu: []u32,
+    gpu: []GPUExec,
     budget_us: u32,
 };
 
@@ -28,9 +34,9 @@ pub const FrameGraph = struct {
         return FrameGraph{ .passes = passes };
     }
 
-    /// Topological sort + hard budget enforcement in one pass.
-    /// Critical passes always survive; non-critical are greedily dropped from the end.
-    pub fn resolve(self: *const FrameGraph, allocator: std.mem.Allocator, budget_us: u32) !ExecutionPlan {
+    /// Compile: topological sort + hard budget enforcement + GPUExec materialization.
+    /// Output is fully ready for executor — no pass metadata needed at runtime.
+    pub fn compile(self: *const FrameGraph, allocator: std.mem.Allocator, budget_us: u32) !ExecutionPlan {
         const n = self.passes.len;
 
         var in_degree = try allocator.alloc(u32, n);
@@ -54,53 +60,51 @@ pub const FrameGraph = struct {
         var order = try allocator.alloc(u32, n);
         var written: usize = 0;
 
-        var critical = std.ArrayList(u32).init(allocator);
-        defer critical.deinit();
-        var normal = std.ArrayList(u32).init(allocator);
-        defer normal.deinit();
+        var crit_q = std.ArrayList(u32).init(allocator);
+        defer crit_q.deinit();
+        var norm_q = std.ArrayList(u32).init(allocator);
+        defer norm_q.deinit();
 
         for (0..n) |i| {
             if (in_degree[i] == 0) {
-                if (self.passes[i].critical) try critical.append(@intCast(i)) else try normal.append(@intCast(i));
+                if (self.passes[i].critical) try crit_q.append(@intCast(i)) else try norm_q.append(@intCast(i));
             }
         }
 
-        while (critical.items.len > 0 or normal.items.len > 0) {
-            while (critical.items.len > 0) {
-                const idx = critical.pop().?;
+        while (crit_q.items.len > 0 or norm_q.items.len > 0) {
+            while (crit_q.items.len > 0) {
+                const idx = crit_q.pop().?;
                 order[written] = idx;
                 written += 1;
                 for (rev_adj[idx].items) |succ| {
                     in_degree[succ] -= 1;
                     if (in_degree[succ] == 0) {
-                        if (self.passes[succ].critical) try critical.append(succ) else try normal.append(succ);
+                        if (self.passes[succ].critical) try crit_q.append(succ) else try norm_q.append(succ);
                     }
                 }
             }
-            while (normal.items.len > 0) {
-                const idx = normal.pop().?;
+            while (norm_q.items.len > 0) {
+                const idx = norm_q.pop().?;
                 order[written] = idx;
                 written += 1;
                 for (rev_adj[idx].items) |succ| {
                     in_degree[succ] -= 1;
                     if (in_degree[succ] == 0) {
-                        if (self.passes[succ].critical) try critical.append(succ) else try normal.append(succ);
+                        if (self.passes[succ].critical) try crit_q.append(succ) else try norm_q.append(succ);
                     }
                 }
             }
         }
 
-        const plan_order = order[0..written];
-
-        // Hard budget enforcement: drop non-critical passes from the end
+        // Hard budget enforcement: drop non-critical from end
         var total: u32 = 0;
-        for (plan_order) |idx| total += self.passes[idx].cost_us;
+        for (order[0..written]) |idx| total += self.passes[idx].cost_us;
 
         if (total > budget_us) {
             var i: usize = written;
             while (i > 0 and total > budget_us) {
                 i -= 1;
-                const idx = plan_order[i];
+                const idx = order[i];
                 const p = &self.passes[idx];
                 if (!p.critical and p.cost_us <= total - budget_us) {
                     total -= p.cost_us;
@@ -110,30 +114,45 @@ pub const FrameGraph = struct {
             }
         }
 
+        // Separate CPU indices from GPU materialized execs
+        var gpu_list = std.ArrayList(GPUExec).init(allocator);
+        defer gpu_list.deinit();
+
+        var cpu_end: usize = 0;
+        for (0..written) |oi| {
+            const idx = order[oi];
+            const p = &self.passes[idx];
+            if (p.gpu) {
+                try gpu_list.append(GPUExec{
+                    .pass_id = p.id,
+                    .job = .{
+                        .id = p.id,
+                        .pipeline_id = p.id,
+                        .dispatch_x = 64,
+                        .dispatch_y = 64,
+                        .dispatch_z = 1,
+                        .wait_semaphore = if (p.gpu_wait_for.len > 0) p.gpu_wait_for[0] else 0,
+                        .signal_semaphore = if (p.gpu_signal.len > 0) p.gpu_signal[0] else 0,
+                        .deadline_ns = 0,
+                        .priority = if (p.critical) 0 else 1,
+                        .dropable = !p.critical,
+                    },
+                });
+            } else {
+                order[cpu_end] = idx;
+                cpu_end += 1;
+            }
+        }
+
         return ExecutionPlan{
-            .order = order,
-            .count = written,
+            .cpu = try allocator.realloc(order, cpu_end),
+            .gpu = try gpu_list.toOwnedSlice(),
             .budget_us = budget_us,
         };
     }
 
     pub fn deinitPlan(allocator: std.mem.Allocator, plan: *const ExecutionPlan) void {
-        allocator.free(plan.order);
-    }
-
-    /// Build a GPUJob from a pass at plan time for GPU scheduler dispatch.
-    pub fn passToGPUJob(pass: *const Pass) gpu_job.GPUJob {
-        return gpu_job.GPUJob{
-            .id = pass.id,
-            .pipeline_id = pass.id,
-            .dispatch_x = 64,
-            .dispatch_y = 64,
-            .dispatch_z = 1,
-            .wait_semaphore = if (pass.gpu_wait_for.len > 0) pass.gpu_wait_for[0] else 0,
-            .signal_semaphore = if (pass.gpu_signal.len > 0) pass.gpu_signal[0] else 0,
-            .deadline_ns = 0,
-            .priority = if (pass.critical) 0 else 1,
-            .dropable = !pass.critical,
-        };
+        allocator.free(plan.cpu);
+        allocator.free(plan.gpu);
     }
 };

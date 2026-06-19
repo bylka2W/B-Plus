@@ -68,15 +68,13 @@ pub const GPUScheduler = struct {
         self.frame_start_ns = @intCast(std.time.nanoTimestamp());
     }
 
-    /// Submit an entire frame plan: iterate GPU passes, build jobs, dispatch.
-    pub fn submitFrame(self: *GPUScheduler, fg: *const frame_graph.FrameGraph, plan: *const frame_graph.ExecutionPlan) void {
+    /// Submit a fully materialized ExecutionPlan.
+    /// No FrameGraph reference needed — all GPUExecs are pre-compiled.
+    pub fn submitFrame(self: *GPUScheduler, plan: *const frame_graph.ExecutionPlan) void {
         self.frameStart();
-        for (0..plan.count) |oi| { const idx = plan.order[oi];
-            const pass = &fg.passes[idx];
-            if (!pass.gpu) continue;
+        for (plan.gpu) |*gpu_exec| {
             if (self.remainingBudget() < 200_000) break;
-
-            var gj = frame_graph.FrameGraph.passToGPUJob(pass);
+            var gj = gpu_exec.job;
             gj.deadline_ns = @as(u64, @intCast(std.time.nanoTimestamp())) + @as(u64, @intCast(self.remainingBudget()));
             self.gpu_queue.append(gj) catch {};
         }

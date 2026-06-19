@@ -258,28 +258,21 @@ pub const WorkerPool = struct {
         }
     }
 
-    /// Submit an entire frame plan: CPU passes go to WorkerPool, GPU passes go to GPUScheduler.
-    pub fn submitFrame(pool: *WorkerPool, fg: *const frame_graph.FrameGraph, plan: *const frame_graph.ExecutionPlan) void {
-        for (0..plan.count) |oi| { const idx = plan.order[oi];
-            const pass = &fg.passes[idx];
-            if (pass.gpu) {
-                if (pool.gpu_sched) |gs| {
-                    const gj = frame_graph.FrameGraph.passToGPUJob(pass);
-                    gs.submit(gj);
-                }
-            } else {
-                // CPU pass: submit via a generic no-op stub for now
-                const Dummy = struct {
-                    fn run(_: *anyopaque) void {}
-                };
-                var stub = Job{
-                    .func = Dummy.run,
-                    .ctx = undefined,
-                    .priority = if (pass.critical) .Critical else .Normal,
-                    .next = null,
-                };
+    /// Submit a fully materialized ExecutionPlan.
+    /// CPU passes → WorkerPool, GPU passes → GPUScheduler.
+    /// No FrameGraph reference — all materialization happened at compile time.
+    pub fn submitFrame(pool: *WorkerPool, plan: *const frame_graph.ExecutionPlan) void {
+        {
+            const Dummy = struct {
+                fn run(_: *anyopaque) void {}
+            };
+            for (0..plan.cpu.len) |_| {
+                var stub = Job{ .func = Dummy.run, .ctx = undefined, .priority = .Normal, .next = null };
                 pool.submit(&stub);
             }
+        }
+        if (pool.gpu_sched) |gs| {
+            gs.submitFrame(plan);
         }
     }
 
@@ -729,9 +722,9 @@ pub const Scheduler = struct {
         }
     }
 
-    pub fn submitFrame(s: *Scheduler, fg: *const frame_graph.FrameGraph, plan: *const frame_graph.ExecutionPlan) void {
+    pub fn submitFrame(s: *Scheduler, plan: *const frame_graph.ExecutionPlan) void {
         if (s.pool) |*p| {
-            p.submitFrame(fg, plan);
+            p.submitFrame(plan);
         }
     }
 };
