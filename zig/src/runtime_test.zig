@@ -1114,3 +1114,48 @@ test "Stage 6: compaction across multiple tiers" {
         try std.testing.expectEqual(@as(u8, @intCast(0x30 + j)), r3[j]);
     }
 }
+
+test "Stage 6: free-list invariant — no double-free under single release" {
+    var l1: [4096]u8 = undefined;
+    var l2: [4096]u8 = undefined;
+    var l3: [4096]u8 = undefined;
+    var cids: [CAP]u32 = undefined;
+    var offs: [CAP]u32 = undefined;
+    var gens: [CAP]u32 = undefined;
+    var sizes: [CAP]u32 = undefined;
+    var states: [CAP]rt.SlotState = undefined;
+    var free_next: [CAP]u32 = undefined;
+    var heats: [CAP]u32 = undefined;
+    var total_heats: [CAP]u32 = undefined;
+    var log: [64]rt.RuntimeEvent = undefined;
+    var chunks: [CHUNK_CAP]rt.Chunk = undefined;
+    const ms = makeMetaStore(&cids, &offs, &gens, &sizes, &states, &free_next, &heats, &total_heats);
+    var tr = makeRuntime(&l1, &l2, &l3, ms, &log, &chunks);
+
+    // Alloc → capture chunk_id → release
+    const h1 = tr.allocL2(200);
+    const cid1 = tr.handles.meta.chunk_ids[h1.slot];
+    tr.release(h1);
+
+    // Free list should contain exactly one entry
+    try std.testing.expectEqual(@as(u32, 1), tr.chunks.free_count);
+
+    // Alloc again — must reuse the freed chunk_id (LIFO)
+    const h2 = tr.allocL2(200);
+    const cid2 = tr.handles.meta.chunk_ids[h2.slot];
+    try std.testing.expectEqual(cid1, cid2);
+
+    // Free list now empty
+    try std.testing.expectEqual(@as(u32, 0), tr.chunks.free_count);
+
+    // Verify data is clean (fresh allocation)
+    const slice = tr.access(h2);
+    for (0..200) |j| slice[j] = @intCast(j & 0xFF);
+    for (0..200) |j| {
+        try std.testing.expectEqual(@as(u8, @intCast(j & 0xFF)), slice[j]);
+    }
+
+    // Release again → back to free list
+    tr.release(h2);
+    try std.testing.expectEqual(@as(u32, 1), tr.chunks.free_count);
+}
