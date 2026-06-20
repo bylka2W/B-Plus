@@ -263,6 +263,15 @@ pub const WorkerPool = struct {
     /// - intra_frame edges → standard in_degree counting
     /// - inter_frame edges → history availability check before dispatch
     /// CPU → WorkerPool, GPU/GPU.render → GPUScheduler, barrier → frame sync.
+    fn nodeBlocked(node: *const frame_graph.ExecutionNode, ctx: *const frame_graph.FrameContext) bool {
+        switch (node.kind) {
+            .render => |r| if (!ctx.previous.hasHistory(r.history_reads)) return true,
+            .barrier => |b| if (ctx.frame_index < b.wait_for_frame) return true,
+            else => {},
+        }
+        return false;
+    }
+
     pub fn submitFrame(pool: *WorkerPool, plan: *const frame_graph.ExecutionPlan, ctx: *const frame_graph.FrameContext) void {
         const n = plan.nodes.len;
         if (n == 0) return;
@@ -272,22 +281,11 @@ pub const WorkerPool = struct {
         defer pool.allocator.free(in_degree);
         @memset(in_degree, 0);
 
-        // Track which nodes need history (incoming inter_frame edges)
-        var needs_history = pool.allocator.alloc(bool, n) catch return;
-        defer pool.allocator.free(needs_history);
-        @memset(needs_history, false);
-
         for (plan.edges) |e| {
-            if (e.to < n) {
-                if (e.kind == .intra_frame) {
-                    in_degree[e.to] += 1;
-                } else {
-                    needs_history[e.to] = true;
-                }
+            if (e.to < n and e.kind == .intra_frame) {
+                in_degree[e.to] += 1;
             }
         }
-
-        const history_ready = ctx.history.frame_index > 0;
 
         var cpu_stubs = pool.allocator.alloc(Job, n) catch return;
         defer pool.allocator.free(cpu_stubs);
@@ -299,30 +297,39 @@ pub const WorkerPool = struct {
             fn run(_: *anyopaque) void {}
         };
 
-        // Two ready lists: avoid O(n) re-scan per wave
+        // Two ready lists + two blocked lists for queue-driven Kahn
         var ready_a = std.ArrayList(u32).init(pool.allocator);
         defer ready_a.deinit();
         var ready_b = std.ArrayList(u32).init(pool.allocator);
         defer ready_b.deinit();
 
+        var blocked_a = std.ArrayList(u32).init(pool.allocator);
+        defer blocked_a.deinit();
+        var blocked_b = std.ArrayList(u32).init(pool.allocator);
+        defer blocked_b.deinit();
+
         for (0..n) |i| {
-            if (in_degree[i] == 0) ready_a.append(@intCast(i)) catch {};
+            if (in_degree[i] == 0) {
+                if (nodeBlocked(&plan.nodes[i], ctx)) {
+                    blocked_a.append(@intCast(i)) catch {};
+                } else {
+                    ready_a.append(@intCast(i)) catch {};
+                }
+            }
         }
 
         var remaining: usize = n;
         var cur = &ready_a;
         var nxt = &ready_b;
+        var blocked_cur = &blocked_a;
+        var blocked_nxt = &blocked_b;
 
         while (cur.items.len > 0 and remaining > 0) {
-            // Phase 1: submit CPU nodes to WorkerPool
+            // Phase 1: submit CPU nodes, collect GPU indices
             var cpu_count: usize = 0;
             var gpu_count: usize = 0;
             for (cur.items) |idx| {
                 const node = &plan.nodes[idx];
-
-                // Temporal gate: skip nodes whose history dependencies aren't met
-                if (needs_history[idx] and !history_ready) continue;
-
                 switch (node.kind) {
                     .cpu => {
                         cpu_stubs[cpu_count] = Job{ .func = Dummy.run, .ctx = undefined, .priority = .Normal, .next = null };
@@ -333,16 +340,14 @@ pub const WorkerPool = struct {
                         gpu_ready[gpu_count] = idx;
                         gpu_count += 1;
                     },
-                    .barrier => {
-                        // Register barrier for frame sync (present-phase check)
-                    },
+                    .barrier => {},
                 }
             }
 
-            // Barrier: CPU wave completes before GPU wave of same level
+            // CPU wave completes before GPU wave of same level
             if (cpu_count > 0) pool.waitAll();
 
-            // Phase 2: submit GPU nodes (guaranteed CPU→GPU ordering per wave)
+            // Phase 2: submit GPU nodes
             for (0..gpu_count) |gi| {
                 const idx = gpu_ready[gi];
                 const node = &plan.nodes[idx];
@@ -355,22 +360,43 @@ pub const WorkerPool = struct {
             }
             if (pool.gpu_sched) |gs| gs.tick();
 
-            // Build next ready set by scanning only edges from completed nodes
+            // Build next ready set from completed nodes (cur items)
             nxt.clearRetainingCapacity();
+            blocked_nxt.clearRetainingCapacity();
+
             for (cur.items) |idx| {
                 remaining -= 1;
                 for (plan.edges) |e| {
                     if (e.from == idx and e.to < n and e.kind == .intra_frame) {
                         if (in_degree[e.to] > 0) in_degree[e.to] -= 1;
-                        if (in_degree[e.to] == 0) nxt.append(e.to) catch {};
+                        if (in_degree[e.to] == 0) {
+                            if (nodeBlocked(&plan.nodes[e.to], ctx)) {
+                                blocked_nxt.append(e.to) catch {};
+                            } else {
+                                nxt.append(e.to) catch {};
+                            }
+                        }
                     }
                 }
             }
 
-            // Swap lists
-            const tmp = cur;
+            // Recheck blocked nodes from previous wave
+            for (blocked_cur.items) |idx| {
+                if (nodeBlocked(&plan.nodes[idx], ctx)) {
+                    blocked_nxt.append(idx) catch {};
+                } else {
+                    nxt.append(idx) catch {};
+                }
+            }
+
+            // Swap ready and blocked lists
+            const tmp_ready = cur;
             cur = nxt;
-            nxt = tmp;
+            nxt = tmp_ready;
+
+            const tmp_blocked = blocked_cur;
+            blocked_cur = blocked_nxt;
+            blocked_nxt = tmp_blocked;
         }
     }
 

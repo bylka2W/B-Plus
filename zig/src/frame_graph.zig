@@ -1,6 +1,37 @@
 const std = @import("std");
 const gpu_job = @import("gpu_job.zig");
 
+/// Per-resource history validity.
+pub const HistoryUsage = packed struct {
+    color: bool = false,
+    depth: bool = false,
+    motion: bool = false,
+    exposure: bool = false,
+};
+
+/// A single history resource with generation tracking.
+pub const HistoryResource = struct {
+    id: u32 = 0,
+    generation: u64 = 0,
+    valid: bool = false,
+};
+
+/// Full set of history resources for one frame.
+pub const HistorySet = struct {
+    color: HistoryResource = .{},
+    depth: HistoryResource = .{},
+    motion: HistoryResource = .{},
+    exposure: HistoryResource = .{},
+
+    pub fn hasHistory(self: *const HistorySet, usage: HistoryUsage) bool {
+        if (usage.color and !self.color.valid) return false;
+        if (usage.depth and !self.depth.valid) return false;
+        if (usage.motion and !self.motion.valid) return false;
+        if (usage.exposure and !self.exposure.valid) return false;
+        return true;
+    }
+};
+
 pub const Pass = struct {
     id: u32,
     name: []const u8,
@@ -10,10 +41,8 @@ pub const Pass = struct {
     gpu_signal: []const u32,
     cost_us: u32,
     critical: bool,
-    /// Stage 14: temporal hints for history buffer access
-    reads_history: bool = false,
-    writes_history: bool = false,
-    temporal_weight: f32 = 0.0,
+    history_reads: HistoryUsage = .{},
+    history_writes: HistoryUsage = .{},
 };
 
 pub const EdgeKind = enum {
@@ -25,17 +54,17 @@ pub const NodeKind = union(enum) {
     cpu: struct { pass_id: u32 },
     gpu: struct { pass_id: u32, job: gpu_job.GPUJob },
 
-    /// Temporal render stage — reads/writes frame history.
-    /// Scheduled only when history dependencies (previous frame) are available.
+    /// Temporal render stage — reads/writes specific history resources.
+    /// Scheduled only when all required history resources are valid.
     render: struct {
         pass_id: u32,
         job: gpu_job.GPUJob,
-        reads_history: bool,
-        writes_history: bool,
-        temporal_weight: f32,
+        history_reads: HistoryUsage = .{},
+        history_writes: HistoryUsage = .{},
     },
 
     /// Temporal barrier — frame boundary synchronization.
+    /// Blocks until ctx.frame_index >= wait_for_frame.
     barrier: struct {
         wait_for_frame: u64,
         buffer_mask: u32,
@@ -59,20 +88,13 @@ pub const DependencyEdge = struct {
     temporal_offset: i32 = 0,
 };
 
-/// History buffers for temporal accumulation between frames.
-pub const HistoryBuffers = struct {
-    color_id: u32 = 0,
-    depth_id: u32 = 0,
-    motion_id: u32 = 0,
-    frame_index: u64 = 0,
-};
-
 /// Per-frame context passed through the pipeline.
-/// Carries temporal state, history buffers, and frame metadata.
+/// Carries temporal state, current/previous history sets, and metadata.
 pub const FrameContext = struct {
     frame_index: u64,
     delta_time_ns: u64,
-    history: HistoryBuffers,
+    current: HistorySet,
+    previous: HistorySet,
     temporal_mask: u32,
 };
 
@@ -198,17 +220,19 @@ pub const FrameGraph = struct {
                 .dropable = !p.critical,
             };
 
+            const hr = p.history_reads;
+            const hw = p.history_writes;
+
             if (p.gpu) {
-                if (p.reads_history or p.writes_history or p.temporal_weight > 0) {
+                if (@as(u4, @bitCast(hr)) != 0 or @as(u4, @bitCast(hw)) != 0) {
                     try node_list.append(ExecutionNode{
                         .id = p.id,
                         .name = p.name,
                         .kind = NodeKind{ .render = .{
                             .pass_id = p.id,
                             .job = base_job,
-                            .reads_history = p.reads_history,
-                            .writes_history = p.writes_history,
-                            .temporal_weight = p.temporal_weight,
+                            .history_reads = hr,
+                            .history_writes = hw,
                         }},
                     });
                 } else {
@@ -237,7 +261,8 @@ pub const FrameGraph = struct {
             for (p.deps) |dep_pid| {
                 if (dep_pid < n) {
                     if (pass_to_node[dep_pid]) |from_ni| {
-                        const kind: EdgeKind = if (p.reads_history or p.writes_history) .inter_frame else .intra_frame;
+                        const is_temporal = @as(u4, @bitCast(p.history_reads)) != 0 or @as(u4, @bitCast(p.history_writes)) != 0;
+                        const kind: EdgeKind = if (is_temporal) .inter_frame else .intra_frame;
                         try edge_list.append(DependencyEdge{
                             .from = from_ni,
                             .to = to_ni,

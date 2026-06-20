@@ -423,8 +423,8 @@ fn runTemporalFrameGraph(allocator: std.mem.Allocator) !u64 {
     const passes = [_]frame_graph.Pass{
         .{ .id = 0, .name = "depth", .deps = &.{}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 200, .critical = true },
         .{ .id = 1, .name = "motion", .deps = &.{}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 300, .critical = true },
-        .{ .id = 2, .name = "reproject", .deps = &.{0}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 500, .critical = true, .reads_history = true },
-        .{ .id = 3, .name = "temporal_accum", .deps = &.{1, 2}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 600, .critical = false, .reads_history = true, .writes_history = true, .temporal_weight = 0.8 },
+        .{ .id = 2, .name = "reproject", .deps = &.{0}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 500, .critical = true, .history_reads = .{ .color = true, .motion = true } },
+        .{ .id = 3, .name = "temporal_accum", .deps = &.{ 1, 2 }, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 600, .critical = false, .history_reads = .{ .color = true, .motion = true }, .history_writes = .{ .color = true } },
         .{ .id = 4, .name = "sharpen", .deps = &.{3}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 400, .critical = false },
         .{ .id = 5, .name = "present", .deps = &.{4}, .gpu = false, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 100, .critical = true },
     };
@@ -457,24 +457,42 @@ fn runTemporalFrameGraph(allocator: std.mem.Allocator) !u64 {
     }
     if (!has_inter_frame) return error.MissingInterFrameEdge;
 
-    // Build FrameContext with history for temporal gating
-    const hist = frame_graph.HistoryBuffers{
-        .color_id = 1,
-        .depth_id = 2,
-        .motion_id = 3,
-        .frame_index = 1,
+    // Build FrameContext with per-resource history for temporal gating
+    const hist = frame_graph.HistorySet{
+        .color = .{ .id = 1, .generation = 0, .valid = true },
+        .depth = .{ .id = 2, .generation = 0, .valid = true },
+        .motion = .{ .id = 3, .generation = 0, .valid = true },
+        .exposure = .{ .id = 4, .generation = 0, .valid = false },
     };
     const ctx = frame_graph.FrameContext{
         .frame_index = 1,
         .delta_time_ns = 16_666_666,
-        .history = hist,
+        .current = hist,
+        .previous = hist,
         .temporal_mask = 0,
     };
 
-    // Validate temporal gating via ctx:
-    // All 6 passes survive budget (2100 ≤ 3000). reproject (render, reads_history)
-    // needs history → frame_index > 0 so it's dispatchable.
-    _ = ctx;
+    // Validate per-resource temporal gating:
+    // Frame 1: reproject needs color + motion → both valid in previous → dispatchable
+    // Frame 0: empty history → reproject should be blocked (history not available)
+    var reproject_hr: frame_graph.HistoryUsage = .{};
+    var accum_hr: frame_graph.HistoryUsage = .{};
+    for (plan.nodes) |*node| {
+        switch (node.kind) {
+            .render => |r| {
+                if (r.pass_id == 2) reproject_hr = r.history_reads;
+                if (r.pass_id == 3) accum_hr = r.history_reads;
+            },
+            else => {},
+        }
+    }
+    // Frame 1: history available
+    const empty = frame_graph.HistorySet{};
+    if (ctx.previous.hasHistory(reproject_hr) != true) return error.HistoryNotAvailableFrame1;
+    // Frame 0: empty history → blocked
+    if (empty.hasHistory(reproject_hr) != false) return error.HistoryLeakFrame0;
+    // sharpen depends on temporal_accum (intra_frame). If accum blocked, sharpen stays blocked.
+    if (empty.hasHistory(accum_hr) != false) return error.HistoryLeakAccumFrame0;
 
     return @as(u64, @intCast(plan.nodes.len));
 }
