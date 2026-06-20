@@ -258,21 +258,36 @@ pub const WorkerPool = struct {
         }
     }
 
-    /// Submit a fully materialized ExecutionPlan (unified compute graph).
-    /// Queue-driven Kahn's algorithm O(n+e) — no full re-scan per wave.
-    /// CPU → WorkerPool, GPU → GPUScheduler with sync barrier between them
-    /// per wave: GPU never dispatches ahead of the same wave's CPU completion.
-    pub fn submitFrame(pool: *WorkerPool, plan: *const frame_graph.ExecutionPlan) void {
+    /// Submit a fully materialized ExecutionPlan with temporal context.
+    /// Queue-driven Kahn's algorithm O(n+e) with temporal gating:
+    /// - intra_frame edges → standard in_degree counting
+    /// - inter_frame edges → history availability check before dispatch
+    /// CPU → WorkerPool, GPU/GPU.render → GPUScheduler, barrier → frame sync.
+    pub fn submitFrame(pool: *WorkerPool, plan: *const frame_graph.ExecutionPlan, ctx: *const frame_graph.FrameContext) void {
         const n = plan.nodes.len;
         if (n == 0) return;
 
+        // Count only intra_frame edges for Kahn in_degree
         var in_degree = pool.allocator.alloc(u32, n) catch return;
         defer pool.allocator.free(in_degree);
         @memset(in_degree, 0);
 
+        // Track which nodes need history (incoming inter_frame edges)
+        var needs_history = pool.allocator.alloc(bool, n) catch return;
+        defer pool.allocator.free(needs_history);
+        @memset(needs_history, false);
+
         for (plan.edges) |e| {
-            if (e.to < n) in_degree[e.to] += 1;
+            if (e.to < n) {
+                if (e.kind == .intra_frame) {
+                    in_degree[e.to] += 1;
+                } else {
+                    needs_history[e.to] = true;
+                }
+            }
         }
+
+        const history_ready = ctx.history.frame_index > 0;
 
         var cpu_stubs = pool.allocator.alloc(Job, n) catch return;
         defer pool.allocator.free(cpu_stubs);
@@ -304,13 +319,23 @@ pub const WorkerPool = struct {
             var gpu_count: usize = 0;
             for (cur.items) |idx| {
                 const node = &plan.nodes[idx];
-                if (node.kind == .cpu) {
-                    cpu_stubs[cpu_count] = Job{ .func = Dummy.run, .ctx = undefined, .priority = .Normal, .next = null };
-                    pool.submit(&cpu_stubs[cpu_count]);
-                    cpu_count += 1;
-                } else {
-                    gpu_ready[gpu_count] = idx;
-                    gpu_count += 1;
+
+                // Temporal gate: skip nodes whose history dependencies aren't met
+                if (needs_history[idx] and !history_ready) continue;
+
+                switch (node.kind) {
+                    .cpu => {
+                        cpu_stubs[cpu_count] = Job{ .func = Dummy.run, .ctx = undefined, .priority = .Normal, .next = null };
+                        pool.submit(&cpu_stubs[cpu_count]);
+                        cpu_count += 1;
+                    },
+                    .gpu, .render => {
+                        gpu_ready[gpu_count] = idx;
+                        gpu_count += 1;
+                    },
+                    .barrier => {
+                        // Register barrier for frame sync (present-phase check)
+                    },
                 }
             }
 
@@ -320,7 +345,13 @@ pub const WorkerPool = struct {
             // Phase 2: submit GPU nodes (guaranteed CPU→GPU ordering per wave)
             for (0..gpu_count) |gi| {
                 const idx = gpu_ready[gi];
-                if (pool.gpu_sched) |gs| gs.submit(plan.nodes[idx].kind.gpu.job);
+                const node = &plan.nodes[idx];
+                const job = switch (node.kind) {
+                    .gpu => |g| g.job,
+                    .render => |r| r.job,
+                    else => continue,
+                };
+                if (pool.gpu_sched) |gs| gs.submit(job);
             }
             if (pool.gpu_sched) |gs| gs.tick();
 
@@ -329,7 +360,7 @@ pub const WorkerPool = struct {
             for (cur.items) |idx| {
                 remaining -= 1;
                 for (plan.edges) |e| {
-                    if (e.from == idx and e.to < n) {
+                    if (e.from == idx and e.to < n and e.kind == .intra_frame) {
                         if (in_degree[e.to] > 0) in_degree[e.to] -= 1;
                         if (in_degree[e.to] == 0) nxt.append(e.to) catch {};
                     }
@@ -789,9 +820,9 @@ pub const Scheduler = struct {
         }
     }
 
-    pub fn submitFrame(s: *Scheduler, plan: *const frame_graph.ExecutionPlan) void {
+    pub fn submitFrame(s: *Scheduler, plan: *const frame_graph.ExecutionPlan, ctx: *const frame_graph.FrameContext) void {
         if (s.pool) |*p| {
-            p.submitFrame(plan);
+            p.submitFrame(plan, ctx);
         }
     }
 };
