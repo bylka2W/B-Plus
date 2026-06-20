@@ -27,6 +27,8 @@ pub const Job = struct {
     sticky_core: ?u32 = null,
     stickiness: u8 = 0,
     submitted_at: u64 = 0,
+    enqueue_depth: u32 = 0,
+    completed_before_start: u64 = 0,
 };
 
 /// Per-worker double-ended queue.
@@ -87,6 +89,8 @@ pub const Metrics = struct {
     migrations: std.atomic.Value(u64),
     steals: std.atomic.Value(u64),
     rejected_steals: std.atomic.Value(u64),
+    steal_attempts: std.atomic.Value(u64),
+    local_pops: std.atomic.Value(u64),
     sticky_honored: std.atomic.Value(u64),
     force_migrate_escape: std.atomic.Value(u64),
     wave_wait_max_ns: std.atomic.Value(u64),
@@ -99,6 +103,8 @@ pub const Metrics = struct {
             .migrations = std.atomic.Value(u64).init(0),
             .steals = std.atomic.Value(u64).init(0),
             .rejected_steals = std.atomic.Value(u64).init(0),
+            .steal_attempts = std.atomic.Value(u64).init(0),
+            .local_pops = std.atomic.Value(u64).init(0),
             .sticky_honored = std.atomic.Value(u64).init(0),
             .force_migrate_escape = std.atomic.Value(u64).init(0),
             .wave_wait_max_ns = std.atomic.Value(u64).init(0),
@@ -123,6 +129,7 @@ const Worker = struct {
     id: u32,
     local_q: WorkerQueue,
     affinity: ?latency.WorkerAffinity,
+    jobs_completed: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 };
 
 pub const WorkerPool = struct {
@@ -238,6 +245,7 @@ pub const WorkerPool = struct {
     }
 
     fn assignToWorker(pool: *WorkerPool, job: *Job, wid: u32) void {
+        job.enqueue_depth = @intCast(@min(pool.workers[wid].local_q.items.items.len, std.math.maxInt(u32)));
         pool.workers[wid].local_q.pushBack(job, pool.allocator);
         _ = pool.pending.fetchAdd(1, .release);
         pool.worker_cond.signal();
@@ -536,6 +544,11 @@ pub const WorkerPool = struct {
         if (pool.latency_profile != null) {
             if (pool.workers[wid].affinity) |aff| {
                 if (aff.core_id == target_core) {
+                    // Backpressure: if target core queue is deep, redistribute via balanced
+                    if (pool.workers[wid].local_q.approxLen() >= pool.config.max_queue_len) {
+                        pool.submit(job);
+                        return;
+                    }
                     assignToWorker(pool, job, wid);
                     return;
                 }
@@ -595,11 +608,13 @@ fn workerEntry(pool: *WorkerPool) void {
     while (true) {
         // 1. Try local queue (LIFO — own tasks)
         if (me.local_q.popBack()) |job| {
-            executeAndComplete(pool, job);
+            _ = pool.metrics.local_pops.fetchAdd(1, .monotonic);
+            executeAndComplete(pool, me, job);
             continue;
         }
 
         // 2. Steal from neighbors (front, non-blocking, cost-benefit)
+        _ = pool.metrics.steal_attempts.fetchAdd(1, .monotonic);
         const start = (id + 1) % pool.count;
         var i: u32 = 0;
         while (i < pool.count - 1) : (i += 1) {
@@ -653,7 +668,7 @@ fn workerEntry(pool: *WorkerPool) void {
                             const cost = lp.score(my_core, vc, 0);
                             lp.recordSuccessfulSteal(vc, benefit, cost);
                         }
-                        executeAndComplete(pool, job);
+                        executeAndComplete(pool, me, job);
                         break;
                     }
                     victim.local_q.pushBack(job, pool.allocator);
@@ -670,7 +685,7 @@ fn workerEntry(pool: *WorkerPool) void {
                         _ = pool.metrics.migrations.fetchAdd(1, .monotonic);
                     }
                 }
-                executeAndComplete(pool, job);
+                executeAndComplete(pool, me, job);
                 break;
             }
         } else {
@@ -680,7 +695,7 @@ fn workerEntry(pool: *WorkerPool) void {
 
             // Try to pop from shared queues (highest priority first)
             if (popSharedLocked(pool)) |job| {
-                executeAndComplete(pool, job);
+                executeAndComplete(pool, me, job);
                 continue;
             }
 
@@ -691,7 +706,7 @@ fn workerEntry(pool: *WorkerPool) void {
 
             // Shared mutex is re-locked after wait. Try to pop again.
             if (popSharedLocked(pool)) |job| {
-                executeAndComplete(pool, job);
+                executeAndComplete(pool, me, job);
                 continue;
             }
         }
@@ -733,7 +748,8 @@ fn popSharedLocked(pool: *WorkerPool) ?*Job {
     return null;
 }
 
-fn executeAndComplete(pool: *WorkerPool, job: *Job) void {
+fn executeAndComplete(pool: *WorkerPool, me: *Worker, job: *Job) void {
+    job.completed_before_start = me.jobs_completed.load(.monotonic);
     const wait_ns = @as(u64, @intCast(std.time.nanoTimestamp())) -| job.submitted_at;
     var prev = pool.metrics.queue_wait_max_ns.load(.monotonic);
     while (wait_ns > prev) {
@@ -742,6 +758,7 @@ fn executeAndComplete(pool: *WorkerPool, job: *Job) void {
         } else break;
     }
     job.func(job.ctx);
+    _ = me.jobs_completed.fetchAdd(1, .monotonic);
     const prev_pending = pool.pending.fetchSub(1, .release);
     if (prev_pending == 1) {
         pool.completed_mutex.lock();

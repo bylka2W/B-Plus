@@ -13,19 +13,23 @@ const ALLOC_SIZE = 64 * 1024 * 1024;
 
 const TimingCtx = struct {
     submitted_at: u64,
+    started_at: u64,
     completed_at: u64,
     work_iters: u32,
+    enqueue_depth: u32,
+    completed_before_start: u64 = 0,
 };
 
 fn timingJobFn(ctx: *anyopaque) void {
     const tc = @as(*TimingCtx, @ptrCast(@alignCast(ctx)));
+    tc.started_at = @intCast(std.time.nanoTimestamp());
     var x: u64 = 1;
     for (0..tc.work_iters) |_| x = x *| 7 +| 3;
     std.mem.doNotOptimizeAway(&x);
     tc.completed_at = @intCast(std.time.nanoTimestamp());
 }
 
-const RunResult = struct {
+pub const RunResult = struct {
     label: []const u8,
     p50_ns: u64,
     p95_ns: u64,
@@ -34,6 +38,8 @@ const RunResult = struct {
     throughput: f64,
     steals: u64,
     rejected: u64,
+    steal_attempts: u64,
+    local_pops: u64,
     migrations: u64,
     sticky: u64,
     stall_rate: f64,
@@ -42,10 +48,20 @@ const RunResult = struct {
     wave_wait_avg_ns: u64,
     wave_count: u64,
     queue_wait_max_ns: u64,
+    queue_wait_p95_ns: u64,
+    queue_wait_p99_ns: u64,
+    queue_depth_p99: u32,
+    queue_depth_max: u32,
+    exec_time_p50_ns: u64,
+    exec_time_p95_ns: u64,
+    exec_time_p99_ns: u64,
+    completed_before_p50: u64,
+    completed_before_p95: u64,
+    completed_before_p99: u64,
 };
 
 fn makeJob(jobs: []sched.Job, idx: usize, ctxs: []TimingCtx, iters: u32, sticky_core: ?u32, stickiness: u8) void {
-    ctxs[idx] = TimingCtx{ .submitted_at = 0, .completed_at = 0, .work_iters = iters };
+    ctxs[idx] = TimingCtx{ .submitted_at = 0, .started_at = 0, .completed_at = 0, .work_iters = iters, .enqueue_depth = 0 };
     jobs[idx] = sched.Job{
         .func = timingJobFn,
         .ctx = @as(*anyopaque, @ptrCast(&ctxs[idx])),
@@ -80,6 +96,26 @@ fn compute(label: []const u8, ctxs: []TimingCtx, scheduler: *sched.Scheduler, fi
     const ww_cnt = if (scheduler.pool) |*p| p.metrics.wave_count.load(.acquire) else 0;
     const qw_max = if (scheduler.pool) |*p| p.metrics.queue_wait_max_ns.load(.acquire) else 0;
 
+    var queue_waits = std.heap.page_allocator.alloc(u64, N) catch unreachable;
+    defer std.heap.page_allocator.free(queue_waits);
+    for (ctxs, 0..) |ctx, i| queue_waits[i] = if (ctx.started_at > 0) ctx.started_at -| ctx.submitted_at else 0;
+    std.sort.block(u64, queue_waits, {}, std.sort.asc(u64));
+
+    var depths = std.heap.page_allocator.alloc(u32, N) catch unreachable;
+    defer std.heap.page_allocator.free(depths);
+    for (ctxs, 0..) |ctx, i| depths[i] = ctx.enqueue_depth;
+    std.sort.block(u32, depths, {}, std.sort.asc(u32));
+
+    var exec_times = std.heap.page_allocator.alloc(u64, N) catch unreachable;
+    defer std.heap.page_allocator.free(exec_times);
+    for (ctxs, 0..) |ctx, i| exec_times[i] = if (ctx.started_at > 0) ctx.completed_at -| ctx.started_at else 0;
+    std.sort.block(u64, exec_times, {}, std.sort.asc(u64));
+
+    var completed_before = std.heap.page_allocator.alloc(u64, N) catch unreachable;
+    defer std.heap.page_allocator.free(completed_before);
+    for (ctxs, 0..) |ctx, i| completed_before[i] = ctx.completed_before_start;
+    std.sort.block(u64, completed_before, {}, std.sort.asc(u64));
+
     return RunResult{
         .label = label,
         .p50_ns = latencies[N * 50 / 100],
@@ -89,6 +125,8 @@ fn compute(label: []const u8, ctxs: []TimingCtx, scheduler: *sched.Scheduler, fi
         .throughput = throughput,
         .steals = if (scheduler.pool) |*p| p.metrics.steals.load(.acquire) else 0,
         .rejected = if (scheduler.pool) |*p| p.metrics.rejected_steals.load(.acquire) else 0,
+        .steal_attempts = if (scheduler.pool) |*p| p.metrics.steal_attempts.load(.acquire) else 0,
+        .local_pops = if (scheduler.pool) |*p| p.metrics.local_pops.load(.acquire) else 0,
         .migrations = if (scheduler.pool) |*p| p.metrics.migrations.load(.acquire) else 0,
         .sticky = if (scheduler.pool) |*p| p.metrics.sticky_honored.load(.acquire) else 0,
         .stall_rate = @as(f64, @floatFromInt(stalls)) / @as(f64, @floatFromInt(N)),
@@ -97,6 +135,16 @@ fn compute(label: []const u8, ctxs: []TimingCtx, scheduler: *sched.Scheduler, fi
         .wave_wait_avg_ns = if (ww_cnt > 0) @divFloor(ww_sum, ww_cnt) else 0,
         .wave_count = ww_cnt,
         .queue_wait_max_ns = qw_max,
+        .queue_wait_p95_ns = queue_waits[N * 95 / 100],
+        .queue_wait_p99_ns = queue_waits[N * 99 / 100],
+        .queue_depth_p99 = depths[N * 99 / 100],
+        .queue_depth_max = depths[N - 1],
+        .exec_time_p50_ns = exec_times[N * 50 / 100],
+        .exec_time_p95_ns = exec_times[N * 95 / 100],
+        .exec_time_p99_ns = exec_times[N * 99 / 100],
+        .completed_before_p50 = completed_before[N * 50 / 100],
+        .completed_before_p95 = completed_before[N * 95 / 100],
+        .completed_before_p99 = completed_before[N * 99 / 100],
     };
 }
 
@@ -133,8 +181,10 @@ fn runHotCoreSkew(allocator: std.mem.Allocator, smart: bool) !RunResult {
             scheduler.submitAffine(&jobs[i], 0)
         else
             scheduler.submit(&jobs[i]);
+        ctxs[i].enqueue_depth = jobs[i].enqueue_depth;
     }
     scheduler.waitAll();
+    for (0..N) |i| ctxs[i].completed_before_start = jobs[i].completed_before_start;
     const end = @as(u64, @intCast(std.time.nanoTimestamp()));
     const result = compute("hot-core-skew", ctxs, &scheduler, first_submit, end);
 
@@ -174,8 +224,10 @@ fn runBurstLoad(allocator: std.mem.Allocator, smart: bool) !RunResult {
         makeJob(jobs, i, ctxs, 10, st, if (st != null) 1 else 0);
         ctxs[i].submitted_at = @as(u64, @intCast(std.time.nanoTimestamp()));
         scheduler.submit(&jobs[i]);
+        ctxs[i].enqueue_depth = jobs[i].enqueue_depth;
     }
     scheduler.waitAll();
+    for (0..N) |i| ctxs[i].completed_before_start = jobs[i].completed_before_start;
     const end = @as(u64, @intCast(std.time.nanoTimestamp()));
     const result = compute("burst-load", ctxs, &scheduler, first_submit, end);
 
@@ -219,8 +271,10 @@ fn runMixedSize(allocator: std.mem.Allocator, smart: bool) !RunResult {
         makeJob(jobs, i, ctxs, iters, st, if (st != null) 1 else 0);
         ctxs[i].submitted_at = @as(u64, @intCast(std.time.nanoTimestamp()));
         scheduler.submit(&jobs[i]);
+        ctxs[i].enqueue_depth = jobs[i].enqueue_depth;
     }
     scheduler.waitAll();
+    for (0..N) |i| ctxs[i].completed_before_start = jobs[i].completed_before_start;
     const end = @as(u64, @intCast(std.time.nanoTimestamp()));
     const result = compute("mixed-size", ctxs, &scheduler, first_submit, end);
 
@@ -231,7 +285,7 @@ fn runMixedSize(allocator: std.mem.Allocator, smart: bool) !RunResult {
 }
 
 // ── Pattern D: Affinity conflicts ──
-fn runAffinityConflict(allocator: std.mem.Allocator, smart: bool) !RunResult {
+pub fn runAffinityConflict(allocator: std.mem.Allocator, smart: bool) !RunResult {
     const N = 2000;
     const mem = try allocator.alloc(u8, ALLOC_SIZE);
     defer allocator.free(mem);
@@ -267,6 +321,7 @@ fn runAffinityConflict(allocator: std.mem.Allocator, smart: bool) !RunResult {
             scheduler.submitAffine(&jobs[idx], core)
         else
             scheduler.submit(&jobs[idx]);
+        ctxs[idx].enqueue_depth = jobs[idx].enqueue_depth;
     }
     while (idx < N) : (idx += 1) {
         seed = seed *% 6364136223846793005 +% 1442695040888963407;
@@ -274,8 +329,10 @@ fn runAffinityConflict(allocator: std.mem.Allocator, smart: bool) !RunResult {
         makeJob(jobs, idx, ctxs, 10, @as(?u32, @intCast(sc)), if (smart) 1 else 0);
         ctxs[idx].submitted_at = @as(u64, @intCast(std.time.nanoTimestamp()));
         scheduler.submit(&jobs[idx]);
+        ctxs[idx].enqueue_depth = jobs[idx].enqueue_depth;
     }
     scheduler.waitAll();
+    for (0..N) |i| ctxs[i].completed_before_start = jobs[i].completed_before_start;
     const end = @as(u64, @intCast(std.time.nanoTimestamp()));
     const result = compute("affinity-conflict", ctxs, &scheduler, first_submit, end);
 
@@ -320,6 +377,7 @@ fn runStickyStarvation(allocator: std.mem.Allocator, smart: bool) !RunResult {
         makeJob(jobs, idx, ctxs, 100, @as(?u32, @intCast(0)), if (smart) 1 else 0);
         ctxs[idx].submitted_at = @as(u64, @intCast(std.time.nanoTimestamp()));
         scheduler.submit(&jobs[idx]);
+        ctxs[idx].enqueue_depth = jobs[idx].enqueue_depth;
     }
     while (idx < N) : (idx += 1) {
         seed = seed *% 6364136223846793005 +% 1442695040888963407;
@@ -327,8 +385,10 @@ fn runStickyStarvation(allocator: std.mem.Allocator, smart: bool) !RunResult {
         makeJob(jobs, idx, ctxs, 50, @as(?u32, @intCast(core)), if (smart) 1 else 0);
         ctxs[idx].submitted_at = @as(u64, @intCast(std.time.nanoTimestamp()));
         scheduler.submit(&jobs[idx]);
+        ctxs[idx].enqueue_depth = jobs[idx].enqueue_depth;
     }
     scheduler.waitAll();
+    for (0..N) |i| ctxs[i].completed_before_start = jobs[i].completed_before_start;
     const end = @as(u64, @intCast(std.time.nanoTimestamp()));
     const result = compute("sticky-starvation", ctxs, &scheduler, first_submit, end);
 
@@ -425,6 +485,8 @@ fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
         .throughput = @as(f64, @floatFromInt(dispatched)),
         .steals = 0,
         .rejected = 0,
+        .steal_attempts = 0,
+        .local_pops = 0,
         .migrations = 0,
         .sticky = 0,
         .stall_rate = 0,
@@ -433,6 +495,16 @@ fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
         .wave_wait_avg_ns = 0,
         .wave_count = 0,
         .queue_wait_max_ns = 0,
+        .queue_wait_p95_ns = 0,
+        .queue_wait_p99_ns = 0,
+        .queue_depth_p99 = 0,
+        .queue_depth_max = 0,
+        .exec_time_p50_ns = 0,
+        .exec_time_p95_ns = 0,
+        .exec_time_p99_ns = 0,
+        .completed_before_p50 = 0,
+        .completed_before_p95 = 0,
+        .completed_before_p99 = 0,
     };
 }
 
@@ -560,10 +632,10 @@ fn printTable(base: []const RunResult, smart: []const RunResult) !void {
     try stdout.print("╠══════════════════╬════════════════════╬═══════════╬═══════════╬═══════════╣\n", .{});
 
     for (base, smart) |b, s| {
-        const labels = [_][]const u8{ "p50 latency", "p95 latency", "p99 latency", "throughput", "steals", "rejected", "migrations", "sticky" };
-        const is_ns = [_]bool{ true, true, true, false, false, false, false, false };
-        const bvals = [_]u64{ b.p50_ns, b.p95_ns, b.p99_ns, @intFromFloat(b.throughput), b.steals, b.rejected, b.migrations, b.sticky };
-        const svals = [_]u64{ s.p50_ns, s.p95_ns, s.p99_ns, @intFromFloat(s.throughput), s.steals, s.rejected, s.migrations, s.sticky };
+        const labels = [_][]const u8{ "p50 latency", "p95 latency", "p99 latency", "throughput", "steals", "rejected", "attempts", "migrations", "sticky", "local_pops" };
+        const is_ns = [_]bool{ true, true, true, false, false, false, false, false, false, false };
+        const bvals = [_]u64{ b.p50_ns, b.p95_ns, b.p99_ns, @intFromFloat(b.throughput), b.steals, b.rejected, b.steal_attempts, b.migrations, b.sticky, b.local_pops };
+        const svals = [_]u64{ s.p50_ns, s.p95_ns, s.p99_ns, @intFromFloat(s.throughput), s.steals, s.rejected, s.steal_attempts, s.migrations, s.sticky, s.local_pops };
 
         for (labels, is_ns, bvals, svals) |row_label, ns, bv, sv| {
             const bstr = fmtVal(bv, ns);
@@ -582,7 +654,36 @@ fn printTable(base: []const RunResult, smart: []const RunResult) !void {
         if (s.queue_wait_max_ns > 0) {
             const bq = fmtVal(b.queue_wait_max_ns, true);
             const sq = fmtVal(s.queue_wait_max_ns, true);
+            const bq95 = fmtVal(b.queue_wait_p95_ns, true);
+            const sq95 = fmtVal(s.queue_wait_p95_ns, true);
+            const bq99 = fmtVal(b.queue_wait_p99_ns, true);
+            const sq99 = fmtVal(s.queue_wait_p99_ns, true);
             try stdout.print("║ {s: <16} ║ queue_wait_max     ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, bq, sq });
+            try stdout.print("║ {s: <16} ║ queue_wait_p95     ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, bq95, sq95 });
+            try stdout.print("║ {s: <16} ║ queue_wait_p99     ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, bq99, sq99 });
+            const bdp99 = fmtVal(b.queue_depth_p99, false);
+            const sdp99 = fmtVal(s.queue_depth_p99, false);
+            const bdmax = fmtVal(b.queue_depth_max, false);
+            const sdmax = fmtVal(s.queue_depth_max, false);
+            try stdout.print("║ {s: <16} ║ depth_p99/max     ║ {s: >4}/{s: <4} ║ {s: >4}/{s: <4} ║           ║\n", .{ s.label, bdp99, bdmax, sdp99, sdmax });
+            const be50 = fmtVal(b.exec_time_p50_ns, true);
+            const se50 = fmtVal(s.exec_time_p50_ns, true);
+            const be95 = fmtVal(b.exec_time_p95_ns, true);
+            const se95 = fmtVal(s.exec_time_p95_ns, true);
+            const be99 = fmtVal(b.exec_time_p99_ns, true);
+            const se99 = fmtVal(s.exec_time_p99_ns, true);
+            try stdout.print("║ {s: <16} ║ exec_time_p50     ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, be50, se50 });
+            try stdout.print("║ {s: <16} ║ exec_time_p95     ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, be95, se95 });
+            try stdout.print("║ {s: <16} ║ exec_time_p99     ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, be99, se99 });
+            const bcb50 = fmtVal(b.completed_before_p50, false);
+            const scb50 = fmtVal(s.completed_before_p50, false);
+            const bcb95 = fmtVal(b.completed_before_p95, false);
+            const scb95 = fmtVal(s.completed_before_p95, false);
+            const bcb99 = fmtVal(b.completed_before_p99, false);
+            const scb99 = fmtVal(s.completed_before_p99, false);
+            try stdout.print("║ {s: <16} ║ wait_seq_p50      ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, bcb50, scb50 });
+            try stdout.print("║ {s: <16} ║ wait_seq_p95      ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, bcb95, scb95 });
+            try stdout.print("║ {s: <16} ║ wait_seq_p99      ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, bcb99, scb99 });
         }
 
         try stdout.print("╠══════════════════╬════════════════════╬═══════════╬═══════════╬═══════════╣\n", .{});
