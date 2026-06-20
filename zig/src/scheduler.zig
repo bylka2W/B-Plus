@@ -89,6 +89,7 @@ pub const Metrics = struct {
     rejected_steals: std.atomic.Value(u64),
     sticky_honored: std.atomic.Value(u64),
     force_migrate_escape: std.atomic.Value(u64),
+    wave_wait_max_ns: std.atomic.Value(u64),
 
     pub fn init() Metrics {
         return Metrics{
@@ -97,6 +98,7 @@ pub const Metrics = struct {
             .rejected_steals = std.atomic.Value(u64).init(0),
             .sticky_honored = std.atomic.Value(u64).init(0),
             .force_migrate_escape = std.atomic.Value(u64).init(0),
+            .wave_wait_max_ns = std.atomic.Value(u64).init(0),
         };
     }
 };
@@ -324,6 +326,9 @@ pub const WorkerPool = struct {
         var blocked_cur = &blocked_a;
         var blocked_nxt = &blocked_b;
 
+        // Exit when no ready nodes remain. Blocked nodes (temporal/barrier)
+        // can't make progress this frame — blocking conditions are frame-invariant
+        // and will be re-evaluated on the next submitFrame() call.
         while (cur.items.len > 0 and remaining > 0) {
             // Phase 1: submit CPU nodes, collect GPU indices
             var cpu_count: usize = 0;
@@ -345,7 +350,18 @@ pub const WorkerPool = struct {
             }
 
             // CPU wave completes before GPU wave of same level
-            if (cpu_count > 0) pool.waitAll();
+            if (cpu_count > 0) {
+                const t0 = @as(u64, @intCast(std.time.nanoTimestamp()));
+                pool.waitAll();
+                const t1 = @as(u64, @intCast(std.time.nanoTimestamp()));
+                const wait_ns = t1 -| t0;
+                var prev = pool.metrics.wave_wait_max_ns.load(.monotonic);
+                while (wait_ns > prev) {
+                    if (pool.metrics.wave_wait_max_ns.compareAndSwap(prev, wait_ns, .monotonic, .monotonic)) |actual| {
+                        prev = actual;
+                    } else break;
+                }
+            }
 
             // Phase 2: submit GPU nodes
             for (0..gpu_count) |gi| {

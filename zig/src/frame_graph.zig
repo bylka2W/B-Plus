@@ -251,7 +251,9 @@ pub const FrameGraph = struct {
             }
         }
 
-        // Build edges with temporal kind detection
+        // Build edges: all deps are intra-frame (same-frame data flow).
+        // Inter-frame edges are explicit cross-frame dependencies, not auto-detected
+        // from history_reads/history_writes — those are handled by scheduler nodeBlocked().
         var edge_list = std.ArrayList(DependencyEdge).init(allocator);
         defer edge_list.deinit();
 
@@ -261,13 +263,11 @@ pub const FrameGraph = struct {
             for (p.deps) |dep_pid| {
                 if (dep_pid < n) {
                     if (pass_to_node[dep_pid]) |from_ni| {
-                        const is_temporal = @as(u4, @bitCast(p.history_reads)) != 0 or @as(u4, @bitCast(p.history_writes)) != 0;
-                        const kind: EdgeKind = if (is_temporal) .inter_frame else .intra_frame;
                         try edge_list.append(DependencyEdge{
                             .from = from_ni,
                             .to = to_ni,
-                            .kind = kind,
-                            .temporal_offset = if (kind == .inter_frame) -1 else 0,
+                            .kind = .intra_frame,
+                            .temporal_offset = 0,
                         });
                     }
                 }

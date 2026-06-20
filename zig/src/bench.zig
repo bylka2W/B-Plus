@@ -450,12 +450,13 @@ fn runTemporalFrameGraph(allocator: std.mem.Allocator) !u64 {
     if (!has_accum_render) return error.MissingAccumRender;
     if (!has_present_cpu) return error.MissingPresent;
 
-    // Validate inter_frame edges from temporal nodes
-    var has_inter_frame: bool = false;
+    // Validate edges: all deps emit intra_frame edges (same-frame data flow).
+    // Inter-frame edges are explicit (not auto-detected from history_reads).
     for (plan.edges) |e| {
-        if (e.kind == .inter_frame) has_inter_frame = true;
+        if (e.kind != .intra_frame) return error.UnexpectedInterFrame;
+        // temporal_offset is 0 for same-frame deps
+        if (e.temporal_offset != 0) return error.NonZeroTemporalOffset;
     }
-    if (!has_inter_frame) return error.MissingInterFrameEdge;
 
     // Build FrameContext with per-resource history for temporal gating
     const hist = frame_graph.HistorySet{
