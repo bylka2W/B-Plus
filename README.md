@@ -1494,6 +1494,7 @@ No pass metadata at runtime. Single temporal Kahn engine. History-aware dispatch
 #### Testing
 
 ```bash
+chcp 65001 >nul & zig test src\test_affinity.zig  # affinity-conflict only: p99, queue_wait, wait_seq, exec_time
 zig test src\bench.zig            # 8 tests: 4 CPU patterns + frame-graph + gpu-scheduler + temporal-frame + metric
 ```
 
