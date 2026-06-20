@@ -499,7 +499,7 @@ zig/                    — компилятор (Zig, активная разр
     scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
     scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
     bench.zig            — Stage 7+ A/B benchmark: baseline vs smart scheduler (4 patterns) + Stage 9+ smoke tests
-    frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan (unified compute DAG IR)
+    frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan (temporal compute DAG IR with intra/inter-frame edges)
     gpu_job.zig          — Stage 9 GPUJob dispatch descriptor
     gpu_scheduler.zig    — Stage 9+ Pure GPU dispatch sink (no graph awareness)
     scheduler_config.zig — Stage 8 SchedulerConfig (max_sticky_ns, max_queue_len, imbalance thresholds)
@@ -1433,32 +1433,42 @@ Job → WorkerPool → worker[N] (per-core LIFO queue)
 - **Starvation escape**: steal loop checks `wait_ns > max_sticky_ns` for sticky jobs → force-migrate (`force_migrate_escape` counter).
 - **`SystemLoad`** (`latency.zig`): `avg_queue`, `max_queue`, `min_queue`, `imbalance_ratio`; `computeSystemLoad()`, `isSystemUnderPressure()`.
 
-### Stage 9–13: Unified Compute DAG Runtime (Graph VM)
+### Stage 9–14: Temporal Compute DAG Runtime (Graph VM)
 
-`src/frame_graph.zig` — frame compiler producing a unified compute DAG IR (`ExecutionPlan`).
+`src/frame_graph.zig` — frame compiler producing a temporal compute DAG IR (`ExecutionPlan`).
 
 ```text
 Pass[] → FrameGraph.compile()
                   ↓
-    ExecutionPlan { nodes + edges }     ← unified compute DAG IR
+    ExecutionPlan { nodes + edges }                         ← temporal DAG IR
                   ↓
-    WorkerPool.submitFrame()            ← single queue-driven Kahn O(n+e)
-        ├─ CPU node → WorkerPool.submit()  ← async pool (CPU wave)
+    WorkerPool.submitFrame(plan, &ctx)                      ← single Kahn O(n+e)
+        ├─ intra_frame edges → in_degree counting
+        ├─ inter_frame edges → history gating (ctx.history.frame_index)
+        ├─ CPU node → WorkerPool.submit() (CPU wave)
         ├─ barrier: waitAll()
-        └─ GPU node → GPUScheduler.submit() ← pure sink (GPU wave)
+        └─ GPU / Render node → GPUScheduler.submit() (GPU wave)
 ```
 
-**ExecutionNode** (`frame_graph.zig`): `id + name + kind (cpu | gpu)` — unified IR node, replaces separate CPU/GPU paths.
+**ExecutionNode** (`frame_graph.zig`): `id + name + kind (cpu | gpu | render | barrier)` — unified IR node with temporal awareness.
 
-**ExecutionPlan** (`frame_graph.zig`): `nodes[] + edges[] + budget_us` — partially-ordered DAG. Compiler IR + runtime bytecode in one model.
+**NodeKind.render**: temporal GPU stage with `reads_history`, `writes_history`, `temporal_weight`. Used for reprojection, temporal accumulation, upscaling passes.
 
-**DependencyEdge** (`frame_graph.zig`): `{ from, to }` — lightweight edge between node indices. Only the main scheduler (Kahn) processes edges.
+**NodeKind.barrier**: frame-boundary synchronization — `wait_for_frame`, `buffer_mask`.
+
+**ExecutionPlan** (`frame_graph.zig`): `nodes[] + edges[] + budget_us` — partially-ordered DAG with intra-frame and inter-frame edges.
+
+**DependencyEdge** (`frame_graph.zig`): `{ from, to, kind (intra_frame | inter_frame), temporal_offset }` — edges carry temporal semantics. Inter-frame edges bypass Kahn in_degree; history availability is checked at dispatch time.
+
+**EdgeKind**: `intra_frame` (same-frame dependency) or `inter_frame` (cross-frame history dependency). The scheduler only counts intra_frame edges for topological ordering; inter_frame edges gate node dispatch on `FrameContext.history.frame_index`.
+
+**FrameContext** (`frame_graph.zig`): per-frame temporal state — `frame_index`, `delta_time_ns`, `HistoryBuffers` (color/depth/motion ids + frame_index), `temporal_mask`. Passed through the pipeline to gate temporal node execution.
 
 **GPUJob** (`gpu_job.zig`): dispatch descriptor with pipeline_id, dispatch grid, semaphore chain, deadline, priority, dropable.
 
 **GPUScheduler** (`gpu_scheduler.zig`): pure GPU dispatch sink — no graph awareness, no Kahn. `submit(job)` + `tick()` only.
 
-#### Key architectural decisions (Stage 9–13)
+#### Key architectural decisions (Stage 9–14)
 
 | Stage | Change |
 |-------|--------|
@@ -1467,22 +1477,24 @@ Pass[] → FrameGraph.compile()
 | 11 | DependencyEdge + Kahn in GPU scheduler for runtime reorder within DAG |
 | 12 | Unified ExecutionNode (cpu|gpu) replaces separate cpu/gpu fields — single DAG IR |
 | 13 | Queue-driven Kahn O(n+e), GPUScheduler as pure sink, CPU/GPU wave barrier |
+| 14 | Temporal Frame Graph: EdgeKind, render/barrier nodes, FrameContext, history gating |
 
 #### Pipeline
 
 ```
-FrameGraph.compile()    →  compiler (topo sort + budget prune + DAG materialization)
-ExecutionPlan           →  unified DAG IR (nodes + edges)
-WorkerPool              →  Kahn engine (CPU→pool, GPU→sink)
+FrameGraph.compile()    →  compiler (topo sort + budget + temporal materialization)
+ExecutionPlan           →  temporal DAG IR (nodes + edges with intra/inter frame kinds)
+WorkerPool              →  temporal Kahn engine (CPU→pool, GPU→sink, history gated)
 GPUScheduler            →  pure GPU dispatch sink
+FrameContext            →  per-frame temporal state (history buffers, frame index)
 ```
 
-No pass metadata at runtime. Single Kahn engine. No duplicated scheduling paths.
+No pass metadata at runtime. Single temporal Kahn engine. History-aware dispatch.
 
 #### Testing
 
 ```bash
-zig test src\bench.zig            # 7 tests: 4 CPU patterns + frame-graph + gpu-scheduler + metric validation
+zig test src\bench.zig            # 8 tests: 4 CPU patterns + frame-graph + gpu-scheduler + temporal-frame + metric
 ```
 
 
