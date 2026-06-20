@@ -38,6 +38,10 @@ const RunResult = struct {
     sticky: u64,
     stall_rate: f64,
     force_escape: u64,
+    wave_wait_max_ns: u64,
+    wave_wait_avg_ns: u64,
+    wave_count: u64,
+    queue_wait_max_ns: u64,
 };
 
 fn makeJob(jobs: []sched.Job, idx: usize, ctxs: []TimingCtx, iters: u32, sticky_core: ?u32, stickiness: u8) void {
@@ -71,6 +75,11 @@ fn compute(label: []const u8, ctxs: []TimingCtx, scheduler: *sched.Scheduler, fi
         if (l > median * 2) stalls += 1;
     }
 
+    const ww_max = if (scheduler.pool) |*p| p.metrics.wave_wait_max_ns.load(.acquire) else 0;
+    const ww_sum = if (scheduler.pool) |*p| p.metrics.wave_wait_sum_ns.load(.acquire) else 0;
+    const ww_cnt = if (scheduler.pool) |*p| p.metrics.wave_count.load(.acquire) else 0;
+    const qw_max = if (scheduler.pool) |*p| p.metrics.queue_wait_max_ns.load(.acquire) else 0;
+
     return RunResult{
         .label = label,
         .p50_ns = latencies[N * 50 / 100],
@@ -84,6 +93,10 @@ fn compute(label: []const u8, ctxs: []TimingCtx, scheduler: *sched.Scheduler, fi
         .sticky = if (scheduler.pool) |*p| p.metrics.sticky_honored.load(.acquire) else 0,
         .stall_rate = @as(f64, @floatFromInt(stalls)) / @as(f64, @floatFromInt(N)),
         .force_escape = if (scheduler.pool) |*p| p.metrics.force_migrate_escape.load(.acquire) else 0,
+        .wave_wait_max_ns = ww_max,
+        .wave_wait_avg_ns = if (ww_cnt > 0) @divFloor(ww_sum, ww_cnt) else 0,
+        .wave_count = ww_cnt,
+        .queue_wait_max_ns = qw_max,
     };
 }
 
@@ -416,6 +429,10 @@ fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
         .sticky = 0,
         .stall_rate = 0,
         .force_escape = 0,
+        .wave_wait_max_ns = 0,
+        .wave_wait_avg_ns = 0,
+        .wave_count = 0,
+        .queue_wait_max_ns = 0,
     };
 }
 
@@ -554,6 +571,20 @@ fn printTable(base: []const RunResult, smart: []const RunResult) !void {
             const delta = fmtDelta(bv, sv);
             try stdout.print("║ {s: <16} ║ {s: <16} ║ {s: >9} ║ {s: >9} ║ {s} ║\n", .{ b.label, row_label, bstr, sstr, delta });
         }
+
+        // Wave wait diagnostic (only non-zero if submitFrame was used)
+        if (s.wave_count > 0) {
+            const maxstr = fmtVal(s.wave_wait_max_ns, true);
+            const avgstr = fmtVal(s.wave_wait_avg_ns, true);
+            try stdout.print("║ {s: <16} ║ wave_wait_max/avg  ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, maxstr, avgstr });
+        }
+        // Queue wait diagnostic — directly measures submit→exec stall
+        if (s.queue_wait_max_ns > 0) {
+            const bq = fmtVal(b.queue_wait_max_ns, true);
+            const sq = fmtVal(s.queue_wait_max_ns, true);
+            try stdout.print("║ {s: <16} ║ queue_wait_max     ║ {s: >9} ║ {s: >9} ║           ║\n", .{ s.label, bq, sq });
+        }
+
         try stdout.print("╠══════════════════╬════════════════════╬═══════════╬═══════════╬═══════════╣\n", .{});
     }
     try stdout.print("╚══════════════════╩════════════════════╩═══════════╩═══════════╩═══════════╝\n", .{});
@@ -604,5 +635,15 @@ test "benchmark: baseline vs smart comparison" {
         if (r.p99_ns > 1_000_000) {
             std.debug.print("\n  WARNING: p99={d}ns exceeds 1ms for {s}\n", .{ r.p99_ns, r.label });
         }
+    }
+
+    // Diagnostic: wave_wait metrics confirm wave barrier is NOT triggered
+    // in CPU-only benchmarks (submitFrame not called).
+    var any_wave: bool = false;
+    for (smart) |r| {
+        if (r.wave_count > 0) any_wave = true;
+    }
+    if (!any_wave) {
+        try stdout.print("\n  [diag] wave_wait_max_ns=0 (CPU benchmarks don't use submitFrame)\n", .{});
     }
 }

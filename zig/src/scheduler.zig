@@ -90,6 +90,9 @@ pub const Metrics = struct {
     sticky_honored: std.atomic.Value(u64),
     force_migrate_escape: std.atomic.Value(u64),
     wave_wait_max_ns: std.atomic.Value(u64),
+    wave_wait_sum_ns: std.atomic.Value(u64),
+    wave_count: std.atomic.Value(u64),
+    queue_wait_max_ns: std.atomic.Value(u64),
 
     pub fn init() Metrics {
         return Metrics{
@@ -99,6 +102,9 @@ pub const Metrics = struct {
             .sticky_honored = std.atomic.Value(u64).init(0),
             .force_migrate_escape = std.atomic.Value(u64).init(0),
             .wave_wait_max_ns = std.atomic.Value(u64).init(0),
+            .wave_wait_sum_ns = std.atomic.Value(u64).init(0),
+            .wave_count = std.atomic.Value(u64).init(0),
+            .queue_wait_max_ns = std.atomic.Value(u64).init(0),
         };
     }
 };
@@ -357,10 +363,12 @@ pub const WorkerPool = struct {
                 const wait_ns = t1 -| t0;
                 var prev = pool.metrics.wave_wait_max_ns.load(.monotonic);
                 while (wait_ns > prev) {
-                    if (pool.metrics.wave_wait_max_ns.compareAndSwap(prev, wait_ns, .monotonic, .monotonic)) |actual| {
+                    if (pool.metrics.wave_wait_max_ns.cmpxchgStrong(prev, wait_ns, .monotonic, .monotonic)) |actual| {
                         prev = actual;
                     } else break;
                 }
+                _ = pool.metrics.wave_wait_sum_ns.fetchAdd(wait_ns, .monotonic);
+                _ = pool.metrics.wave_count.fetchAdd(1, .monotonic);
             }
 
             // Phase 2: submit GPU nodes
@@ -726,9 +734,16 @@ fn popSharedLocked(pool: *WorkerPool) ?*Job {
 }
 
 fn executeAndComplete(pool: *WorkerPool, job: *Job) void {
+    const wait_ns = @as(u64, @intCast(std.time.nanoTimestamp())) -| job.submitted_at;
+    var prev = pool.metrics.queue_wait_max_ns.load(.monotonic);
+    while (wait_ns > prev) {
+        if (pool.metrics.queue_wait_max_ns.cmpxchgStrong(prev, wait_ns, .monotonic, .monotonic)) |actual| {
+            prev = actual;
+        } else break;
+    }
     job.func(job.ctx);
-    const prev = pool.pending.fetchSub(1, .release);
-    if (prev == 1) {
+    const prev_pending = pool.pending.fetchSub(1, .release);
+    if (prev_pending == 1) {
         pool.completed_mutex.lock();
         pool.completed_cond.broadcast();
         pool.completed_mutex.unlock();
