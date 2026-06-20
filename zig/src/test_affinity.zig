@@ -19,16 +19,14 @@ test "frame-smoke" {
     @memset(in_buf, 1.0);
     @memset(out_buf, 0.0);
 
-    var f = frame.Frame{
-        .id = 0,
+    var graph = frame.FrameGraph{
+        .frame_id = 0,
         .width = w,
         .height = h,
         .input = in_buf,
         .output = out_buf,
-        .prev_frame = null,
-        .prev_velocity = null,
-        .motion = null,
-        .timestamp_ns = @intCast(std.time.nanoTimestamp()),
+        .history = null,
+        .scale = 2.0,
     };
 
     var s: sched.Scheduler = undefined;
@@ -36,19 +34,113 @@ test "frame-smoke" {
     defer s.deinit();
     try s.start();
 
-    var ts1 = try frame.submitUpsample(&s.pool.?, allocator, &f, 2.0);
-    defer ts1.deinit(allocator);
-    s.waitAll();
-
-    var ts2 = try frame.submitSharpen(&s.pool.?, allocator, &f, 2.0);
-    defer ts2.deinit(allocator);
-    s.waitAll();
+    var batch = try frame.submitFrame(&s, allocator, &graph);
+    defer batch.deinit(allocator);
 
     var sum: f64 = 0;
     for (out_buf) |v| sum += v;
     const mean = sum / @as(f64, @floatFromInt(out_buf.len));
 
     try stdout.print("\nframe-smoke: {d}x{d} -> {d}x{d}, output mean={d:.4}\n", .{ w, h, w2, w2, mean });
+    try std.testing.expect(mean > 0);
+}
+
+test "frame-temporal" {
+    const allocator = std.testing.allocator;
+    const stdout = std.io.getStdOut().writer();
+
+    const w: u32 = 64;
+    const h: u32 = 64;
+    const w2 = @as(u32, @intFromFloat(@as(f32, @floatFromInt(w)) * 2.0));
+
+    const in_buf = try allocator.alloc(f32, w * h);
+    defer allocator.free(in_buf);
+    const hist_buf = try allocator.alloc(f32, w * h);
+    defer allocator.free(hist_buf);
+    const out_buf = try allocator.alloc(f32, w2 * w2);
+    defer allocator.free(out_buf);
+
+    @memset(in_buf, 0.5);
+    @memset(hist_buf, 0.25);
+    @memset(out_buf, 0.0);
+
+    var graph = frame.FrameGraph{
+        .frame_id = 1,
+        .width = w,
+        .height = h,
+        .input = in_buf,
+        .output = out_buf,
+        .history = hist_buf,
+        .scale = 2.0,
+    };
+
+    var s: sched.Scheduler = undefined;
+    try sched.Scheduler.initThreaded(&s, allocator, 4, 0, 0);
+    defer s.deinit();
+    try s.start();
+
+    var batch = try frame.submitFrame(&s, allocator, &graph);
+    defer batch.deinit(allocator);
+
+    var sum: f64 = 0;
+    for (out_buf) |v| sum += v;
+    const mean = sum / @as(f64, @floatFromInt(out_buf.len));
+
+    try stdout.print("\nframe-temporal: frame_id={d} mean={d:.4}\n", .{ graph.frame_id, mean });
+    try std.testing.expect(mean > 0);
+}
+
+test "frame-compiler" {
+    const allocator = std.testing.allocator;
+    const stdout = std.io.getStdOut().writer();
+
+    const w: u32 = 32;
+    const h: u32 = 32;
+
+    const in_buf = try allocator.alloc(f32, w * h);
+    defer allocator.free(in_buf);
+    const out_buf = try allocator.alloc(f32, w * h);
+    defer allocator.free(out_buf);
+    const hist_buf = try allocator.alloc(f32, w * h);
+    defer allocator.free(hist_buf);
+
+    @memset(in_buf, 0.5);
+    @memset(out_buf, 0.0);
+    @memset(hist_buf, 0.25);
+
+    var graph = frame.FrameGraph{
+        .frame_id = 2,
+        .width = w,
+        .height = h,
+        .input = in_buf,
+        .output = out_buf,
+        .history = hist_buf,
+        .scale = 1.0,
+    };
+
+    const desc = frame.FgDesc{
+        .nodes = &.{
+            frame.FgNode{ .stage = .upsample, .deps = &.{} },
+            frame.FgNode{ .stage = .sharpen, .deps = &.{0} },
+            frame.FgNode{ .stage = .temporal, .deps = &.{0} },
+        },
+    };
+
+    var s: sched.Scheduler = undefined;
+    try sched.Scheduler.initThreaded(&s, allocator, 4, 0, 0);
+    defer s.deinit();
+    try s.start();
+
+    var compiled = try frame.submitGraph(&s, allocator, &graph, &desc);
+    defer compiled.deinit(allocator);
+
+    try stdout.print("frame-compiler: {d} waves, {d} nodes\n", .{ compiled.waves.len, desc.nodes.len });
+    try std.testing.expect(compiled.waves.len == 2);
+    for (compiled.waves) |*wave| try std.testing.expect(wave.jobs.jobs.len > 0);
+
+    var sum: f64 = 0;
+    for (out_buf) |v| sum += v;
+    const mean = sum / @as(f64, @floatFromInt(out_buf.len));
     try std.testing.expect(mean > 0);
 }
 
