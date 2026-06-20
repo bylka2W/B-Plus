@@ -59,6 +59,13 @@ const WorkerQueue = struct {
         return q.items.pop();
     }
 
+    fn popFront(q: *WorkerQueue) ?*Job {
+        q.mutex.lock();
+        defer q.mutex.unlock();
+        if (q.items.items.len == 0) return null;
+        return q.items.orderedRemove(0);
+    }
+
     fn tryPopFront(q: *WorkerQueue) ?*Job {
         if (!q.mutex.tryLock()) return null;
         defer q.mutex.unlock();
@@ -606,8 +613,8 @@ fn workerEntry(pool: *WorkerPool) void {
     const my_core = if (me.affinity) |a| a.core_id else id;
 
     while (true) {
-        // 1. Try local queue (LIFO — own tasks)
-        if (me.local_q.popBack()) |job| {
+        // 1. Try local queue (FIFO — fair, no starvation)
+        if (me.local_q.popFront()) |job| {
             _ = pool.metrics.local_pops.fetchAdd(1, .monotonic);
             executeAndComplete(pool, me, job);
             continue;
