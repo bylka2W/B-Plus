@@ -1,5 +1,56 @@
 const std = @import("std");
 const bench = @import("bench.zig");
+const frame = @import("frame.zig");
+const sched = @import("scheduler.zig");
+
+test "frame-smoke" {
+    const allocator = std.testing.allocator;
+    const stdout = std.io.getStdOut().writer();
+
+    const w = 64;
+    const h = 64;
+    const w2 = @as(u32, @intFromFloat(@as(f32, @floatFromInt(w)) * 2.0));
+
+    const in_buf = try allocator.alloc(f32, w * h);
+    defer allocator.free(in_buf);
+    const out_buf = try allocator.alloc(f32, w2 * w2);
+    defer allocator.free(out_buf);
+
+    @memset(in_buf, 1.0);
+    @memset(out_buf, 0.0);
+
+    var f = frame.Frame{
+        .id = 0,
+        .width = w,
+        .height = h,
+        .input = in_buf,
+        .output = out_buf,
+        .prev_frame = null,
+        .prev_velocity = null,
+        .motion = null,
+        .timestamp_ns = @intCast(std.time.nanoTimestamp()),
+    };
+
+    var s: sched.Scheduler = undefined;
+    try sched.Scheduler.initThreaded(&s, allocator, 4, 0, 0);
+    defer s.deinit();
+    try s.start();
+
+    var ts1 = try frame.submitUpsample(&s.pool.?, allocator, &f, 2.0);
+    defer ts1.deinit(allocator);
+    s.waitAll();
+
+    var ts2 = try frame.submitSharpen(&s.pool.?, allocator, &f, 2.0);
+    defer ts2.deinit(allocator);
+    s.waitAll();
+
+    var sum: f64 = 0;
+    for (out_buf) |v| sum += v;
+    const mean = sum / @as(f64, @floatFromInt(out_buf.len));
+
+    try stdout.print("\nframe-smoke: {d}x{d} -> {d}x{d}, output mean={d:.4}\n", .{ w, h, w2, w2, mean });
+    try std.testing.expect(mean > 0);
+}
 
 test "affinity-conflict" {
     const allocator = std.testing.allocator;
