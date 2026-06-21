@@ -80,8 +80,8 @@ bpc run   <входной.b+>              — скомпилировать и �
 | 2 | Разбирает (парсит) исходный код в AST |
 | 3 | Генерирует машинный код x64 с DllMain (возвращает TRUE) |
 | 4 | Создаёт таблицу импорта (kernel32.dll + runtime) |
-| 5 | Строит таблицу экспорта (Export Directory Table, EAT, ENPT, EOT) |
-| 6 | Упаковывает всё в формат PE (DLL) |
+| 5 | Строит таблицу экспорта (Export Directory Table, EAT, ENPT, EOT) с сортировкой ENPT по алфавиту (требование Windows для `GetProcAddress`) |
+| 6 | Упаковывает всё в формат PE (DLL), секция `.text` — RWX (`0xE0000020`) |
 | 7 | Записывает результат на диск |
 
 **Примеры:**
@@ -234,6 +234,16 @@ state Counter {
 var x: int, y: int, name: int
 ```
 
+Допускается сокращённая запись — идентификатор без `var` и типа:
+
+```rust
+state S {
+    x     // эквивалентно var x: i64
+}
+```
+
+Такие голые идентификаторы автоматически регистрируются как переменные `i64`.
+
 ### 3.6 Присваивания
 
 Внутри `entry { }`, `exit { }` или тела перехода:
@@ -250,6 +260,16 @@ on event -> Next {
 
 Поддерживаются операторы `=`, `+=`, `-=".
 В правой части можно использовать числа и имена переменных.
+
+**Запись через указатель** — если левая часть это `*<имя>`, то значение записывается в память
+по адресу, хранящемуся в переменной:
+
+```rust
+*ctl = new_value    // MOV [RCX], RAX — запись по указателю
+result = *ctl       // чтение: RAX = [RCX]
+```
+
+Используется для работы с TLS-сохранёнными указателями на persistent-кучу.
 
 ### 3.7 Печать (print)
 
@@ -293,6 +313,12 @@ export entry <Имя> {
 Экспортируемая точка входа — компилируется как функция, видимая извне DLL.
 Используется при сборке DLL (`bpc dll`) вместе с флагом `-exports`.
 Тело может быть пустым — достаточно объявления для экспорта.
+
+Все `export entry` в одном файле используют контекст **первого** `state` блока:
+переменные состояния доступны из любого экспорта.
+
+ENPT (Export Name Pointer Table) автоматически сортируется по алфавиту —
+требование Windows для бинарного поиска в `GetProcAddress`.
 
 ```rust
 export entry TSS_Init {
@@ -997,6 +1023,16 @@ Multiple variables can be declared separated by commas:
 var x: int, y: int, name: int
 ```
 
+Bare identifiers without `var` and type are also accepted in state bodies:
+
+```rust
+state S {
+    x     // equivalent to var x: i64
+}
+```
+
+Such bare identifiers are automatically registered as `i64` variables.
+
 ### 3.6 Assignments
 
 Inside `entry { }`, `exit { }` or a transition body:
@@ -1013,6 +1049,16 @@ on event -> Next {
 
 Supported operators: `=`, `+=`, `-=`.
 The right side can use numbers and variable names.
+
+**Pointer dereference assignment** — when the left side is `*<name>`, the value
+is written to the memory address stored in the variable:
+
+```rust
+*ctl = new_value    // MOV [RCX], RAX
+result = *ctl       // RAX = [RCX]
+```
+
+Used for accessing heap memory via TLS-stored pointers.
 
 ### 3.7 Print (print)
 
