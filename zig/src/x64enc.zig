@@ -35,6 +35,7 @@ pub const OpCode = enum(u16) {
     XOR_R32_R32,
     IMUL_R64_R64,
     IMUL_R32_R32,
+    IDIV_R64,
     AND_R64_R64,
     AND_R32_R32,
     OR_R64_R64,
@@ -68,6 +69,7 @@ pub const OpCode = enum(u16) {
     JBE_REL32,
     JAE_REL32,
     CALL_REL32,
+    CQO,
     RET,
     NOP,
     INT3,
@@ -342,6 +344,10 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0xAF, operands[0].reg, operands[1], 0x0F);
         },
+        .IDIV_R64 => {
+            if (operands.len < 1) return error.MissingOperands;
+            try emitModrmSibDisp(code, 0x48, 0xF7, 7, operands[0], 0);
+        },
         .IMUL_R32_R32 => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0, 0xAF, operands[0].reg, operands[1], 0x0F);
@@ -452,6 +458,10 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
         },
         .PREFETCHT2_RIPREL => {
             try prefetchRipRel(code, 3);
+        },
+        .CQO => {
+            try code.append(0x48);
+            try code.append(0x99);
         },
         .RET => try code.append(0xC3),
         .NOP => try code.append(0x90),

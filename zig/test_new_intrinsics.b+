@@ -1,0 +1,10 @@
+entry test_new_intrinsics:
+    var img: Image = create_image(64, 64);
+    for (x, y, 64, 64) {
+        var val = sample(img, x, y);
+        var a = floor(1.5);
+        var b = sqrt(4.0);
+        var c = rsqrt(4.0);
+        var d = abs(-3.0);
+        img[x, y] = a + b + c + d;
+    }

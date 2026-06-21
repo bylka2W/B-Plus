@@ -1,0 +1,52 @@
+state S1 {
+    var src: image<f32>
+    var dst: image<f32>
+    var val: f32
+    var u: f32
+    var v: f32
+    var c: f32
+    var n: f32
+    var s: f32
+    var e: f32
+    var w: f32
+    var blur: f32
+    var sharp: f32
+    enter {
+        create_image(src, 4, 4)
+        create_image(dst, 4, 4)
+        src[0, 0] = 1.0
+        src[1, 0] = 1.0
+        src[2, 0] = 1.0
+        src[3, 0] = 8.0
+        src[0, 1] = 1.0
+        src[1, 1] = 1.0
+        src[2, 1] = 1.0
+        src[3, 1] = 8.0
+        src[0, 2] = 1.0
+        src[1, 2] = 1.0
+        src[2, 2] = 1.0
+        src[3, 2] = 8.0
+        src[0, 3] = 1.0
+        src[1, 3] = 1.0
+        src[2, 3] = 1.0
+        src[3, 3] = 8.0
+        for(x, y, 4, 4) {
+            u = x / 4.0
+            v = y / 4.0
+            c = sample(src, u, v)
+            n = sample(src, u, v - 0.015625)
+            s = sample(src, u, v + 0.015625)
+            e = sample(src, u + 0.015625, v)
+            w = sample(src, u - 0.015625, v)
+            blur = (c + n + s + e + w) / 5.0
+            sharp = c + (c - blur) * 0.5
+            dst[x, y] = sharp
+        }
+        print("ok")
+    }
+    always -> S1
+}
+
+entry main {
+    always { }
+}

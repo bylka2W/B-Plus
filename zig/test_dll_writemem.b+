@@ -1,0 +1,5 @@
+state TSS_Init { written }
+export entry TSS_Init {
+    written = WriteProcessMemory(-1, 0, 0, 0, 0);
+    print("writeprocessmemory ok")
+}

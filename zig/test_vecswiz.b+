@@ -1,0 +1,8 @@
+entry main {
+    var a: vec4f = vec4f(1)
+    var b: vec4f = vec4f(2)
+    var c: vec4f
+    c = a.xxxx + b.yyyy
+    c = a.xyzw
+    print("ok");
+}

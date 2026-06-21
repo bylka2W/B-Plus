@@ -1,0 +1,6 @@
+entry main {
+    var a: vec4f
+    var b: vec4f
+    a = b;
+    print("ok");
+}

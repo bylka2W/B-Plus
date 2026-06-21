@@ -1,0 +1,15 @@
+state S1 {
+    var img: image<f32>
+    var val: f32
+    enter {
+        create_image(img, 4, 4)
+        img[0, 0] = 1.0
+        val = img[0, 0]
+        if (val) { print("ok"); } else { print("FAIL"); }
+    }
+    always -> S1
+}
+
+entry main {
+    always { }
+}

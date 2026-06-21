@@ -1,0 +1,5 @@
+state TSS_Init { hProc }
+export entry TSS_Init {
+    hProc = OpenProcess(0x1FFFFF, 0, -1);
+    print("openprocess ok")
+}

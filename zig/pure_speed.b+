@@ -1,0 +1,8 @@
+state A {
+    entry { }
+    on go -> B
+}
+state B {
+    entry { }
+    on go -> A
+}

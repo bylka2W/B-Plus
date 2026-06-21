@@ -1,0 +1,3 @@
+export entry TSS_Init {
+    print("hello from TSS_Init")
+}

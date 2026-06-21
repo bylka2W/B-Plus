@@ -1,0 +1,10 @@
+state TSS_Init { hProc, mem, written, hKernel, pLoadLibrary, hThread, lastError }
+export entry TSS_Init {
+    hProc = OpenProcess(0x042A, 0, 23240);
+    mem = VirtualAllocEx(hProc, 0, 260, 0x1000, 4);
+    written = WriteProcessMemory(hProc, mem, "C:\\TSS\\build\\test.dll", 260, 0);
+    hKernel = LoadLibraryA("kernel32.dll");
+    pLoadLibrary = GetProcAddress(hKernel, "LoadLibraryA");
+    hThread = CreateRemoteThread(hProc, 0, 0, pLoadLibrary, mem, 0, 0);
+    ExitProcess(hThread)
+}

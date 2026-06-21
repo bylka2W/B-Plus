@@ -1,0 +1,6 @@
+state TSS_Init { h1, h2 }
+export entry TSS_Init {
+    h1 = LoadLibraryA("C:\\B-Plus\\zig\\test_dll_safe.dll");
+    h2 = LoadLibraryA("C:\\B-Plus\\zig\\nonexistent.dll");
+    ExitProcess(h1)
+}

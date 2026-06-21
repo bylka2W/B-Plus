@@ -1,0 +1,5 @@
+entry main {
+    print("A")
+    for(x, y, 1, 1) {}
+    print("B")
+}

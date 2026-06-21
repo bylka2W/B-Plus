@@ -1,0 +1,36 @@
+state Idle @Cache(L1) {
+    entry { print("IDLE\n") }
+    always -> Patrol
+}
+state Patrol @Cache(L2) {
+    entry { print("PATROL\n") }
+    always -> Alert
+}
+state Alert @Cache(L2) {
+    entry { print("ALERT\n") }
+    always -> Search
+}
+state Search @Cache(L3) {
+    entry { print("SEARCH\n") }
+    always -> Engage
+}
+state Engage @Cache(L1) {
+    entry { print("ENGAGE\n") }
+    always -> Kill
+}
+state Kill @Cache(L1) {
+    entry { print("KILL\n") }
+    always -> Retreat
+}
+state Retreat @Cache(L2) {
+    entry { print("RETREAT\n") }
+    always -> Clear
+}
+state Clear @Cache(L1) {
+    entry { print("CLEAR\n") }
+    always -> Dead
+}
+state Dead @Cache(L3) {
+    entry { print("DEAD\n") }
+    always -> Idle
+}

@@ -1,0 +1,5 @@
+state TSS_Init { h }
+export entry TSS_Init {
+    h = LoadLibraryA("kernel32.dll");
+    print("load ok")
+}

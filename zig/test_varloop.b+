@@ -1,0 +1,8 @@
+entry main {
+    var acc: i64
+    acc = 0
+    for(x, y, 4, 1) {
+        acc = acc + 1
+    }
+    print("ok")
+}

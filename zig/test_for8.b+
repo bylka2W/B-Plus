@@ -1,0 +1,7 @@
+entry main {
+    for(x, y, 4, 1) {
+        i = 1
+        print("X")
+    }
+    print("ok")
+}

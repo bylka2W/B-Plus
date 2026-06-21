@@ -2618,6 +2618,11 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
                 freeXmm(p, reg);
             } else if (try tryEmitWin32Call(p, expr, current_state)) {
                 try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+            } else if (isFloatExpr(p, current_state, expr)) {
+                const reg = try emitExprToXmm(p, expr, current_state, 4);
+                try x64.emit(&p.code, .SSE_CVTTSS2SI, &.{ x64.Operand.r(Reg.RAX), x64.Operand.xmm(reg) });
+                freeXmm(p, reg);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size);
             } else {
                 try emitExprToRAX(p, expr, current_state);
                 try emitStoreVarFromReg(p, vo, Reg.RAX, size);
@@ -2793,6 +2798,24 @@ fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8)
     if (std.mem.eql(u8, e, "false")) { try emitXorReg(p, Reg.RAX); return; }
     const plus_idx = std.mem.lastIndexOfScalar(u8, e, '+');
     const minus_idx = std.mem.lastIndexOfScalar(u8, e, '-');
+    const div_idx = std.mem.lastIndexOfScalar(u8, e, '/');
+    if (div_idx != null and div_idx.? > 0) {
+        const lhs = std.mem.trim(u8, e[0..div_idx.?], " \t");
+        const rhs = std.mem.trim(u8, e[div_idx.?+1..], " \t");
+        try emitExprAtomToRAX(p, lhs, current_state);
+        try x64.emit(&p.code, .CQO, &.{});
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RDX) });
+        if (try tryLoadVarToReg(p, Reg.R8, rhs, current_state)) {
+        } else {
+            const rn = parseNumber(rhs);
+            try emitLoadImm(p, Reg.R8, rn);
+        }
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RCX) });
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RBX) });
+        try x64.emit(&p.code, .IDIV_R64, &.{ x64.Operand.r(Reg.R8) });
+        return;
+    }
     if (plus_idx != null and plus_idx.? > 0) {
         const lhs = std.mem.trim(u8, e[0..plus_idx.?], " \t");
         const rhs = std.mem.trim(u8, e[plus_idx.?+1..], " \t");
@@ -2908,6 +2931,19 @@ fn isFloatVar(p: *PendingOutput, state: []const u8, name: []const u8) bool {
     if (vo == std.math.minInt(i32)) return false;
     const t = getVarTypeName(p, state, name);
     return isSimdType(t);
+}
+
+fn isFloatExpr(p: *PendingOutput, state: []const u8, expr: []const u8) bool {
+    for (expr, 0..) |c, i| {
+        if (c == '.' and i > 0 and i < expr.len - 1 and std.ascii.isDigit(expr[i-1]) and std.ascii.isDigit(expr[i+1])) {
+            return true;
+        }
+    }
+    var it = std.mem.tokenizeAny(u8, expr, " \t+-*/()");
+    while (it.next()) |token| {
+        if (token.len > 0 and isFloatVar(p, state, token)) return true;
+    }
+    return false;
 }
 
 fn getVarTypeName(p: *PendingOutput, state_name: []const u8, var_name: []const u8) []const u8 {
@@ -3226,6 +3262,9 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
                 if (p.in_for_loop and (std.mem.eql(u8, name, "x") or std.mem.eql(u8, name, "y"))) {
                     try emitLoadVarToReg(p, Reg.RAX, vo, 4);
                     try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(r), x64.Operand.r(Reg.RAX) });
+                } else if (!isSimdType(getVarTypeName(p, state, name))) {
+                    try emitLoadVarToReg(p, Reg.RAX, vo, 4);
+                    try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(r), x64.Operand.r(Reg.RAX) });
                 } else {
                     try emitLoadXmmToReg(p, r, vo, simd_size);
                 }
@@ -3525,6 +3564,15 @@ fn emitIntToRax(p: *PendingOutput, expr_idx: usize, state: []const u8) !void {
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
             try emitIntToRax(p, info.rhs, state);
             try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RCX) });
+        },
+        .Div => |info| {
+            try emitIntToRax(p, info.lhs, state);
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+            try emitIntToRax(p, info.rhs, state);
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .CQO, &.{});
+            try x64.emit(&p.code, .IDIV_R64, &.{ x64.Operand.r(Reg.RBX) });
         },
         else => try emitLoadImm(p, Reg.RAX, 0),
     }

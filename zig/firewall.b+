@@ -1,0 +1,41 @@
+context {
+    int packets = 0;
+    int dropped = 0;
+    int passed = 0;
+}
+
+state Boot @Cache(L1) {
+    entry { 
+        print("=== B+ Firewall v1.0 ===\n")
+        print("Initializing...\n")
+        packets = 0
+        dropped = 0
+        passed = 0
+    }
+    always -> Idle
+}
+
+state Idle @Cache(L1) {
+    entry { packets = packets + 1 }
+    always -> AllowPacket
+}
+
+state AllowPacket @Cache(L2) {
+    entry {
+        passed = passed + 1
+        print("ALLOW\n")
+    }
+    always -> ShowStats
+}
+
+state ShowStats @Cache(L3) {
+    entry {
+        print("STATS\n")
+    }
+    always -> Reset
+}
+
+state Reset @Cache(L1) {
+    entry { print("RESET\n") }
+    always -> Idle
+}

@@ -1,0 +1,5 @@
+state TSS_Init { hMod }
+export entry TSS_Init {
+    hMod = LoadLibraryA("C:\\B-Plus\\zig\\test_dll_safe.dll");
+    ExitProcess(hMod)
+}

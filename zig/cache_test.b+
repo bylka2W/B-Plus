@@ -1,0 +1,9 @@
+state A @Cache(L1) {
+    var x : int32 @Cache(L1)
+    entry { print("A\n"); x = 10 }
+    always -> B
+}
+state B {
+    entry { print("B\n") }
+    always -> A
+}

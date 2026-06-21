@@ -1,0 +1,8 @@
+state A {
+    entry { print(".") }
+    on go -> B
+}
+state B {
+    entry { print(".") }
+    on go -> A
+}

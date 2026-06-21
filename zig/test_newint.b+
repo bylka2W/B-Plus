@@ -1,0 +1,16 @@
+entry main {
+    var img: image<f32>
+    create_image(img, 8, 8)
+    var a: vec4f
+    var b: vec4f
+    var c: vec4f
+    var d: f32
+    for(x, y, 8, 8) {
+        img[x, y] = x * 1.0
+    }
+    a = sample_offset_v4(img, 0, 0, 1, 0)
+    b = sample_offset_v4(img, 0, 0, 0, 1)
+    c = a + b
+    d = dot(a, b)
+    print("ok")
+}

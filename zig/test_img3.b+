@@ -1,0 +1,8 @@
+entry main {
+    var img: image<f32>
+    var x: int
+    var y: int
+    var p: float
+    p = img[x,y];
+    print("ok");
+}

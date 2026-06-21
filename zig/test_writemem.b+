@@ -1,0 +1,7 @@
+state TSS_Init { hProc, mem, written }
+export entry TSS_Init {
+    hProc = OpenProcess(0x042A, 0, 13800);
+    mem = VirtualAllocEx(hProc, 0, 260, 0x1000, 4);
+    written = WriteProcessMemory(hProc, mem, "testpath.dll", 260, 0);
+    ExitProcess(written)
+}

@@ -1,0 +1,8 @@
+state S1 {
+    enter { print("aaa"); }
+    always -> S1
+}
+
+entry main {
+    always { }
+}

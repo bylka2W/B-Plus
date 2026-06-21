@@ -1,0 +1,23 @@
+state S1 {
+    var input: image<f32>
+    var output: image<f32>
+    var val: f32
+    enter {
+        create_image(input, 4, 4)
+        create_image(output, 4, 4)
+        input[0, 0] = 1.0
+        input[1, 0] = 2.0
+        input[2, 0] = 3.0
+        input[3, 0] = 4.0
+        for(x, y, 4, 4) {
+            val = sample(input, x / 4.0, y / 4.0)
+            output[x, y] = val
+        }
+        print("ok")
+    }
+    always -> S1
+}
+
+entry main {
+    always { }
+}
