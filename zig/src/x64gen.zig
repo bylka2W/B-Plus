@@ -2,12 +2,15 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const x64 = @import("x64enc.zig");
 const rt = @import("runtime.zig");
+const sym = @import("symbol.zig");
 const Allocator = std.mem.Allocator;
 
 pub const X64Output = struct {
     code: []u8,
     import_dir_rva: u32,
     idat_size: u32,
+    symbols: sym.SymbolTable,
+    is_dll: bool,
 };
 
 const Reg = struct {
@@ -15,6 +18,11 @@ const Reg = struct {
     const RSP: i16 = 4; const RBP: i16 = 5; const RSI: i16 = 6; const RDI: i16 = 7;
     const R8: i16 = 8; const R9: i16 = 9; const R10: i16 = 10; const R11: i16 = 11;
     const R12: i16 = 12; const R13: i16 = 13; const R14: i16 = 14; const R15: i16 = 15;
+};
+
+const XMM = struct {
+    const XMM0: i16 = 0; const XMM1: i16 = 1; const XMM2: i16 = 2; const XMM3: i16 = 3;
+    const XMM4: i16 = 4; const XMM5: i16 = 5; const XMM6: i16 = 6; const XMM7: i16 = 7;
 };
 
 const IMPORT_FNS = [_][]const u8{
@@ -57,6 +65,8 @@ const PendingOutput = struct {
     off_cur_state: i32, off_cursor: i32, off_remaining: i32, off_abudget: i32,
     off_buf: i32,
     off_ctx_var_start: i32, off_state_data_base: i32,
+    in_for_loop: bool,
+    off_for_loop_x: i32, off_for_loop_y: i32,
     off_core_type: i32, off_numa_highest_node: i32, off_numa_node_mask: i32,
     off_l1_base: i32, off_l1_ptr: i32, off_l1_end: i32, off_l1_buf_start: i32,
     off_l2_base: i32, off_l2_ptr: i32, off_l2_end: i32, off_l2_buf_start: i32,
@@ -89,14 +99,24 @@ const PendingOutput = struct {
     l3_num_blocks: u32,
     has_hot_states: bool,
     total_transitions: u32,
+    is_dll: bool,
     dp_id: []u32,
     en_id: []u32,
     inline_enter: []const bool,
     allocator: Allocator,
+    xmm_used: [16]bool,
+    symbols: sym.SymbolTable,
+    expr_arena: std.ArrayList(Expr),
+    value_uses: std.ArrayList(u32), // use count per value (parallel to expr_arena)
+    value_cache: std.AutoHashMap(usize, i16),
 };
 
 
 pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
+    return generateEx(allocator, program, false);
+}
+
+pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool) !X64Output {
     var p = PendingOutput{
         .code = std.ArrayList(u8).init(allocator),
         .pending_fixups = std.ArrayList(Fixup).init(allocator),
@@ -133,6 +153,8 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         .off_ht_sizes = 0,
         .off_ht_free_next = 0,
         .off_ht_free_head = 0,
+        .in_for_loop = false,
+        .off_for_loop_x = 0, .off_for_loop_y = 0,
         .off_telem_l1_spill = 0, .off_telem_l2_spill = 0,
         .off_telem_l1_peak = 0, .off_telem_l2_peak = 0, .off_telem_l3_peak = 0,
         .off_telem_l1_allocs = 0, .off_telem_l2_allocs = 0, .off_telem_l3_allocs = 0,
@@ -143,10 +165,16 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
         .l3_num_blocks = 0,
         .has_hot_states = false,
         .total_transitions = 0,
+        .is_dll = is_dll,
         .dp_id = &.{},
         .en_id = &.{},
         .inline_enter = &.{},
         .allocator = allocator,
+        .xmm_used = .{false} ** 16,
+        .symbols = sym.SymbolTable.init(allocator),
+        .expr_arena = std.ArrayList(Expr).init(allocator),
+        .value_uses = std.ArrayList(u32).init(allocator),
+        .value_cache = std.AutoHashMap(usize, i16).init(allocator),
     };
     for (program.states.items) |s| try p.state_names.append(s.name);
     for (program.states.items, 0..) |s, i| try p.state_index_map.put(s.name, i);
@@ -224,6 +252,9 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
             }
         }
     }
+    const idat_size = computeImportTableSize();
+    // Exports are already collected in p.symbols during emitPrologueAndInit
+    // No additional work needed here - symbols persist independently of label maps
     // Cleanup allocations
     p.allocator.free(p.dp_id);
     p.allocator.free(p.en_id);
@@ -249,8 +280,16 @@ pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
     p.state_names.deinit();
     p.state_index_map.deinit();
     p.ctx_vars.deinit();
-    const idat_size = computeImportTableSize();
-    return X64Output{ .code = try p.code.toOwnedSlice(), .import_dir_rva = @intCast(import_dir_rva), .idat_size = idat_size };
+    p.expr_arena.deinit();
+    p.value_uses.deinit();
+    p.value_cache.deinit();
+    return X64Output{
+        .code = try p.code.toOwnedSlice(),
+        .import_dir_rva = @intCast(import_dir_rva),
+        .idat_size = idat_size,
+        .symbols = p.symbols,
+        .is_dll = p.is_dll,
+    };
 }
 
 fn allocLabelId(p: *PendingOutput, comptime fmt: []const u8, args: anytype) !u32 {
@@ -280,10 +319,17 @@ fn getLabel(p: *const PendingOutput, id: u32) ?usize {
 }
 
 fn getTypeSize(t: []const u8) u32 {
-    if (std.mem.eql(u8, t, "int8") or std.mem.eql(u8, t, "i8") or std.mem.eql(u8, t, "u8") or std.mem.eql(u8, t, "byte") or std.mem.eql(u8, t, "bool")) return 1;
-    if (std.mem.eql(u8, t, "int16") or std.mem.eql(u8, t, "i16") or std.mem.eql(u8, t, "u16") or std.mem.eql(u8, t, "short") or std.mem.eql(u8, t, "half")) return 2;
     if (std.mem.eql(u8, t, "int32") or std.mem.eql(u8, t, "i32") or std.mem.eql(u8, t, "u32") or std.mem.eql(u8, t, "int") or std.mem.eql(u8, t, "uint") or std.mem.eql(u8, t, "float")) return 4;
+    if (std.mem.eql(u8, t, "int16") or std.mem.eql(u8, t, "i16") or std.mem.eql(u8, t, "u16") or std.mem.eql(u8, t, "short") or std.mem.eql(u8, t, "half") or std.mem.eql(u8, t, "vec2h")) return 2;
+    if (std.mem.eql(u8, t, "int8") or std.mem.eql(u8, t, "i8") or std.mem.eql(u8, t, "u8") or std.mem.eql(u8, t, "byte") or std.mem.eql(u8, t, "bool")) return 1;
+    if (std.mem.eql(u8, t, "vec2f") or std.mem.eql(u8, t, "vec2i")) return 8;
+    if (std.mem.eql(u8, t, "vec4f") or std.mem.eql(u8, t, "vec4i") or std.mem.eql(u8, t, "vec4h")) return 16;
+    if (std.mem.startsWith(u8, t, "image<")) return 8;
     return 8;
+}
+
+fn isSimdType(t: []const u8) bool {
+    return std.mem.eql(u8, t, "float") or std.mem.eql(u8, t, "f32") or std.mem.eql(u8, t, "vec2f") or std.mem.eql(u8, t, "vec4f") or std.mem.eql(u8, t, "half");
 }
 
 fn getTypeAlign(t: []const u8) u32 {
@@ -371,6 +417,8 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     p.off_l2_buf_start = off - @as(i32, @intCast(p.arena_l2_size)); off -= @as(i32, @intCast(p.arena_l2_size));
     p.off_l3_buf_start = off - @as(i32, @intCast(p.arena_l3_size)); off -= @as(i32, @intCast(p.arena_l3_size));
     p.off_epoch = off; off -= 8;
+    p.off_for_loop_x = off; off -= 4;
+    p.off_for_loop_y = off; off -= 4;
     p.off_ht_states = off - 64; off -= 64;
     p.off_ht_tiers = off - 64; off -= 64;
     p.off_ht_heats = off - 256; off -= 256;
@@ -386,6 +434,24 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
 }
 
 fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
+    if (p.is_dll) {
+        // DLL entry point: just return TRUE (rax = 1)
+        try emitXorReg(p, Reg.RAX);
+        try emitInc(p, Reg.RAX);
+        try x64.emit(&p.code, .RET, &.{});
+        // Emit export stubs after the entry point
+        for (program.entries.items) |*entry| {
+            if (entry.is_export) {
+                const label_id = try allocLabelId(p, "exp_{s}", .{entry.name});
+                try setLabel(p, label_id);
+                try p.symbols.add(entry.name, sym.SymbolKind.exp, @intCast(p.code.items.len));
+                try emitXorReg(p, Reg.RAX);
+                try emitInc(p, Reg.RAX);
+                try x64.emit(&p.code, .RET, &.{});
+            }
+        }
+        return;
+    }
     try p.code.append(0x55);
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBP), x64.Operand.r(Reg.RSP) });
     try emitPushR64(p, Reg.RBX); try emitPushR64(p, Reg.R12);
@@ -393,15 +459,40 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
     var off = p.off_ctx_var_start;
     for (p.ctx_vars.items) |v| {
-        try emitLoadImm(p, Reg.RAX, parseNumber(v.default_value));
-        try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, off), x64.Operand.r(Reg.RAX) });
+        if (isSimdType(v.type_name)) {
+            const val = parseNumber(v.default_value);
+            if (val == 0) {
+                try emitXorXmm(p, XMM.XMM0);
+            } else {
+                try emitLoadImm(p, Reg.RAX, val);
+                try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(XMM.XMM0), x64.Operand.r(Reg.RAX) });
+            }
+            try emitStoreXmmFromReg(p, off, XMM.XMM0, 4);
+        } else {
+            try emitLoadImm(p, Reg.RAX, parseNumber(v.default_value));
+            try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, off), x64.Operand.r(Reg.RAX) });
+        }
         off -= 8;
     }
     var it = p.state_vars.iterator();
     while (it.next()) |entry| {
         for (entry.value_ptr.items) |sv| {
-            try emitLoadImm(p, Reg.RAX, parseNumber(sv.default_value));
-            try emitStoreVarFromReg(p, sv.stack_offset, Reg.RAX, sv.size);
+            if (sv.size > 8 or isSimdType(sv.type_name)) {
+                const val = parseNumber(sv.default_value);
+                if (val == 0) {
+                    try emitXorXmm(p, XMM.XMM0);
+                } else {
+                    try emitLoadImm(p, Reg.RAX, val);
+                    try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(XMM.XMM0), x64.Operand.r(Reg.RAX) });
+                    if (sv.size == 16) {
+                        try x64.emit(&p.code, .SSE_SHUFPS, &.{ x64.Operand.xmm(XMM.XMM0), x64.Operand.xmm(XMM.XMM0), x64.Operand.immU32(0) });
+                    }
+                }
+                try emitStoreXmmFromReg(p, sv.stack_offset, XMM.XMM0, sv.size);
+            } else {
+                try emitLoadImm(p, Reg.RAX, parseNumber(sv.default_value));
+                try emitStoreVarFromReg(p, sv.stack_offset, Reg.RAX, sv.size);
+            }
         }
     }
     try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RBP, p.off_l1_buf_start) });
@@ -484,23 +575,30 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     try emitXorReg(p, Reg.RAX); // free_head = 0
     try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_ht_free_head), x64.Operand.r(Reg.RAX) });
 
-    try emitWin32Call(p, 0, -10);
-    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdin), x64.Operand.r(Reg.RAX) });
-    try emitWin32Call(p, 0, -11);
-    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdout), x64.Operand.r(Reg.RAX) });
-    try emitAffinityInit(p);
-    if (program.entries.items.len > 0) {
+    if (!p.is_dll) {
+        try emitWin32Call(p, 0, -10);
+        try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdin), x64.Operand.r(Reg.RAX) });
+        try emitWin32Call(p, 0, -11);
+        try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdout), x64.Operand.r(Reg.RAX) });
+        try emitAffinityInit(p);
+    }
+    if (!p.is_dll and program.entries.items.len > 0) {
         const entry = &program.entries.items[0];
         if (entry.body_lines.items.len > 0) {
             var buf = std.ArrayList(u8).init(p.allocator);
             for (entry.body_lines.items, 0..) |line, i| {
-                const t = std.mem.trim(u8, line, " \t{}");
-                if (t.len > 0) { if (i > 0) try buf.append(';'); try buf.appendSlice(t); }
+                const t = std.mem.trim(u8, line, " \t");
+                if (t.len == 0) continue;
+                if (std.mem.startsWith(u8, t, "var ")) continue;
+                if (std.mem.startsWith(u8, t, "state ")) continue;
+                if (i > 0) try buf.append(';');
+                try buf.appendSlice(t);
             }
             try emitAction(p, buf.items, "");
             buf.deinit();
         }
     }
+
     if (program.states.items.len > 0) {
         try emitMovRegImm32(p, Reg.RAX, 4);
         try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_abudget), x64.Operand.r(Reg.RAX) });
@@ -1066,7 +1164,24 @@ fn emitStateEnterBodyContent(p: *PendingOutput, state: *const ast.StateDefNode, 
             if (std.mem.eql(u8, cp, "L1")) {
                 try emitLoadImm(p, Reg.RAX, parseNumber(v.default_value orelse "0"));
                 const vo = getVarOffset(p, state.name, v.name);
-                if (vo != std.math.minInt(i32)) try emitStoreVarFromReg(p, vo, Reg.RAX, getVarSize(p, state.name, v.name));
+                if (vo != std.math.minInt(i32)) {
+                    const vsz = getVarSize(p, state.name, v.name);
+                    if (vsz > 8 or isSimdType(v.type_name)) {
+                        const val = parseNumber(v.default_value orelse "0");
+                        if (val == 0) {
+                            try emitXorXmm(p, XMM.XMM0);
+                        } else {
+                            try emitLoadImm(p, Reg.RAX, val);
+                            try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(XMM.XMM0), x64.Operand.r(Reg.RAX) });
+                            if (vsz == 16) {
+                                try x64.emit(&p.code, .SSE_SHUFPS, &.{ x64.Operand.xmm(XMM.XMM0), x64.Operand.xmm(XMM.XMM0), x64.Operand.immU32(0) });
+                            }
+                        }
+                        try emitStoreXmmFromReg(p, vo, XMM.XMM0, vsz);
+                    } else {
+                        try emitStoreVarFromReg(p, vo, Reg.RAX, vsz);
+                    }
+                }
             }
         }
     }
@@ -2166,18 +2281,177 @@ pub fn addPoolString(p: *PendingOutput, str: []const u8) !u32 {
     return @intCast(idx);
 }
 
+fn findMatching(src: []const u8, start: usize, open: u8, close: u8) usize {
+    var depth: u32 = 1;
+    var i = start + 1;
+    while (i < src.len and depth > 0) : (i += 1) {
+        if (src[i] == open) depth += 1;
+        if (src[i] == close) depth -= 1;
+    }
+    return i - 1;
+}
+
+fn emitIfElse(p: *PendingOutput, cond: []const u8, then_body: []const u8, else_body: []const u8, current_state: []const u8) !void {
+    const else_lbl = try allocLabelId(p, "if_else_{d}", .{p.label_names.items.len});
+    const merge_lbl = try allocLabelId(p, "if_merge_{d}", .{p.label_names.items.len});
+    const cond_reg = try emitExprToXmm(p, cond, current_state, 4);
+    const zero_reg = allocXmm(p);
+    try emitXorXmm(p, zero_reg);
+    try x64.emit(&p.code, .SSE_UCOMISS, &.{ x64.Operand.xmm(cond_reg), x64.Operand.xmm(zero_reg) });
+    try emitCondLongJmp(p, .JE_REL32, else_lbl);
+    freeXmm(p, zero_reg);
+    freeXmm(p, cond_reg);
+    try emitAction(p, then_body, current_state);
+    try emitLongJmp(p, merge_lbl);
+    try setLabel(p, else_lbl);
+    if (else_body.len > 0) try emitAction(p, else_body, current_state);
+    try setLabel(p, merge_lbl);
+}
+
+fn emitForLoop(p: *PendingOutput, w: u32, h: u32, body: []const u8, current_state: []const u8) !void {
+    const header_lbl = try allocLabelId(p, "for_hdr_{d}", .{p.label_names.items.len});
+    const end_lbl = try allocLabelId(p, "for_end_{d}", .{p.label_names.items.len});
+
+    try emitLoadImm(p, Reg.RAX, 0);
+    try emitStoreVarFromReg(p, p.off_for_loop_x, Reg.RAX, 4);
+    try emitStoreVarFromReg(p, p.off_for_loop_y, Reg.RAX, 4);
+
+    try setLabel(p, header_lbl);
+    try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_y, 4);
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(h) });
+    try emitCondLongJmp(p, .JGE_REL32, end_lbl);
+
+    {
+        const saved = p.in_for_loop;
+        p.in_for_loop = true;
+        try emitAction(p, body, current_state);
+        p.in_for_loop = saved;
+    }
+
+    try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_x, 4);
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(1) });
+    try emitStoreVarFromReg(p, p.off_for_loop_x, Reg.RAX, 4);
+    try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(w) });
+    try emitCondLongJmp(p, .JL_REL32, header_lbl);
+
+    try emitLoadImm(p, Reg.RAX, 0);
+    try emitStoreVarFromReg(p, p.off_for_loop_x, Reg.RAX, 4);
+    try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_y, 4);
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(1) });
+    try emitStoreVarFromReg(p, p.off_for_loop_y, Reg.RAX, 4);
+    try emitLongJmp(p, header_lbl);
+    try setLabel(p, end_lbl);
+}
+
 fn emitAction(p: *PendingOutput, body: []const u8, current_state: []const u8) anyerror!void {
     if (body.len == 0) return;
-    var it = std.mem.splitScalar(u8, body, ';');
-    while (it.next()) |stmt| {
-        const s = std.mem.trim(u8, stmt, " \t\r\n");
-        if (s.len == 0) continue;
-        try emitSingleAction(p, s, current_state);
+    var start: usize = 0;
+    var i: usize = 0;
+    var depth: u32 = 0;
+    while (i < body.len) : (i += 1) {
+        switch (body[i]) {
+            '{' => depth += 1,
+            '}' => {
+                if (depth > 0) depth -= 1;
+            },
+            ';' => {
+                if (depth == 0) {
+                    const s = std.mem.trim(u8, body[start..i], " \t\r\n");
+                    if (s.len > 0) try emitSingleAction(p, s, current_state);
+                    start = i + 1;
+                }
+            },
+            else => {},
+        }
     }
+    const s = std.mem.trim(u8, body[start..], " \t\r\n");
+    if (s.len > 0) try emitSingleAction(p, s, current_state);
 }
 
 fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const u8) anyerror!void {
     if (body.len == 0) return;
+    const trimmed_body = std.mem.trimLeft(u8, body, " \t\r\n");
+    if (trimmed_body.len >= 2 and std.mem.eql(u8, trimmed_body[0..2], "if")) {
+        const after_if = std.mem.trimLeft(u8, trimmed_body[2..], " \t\r\n");
+        if (after_if.len > 0 and after_if[0] == '(') {
+            const cond_close = findMatching(after_if, 0, '(', ')');
+            const cond = std.mem.trim(u8, after_if[1..cond_close], " \t\r\n");
+            const after_paren = std.mem.trimLeft(u8, after_if[cond_close + 1 ..], " \t\r\n");
+            if (after_paren.len > 0 and after_paren[0] == '{') {
+                const then_end = findMatching(after_paren, 0, '{', '}');
+                const then_body = after_paren[1..then_end];
+                var else_body: []const u8 = "";
+                const after_then = std.mem.trimLeft(u8, after_paren[then_end + 1 ..], " \t\r\n");
+                if (std.mem.startsWith(u8, after_then, "else{")) {
+                    const else_end = findMatching(after_then, 4, '{', '}');
+                    else_body = after_then[5..else_end];
+                } else if (std.mem.startsWith(u8, after_then, "else {")) {
+                    const else_end = findMatching(after_then, 5, '{', '}');
+                    else_body = after_then[6..else_end];
+                }
+                try emitIfElse(p, cond, then_body, else_body, current_state);
+            }
+            return;
+        }
+    }
+    if (trimmed_body.len >= 3 and std.mem.eql(u8, trimmed_body[0..3], "for")) {
+        const after_for = std.mem.trimLeft(u8, trimmed_body[3..], " \t\r\n");
+        if (after_for.len > 0 and after_for[0] == '(') {
+            const close_paren = findMatching(after_for, 0, '(', ')');
+            const args_str = std.mem.trim(u8, after_for[1..close_paren], " \t\r\n");
+            const after_paren = std.mem.trimLeft(u8, after_for[close_paren + 1 ..], " \t\r\n");
+            var it = std.mem.splitScalar(u8, args_str, ',');
+            _ = std.mem.trim(u8, it.next() orelse "x", " \t\r\n");
+            _ = std.mem.trim(u8, it.next() orelse "y", " \t\r\n");
+            var w: u32 = 1;
+            var h: u32 = 1;
+            const rest = std.mem.trimLeft(u8, it.rest(), " \t\r\n");
+            if (std.mem.startsWith(u8, rest, "in ")) {
+            } else if (rest.len > 0) {
+                var it2 = std.mem.splitScalar(u8, rest, ',');
+                w = std.fmt.parseInt(u32, std.mem.trim(u8, it2.next() orelse "1", " \t\r\n"), 10) catch 1;
+                h = std.fmt.parseInt(u32, std.mem.trim(u8, it2.next() orelse "1", " \t\r\n"), 10) catch 1;
+            }
+            if (after_paren.len > 0 and after_paren[0] == '{') {
+                const body_end = findMatching(after_paren, 0, '{', '}');
+                const for_body = after_paren[1..body_end];
+                try emitForLoop(p, w, h, for_body, current_state);
+            }
+            return;
+        }
+    }
+    if (std.mem.startsWith(u8, body, "create_image(") and std.mem.endsWith(u8, body, ")")) {
+        const inner = body["create_image(".len..body.len - 1];
+        const first_comma = std.mem.indexOfScalar(u8, inner, ',') orelse return;
+        const name = std.mem.trim(u8, inner[0..first_comma], " \t");
+        const rest = std.mem.trim(u8, inner[first_comma + 1 ..], " \t");
+        const second_comma = std.mem.indexOfScalar(u8, rest, ',') orelse return;
+        const w_str = std.mem.trim(u8, rest[0..second_comma], " \t");
+        const h_str = std.mem.trim(u8, rest[second_comma + 1 ..], " \t");
+        const vo = getVarOffset(p, current_state, name);
+        if (vo == std.math.minInt(i32)) return;
+        try emitExprToRAX(p, w_str, current_state);
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R9), x64.Operand.r(Reg.RAX) });
+        try emitExprToRAX(p, h_str, current_state);
+        try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R9) });
+        try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(2) });
+        try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R12), x64.Operand.r(Reg.RAX) });
+        try emitShadowCall(p, 4);
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+        try emitXorReg(p, Reg.RDX);
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.R12) });
+        try emitShadowCall(p, 5);
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R12), x64.Operand.r(Reg.RAX) });
+        try emitExprToRAX(p, w_str, current_state);
+        try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R12, 0), x64.Operand.r(Reg.RAX) });
+        try emitExprToRAX(p, h_str, current_state);
+        try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R12, 4), x64.Operand.r(Reg.RAX) });
+        try emitExprToRAX(p, w_str, current_state);
+        try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R12, 8), x64.Operand.r(Reg.RAX) });
+        try emitStoreVarFromReg(p, vo, Reg.R12, 8);
+        return;
+    }
     if (std.mem.startsWith(u8, body, "print(") and std.mem.endsWith(u8, body, ")")) {
         const content = std.mem.trim(u8, body["print(".len..body.len - 1], " \t\"");
         if (content.len == 0) return;
@@ -2219,9 +2493,17 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         const vo = getVarOffset(p, current_state, var_name);
         if (vo != std.math.minInt(i32)) {
             const size = getVarSize(p, current_state, var_name);
-            try emitLoadVarToReg(p, Reg.RAX, vo, size);
-            try emitExprToRAXAdd(p, expr, current_state);
-            try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+            if (isFloatVar(p, current_state, var_name)) {
+                const rhs_reg = try emitExprToXmm(p, expr, current_state, size);
+                try emitLoadXmmToReg(p, XMM.XMM0, vo, size);
+                try emitSseArith(p, XMM.XMM0, rhs_reg, .SSE_ADDPS, .SSE_ADDSS, size);
+                freeXmm(p, rhs_reg);
+                try emitStoreXmmFromReg(p, vo, XMM.XMM0, size);
+            } else {
+                try emitLoadVarToReg(p, Reg.RAX, vo, size);
+                try emitExprToRAXAdd(p, expr, current_state);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+            }
         }
         return;
     }
@@ -2232,9 +2514,17 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         const vo = getVarOffset(p, current_state, var_name);
         if (vo != std.math.minInt(i32)) {
             const size = getVarSize(p, current_state, var_name);
-            try emitLoadVarToReg(p, Reg.RAX, vo, size);
-            try emitExprToRAXSub(p, expr, current_state);
-            try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+            if (isFloatVar(p, current_state, var_name)) {
+                const rhs_reg = try emitExprToXmm(p, expr, current_state, size);
+                try emitLoadXmmToReg(p, XMM.XMM0, vo, size);
+                try emitSseArith(p, XMM.XMM0, rhs_reg, .SSE_SUBPS, .SSE_SUBSS, size);
+                freeXmm(p, rhs_reg);
+                try emitStoreXmmFromReg(p, vo, XMM.XMM0, size);
+            } else {
+                try emitLoadVarToReg(p, Reg.RAX, vo, size);
+                try emitExprToRAXSub(p, expr, current_state);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+            }
         }
         return;
     }
@@ -2242,23 +2532,51 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
     if (eq != null and eq.? > 0) {
         const var_name = std.mem.trim(u8, body[0..eq.?], " \t");
         const expr = std.mem.trim(u8, body[eq.?+1..], " \t");
+        const brk = std.mem.indexOf(u8, var_name, "[");
+        if (brk != null and std.mem.indexOf(u8, var_name, ",") != null and std.mem.indexOf(u8, var_name, "]") != null) {
+            const rest = var_name[brk.?+1..];
+            const comma_idx = std.mem.indexOf(u8, rest, ",") orelse return;
+            const close_idx = std.mem.indexOf(u8, rest, "]") orelse return;
+            const img_name = std.mem.trim(u8, var_name[0..brk.?], " \t");
+            const x_expr = std.mem.trim(u8, rest[0..comma_idx], " \t");
+            const y_expr = std.mem.trim(u8, rest[comma_idx+1..close_idx], " \t");
+            const elem_size: u32 = 4;
+            const reg = try emitExprToXmm(p, expr, current_state, elem_size);
+            try emitImagePixelStoreReg(p, img_name, x_expr, y_expr, current_state, elem_size, reg);
+            freeXmm(p, reg);
+            return;
+        }
         const vo = getVarOffset(p, current_state, var_name);
         if (vo != std.math.minInt(i32)) {
-            try emitExprToRAX(p, expr, current_state);
             const size = getVarSize(p, current_state, var_name);
-            try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+            if (isFloatVar(p, current_state, var_name)) {
+                const reg = try emitExprToXmm(p, expr, current_state, size);
+                try emitStoreXmmFromReg(p, vo, reg, size);
+                freeXmm(p, reg);
+            } else {
+                try emitExprToRAX(p, expr, current_state);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+            }
         }
         return;
     }
 }
 
 fn getVarOffset(p: *PendingOutput, state_name: []const u8, var_name: []const u8) i32 {
+    if (p.in_for_loop) {
+        if (std.mem.eql(u8, var_name, "x")) return p.off_for_loop_x;
+        if (std.mem.eql(u8, var_name, "y")) return p.off_for_loop_y;
+    }
     for (p.ctx_vars.items, 0..) |cv, i| { if (std.mem.eql(u8, cv.name, var_name)) return p.off_ctx_var_start - @as(i32, @intCast(i)) * 8; }
     if (p.state_vars.get(state_name)) |sv_list| { for (sv_list.items) |sv| { if (std.mem.eql(u8, sv.name, var_name)) return sv.stack_offset; } }
     return std.math.minInt(i32);
 }
 
 fn getVarSize(p: *PendingOutput, state_name: []const u8, var_name: []const u8) u32 {
+    if (p.in_for_loop) {
+        if (std.mem.eql(u8, var_name, "x")) return 4;
+        if (std.mem.eql(u8, var_name, "y")) return 4;
+    }
     for (p.ctx_vars.items) |cv| { if (std.mem.eql(u8, cv.name, var_name)) return 8; }
     if (p.state_vars.get(state_name)) |sv_list| { for (sv_list.items) |sv| { if (std.mem.eql(u8, sv.name, var_name)) return sv.size; } }
     return 8;
@@ -2279,6 +2597,26 @@ fn emitStoreVarFromReg(p: *PendingOutput, offset: i32, reg: i16, size: u32) !voi
         2 => try x64.emit(&p.code, .MOV_MEM_R16, &.{ x64.Operand.mem(Reg.RBP, offset), x64.Operand.r(reg) }),
         4 => try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, offset), x64.Operand.r(reg) }),
         else => try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, offset), x64.Operand.r(reg) }),
+    }
+}
+
+fn emitLoadXmmToReg(p: *PendingOutput, xmm: i16, offset: i32, size: u32) !void {
+    const mem = x64.Operand.mem(Reg.RBP, offset);
+    switch (size) {
+        4 => try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(xmm), mem }),
+        8 => try x64.emit(&p.code, .SSE_MOVSD_LD, &.{ x64.Operand.xmm(xmm), mem }),
+        16 => try x64.emit(&p.code, .SSE_MOVUPS_LD, &.{ x64.Operand.xmm(xmm), mem }),
+        else => try x64.emit(&p.code, .SSE_MOVUPS_LD, &.{ x64.Operand.xmm(xmm), mem }),
+    }
+}
+
+fn emitStoreXmmFromReg(p: *PendingOutput, offset: i32, xmm: i16, size: u32) !void {
+    const mem = x64.Operand.mem(Reg.RBP, offset);
+    switch (size) {
+        4 => try x64.emit(&p.code, .SSE_MOVSS_ST, &.{ mem, x64.Operand.xmm(xmm) }),
+        8 => try x64.emit(&p.code, .SSE_MOVSD_ST, &.{ mem, x64.Operand.xmm(xmm) }),
+        16 => try x64.emit(&p.code, .SSE_MOVUPS_ST, &.{ mem, x64.Operand.xmm(xmm) }),
+        else => try x64.emit(&p.code, .SSE_MOVUPS_ST, &.{ mem, x64.Operand.xmm(xmm) }),
     }
 }
 
@@ -2393,6 +2731,726 @@ fn tryLoadVarToReg(p: *PendingOutput, reg: i16, name: []const u8, state: []const
         return true;
     }
     return false;
+}
+
+fn isFloatVar(p: *PendingOutput, state: []const u8, name: []const u8) bool {
+    const vo = getVarOffset(p, state, name);
+    if (vo == std.math.minInt(i32)) return false;
+    const t = getVarTypeName(p, state, name);
+    return isSimdType(t);
+}
+
+fn getVarTypeName(p: *PendingOutput, state_name: []const u8, var_name: []const u8) []const u8 {
+    for (p.ctx_vars.items) |cv| { if (std.mem.eql(u8, cv.name, var_name)) return cv.type_name; }
+    if (p.state_vars.get(state_name)) |sv_list| { for (sv_list.items) |sv| { if (std.mem.eql(u8, sv.name, var_name)) return sv.type_name; } }
+    return "int64";
+}
+
+const Expr = union(enum) {
+    Const: f32,
+    Var: []const u8,
+    Add: struct { lhs: usize, rhs: usize },
+    Sub: struct { lhs: usize, rhs: usize },
+    Mul: struct { lhs: usize, rhs: usize },
+    VecSplat: usize,
+    VecSwizzle: struct { src: usize, mask: u8 },
+    ImageLoad: struct { img: []const u8, x: usize, y: usize, elem_size: u32 },
+    Dot: struct { lhs: usize, rhs: usize },
+    Div: struct { lhs: usize, rhs: usize },
+    Min: struct { lhs: usize, rhs: usize },
+    Max: struct { lhs: usize, rhs: usize },
+    Sample: struct { img: []const u8, u: usize, v: usize },
+    Floor: usize,
+    Sqrt: usize,
+    Rsqrt: usize,
+};
+
+fn pushExpr(p: *PendingOutput, expr: Expr) anyerror!usize {
+    const idx = p.expr_arena.items.len;
+    try p.expr_arena.append(expr);
+    try p.value_uses.append(0);
+    switch (expr) {
+        .Add => |info| {
+            p.value_uses.items[info.lhs] += 1;
+            p.value_uses.items[info.rhs] += 1;
+        },
+        .Sub => |info| {
+            p.value_uses.items[info.lhs] += 1;
+            p.value_uses.items[info.rhs] += 1;
+        },
+        .Mul => |info| {
+            p.value_uses.items[info.lhs] += 1;
+            p.value_uses.items[info.rhs] += 1;
+        },
+        .Div => |info| {
+            p.value_uses.items[info.lhs] += 1;
+            p.value_uses.items[info.rhs] += 1;
+        },
+        .Min => |info| {
+            p.value_uses.items[info.lhs] += 1;
+            p.value_uses.items[info.rhs] += 1;
+        },
+        .Max => |info| {
+            p.value_uses.items[info.lhs] += 1;
+            p.value_uses.items[info.rhs] += 1;
+        },
+        .Sample => |s| {
+            p.value_uses.items[s.u] += 1;
+            p.value_uses.items[s.v] += 1;
+        },
+        .Floor => |inner| p.value_uses.items[inner] += 1,
+        .Sqrt => |inner| p.value_uses.items[inner] += 1,
+        .Rsqrt => |inner| p.value_uses.items[inner] += 1,
+        .Dot => |d| {
+            p.value_uses.items[d.lhs] += 1;
+            p.value_uses.items[d.rhs] += 1;
+        },
+        else => {},
+    }
+    return idx;
+}
+
+fn skipSpaces(src: []const u8, pos: *usize) void {
+    while (pos.* < src.len and (src[pos.*] == ' ' or src[pos.*] == '\t')) pos.* += 1;
+}
+
+fn parseAtom(p: *PendingOutput, src: []const u8, pos: *usize) anyerror!usize {
+    skipSpaces(src, pos);
+    if (pos.* >= src.len) return pushExpr(p, .{ .Const = 0 });
+
+    if (src[pos.*] == '(') {
+        pos.* += 1;
+        const idx = try parseAddSub(p, src, pos);
+        skipSpaces(src, pos);
+        if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+        return idx;
+    }
+
+    if (pos.* < src.len and ((src[pos.*] == '-' and pos.* + 1 < src.len and std.ascii.isDigit(src[pos.* + 1])) or std.ascii.isDigit(src[pos.*]) or src[pos.*] == '.')) {
+        const start = pos.*;
+        if (src[pos.*] == '-') pos.* += 1;
+        while (pos.* < src.len and (std.ascii.isDigit(src[pos.*]) or src[pos.*] == '.')) pos.* += 1;
+        const val = std.fmt.parseFloat(f32, src[start..pos.*]) catch 0;
+        return pushExpr(p, .{ .Const = val });
+    }
+
+    if (std.ascii.isAlphabetic(src[pos.*]) or src[pos.*] == '_') {
+        const start = pos.*;
+        while (pos.* < src.len and (std.ascii.isAlphanumeric(src[pos.*]) or src[pos.*] == '_' or src[pos.*] == '<' or src[pos.*] == '>')) pos.* += 1;
+        const name = src[start..pos.*];
+        skipSpaces(src, pos);
+        if (pos.* < src.len and src[pos.*] == '(') {
+            pos.* += 1;
+            if (std.mem.eql(u8, name, "min") or std.mem.eql(u8, name, "max")) {
+                const a = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const b = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+                if (std.mem.eql(u8, name, "min")) return pushExpr(p, .{ .Min = .{ .lhs = a, .rhs = b } });
+                return pushExpr(p, .{ .Max = .{ .lhs = a, .rhs = b } });
+            }
+            if (std.mem.eql(u8, name, "floor") or std.mem.eql(u8, name, "sqrt") or std.mem.eql(u8, name, "rsqrt") or std.mem.eql(u8, name, "abs") or std.mem.eql(u8, name, "frac") or std.mem.eql(u8, name, "saturate")) {
+                const a = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+                if (std.mem.eql(u8, name, "floor")) return pushExpr(p, .{ .Floor = a });
+                if (std.mem.eql(u8, name, "sqrt")) return pushExpr(p, .{ .Sqrt = a });
+                if (std.mem.eql(u8, name, "rsqrt")) return pushExpr(p, .{ .Rsqrt = a });
+                if (std.mem.eql(u8, name, "abs")) {
+                    // abs(x) -> max(x, 0.0 - x)
+                    const zero = try pushExpr(p, .{ .Const = 0 });
+                    const neg = try pushExpr(p, .{ .Sub = .{ .lhs = zero, .rhs = a } });
+                    return try pushExpr(p, .{ .Max = .{ .lhs = a, .rhs = neg } });
+                }
+                if (std.mem.eql(u8, name, "frac")) {
+                    // frac(x) -> x - floor(x)
+                    const floored = try pushExpr(p, .{ .Floor = a });
+                    return try pushExpr(p, .{ .Sub = .{ .lhs = a, .rhs = floored } });
+                }
+                // saturate(x) -> min(1.0, max(0.0, x))
+                const zero = try pushExpr(p, .{ .Const = 0 });
+                const one = try pushExpr(p, .{ .Const = 1.0 });
+                const maxed = try pushExpr(p, .{ .Max = .{ .lhs = zero, .rhs = a } });
+                return try pushExpr(p, .{ .Min = .{ .lhs = one, .rhs = maxed } });
+            }
+            if (std.mem.eql(u8, name, "dot")) {
+                const a = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const b = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+                return pushExpr(p, .{ .Dot = .{ .lhs = a, .rhs = b } });
+            }
+            if (std.mem.eql(u8, name, "sample_v4")) {
+                skipSpaces(src, pos);
+                const img_start = pos.*;
+                while (pos.* < src.len and (std.ascii.isAlphanumeric(src[pos.*]) or src[pos.*] == '_')) pos.* += 1;
+                const img_name = src[img_start..pos.*];
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const u_idx = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const v_idx = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+                return pushExpr(p, .{ .ImageLoad = .{ .img = img_name, .x = u_idx, .y = v_idx, .elem_size = 4 } });
+            }
+            if (std.mem.eql(u8, name, "sample_offset_v4")) {
+                skipSpaces(src, pos);
+                const img_start = pos.*;
+                while (pos.* < src.len and (std.ascii.isAlphanumeric(src[pos.*]) or src[pos.*] == '_')) pos.* += 1;
+                const img_name = src[img_start..pos.*];
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const u_idx = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const v_idx = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const du_idx = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const dv_idx = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+                const u_plus_du = try pushExpr(p, .{ .Add = .{ .lhs = u_idx, .rhs = du_idx } });
+                const v_plus_dv = try pushExpr(p, .{ .Add = .{ .lhs = v_idx, .rhs = dv_idx } });
+                return pushExpr(p, .{ .ImageLoad = .{ .img = img_name, .x = u_plus_du, .y = v_plus_dv, .elem_size = 4 } });
+            }
+            if (std.mem.eql(u8, name, "sample")) {
+                skipSpaces(src, pos);
+                const img_start = pos.*;
+                while (pos.* < src.len and (std.ascii.isAlphanumeric(src[pos.*]) or src[pos.*] == '_')) pos.* += 1;
+                const img_name = src[img_start..pos.*];
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const u_idx = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const v_idx = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+                return pushExpr(p, .{ .Sample = .{ .img = img_name, .u = u_idx, .v = v_idx } });
+            }
+            const inner = try parseAddSub(p, src, pos);
+            skipSpaces(src, pos);
+            if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+            return pushExpr(p, .{ .VecSplat = inner });
+        }
+        if (pos.* < src.len and src[pos.*] == '[') {
+            pos.* += 1;
+            const x_idx = try parseAddSub(p, src, pos);
+            skipSpaces(src, pos);
+            if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+            const y_idx = try parseAddSub(p, src, pos);
+            skipSpaces(src, pos);
+            if (pos.* < src.len and src[pos.*] == ']') pos.* += 1;
+            return pushExpr(p, .{ .ImageLoad = .{ .img = name, .x = x_idx, .y = y_idx, .elem_size = 4 } });
+        }
+        const var_idx = try pushExpr(p, .{ .Var = name });
+        skipSpaces(src, pos);
+        if (pos.* < src.len and src[pos.*] == '.') {
+            pos.* += 1;
+            var mask: u8 = 0;
+            const swiz_start = pos.*;
+            while (pos.* < src.len and (src[pos.*] == 'x' or src[pos.*] == 'y' or src[pos.*] == 'z' or src[pos.*] == 'w')) pos.* += 1;
+            const swiz = src[swiz_start..pos.*];
+            for (swiz, 0..) |ch, i| {
+                const lane: u8 = if (ch == 'x') @as(u8, 0) else if (ch == 'y') @as(u8, 1) else if (ch == 'z') @as(u8, 2) else @as(u8, 3);
+                mask |= lane << @as(u3, @intCast(i * 2));
+            }
+            if (swiz.len > 0) return pushExpr(p, .{ .VecSwizzle = .{ .src = var_idx, .mask = mask } });
+        }
+        return var_idx;
+    }
+
+    pos.* += 1;
+    return pushExpr(p, .{ .Const = 0 });
+}
+
+fn parseMulDiv(p: *PendingOutput, src: []const u8, pos: *usize) anyerror!usize {
+    var lhs = try parseAtom(p, src, pos);
+    while (true) {
+        skipSpaces(src, pos);
+        if (pos.* >= src.len) break;
+        if (src[pos.*] == '*') {
+            pos.* += 1;
+            const rhs = try parseAtom(p, src, pos);
+            lhs = try pushExpr(p, .{ .Mul = .{ .lhs = lhs, .rhs = rhs } });
+        } else if (src[pos.*] == '/') {
+            pos.* += 1;
+            const rhs = try parseAtom(p, src, pos);
+            lhs = try pushExpr(p, .{ .Div = .{ .lhs = lhs, .rhs = rhs } });
+        } else {
+            break;
+        }
+    }
+    return lhs;
+}
+
+fn parseAddSub(p: *PendingOutput, src: []const u8, pos: *usize) anyerror!usize {
+    var lhs = try parseMulDiv(p, src, pos);
+    while (true) {
+        skipSpaces(src, pos);
+        if (pos.* >= src.len) break;
+        if (src[pos.*] == '+') {
+            pos.* += 1;
+            const rhs = try parseMulDiv(p, src, pos);
+            lhs = try pushExpr(p, .{ .Add = .{ .lhs = lhs, .rhs = rhs } });
+        } else if (src[pos.*] == '-') {
+            pos.* += 1;
+            const rhs = try parseMulDiv(p, src, pos);
+            lhs = try pushExpr(p, .{ .Sub = .{ .lhs = lhs, .rhs = rhs } });
+        } else {
+            break;
+        }
+    }
+    return lhs;
+}
+
+fn consumeValue(p: *PendingOutput, value_id: usize) void {
+    if (p.value_uses.items[value_id] > 0) {
+        p.value_uses.items[value_id] -= 1;
+    }
+}
+
+fn releaseValue(p: *PendingOutput, value_id: usize, reg: i16) void {
+    const count = &p.value_uses.items[value_id];
+    if (count.* > 0) count.* -= 1;
+    if (count.* == 0) freeXmm(p, reg);
+}
+
+fn emitValue(p: *PendingOutput, value_id: usize, state: []const u8, simd_size: u32) anyerror!i16 {
+    if (p.value_cache.get(value_id)) |r| return r;
+    const r = try emitValueImpl(p, value_id, state, simd_size);
+    try p.value_cache.put(value_id, r);
+    return r;
+}
+
+fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_size: u32) anyerror!i16 {
+    const expr = p.expr_arena.items[value_id];
+    switch (expr) {
+        .Const => |val| {
+            const r = allocXmm(p);
+            if (val == 0) {
+                try emitXorXmm(p, r);
+            } else {
+                const bits = @as(u32, @bitCast(@as(f32, @floatCast(val))));
+                try emitMovRegImm32(p, Reg.RAX, bits);
+                try x64.emit(&p.code, .SSE_MOVD_LD, &.{ x64.Operand.xmm(r), x64.Operand.r(Reg.RAX) });
+                if (simd_size == 16) {
+                    try x64.emit(&p.code, .SSE_SHUFPS, &.{ x64.Operand.xmm(r), x64.Operand.xmm(r), x64.Operand.immU32(0) });
+                }
+            }
+            return r;
+        },
+        .Var => |name| {
+            const vo = getVarOffset(p, state, name);
+            if (vo != std.math.minInt(i32)) {
+                const r = allocXmm(p);
+                if (p.in_for_loop and (std.mem.eql(u8, name, "x") or std.mem.eql(u8, name, "y"))) {
+                    try emitLoadVarToReg(p, Reg.RAX, vo, 4);
+                    try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(r), x64.Operand.r(Reg.RAX) });
+                } else {
+                    try emitLoadXmmToReg(p, r, vo, simd_size);
+                }
+                return r;
+            }
+            const r = allocXmm(p);
+            try emitXorXmm(p, r);
+            return r;
+        },
+        .Add => |info| {
+            const lhs_reg = try emitValue(p, info.lhs, state, simd_size);
+            const rhs_reg = try emitValue(p, info.rhs, state, simd_size);
+            try emitSseArith(p, lhs_reg, rhs_reg, .SSE_ADDPS, .SSE_ADDSS, simd_size);
+            consumeValue(p, info.lhs);
+            releaseValue(p, info.rhs, rhs_reg);
+            return lhs_reg;
+        },
+        .Sub => |info| {
+            const lhs_reg = try emitValue(p, info.lhs, state, simd_size);
+            const rhs_reg = try emitValue(p, info.rhs, state, simd_size);
+            try emitSseArith(p, lhs_reg, rhs_reg, .SSE_SUBPS, .SSE_SUBSS, simd_size);
+            consumeValue(p, info.lhs);
+            releaseValue(p, info.rhs, rhs_reg);
+            return lhs_reg;
+        },
+        .Mul => |info| {
+            const lhs_reg = try emitValue(p, info.lhs, state, simd_size);
+            const rhs_reg = try emitValue(p, info.rhs, state, simd_size);
+            try emitSseArith(p, lhs_reg, rhs_reg, .SSE_MULPS, .SSE_MULSS, simd_size);
+            consumeValue(p, info.lhs);
+            releaseValue(p, info.rhs, rhs_reg);
+            return lhs_reg;
+        },
+        .Div => |info| {
+            const lhs_reg = try emitValue(p, info.lhs, state, simd_size);
+            const rhs_reg = try emitValue(p, info.rhs, state, simd_size);
+            try emitSseArith(p, lhs_reg, rhs_reg, .SSE_DIVPS, .SSE_DIVSS, simd_size);
+            consumeValue(p, info.lhs);
+            releaseValue(p, info.rhs, rhs_reg);
+            return lhs_reg;
+        },
+        .Min => |info| {
+            const lhs_reg = try emitValue(p, info.lhs, state, simd_size);
+            const rhs_reg = try emitValue(p, info.rhs, state, simd_size);
+            try emitSseArith(p, lhs_reg, rhs_reg, .SSE_MINPS, .SSE_MINSS, simd_size);
+            consumeValue(p, info.lhs);
+            releaseValue(p, info.rhs, rhs_reg);
+            return lhs_reg;
+        },
+        .Max => |info| {
+            const lhs_reg = try emitValue(p, info.lhs, state, simd_size);
+            const rhs_reg = try emitValue(p, info.rhs, state, simd_size);
+            try emitSseArith(p, lhs_reg, rhs_reg, .SSE_MAXPS, .SSE_MAXSS, simd_size);
+            consumeValue(p, info.lhs);
+            releaseValue(p, info.rhs, rhs_reg);
+            return lhs_reg;
+        },
+        .Floor => |inner| {
+            const inner_reg = try emitValue(p, inner, state, simd_size);
+            const mode: u32 = 1; // 1 = round down (floor)
+            try x64.emit(&p.code, .SSE_ROUNDSS, &.{ x64.Operand.xmm(inner_reg), x64.Operand.xmm(inner_reg), x64.Operand.immU32(mode) });
+            consumeValue(p, inner);
+            return inner_reg;
+        },
+        .Sqrt => |inner| {
+            const inner_reg = try emitValue(p, inner, state, simd_size);
+            try x64.emit(&p.code, .SSE_SQRTSS, &.{ x64.Operand.xmm(inner_reg), x64.Operand.xmm(inner_reg) });
+            consumeValue(p, inner);
+            return inner_reg;
+        },
+        .Rsqrt => |inner| {
+            const inner_reg = try emitValue(p, inner, state, simd_size);
+            try x64.emit(&p.code, .SSE_RSQRTSS, &.{ x64.Operand.xmm(inner_reg), x64.Operand.xmm(inner_reg) });
+            consumeValue(p, inner);
+            return inner_reg;
+        },
+        .Dot => |d| {
+            const lhs_reg = try emitValue(p, d.lhs, state, 16);
+            const rhs_reg = try emitValue(p, d.rhs, state, 16);
+            try x64.emit(&p.code, .SSE_MULPS, &.{ x64.Operand.xmm(lhs_reg), x64.Operand.xmm(rhs_reg) });
+            try x64.emit(&p.code, .SSE_HADDPS, &.{ x64.Operand.xmm(lhs_reg), x64.Operand.xmm(lhs_reg) });
+            try x64.emit(&p.code, .SSE_HADDPS, &.{ x64.Operand.xmm(lhs_reg), x64.Operand.xmm(lhs_reg) });
+            consumeValue(p, d.lhs);
+            releaseValue(p, d.rhs, rhs_reg);
+            return lhs_reg;
+        },
+        .VecSplat => |inner| {
+            const inner_reg = try emitValue(p, inner, state, 4);
+            if (simd_size >= 16) {
+                try x64.emit(&p.code, .SSE_SHUFPS, &.{ x64.Operand.xmm(inner_reg), x64.Operand.xmm(inner_reg), x64.Operand.immU32(0) });
+            }
+            consumeValue(p, inner);
+            return inner_reg;
+        },
+        .VecSwizzle => |vs| {
+            const src_reg = try emitValue(p, vs.src, state, simd_size);
+            if (simd_size >= 16) {
+                try x64.emit(&p.code, .SSE_SHUFPS, &.{ x64.Operand.xmm(src_reg), x64.Operand.xmm(src_reg), x64.Operand.immU32(vs.mask) });
+            }
+            consumeValue(p, vs.src);
+            return src_reg;
+        },
+        .ImageLoad => |il| {
+            const img_vo = getVarOffset(p, state, il.img);
+            if (img_vo == std.math.minInt(i32)) {
+                const r = allocXmm(p);
+                try emitXorXmm(p, r);
+                return r;
+            }
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RAX, 0) });
+            try emitIntToRdx(p, il.y, state);
+            try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RCX) });
+            try emitIntToRax(p, il.x, state);
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
+            switch (il.elem_size) {
+                4 => try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.RDX), x64.Operand.immU32(2) }),
+                16 => try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.RDX), x64.Operand.immU32(4) }),
+                else => {
+                    try emitLoadImm(p, Reg.R8, il.elem_size);
+                    try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R8) });
+                },
+            }
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
+            const r = allocXmm(p);
+            const mem = x64.Operand.mem(Reg.RAX, 0);
+            switch (simd_size) {
+                4 => try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(r), mem }),
+                8 => try x64.emit(&p.code, .SSE_MOVSD_LD, &.{ x64.Operand.xmm(r), mem }),
+                16 => try x64.emit(&p.code, .SSE_MOVUPS_LD, &.{ x64.Operand.xmm(r), mem }),
+                else => try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(r), mem }),
+            }
+            return r;
+        },
+        .Sample => |s| {
+            const img_vo = getVarOffset(p, state, s.img);
+            if (img_vo == std.math.minInt(i32)) {
+                const r = allocXmm(p);
+                try emitXorXmm(p, r);
+                return r;
+            }
+            const u_reg = try emitValue(p, s.u, state, 4);
+            const v_reg = try emitValue(p, s.v, state, 4);
+            const fx = allocXmm(p);
+            const fy = allocXmm(p);
+            const p00 = allocXmm(p);
+            const p10 = allocXmm(p);
+            const p01 = allocXmm(p);
+            const p11 = allocXmm(p);
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RAX, 0) });
+            try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.RAX, 4) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R12), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R13), x64.Operand.r(Reg.R10) });
+            try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.R12), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.R13), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(p00), x64.Operand.r(Reg.R12) });
+            try x64.emit(&p.code, .SSE_MINSS, &.{ x64.Operand.xmm(u_reg), x64.Operand.xmm(p00) });
+            try emitXorXmm(p, p00);
+            try x64.emit(&p.code, .SSE_MAXSS, &.{ x64.Operand.xmm(u_reg), x64.Operand.xmm(p00) });
+            try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(p00), x64.Operand.r(Reg.R13) });
+            try x64.emit(&p.code, .SSE_MINSS, &.{ x64.Operand.xmm(v_reg), x64.Operand.xmm(p00) });
+            try emitXorXmm(p, p00);
+            try x64.emit(&p.code, .SSE_MAXSS, &.{ x64.Operand.xmm(v_reg), x64.Operand.xmm(p00) });
+            try x64.emit(&p.code, .SSE_CVTTSS2SI, &.{ x64.Operand.r(Reg.R8), x64.Operand.xmm(u_reg) });
+            try x64.emit(&p.code, .SSE_CVTTSS2SI, &.{ x64.Operand.r(Reg.R9), x64.Operand.xmm(v_reg) });
+            try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(p00), x64.Operand.r(Reg.R8) });
+            try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(fx), x64.Operand.xmm(u_reg) });
+            try x64.emit(&p.code, .SSE_SUBSS, &.{ x64.Operand.xmm(fx), x64.Operand.xmm(p00) });
+            try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(p00), x64.Operand.r(Reg.R9) });
+            try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(fy), x64.Operand.xmm(v_reg) });
+            try x64.emit(&p.code, .SSE_SUBSS, &.{ x64.Operand.xmm(fy), x64.Operand.xmm(p00) });
+            consumeValue(p, s.u);
+            consumeValue(p, s.v);
+            releaseValue(p, s.u, u_reg);
+            releaseValue(p, s.v, v_reg);
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RAX, 0) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R9) });
+            try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R8) });
+            try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(2) });
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R11) });
+            try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(p00), x64.Operand.mem(Reg.RAX, 0) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R9) });
+            try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R8) });
+            try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RDX), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R12) });
+            {
+                const lbl = try allocLabelId(p, "clamp_x1_{d}", .{p.label_names.items.len});
+                try emitCondLongJmp(p, .JLE_REL32, lbl);
+                try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R12) });
+                try setLabel(p, lbl);
+            }
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RDX) });
+            try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(2) });
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R11) });
+            try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(p10), x64.Operand.mem(Reg.RAX, 0) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R9) });
+            try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R13) });
+            {
+                const lbl = try allocLabelId(p, "clamp_y1_{d}", .{p.label_names.items.len});
+                try emitCondLongJmp(p, .JLE_REL32, lbl);
+                try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R13) });
+                try setLabel(p, lbl);
+            }
+            try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R8) });
+            try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(2) });
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R11) });
+            try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(p01), x64.Operand.mem(Reg.RAX, 0) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R9) });
+            try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R13) });
+            {
+                const lbl = try allocLabelId(p, "clamp_yp11_{d}", .{p.label_names.items.len});
+                try emitCondLongJmp(p, .JLE_REL32, lbl);
+                try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R13) });
+                try setLabel(p, lbl);
+            }
+            try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R8) });
+            try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RDX), x64.Operand.immU32(1) });
+            try x64.emit(&p.code, .CMP_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R12) });
+            {
+                const lbl = try allocLabelId(p, "clamp_xp11_{d}", .{p.label_names.items.len});
+                try emitCondLongJmp(p, .JLE_REL32, lbl);
+                try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R12) });
+                try setLabel(p, lbl);
+            }
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RDX) });
+            try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(2) });
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R11) });
+            try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(p11), x64.Operand.mem(Reg.RAX, 0) });
+            const top = allocXmm(p);
+            try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(top), x64.Operand.xmm(p10) });
+            try x64.emit(&p.code, .SSE_SUBSS, &.{ x64.Operand.xmm(top), x64.Operand.xmm(p00) });
+            try x64.emit(&p.code, .SSE_MULSS, &.{ x64.Operand.xmm(top), x64.Operand.xmm(fx) });
+            try x64.emit(&p.code, .SSE_ADDSS, &.{ x64.Operand.xmm(top), x64.Operand.xmm(p00) });
+            try x64.emit(&p.code, .SSE_SUBSS, &.{ x64.Operand.xmm(p11), x64.Operand.xmm(p01) });
+            try x64.emit(&p.code, .SSE_MULSS, &.{ x64.Operand.xmm(p11), x64.Operand.xmm(fx) });
+            try x64.emit(&p.code, .SSE_ADDSS, &.{ x64.Operand.xmm(p11), x64.Operand.xmm(p01) });
+            try x64.emit(&p.code, .SSE_SUBSS, &.{ x64.Operand.xmm(p11), x64.Operand.xmm(top) });
+            try x64.emit(&p.code, .SSE_MULSS, &.{ x64.Operand.xmm(p11), x64.Operand.xmm(fy) });
+            try x64.emit(&p.code, .SSE_ADDSS, &.{ x64.Operand.xmm(p11), x64.Operand.xmm(top) });
+            freeXmm(p, fx);
+            freeXmm(p, fy);
+            freeXmm(p, p00);
+            freeXmm(p, p01);
+            freeXmm(p, p10);
+            freeXmm(p, top);
+            return p11;
+        },
+    }
+}
+
+fn emitIntToRax(p: *PendingOutput, expr_idx: usize, state: []const u8) !void {
+    const expr = p.expr_arena.items[expr_idx];
+    switch (expr) {
+        .Const => |val| try emitLoadImm(p, Reg.RAX, @as(i32, @intFromFloat(val))),
+        .Var => |name| {
+            const vo = getVarOffset(p, state, name);
+            if (vo != std.math.minInt(i32)) {
+                try emitLoadVarToReg(p, Reg.RAX, vo, 4);
+            } else {
+                try emitLoadImm(p, Reg.RAX, 0);
+            }
+        },
+        .Add => |info| {
+            try emitIntToRax(p, info.lhs, state);
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+            try emitIntToRax(p, info.rhs, state);
+            try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RCX) });
+        },
+        .Sub => |info| {
+            try emitIntToRax(p, info.lhs, state);
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+            try emitIntToRax(p, info.rhs, state);
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RCX) });
+            try x64.emit(&p.code, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
+        },
+        .Mul => |info| {
+            try emitIntToRax(p, info.lhs, state);
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+            try emitIntToRax(p, info.rhs, state);
+            try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RCX) });
+        },
+        else => try emitLoadImm(p, Reg.RAX, 0),
+    }
+}
+
+fn emitIntToRdx(p: *PendingOutput, expr_idx: usize, state: []const u8) !void {
+    try emitIntToRax(p, expr_idx, state);
+    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
+}
+
+fn emitExprToXmm(p: *PendingOutput, expr: []const u8, current_state: []const u8, simd_size: u32) anyerror!i16 {
+    p.value_cache.clearRetainingCapacity();
+    var pos: usize = 0;
+    const root = try parseAddSub(p, expr, &pos);
+    return try emitValue(p, root, current_state, simd_size);
+}
+
+fn emitImagePixelLoad(p: *PendingOutput, img: []const u8, x: []const u8, y: []const u8, cs: []const u8, elem_size: u32) !i16 {
+    const img_vo = getVarOffset(p, cs, img);
+    if (img_vo == std.math.minInt(i32)) {
+        const r = allocXmm(p);
+        try emitXorXmm(p, r);
+        return r;
+    }
+    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+    try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RAX, 0) });
+    try emitExprToRAX(p, y, cs);
+    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RCX) });
+    try emitExprToRAX(p, x, cs);
+    try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
+    if (elem_size > 1) {
+        try emitLoadImm(p, Reg.R8, elem_size);
+        try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R8) });
+    }
+    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
+    try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
+    const r = allocXmm(p);
+    const mem = x64.Operand.mem(Reg.RAX, 0);
+    switch (elem_size) {
+        4 => try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(r), mem }),
+        8 => try x64.emit(&p.code, .SSE_MOVSD_LD, &.{ x64.Operand.xmm(r), mem }),
+        16 => try x64.emit(&p.code, .SSE_MOVUPS_LD, &.{ x64.Operand.xmm(r), mem }),
+        else => try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(r), mem }),
+    }
+    return r;
+}
+
+fn emitImagePixelStoreReg(p: *PendingOutput, img: []const u8, x: []const u8, y: []const u8, cs: []const u8, elem_size: u32, xmm_reg: i16) !void {
+    const img_vo = getVarOffset(p, cs, img);
+    if (img_vo == std.math.minInt(i32)) return;
+    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+    try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RAX, 0) });
+    try emitExprToRAX(p, y, cs);
+    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RCX) });
+    try emitExprToRAX(p, x, cs);
+    try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
+    if (elem_size > 1) {
+        try emitLoadImm(p, Reg.R8, elem_size);
+        try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R8) });
+    }
+    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
+    try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
+    const mem = x64.Operand.mem(Reg.RAX, 0);
+    switch (elem_size) {
+        4 => try x64.emit(&p.code, .SSE_MOVSS_ST, &.{ mem, x64.Operand.xmm(xmm_reg) }),
+        8 => try x64.emit(&p.code, .SSE_MOVSD_ST, &.{ mem, x64.Operand.xmm(xmm_reg) }),
+        16 => try x64.emit(&p.code, .SSE_MOVUPS_ST, &.{ mem, x64.Operand.xmm(xmm_reg) }),
+        else => try x64.emit(&p.code, .SSE_MOVSS_ST, &.{ mem, x64.Operand.xmm(xmm_reg) }),
+    }
+}
+
+fn allocXmm(p: *PendingOutput) i16 {
+    for (0..16) |i| {
+        if (!p.xmm_used[i]) {
+            p.xmm_used[i] = true;
+            return @intCast(i);
+        }
+    }
+    return -1;
+}
+
+fn freeXmm(p: *PendingOutput, reg: i16) void {
+    if (reg >= 0 and reg < 16) p.xmm_used[@intCast(reg)] = false;
+}
+
+fn emitXorXmm(p: *PendingOutput, xmm: i16) !void {
+    try x64.emit(&p.code, .SSE_XORPS, &.{ x64.Operand.xmm(xmm), x64.Operand.xmm(xmm) });
+}
+
+fn emitSseArith(p: *PendingOutput, dest: i16, src: i16, packed_op: x64.OpCode, scalar_op: x64.OpCode, simd_size: u32) !void {
+    const op = if (simd_size == 4) scalar_op else packed_op;
+    try x64.emit(&p.code, op, &.{ x64.Operand.xmm(dest), x64.Operand.xmm(src) });
 }
 
 

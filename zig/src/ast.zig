@@ -39,6 +39,7 @@ pub const EntryDecl = struct {
     name: []const u8,
     body_lines: std.ArrayList([]const u8),
     return_type: ?[]const u8,
+    is_export: bool,
 };
 
 pub const KernelDecl = struct {

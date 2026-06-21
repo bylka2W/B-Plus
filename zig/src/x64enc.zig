@@ -1,6 +1,14 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+pub const SimdPrefix = enum(u8) {
+    none = 0,
+    ps = 0,       // packed single (none)
+    ss = 0xF3,    // scalar single
+    sd = 0xF2,    // scalar double
+    pd = 0x66,    // packed double
+};
+
 pub const OpCode = enum(u16) {
     MOV_R64_IMM64,
     MOV_R64_R64,
@@ -63,6 +71,45 @@ pub const OpCode = enum(u16) {
     RET,
     NOP,
     INT3,
+    // SSE packed single (no prefix)
+    SSE_MOVUPS_LD, // 0F 10: xmm1 <- xmm2/m128
+    SSE_MOVUPS_ST, // 0F 11: xmm2/m128 <- xmm1
+    SSE_MOVAPS_LD, // 0F 28: xmm1 <- xmm2/m128 (aligned)
+    SSE_MOVAPS_ST, // 0F 29: xmm2/m128 <- xmm1 (aligned)
+    SSE_ADDPS,     // 0F 58: xmm1 += xmm2/m128
+    SSE_SUBPS,     // 0F 5C: xmm1 -= xmm2/m128
+    SSE_MULPS,     // 0F 59: xmm1 *= xmm2/m128
+    SSE_DIVPS,     // 0F 5E: xmm1 /= xmm2/m128
+    SSE_MINPS,     // 0F 5D: xmm1 = min(xmm1, xmm2/m128)
+    SSE_MAXPS,     // 0F 5F: xmm1 = max(xmm1, xmm2/m128)
+    SSE_SQRTPS,    // 0F 51: xmm1 = sqrt(xmm2/m128)
+    SSE_SHUFPS,    // 0F C6: xmm1 = shuffle(xmm1, xmm2/m128, imm8)
+    SSE_MOVLHPS,   // 0F 16: xmm1 <- low xmm2 -> high xmm1
+    SSE_HADDPS,    // F2 0F 7C: xmm1 = xmm1[0]+xmm1[1], xmm1[2]+xmm1[3], xmm2[0]+xmm2[1], xmm2[2]+xmm2[3] (SSE3)
+    SSE_DPPS,      // 66 0F 3A 40: xmm1 = dot(xmm1, xmm2, imm8) (SSE4.1)
+    // SSE scalar single (prefix F3)
+    SSE_MOVSS_LD,  // F3 0F 10: xmm1 <- xmm2/m32
+    SSE_MOVSS_ST,  // F3 0F 11: xmm2/m32 <- xmm1
+    SSE_ADDSS,     // F3 0F 58: xmm1 += xmm2/m32
+    SSE_SUBSS,     // F3 0F 5C: xmm1 -= xmm2/m32
+    SSE_MULSS,     // F3 0F 59: xmm1 *= xmm2/m32
+    SSE_DIVSS,     // F3 0F 5E: xmm1 /= xmm2/m32
+    SSE_MINSS,     // F3 0F 5D: xmm1 = min(xmm1, xmm2/m32)
+    SSE_MAXSS,     // F3 0F 5F: xmm1 = max(xmm1, xmm2/m32)
+    SSE_CVTSI2SS,  // F3 0F 2A: xmm1 <- int2float(r32/m32)
+    SSE_CVTTSS2SI, // F3 0F 2C: r32 <- float2int_trunc(xmm2/m32)
+    SSE_UCOMISS,   // 0F 2E: compare scalar single, set flags (no NaN exception)
+    SSE_SQRTSS,    // F3 0F 51: xmm1 = sqrt(xmm2/m32) (scalar)
+    SSE_RSQRTSS,   // F3 0F 52: xmm1 = 1/sqrt(xmm2/m32) (scalar, approximate)
+    SSE_ROUNDSS,   // 66 0F 3A 0A: xmm1 = round(xmm2, imm8) SSE4.1, imm8[1:0]=1==floor
+    // SSE with 66 prefix
+    SSE_MOVD_LD,   // 66 0F 6E: xmm <- r32/m32
+    SSE_MOVD_ST,   // 66 0F 7E: r32/m32 <- xmm
+    SSE_MOVQ_LD,   // F3 0F 7E: xmm <- r64/m64 (MOVQ)
+    SSE_MOVQ_ST,   // 66 0F D6: r64/m64 <- xmm (MOVQ)
+    SSE_MOVSD_LD,  // F2 0F 10: xmm <- xmm/m64 (scalar double load)
+    SSE_MOVSD_ST,  // F2 0F 11: xmm/m64 <- xmm (scalar double store)
+    SSE_XORPS,     // 0F 57: xmm1 ^= xmm2/m128
 };
 
 pub const Operand = struct {
@@ -72,9 +119,13 @@ pub const Operand = struct {
     index_reg: i16 = -1,
     scale: u8 = 1,
     disp: i32 = 0,
+    is_xmm: bool = false,
 
     pub fn r(reg: i16) Operand {
         return .{ .reg = reg };
+    }
+    pub fn xmm(reg: i16) Operand {
+        return .{ .reg = reg, .is_xmm = true };
     }
     pub fn imm(v: i64) Operand {
         return .{ .imm64 = @bitCast(v) };
@@ -405,6 +456,75 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
         .RET => try code.append(0xC3),
         .NOP => try code.append(0x90),
         .INT3 => try code.append(0xCC),
+        // SSE packed single (no simd_prefix)
+        .SSE_MOVUPS_LD => try emitSseOp(code, 0, 0x10, operands[0].reg, operands[1]),
+        .SSE_MOVUPS_ST => try emitSseOp(code, 0, 0x11, operands[1].reg, operands[0]),
+        .SSE_MOVAPS_LD => try emitSseOp(code, 0, 0x28, operands[0].reg, operands[1]),
+        .SSE_MOVAPS_ST => try emitSseOp(code, 0, 0x29, operands[1].reg, operands[0]),
+        .SSE_ADDPS     => try emitSseOp(code, 0, 0x58, operands[0].reg, operands[1]),
+        .SSE_SUBPS     => try emitSseOp(code, 0, 0x5C, operands[0].reg, operands[1]),
+        .SSE_MULPS     => try emitSseOp(code, 0, 0x59, operands[0].reg, operands[1]),
+        .SSE_DIVPS     => try emitSseOp(code, 0, 0x5E, operands[0].reg, operands[1]),
+        .SSE_MINPS     => try emitSseOp(code, 0, 0x5D, operands[0].reg, operands[1]),
+        .SSE_MAXPS     => try emitSseOp(code, 0, 0x5F, operands[0].reg, operands[1]),
+        .SSE_SQRTPS    => try emitSseOp(code, 0, 0x51, operands[0].reg, operands[1]),
+        .SSE_MOVLHPS   => try emitSseOp(code, 0, 0x16, operands[0].reg, operands[1]),
+        .SSE_SHUFPS => {
+            if (operands.len < 3) return error.MissingOperands;
+            try emitSseOp(code, 0, 0xC6, operands[0].reg, operands[1]);
+            try code.append(@as(u8, @intCast(operands[2].imm64 & 0xFF)));
+        },
+        // SSE scalar single (prefix F3)
+        .SSE_MOVSS_LD  => try emitSseOp(code, 0xF3, 0x10, operands[0].reg, operands[1]),
+        .SSE_MOVSS_ST  => try emitSseOp(code, 0xF3, 0x11, operands[1].reg, operands[0]),
+        .SSE_ADDSS     => try emitSseOp(code, 0xF3, 0x58, operands[0].reg, operands[1]),
+        .SSE_SUBSS     => try emitSseOp(code, 0xF3, 0x5C, operands[0].reg, operands[1]),
+        .SSE_MULSS     => try emitSseOp(code, 0xF3, 0x59, operands[0].reg, operands[1]),
+        .SSE_DIVSS     => try emitSseOp(code, 0xF3, 0x5E, operands[0].reg, operands[1]),
+        .SSE_MINSS     => try emitSseOp(code, 0xF3, 0x5D, operands[0].reg, operands[1]),
+        .SSE_MAXSS     => try emitSseOp(code, 0xF3, 0x5F, operands[0].reg, operands[1]),
+        .SSE_CVTSI2SS  => try emitSseOp(code, 0xF3, 0x2A, operands[0].reg, operands[1]),
+        .SSE_CVTTSS2SI => try emitSseOp(code, 0xF3, 0x2C, operands[0].reg, operands[1]),
+        .SSE_UCOMISS   => try emitSseOp(code, 0, 0x2E, operands[0].reg, operands[1]),
+        .SSE_SQRTSS    => try emitSseOp(code, 0xF3, 0x51, operands[0].reg, operands[1]),
+        .SSE_RSQRTSS   => try emitSseOp(code, 0xF3, 0x52, operands[0].reg, operands[1]),
+        .SSE_HADDPS    => try emitSseOp(code, 0xF2, 0x7C, operands[0].reg, operands[1]),
+        .SSE_DPPS => {
+            if (operands.len < 3) return error.MissingOperands;
+            try code.append(0x66);
+            var rex: u8 = 0;
+            if (operands[0].reg >= 8) rex |= 0x04;
+            if (operands[1].reg >= 8) rex |= 0x01;
+            if (rex != 0) try code.append(0x40 | rex);
+            try code.append(0x0F);
+            try code.append(0x3A);
+            try code.append(0x40);
+            const modrm: u8 = 0xC0 | (@as(u8, @intCast(operands[0].reg & 7)) << 3) | @as(u8, @intCast(operands[1].reg & 7));
+            try code.append(modrm);
+            try code.append(@as(u8, @intCast(operands[2].imm64 & 0xFF)));
+        },
+        .SSE_ROUNDSS => {
+            if (operands.len < 3) return error.MissingOperands;
+            try code.append(0x66);
+            var rex: u8 = 0;
+            if (operands[0].reg >= 8) rex |= 0x04;
+            if (operands[1].reg >= 8) rex |= 0x01;
+            if (rex != 0) try code.append(0x40 | rex);
+            try code.append(0x0F);
+            try code.append(0x3A);
+            try code.append(0x0A);
+            const modrm: u8 = 0xC0 | (@as(u8, @intCast(operands[0].reg & 7)) << 3) | @as(u8, @intCast(operands[1].reg & 7));
+            try code.append(modrm);
+            try code.append(@as(u8, @intCast(operands[2].imm64 & 0xFF)));
+        },
+        // SSE with 66 prefix
+        .SSE_MOVD_LD   => try emitSseOp(code, 0x66, 0x6E, operands[0].reg, operands[1]),
+        .SSE_MOVD_ST   => try emitSseOp(code, 0x66, 0x7E, operands[1].reg, operands[0]),
+        .SSE_MOVQ_LD   => try emitSseOp(code, 0xF3, 0x7E, operands[0].reg, operands[1]),
+        .SSE_MOVQ_ST   => try emitSseOp(code, 0x66, 0xD6, operands[1].reg, operands[0]),
+        .SSE_MOVSD_LD  => try emitSseOp(code, 0xF2, 0x10, operands[0].reg, operands[1]),
+        .SSE_MOVSD_ST  => try emitSseOp(code, 0xF2, 0x11, operands[1].reg, operands[0]),
+        .SSE_XORPS     => try emitSseOp(code, 0, 0x57, operands[0].reg, operands[1]),
     }
 }
 
@@ -416,6 +536,11 @@ fn emitJcc(code: *std.ArrayList(u8), opcode: u16, operands: []const Operand) !vo
     try code.append(b1);
     const disp_bytes: [4]u8 = @bitCast(@as(i32, @bitCast(@as(u32, @truncate(operands[0].imm64)))));
     try code.appendSlice(&disp_bytes);
+}
+
+fn emitSseOp(code: *std.ArrayList(u8), simd_prefix: u8, opcode: u8, reg: i16, m: Operand) !void {
+    if (simd_prefix != 0) try code.append(simd_prefix);
+    try emitModrmSibDisp(code, 0, opcode, reg, m, 0x0F);
 }
 
 fn prefetchRipRel(code: *std.ArrayList(u8), reg: u8) !void {

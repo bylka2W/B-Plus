@@ -14,7 +14,8 @@ pub fn main() !void {
 
     if (args.len < 3) {
         const stderr = std.io.getStdErr().writer();
-        try stderr.writeAll("Usage: bpc build <input.b+> [-o <output.exe>]\n");
+        try stderr.writeAll("Usage: bpc build <input.b+> [-o <output>] [-exports <name1,name2,...>]\n");
+        try stderr.writeAll("       bpc dll  <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]\n");
         try stderr.writeAll("       bpc run  <input.b+>\n");
         std.process.exit(1);
     }
@@ -22,53 +23,83 @@ pub fn main() !void {
     const command = args[1];
     const input_path = args[2];
 
-    // Find output path
     var output_path: ?[]const u8 = null;
+    var export_names: ?[]const u8 = null;
     {
         var i: usize = 3;
         while (i < args.len) : (i += 1) {
             if (std.mem.eql(u8, args[i], "-o") and i + 1 < args.len) {
                 output_path = args[i + 1];
-                break;
+                i += 1;
+            } else if (std.mem.eql(u8, args[i], "-exports") and i + 1 < args.len) {
+                export_names = args[i + 1];
+                i += 1;
             }
         }
     }
 
-    // Read input file
     var src = try std.fs.cwd().readFileAlloc(allocator, input_path, std.math.maxInt(u32));
     defer allocator.free(src);
 
-    // Strip UTF-8 BOM if present
     if (std.mem.startsWith(u8, src, "\xEF\xBB\xBF")) {
         const stripped = try allocator.dupe(u8, src[3..]);
         allocator.free(src);
         src = stripped;
     }
 
-    // Parse
     var p = parser.Parser.init(allocator, src);
     var program = try p.parse();
     defer program.deinit();
 
-    // Codegen
-    const output = try x64gen.generate(allocator, program);
+    const is_dll = std.mem.eql(u8, command, "dll");
+
+    // Mark entries as exports based on -exports flag
+    if (is_dll) {
+        if (export_names) |names| {
+            var it = std.mem.splitScalar(u8, names, ',');
+            while (it.next()) |name| {
+                const trimmed = std.mem.trim(u8, name, " \t");
+                for (program.entries.items) |*e| {
+                    if (std.mem.eql(u8, e.name, trimmed)) {
+                        e.is_export = true;
+                    }
+                }
+            }
+        }
+    }
+
+    var output = try if (is_dll) x64gen.generateEx(allocator, program, true) else x64gen.generate(allocator, program);
     defer allocator.free(output.code);
+    defer output.symbols.deinit();
 
-    // PE wrap
-    const pe_bytes = try pe.write(allocator, output.code, output.import_dir_rva, output.idat_size);
-    defer allocator.free(pe_bytes);
-
-    // Write output
     const out_path = output_path orelse blk: {
         const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
         const base = input_path[0..ext_idx];
-        break :blk try std.fmt.allocPrint(allocator, "{s}.exe", .{base});
+        const ext = if (is_dll) ".dll" else ".exe";
+        break :blk try std.fmt.allocPrint(allocator, "{s}{s}", .{ base, ext });
     };
     defer if (output_path == null) allocator.free(out_path);
 
+    var pe_bytes: []u8 = undefined;
+    if (is_dll) {
+        var resolved = std.ArrayList(pe.ResolvedExport).init(allocator);
+        defer resolved.deinit();
+        for (output.symbols.symbols.items) |s| {
+            if (s.kind == .exp) {
+                try resolved.append(.{
+                    .name = s.name,
+                    .rva = pe.section_rva + s.rva,
+                });
+            }
+        }
+        pe_bytes = try pe.writeDll(allocator, output.code, output.import_dir_rva, output.idat_size, resolved.items);
+    } else {
+        pe_bytes = try pe.write(allocator, output.code, output.import_dir_rva, output.idat_size);
+    }
+    defer allocator.free(pe_bytes);
+
     try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = pe_bytes });
 
-    // Run if requested
     if (std.mem.eql(u8, command, "run")) {
         const result = try std.process.Child.run(.{
             .allocator = allocator,

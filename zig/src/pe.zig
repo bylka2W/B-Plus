@@ -1,13 +1,111 @@
 const std = @import("std");
 
+pub const section_rva: u32 = 0x1000;
+
+pub const ResolvedExport = struct {
+    name: []const u8,
+    rva: u32,
+};
+
 pub fn write(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, idat_size: u32) ![]u8 {
+    return writePE(allocator, code, import_dir_rva, idat_size, &.{}, false);
+}
+
+pub fn writeDll(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, idat_size: u32, exports: []const ResolvedExport) ![]u8 {
+    return writePE(allocator, code, import_dir_rva, idat_size, exports, true);
+}
+
+fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, idat_size: u32, exports: []const ResolvedExport, is_dll: bool) ![]u8 {
     const file_align: u32 = 0x200;
     const sect_align: u32 = 0x1000;
-    const section_rva: u32 = 0x1000;
 
+    var export_data: ?[]u8 = null;
+    var export_dir_rva: u32 = 0;
+    var export_dir_size: u32 = 0;
+    if (is_dll and exports.len > 0) {
+        const n = @as(u32, @intCast(exports.len));
+        const base: u32 = 1;
+        const edt_size: u32 = 40;
+        const eat_size = n * 4;
+        const enpt_size = n * 4;
+        const eot_size = n * 2;
+        var names_total: u32 = 0;
+        for (exports) |e| names_total += @as(u32, @intCast(e.name.len)) + 1;
+        const dll_name_size: u32 = 8;
+        const total_export_size = edt_size + eat_size + enpt_size + eot_size + names_total + dll_name_size;
+
+        var ed = std.ArrayList(u8).init(allocator);
+        defer ed.deinit();
+        try ed.ensureTotalCapacity(total_export_size);
+
+        const edt_off: u32 = 0;
+        const eat_off = edt_off + edt_size;
+        const enpt_off = eat_off + eat_size;
+        const eot_off = enpt_off + enpt_size;
+        const names_off = eot_off + eot_size;
+        const dll_name_off = names_off + names_total;
+
+        var name_rvas = try allocator.alloc(u32, n);
+        defer allocator.free(name_rvas);
+        {
+            var name_pos = names_off;
+            for (exports, 0..) |e, i| {
+                name_rvas[i] = name_pos;
+                name_pos += @as(u32, @intCast(e.name.len)) + 1;
+            }
+        }
+
+        const export_base_rva = section_rva + @as(u32, @intCast(code.len));
+
+        // Export Directory Table
+        try ed.appendNTimes(0, 4);  // Characteristics
+        try ed.appendNTimes(0, 4);  // TimeDateStamp
+        try ed.appendNTimes(0, 2);  // MajorVersion
+        try ed.appendNTimes(0, 2);  // MinorVersion
+        const dll_name_rva = export_base_rva + dll_name_off;
+        try ed.appendSlice(&@as([4]u8, @bitCast(dll_name_rva)));  // Name
+        try ed.appendSlice(&@as([4]u8, @bitCast(base)));         // Base
+        try ed.appendSlice(&@as([4]u8, @bitCast(n)));            // NumberOfFunctions
+        try ed.appendSlice(&@as([4]u8, @bitCast(n)));            // NumberOfNames
+        try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + eat_off)));  // AddressOfFunctions
+        try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + enpt_off))); // AddressOfNames
+        try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + eot_off)));  // AddressOfNameOrdinals
+
+        // Export Address Table
+        for (exports) |e| {
+            try ed.appendSlice(&@as([4]u8, @bitCast(e.rva)));
+        }
+
+        // Export Name Pointer Table
+        for (name_rvas) |nr| {
+            try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + nr)));
+        }
+
+        // Export Ordinal Table
+        for (0..n) |i| {
+            try ed.appendSlice(&@as([2]u8, @bitCast(@as(u16, @intCast(i)))));
+        }
+
+        // Name strings
+        while (ed.items.len < names_off) try ed.append(0);
+        for (exports) |e| {
+            try ed.appendSlice(e.name);
+            try ed.append(0);
+        }
+        // DLL name
+        while (ed.items.len < dll_name_off) try ed.append(0);
+        try ed.appendSlice("TSS.dll");
+        try ed.append(0);
+
+        export_data = try ed.toOwnedSlice();
+        export_dir_rva = export_base_rva;
+        export_dir_size = @as(u32, @intCast(export_data.?.len));
+    }
+
+    const total_code_size = @as(u32, @intCast(code.len)) + @as(u32, @intCast((export_data orelse @as([]u8, &.{})).len));
     const headers_size = alignUp(0x1B0, file_align);
-    const raw_code_size = alignUp(@as(u32, @intCast(code.len)), file_align);
-    const image_size = section_rva + alignUp(@as(u32, @intCast(code.len)), sect_align);
+    const raw_code_size = alignUp(total_code_size, file_align);
+    const image_size = section_rva + alignUp(total_code_size, sect_align);
 
     var pe = std.ArrayList(u8).init(allocator);
     defer pe.deinit();
@@ -15,7 +113,7 @@ pub fn write(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32
     // DOS Header
     try pe.appendSlice(&[_]u8{ 0x4D, 0x5A });
     try pe.appendNTimes(0, 58);
-    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x80)))); // e_lfanew
+    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x80))));
 
     // DOS stub
     try pe.appendNTimes(0, 64);
@@ -24,76 +122,84 @@ pub fn write(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32
     try pe.appendSlice(&[_]u8{ 0x50, 0x45, 0x00, 0x00 });
 
     // IMAGE_FILE_HEADER
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x8664)))); // Machine = AMD64
+    const characteristics: u16 = if (is_dll) 0x2022 else 0x0022;
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x8664)))); // Machine
     try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 1))));      // NumberOfSections
-    try pe.appendNTimes(0, 4);                                     // TimeDateStamp
-    try pe.appendNTimes(0, 4);                                     // PointerToSymbolTable
-    try pe.appendNTimes(0, 4);                                     // NumberOfSymbols
+    try pe.appendNTimes(0, 4);
+    try pe.appendNTimes(0, 4);
+    try pe.appendNTimes(0, 4);
     try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0xF0))));   // SizeOfOptionalHeader
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x0022)))); // Characteristics
+    try pe.appendSlice(&@as([2]u8, @bitCast(characteristics)));
 
     // IMAGE_OPTIONAL_HEADER64
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x020B)))); // Magic = PE32+
-    try pe.appendNTimes(0, 2);                                     // MajorLinkerVersion, MinorLinkerVersion
-    try pe.appendNTimes(0, 4);                                     // SizeOfCode
-    try pe.appendNTimes(0, 4);                                     // SizeOfInitializedData
-    try pe.appendNTimes(0, 4);                                     // SizeOfUninitializedData
-    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, section_rva + 0)))); // AddressOfEntryPoint
-    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, section_rva))));     // BaseOfCode
-    try pe.appendNTimes(0, 8);                                     // ImageBase
-    try pe.appendSlice(&@as([4]u8, @bitCast(sect_align)));         // SectionAlignment
-    try pe.appendSlice(&@as([4]u8, @bitCast(file_align)));         // FileAlignment
-    try pe.appendNTimes(0, 2);                                     // MajorOperatingSystemVersion
-    try pe.appendNTimes(0, 2);                                     // MinorOperatingSystemVersion
-    try pe.appendNTimes(0, 2);                                     // MajorImageVersion
-    try pe.appendNTimes(0, 2);                                     // MinorImageVersion
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 6))));       // MajorSubsystemVersion (Vista+)
-    try pe.appendNTimes(0, 2);                                     // MinorSubsystemVersion
-    try pe.appendNTimes(0, 4);                                     // Win32VersionValue
-    try pe.appendSlice(&@as([4]u8, @bitCast(image_size)));         // SizeOfImage
-    try pe.appendSlice(&@as([4]u8, @bitCast(headers_size)));       // SizeOfHeaders
-    try pe.appendNTimes(0, 4);                                     // CheckSum
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 3))));       // Subsystem = CONSOLE
-    try pe.appendNTimes(0, 2);                                     // DllCharacteristics
-    try pe.appendNTimes(0, 8);                                     // SizeOfStackReserve
-    try pe.appendNTimes(0, 8);                                     // SizeOfStackCommit
-    try pe.appendNTimes(0, 8);                                     // SizeOfHeapReserve
-    try pe.appendNTimes(0, 8);                                     // SizeOfHeapCommit
-    try pe.appendNTimes(0, 4);                                     // LoaderFlags
-    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 16))));      // NumberOfRvaAndSizes
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x020B))));
+    try pe.appendNTimes(0, 2);
+    try pe.appendNTimes(0, 4);
+    try pe.appendNTimes(0, 4);
+    try pe.appendNTimes(0, 4);
+    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, section_rva + 0))));
+    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, section_rva))));
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x18000000))));
+    try pe.appendSlice(&@as([4]u8, @bitCast(sect_align)));
+    try pe.appendSlice(&@as([4]u8, @bitCast(file_align)));
+    try pe.appendNTimes(0, 2);
+    try pe.appendNTimes(0, 2);
+    try pe.appendNTimes(0, 2);
+    try pe.appendNTimes(0, 2);
+    try pe.appendNTimes(0, 2);
+    try pe.appendNTimes(0, 2);
+    try pe.appendNTimes(0, 4);
+    try pe.appendSlice(&@as([4]u8, @bitCast(image_size)));
+    try pe.appendSlice(&@as([4]u8, @bitCast(headers_size)));
+    try pe.appendNTimes(0, 4);
+    const subsystem: u16 = if (is_dll) 2 else 3;
+    try pe.appendSlice(&@as([2]u8, @bitCast(subsystem)));
+    try pe.appendNTimes(0, 2);
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x100000))));
+    try pe.appendNTimes(0, 8);
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x100000))));
+    try pe.appendNTimes(0, 8);
+    try pe.appendNTimes(0, 4);
+    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 16))));
 
     // Data directories
-    var import_rva: u32 = 0;
-    var import_size: u32 = 0;
+    var imp_rva_val: u32 = 0;
+    var imp_size_val: u32 = 0;
     if (import_dir_rva != 0) {
-        import_rva = section_rva + import_dir_rva;
-        import_size = idat_size;
+        imp_rva_val = section_rva + import_dir_rva;
+        imp_size_val = idat_size;
     }
-    try pe.appendNTimes(0, 8);  // Export
-    try pe.appendSlice(&@as([4]u8, @bitCast(import_rva)));
-    try pe.appendSlice(&@as([4]u8, @bitCast(import_size)));
+    if (is_dll and export_dir_size > 0) {
+        try pe.appendSlice(&@as([4]u8, @bitCast(export_dir_rva)));
+        try pe.appendSlice(&@as([4]u8, @bitCast(export_dir_size)));
+    } else {
+        try pe.appendNTimes(0, 8);
+    }
+    try pe.appendSlice(&@as([4]u8, @bitCast(imp_rva_val)));
+    try pe.appendSlice(&@as([4]u8, @bitCast(imp_size_val)));
     for (0..14) |_| try pe.appendNTimes(0, 8);
 
     // Section table (.text)
-    const name = ".text\x00\x00\x00";
-    try pe.appendSlice(name);
-    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, @intCast(code.len))))); // VirtualSize
-    try pe.appendSlice(&@as([4]u8, @bitCast(section_rva)));                   // VirtualAddress
-    try pe.appendSlice(&@as([4]u8, @bitCast(raw_code_size)));                 // SizeOfRawData
-    try pe.appendSlice(&@as([4]u8, @bitCast(headers_size)));                  // PointerToRawData
-    try pe.appendNTimes(0, 4);                                                // PointerToRelocations
-    try pe.appendNTimes(0, 4);                                                // PointerToLinenumbers
-    try pe.appendNTimes(0, 2);                                                // NumberOfRelocations
-    try pe.appendNTimes(0, 2);                                                // NumberOfLinenumbers
-    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x60000020))));          // CODE | EXECUTE | READ
+    const sname = ".text\x00\x00\x00";
+    try pe.appendSlice(sname);
+    try pe.appendSlice(&@as([4]u8, @bitCast(total_code_size)));
+    try pe.appendSlice(&@as([4]u8, @bitCast(section_rva)));
+    try pe.appendSlice(&@as([4]u8, @bitCast(raw_code_size)));
+    try pe.appendSlice(&@as([4]u8, @bitCast(headers_size)));
+    try pe.appendNTimes(0, 4);
+    try pe.appendNTimes(0, 4);
+    try pe.appendNTimes(0, 2);
+    try pe.appendNTimes(0, 2);
+    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x60000020))));
 
-    // Align headers
     while (pe.items.len < headers_size) try pe.append(0);
 
-    // Write code
     try pe.appendSlice(code);
+    if (export_data) |ed| {
+        try pe.appendSlice(ed);
+        allocator.free(ed);
+    }
 
-    // Zero-pad to raw size
     while (pe.items.len < headers_size + raw_code_size) try pe.append(0);
 
     return pe.toOwnedSlice();

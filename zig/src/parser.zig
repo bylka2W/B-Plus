@@ -38,6 +38,7 @@ const Token = struct {
         keyword_false,
         keyword_owned,
         keyword_borrowed,
+        keyword_export,
         annotation,
         ident,
         number,
@@ -218,12 +219,13 @@ const Lexer = struct {
     }
 
     fn isIdentStart(c: u8) bool { return std.ascii.isAlphabetic(c) or c == '_'; }
-    fn isIdentChar(c: u8) bool { return std.ascii.isAlphanumeric(c) or c == '_' or c == '?'; }
+    fn isIdentChar(c: u8) bool { return std.ascii.isAlphanumeric(c) or c == '_' or c == '?' or c == '<' or c == '>'; }
     fn isDigit(c: u8) bool { return std.ascii.isDigit(c); }
     fn isHexDigit(c: u8) bool { return std.ascii.isDigit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F'); }
 
     const keywordMap = std.StaticStringMap(Token.Kind).initComptime(.{
         .{ "state", .keyword_state },
+        .{ "export", .keyword_export },
         .{ "entry", .keyword_entry },
         .{ "kernel", .keyword_kernel },
         .{ "enum", .keyword_enum },
@@ -345,6 +347,16 @@ pub const Parser = struct {
                 const s = try p.parseStateDef();
                 errdefer { s.variables.deinit(); s.transitions.deinit(); }
                 try program.states.append(s);
+            } else if (p.peek(.keyword_export)) {
+                p.advance();
+                if (p.peek(.keyword_entry)) {
+                    var e = try p.parseEntry();
+                    e.is_export = true;
+                    errdefer e.body_lines.deinit();
+                    try program.entries.append(e);
+                } else {
+                    return error.ExpectedEntryAfterExport;
+                }
             } else if (p.peek(.keyword_entry)) {
                 const e = try p.parseEntry();
                 errdefer e.body_lines.deinit();
@@ -470,10 +482,12 @@ pub const Parser = struct {
                 p.advance();
                 p.consumeNewlines();
                 state_enter_body = try p.parseBraceBody();
+                if (state_enter_body != null) p.advance();
             } else if (p.peek(.keyword_exit)) {
                 p.advance();
                 p.consumeNewlines();
                 state_exit_body = try p.parseBraceBody();
+                if (state_exit_body != null) p.advance();
             } else if (p.peek(.annotation)) {
                 _ = p.readAnnotationFull();
                 p.consumeNewlines();
@@ -650,23 +664,36 @@ pub const Parser = struct {
         errdefer body_lines.deinit();
 
         if (p.peek(.lbrace)) {
+            const lbrace_start = p.cur_tok.start;
             p.advance();
             var depth: u32 = 1;
-            while (depth > 0 and p.cur_tok.kind != .eof) {
-                if (p.peek(.lbrace)) depth += 1;
-                if (p.peek(.rbrace)) depth -= 1;
-                if (depth > 0) {
-                    // Collect body text
-                    const lineStart = p.lexer.tok_start;
-                    while (p.cur_tok.kind != .newline and p.cur_tok.kind != .rbrace and p.cur_tok.kind != .eof) p.advance();
-                    const line = std.mem.trim(u8, p.src[lineStart..p.lexer.pos], " \t");
-                    if (line.len > 0) try body_lines.append(try p.allocator.dupe(u8, line));
-                    if (p.peek(.newline)) p.advance();
+            var scan_pos = lbrace_start + 1;
+            while (scan_pos < p.src.len and depth > 0) {
+                if (p.src[scan_pos] == '"') {
+                    scan_pos += 1;
+                    while (scan_pos < p.src.len and p.src[scan_pos] != '"') {
+                        if (p.src[scan_pos] == '\\') scan_pos += 1;
+                        scan_pos += 1;
+                    }
+                }
+                if (p.src[scan_pos] == '{') depth += 1;
+                if (p.src[scan_pos] == '}') depth -= 1;
+                scan_pos += 1;
+            }
+            if (scan_pos > lbrace_start + 1) {
+                const body_text = p.src[lbrace_start + 1 .. scan_pos - 1];
+                var lines_iter = std.mem.splitScalar(u8, body_text, '\n');
+                while (lines_iter.next()) |raw_line| {
+                    const t = std.mem.trim(u8, raw_line, " \t\r");
+                    if (t.len > 0) try body_lines.append(try p.allocator.dupe(u8, t));
                 }
             }
-            if (p.peek(.rbrace)) p.advance();
+            // Re-sync lexer to position after the matching }
+            p.lexer.pos = scan_pos - 1;
+            p.lexer.char = if (scan_pos - 1 < p.src.len) p.src[scan_pos - 1] else 0;
+            p.cur_tok = p.lexer.next();
         } else {
-            while (p.cur_tok.kind != .eof and !p.peek(.keyword_state) and !p.peek(.keyword_kernel) and !p.peek(.keyword_entry) and !p.peek(.keyword_enum) and !p.peek(.keyword_parallel)) {
+            while (p.cur_tok.kind != .eof and !p.peek(.keyword_state) and !p.peek(.keyword_kernel) and !p.peek(.keyword_entry) and !p.peek(.keyword_enum) and !p.peek(.keyword_parallel) and !p.peek(.keyword_export)) {
                 const start = p.lexer.tok_start;
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 const line = std.mem.trim(u8, p.src[start..p.lexer.pos], " \t");
@@ -676,7 +703,7 @@ pub const Parser = struct {
             }
         }
 
-        return ast.EntryDecl{ .name = name, .body_lines = body_lines, .return_type = null };
+        return ast.EntryDecl{ .name = name, .body_lines = body_lines, .return_type = null, .is_export = false };
     }
 
     fn parseKernel(p: *Parser) !ast.KernelDecl {
@@ -753,27 +780,38 @@ pub const Parser = struct {
 
     fn parseBraceBody(p: *Parser) !?[]const u8 {
         if (!p.peek(.lbrace)) return null;
+        const lbrace_start = p.cur_tok.start;
         p.advance();
         var depth: u32 = 1;
+        var scan_pos = lbrace_start + 1;
+        while (scan_pos < p.src.len and depth > 0) {
+            if (p.src[scan_pos] == '"') {
+                scan_pos += 1;
+                while (scan_pos < p.src.len and p.src[scan_pos] != '"') {
+                    if (p.src[scan_pos] == '\\') scan_pos += 1;
+                    scan_pos += 1;
+                }
+            }
+            if (p.src[scan_pos] == '{') depth += 1;
+            if (p.src[scan_pos] == '}') depth -= 1;
+            scan_pos += 1;
+        }
         var buf = std.ArrayList(u8).init(p.allocator);
         defer buf.deinit();
-
-        while (depth > 0 and p.cur_tok.kind != .eof) {
-            if (p.peek(.lbrace)) depth += 1;
-            if (p.peek(.rbrace)) depth -= 1;
-            if (depth > 0) {
-                const lineStart = p.lexer.tok_start;
-                while (p.cur_tok.kind != .newline and p.cur_tok.kind != .rbrace and p.cur_tok.kind != .eof) p.advance();
-                const line = std.mem.trim(u8, p.src[lineStart..p.lexer.tok_start], " \t");
+        if (scan_pos > lbrace_start + 1) {
+            const body_text = p.src[lbrace_start + 1 .. scan_pos - 1];
+            var lines_iter = std.mem.splitScalar(u8, body_text, '\n');
+            while (lines_iter.next()) |raw_line| {
+                const line = std.mem.trim(u8, raw_line, " \t\r");
                 if (line.len > 0) {
                     if (buf.items.len > 0) try buf.append(';');
                     try buf.appendSlice(line);
                 }
-                if (p.peek(.newline)) p.advance();
             }
         }
-        if (p.peek(.rbrace)) p.advance();
-
+        p.lexer.pos = scan_pos - 1;
+        p.lexer.char = if (scan_pos - 1 < p.src.len) p.src[scan_pos - 1] else 0;
+        p.cur_tok = p.lexer.next();
         if (buf.items.len == 0) return null;
         const owned = try buf.toOwnedSlice();
         return @as(?[]const u8, @as([]const u8, owned));
