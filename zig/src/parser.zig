@@ -499,9 +499,15 @@ pub const Parser = struct {
             } else if (p.peek(.ident)) {
                 const name = p.identText();
                 p.advance();
+                var var_type: []const u8 = "i64";
+                if (p.peek(.colon)) {
+                    p.advance();
+                    var_type = p.identText();
+                    p.advance();
+                }
                 try variables.append(.{
                     .name = name,
-                    .type_name = "i64",
+                    .type_name = var_type,
                     .default_value = null,
                     .is_fast_path = false,
                     .cache_policy = null,
@@ -513,9 +519,15 @@ pub const Parser = struct {
                     if (!p.peek(.ident)) break;
                     const n = p.identText();
                     p.advance();
+                    var t: []const u8 = "i64";
+                    if (p.peek(.colon)) {
+                        p.advance();
+                        t = p.identText();
+                        p.advance();
+                    }
                     try variables.append(.{
                         .name = n,
-                        .type_name = "i64",
+                        .type_name = t,
                         .default_value = null,
                         .is_fast_path = false,
                         .cache_policy = null,

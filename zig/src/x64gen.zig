@@ -2632,7 +2632,13 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         // *ptr = value (store to pointer)
         if (var_name.len > 0 and var_name[0] == '*') {
             const ptr_var = std.mem.trim(u8, var_name[1..], " \t");
-            if (try tryEmitWin32Call(p, expr, current_state)) {
+            if (isFloatExpr(p, current_state, expr)) {
+                const reg = try emitExprToXmm(p, expr, current_state, 4);
+                if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
+                    try x64.emit(&p.code, .SSE_MOVSS_ST, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.xmm(reg) });
+                }
+                freeXmm(p, reg);
+            } else if (try tryEmitWin32Call(p, expr, current_state)) {
                 if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
                     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
                 }
@@ -2969,6 +2975,7 @@ const Expr = union(enum) {
     Floor: usize,
     Sqrt: usize,
     Rsqrt: usize,
+    Deref: []const u8,
 };
 
 fn pushExpr(p: *PendingOutput, expr: Expr) anyerror!usize {
@@ -3038,6 +3045,15 @@ fn parseAtom(p: *PendingOutput, src: []const u8, pos: *usize) anyerror!usize {
         while (pos.* < src.len and (std.ascii.isDigit(src[pos.*]) or src[pos.*] == '.')) pos.* += 1;
         const val = std.fmt.parseFloat(f32, src[start..pos.*]) catch 0;
         return pushExpr(p, .{ .Const = val });
+    }
+
+    if (src[pos.*] == '*') {
+        pos.* += 1;
+        skipSpaces(src, pos);
+        const start = pos.*;
+        while (pos.* < src.len and (std.ascii.isAlphanumeric(src[pos.*]) or src[pos.*] == '_')) pos.* += 1;
+        const ptr_var = src[start..pos.*];
+        return pushExpr(p, .{ .Deref = ptr_var });
     }
 
     if (std.ascii.isAlphabetic(src[pos.*]) or src[pos.*] == '_') {
@@ -3272,6 +3288,18 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
             }
             const r = allocXmm(p);
             try emitXorXmm(p, r);
+            return r;
+        },
+        .Deref => |ptr_var| {
+            const ptr_vo = getVarOffset(p, state, ptr_var);
+            if (ptr_vo == std.math.minInt(i32)) {
+                const r = allocXmm(p);
+                try emitXorXmm(p, r);
+                return r;
+            }
+            try emitLoadVarToReg(p, Reg.RAX, ptr_vo, 8);
+            const r = allocXmm(p);
+            try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(r), x64.Operand.mem(Reg.RAX, 0) });
             return r;
         },
         .Add => |info| {
