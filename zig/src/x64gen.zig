@@ -3,6 +3,7 @@ const ast = @import("ast.zig");
 const x64 = @import("x64enc.zig");
 const rt = @import("runtime.zig");
 const sym = @import("symbol.zig");
+const abi = @import("abi.zig");
 const Allocator = std.mem.Allocator;
 
 pub const X64Output = struct {
@@ -435,19 +436,21 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
 
 fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     if (p.is_dll) {
-        // DLL entry point: just return TRUE (rax = 1)
+        // DLL entry point
+        try abi.emitPrologue(&p.code);
         try emitXorReg(p, Reg.RAX);
         try emitInc(p, Reg.RAX);
-        try x64.emit(&p.code, .RET, &.{});
-        // Emit export stubs after the entry point
+        try abi.emitEpilogue(&p.code);
+        // Export stubs
         for (program.entries.items) |*entry| {
             if (entry.is_export) {
                 const label_id = try allocLabelId(p, "exp_{s}", .{entry.name});
                 try setLabel(p, label_id);
                 try p.symbols.add(entry.name, sym.SymbolKind.exp, @intCast(p.code.items.len));
+                try abi.emitPrologue(&p.code);
                 try emitXorReg(p, Reg.RAX);
                 try emitInc(p, Reg.RAX);
-                try x64.emit(&p.code, .RET, &.{});
+                try abi.emitEpilogue(&p.code);
             }
         }
         return;
