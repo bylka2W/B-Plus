@@ -45,17 +45,29 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
         const names_off = eot_off + eot_size;
         const dll_name_off = names_off + names_total;
 
-        var name_rvas = try allocator.alloc(u32, n);
-        defer allocator.free(name_rvas);
+        const export_base_rva = section_rva + @as(u32, @intCast(code.len));
+
+        // Sort exports by name for ENPT (GetProcAddress binary search requirement)
+        var indices = try allocator.alloc(usize, n);
+        defer allocator.free(indices);
+        for (0..n) |i| indices[i] = i;
+        const SortCtx = struct { exports: []const ResolvedExport };
+        std.mem.sort(usize, indices, SortCtx{ .exports = exports }, struct {
+            fn lessThan(ctx: SortCtx, a: usize, b: usize) bool {
+                return std.mem.lessThan(u8, ctx.exports[a].name, ctx.exports[b].name);
+            }
+        }.lessThan);
+
+        // Name string offsets in sorted order
+        var name_offs = try allocator.alloc(u32, n);
+        defer allocator.free(name_offs);
         {
-            var name_pos = names_off;
-            for (exports, 0..) |e, i| {
-                name_rvas[i] = name_pos;
-                name_pos += @as(u32, @intCast(e.name.len)) + 1;
+            var off: u32 = names_off;
+            for (indices) |si| {
+                name_offs[si] = off;
+                off += @as(u32, @intCast(exports[si].name.len)) + 1;
             }
         }
-
-        const export_base_rva = section_rva + @as(u32, @intCast(code.len));
 
         // Export Directory Table
         try ed.appendNTimes(0, 4);  // Characteristics
@@ -71,25 +83,25 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
         try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + enpt_off))); // AddressOfNames
         try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + eot_off)));  // AddressOfNameOrdinals
 
-        // Export Address Table
+        // Export Address Table (ordinal order)
         for (exports) |e| {
             try ed.appendSlice(&@as([4]u8, @bitCast(e.rva)));
         }
 
-        // Export Name Pointer Table
-        for (name_rvas) |nr| {
-            try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + nr)));
+        // Export Name Pointer Table (sorted order)
+        for (indices) |si| {
+            try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + name_offs[si])));
         }
 
-        // Export Ordinal Table
-        for (0..n) |i| {
-            try ed.appendSlice(&@as([2]u8, @bitCast(@as(u16, @intCast(i)))));
+        // Export Ordinal Table (sorted order, maps to EAT index)
+        for (indices) |si| {
+            try ed.appendSlice(&@as([2]u8, @bitCast(@as(u16, @intCast(si)))));
         }
 
-        // Name strings
+        // Name strings (sorted order)
         while (ed.items.len < names_off) try ed.append(0);
-        for (exports) |e| {
-            try ed.appendSlice(e.name);
+        for (indices) |si| {
+            try ed.appendSlice(exports[si].name);
             try ed.append(0);
         }
         // DLL name
@@ -190,7 +202,7 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
     try pe.appendNTimes(0, 4);
     try pe.appendNTimes(0, 2);
     try pe.appendNTimes(0, 2);
-    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x60000020))));
+    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xE0000020))));
 
     while (pe.items.len < headers_size) try pe.append(0);
 

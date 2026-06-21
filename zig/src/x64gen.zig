@@ -32,6 +32,10 @@ const IMPORT_FNS = [_][]const u8{
     "GetCurrentThread", "GetNumaHighestNodeNumber", "GetNumaNodeProcessorMask",
     "VirtualAlloc", "VirtualFree", "CreateFileW", "GetFileSizeEx",
     "CreateFileMappingW", "MapViewOfFile", "UnmapViewOfFile", "CloseHandle",
+    "LoadLibraryA", "GetProcAddress",
+    "OpenProcess", "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread", "WaitForSingleObject",
+    "GetCurrentProcessId", "WinExec",
+    "TlsAlloc", "TlsGetValue", "TlsSetValue",
 };
 
 const SectionRva: u32 = 0x1000;
@@ -447,10 +451,60 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                 const label_id = try allocLabelId(p, "exp_{s}", .{entry.name});
                 try setLabel(p, label_id);
                 try p.symbols.add(entry.name, sym.SymbolKind.exp, @intCast(p.code.items.len));
-                try abi.emitPrologue(&p.code);
-                try emitXorReg(p, Reg.RAX);
-                try emitInc(p, Reg.RAX);
-                try abi.emitEpilogue(&p.code);
+                if (entry.body_lines.items.len > 0) {
+                    // Entry with body: full frame prologue, init, compile body, epilogue
+                    try p.code.append(0x55); // push rbp
+                    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBP), x64.Operand.r(Reg.RSP) });
+                    try emitPushR64(p, Reg.RBX); try emitPushR64(p, Reg.R12);
+                    try emitPushR64(p, Reg.R13); try emitPushR64(p, Reg.R14); try emitPushR64(p, Reg.R15);
+                    try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
+                    // Init: zero all reserved slots, then init stdin/stdout handles
+                    try emitXorReg(p, Reg.RAX);
+                    // Zero telem counters
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l1_spill), x64.Operand.r(Reg.RAX) });
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l2_spill), x64.Operand.r(Reg.RAX) });
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l1_peak), x64.Operand.r(Reg.RAX) });
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l2_peak), x64.Operand.r(Reg.RAX) });
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l3_peak), x64.Operand.r(Reg.RAX) });
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l1_allocs), x64.Operand.r(Reg.RAX) });
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l2_allocs), x64.Operand.r(Reg.RAX) });
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l3_allocs), x64.Operand.r(Reg.RAX) });
+                    // Init I/O handles
+                    try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -10 }});
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdin), x64.Operand.r(Reg.RAX) });
+                    try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -11 }});
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdout), x64.Operand.r(Reg.RAX) });
+                    // Compile body
+                    var buf = std.ArrayList(u8).init(p.allocator);
+                    for (entry.body_lines.items, 0..) |line, i| {
+                        const t = std.mem.trim(u8, line, " \t");
+                        if (t.len == 0) continue;
+                        if (std.mem.startsWith(u8, t, "var ")) continue;
+                        if (std.mem.startsWith(u8, t, "state ")) continue;
+                        if (i > 0) try buf.append(';');
+                        try buf.appendSlice(t);
+                    }
+                    const state_ctx = if (program.states.items.len > 0) program.states.items[0].name else entry.name;
+                    if (buf.items.len > 0) {
+                        try emitAction(p, buf.items, state_ctx);
+                    } else {
+                        try emitXorReg(p, Reg.RAX);
+                        try emitInc(p, Reg.RAX);
+                    }
+                    buf.deinit();
+                    // Epilogue
+                    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
+                    try emitPopR64(p, Reg.R15); try emitPopR64(p, Reg.R14);
+                    try emitPopR64(p, Reg.R13); try emitPopR64(p, Reg.R12);
+                    try emitPopR64(p, Reg.RBX);
+                    try p.code.append(0x5D); // pop rbp
+                    try p.code.append(0xC3); // ret
+                } else {
+                    try abi.emitFullPrologue(&p.code);
+                    try emitXorReg(p, Reg.RAX);
+                    try emitInc(p, Reg.RAX);
+                    try abi.emitFullEpilogue(&p.code);
+                }
             }
         }
         return;
@@ -579,9 +633,9 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_ht_free_head), x64.Operand.r(Reg.RAX) });
 
     if (!p.is_dll) {
-        try emitWin32Call(p, 0, -10);
+        try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -10 }});
         try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdin), x64.Operand.r(Reg.RAX) });
-        try emitWin32Call(p, 0, -11);
+        try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -11 }});
         try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdout), x64.Operand.r(Reg.RAX) });
         try emitAffinityInit(p);
     }
@@ -1108,7 +1162,9 @@ const mc_label = try allocLabelId(p, "rt_{d}", .{@intFromEnum(rt.Intrinsic.move_
             // ExitProcess(1)
             try emitXorReg(p, Reg.RCX);
             try emitInc(p, Reg.RCX);
-            try emitShadowCall(p, 3);
+            try abi.emitCallArgs(&p.code, &.{});
+            try emitIatCall(p, 3);
+            try abi.emitCallCleanup(&p.code);
         },
     }
     try emitRet(p);
@@ -1151,11 +1207,15 @@ fn emitAffinityInit(p: *PendingOutput) !void {
     try p.code.append(0x0F); try p.code.append(0xA2);
     try p.code.append(0xC1); try p.code.append(0xE8); try p.code.append(0x18);
     try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_core_type), x64.Operand.r(Reg.RAX) });
-    try emitShadowCall(p, 8);
+    try abi.emitCallArgs(&p.code, &.{});
+    try emitIatCall(p, 8);
+    try abi.emitCallCleanup(&p.code);
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
     const mask: i64 = if (p.has_hot_states) 15 else -16;
     try emitLoadImm(p, Reg.RDX, mask);
-    try emitShadowCall(p, 7);
+    try abi.emitCallArgs(&p.code, &.{});
+    try emitIatCall(p, 7);
+    try abi.emitCallCleanup(&p.code);
 }
 
 const SortedEntry = struct { idx: usize, hw: f64 };
@@ -1620,7 +1680,7 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode, traces: std.ArrayL
     try emitRet(p);
     try setLabel(p, try allocLabelId(p, "exit_end", .{}));
     // ExitProcess
-    try emitWin32Call(p, 3, 0);
+    try emitWin32Call(p, 3, &.{abi.CallArg{ .imm = 0 }});
     try emitLongJmp(p, try allocLabelId(p, "exit_process", .{}));
 }
 
@@ -1987,19 +2047,10 @@ fn emitIatCall(p: *PendingOutput, import_idx: usize) !void {
     try p.pending_fixups.append(.{ .offset = fixoff, .disp_size = 4, .label_id = label_id });
 }
 
-fn emitWin32Call(p: *PendingOutput, import_idx: usize, arg: i32) !void {
-    if (arg == 0) {
-        try emitXorReg(p, Reg.RCX);
-    } else {
-        try x64.emit(&p.code, .MOV_R64_IMM64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.imm(arg) });
-    }
-    try emitShadowCall(p, import_idx);
-}
-
-fn emitShadowCall(p: *PendingOutput, import_idx: usize) !void {
-    try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+fn emitWin32Call(p: *PendingOutput, import_idx: usize, args: []const abi.CallArg) !void {
+    try abi.emitCallArgs(&p.code, args);
     try emitIatCall(p, import_idx);
-    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(40) });
+    try abi.emitCallCleanup(&p.code);
 }
 
 fn emitXorReg(p: *PendingOutput, reg: i16) !void {
@@ -2440,11 +2491,15 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(2) });
         try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
         try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R12), x64.Operand.r(Reg.RAX) });
-        try emitShadowCall(p, 4);
+        try abi.emitCallArgs(&p.code, &.{});
+        try emitIatCall(p, 4);
+        try abi.emitCallCleanup(&p.code);
         try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
         try emitXorReg(p, Reg.RDX);
         try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.R12) });
-        try emitShadowCall(p, 5);
+        try abi.emitCallArgs(&p.code, &.{});
+        try emitIatCall(p, 5);
+        try abi.emitCallCleanup(&p.code);
         try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R12), x64.Operand.r(Reg.RAX) });
         try emitExprToRAX(p, w_str, current_state);
         try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R12, 0), x64.Operand.r(Reg.RAX) });
@@ -2481,12 +2536,16 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         return;
     }
     if (std.mem.startsWith(u8, body, "free(") and std.mem.endsWith(u8, body, ")")) {
-        try emitShadowCall(p, 4);
+        try abi.emitCallArgs(&p.code, &.{});
+        try emitIatCall(p, 4);
+        try abi.emitCallCleanup(&p.code);
         try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
         try emitXorReg(p, Reg.RDX);
         const ptr_name = std.mem.trim(u8, body["free(".len..body.len - 1], " \t");
         if (!try tryLoadVarToReg(p, Reg.R8, ptr_name, current_state)) try emitXorReg(p, Reg.R8);
-        try emitShadowCall(p, 6);
+        try abi.emitCallArgs(&p.code, &.{});
+        try emitIatCall(p, 6);
+        try abi.emitCallCleanup(&p.code);
         return;
     }
     if (std.mem.containsAtLeast(u8, body, 1, "+=")) {
@@ -2531,6 +2590,7 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         }
         return;
     }
+    if (try tryEmitWin32Call(p, body, current_state)) return;
     const eq = std.mem.indexOf(u8, body, "=");
     if (eq != null and eq.? > 0) {
         const var_name = std.mem.trim(u8, body[0..eq.?], " \t");
@@ -2556,13 +2616,116 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
                 const reg = try emitExprToXmm(p, expr, current_state, size);
                 try emitStoreXmmFromReg(p, vo, reg, size);
                 freeXmm(p, reg);
+            } else if (try tryEmitWin32Call(p, expr, current_state)) {
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size);
             } else {
                 try emitExprToRAX(p, expr, current_state);
                 try emitStoreVarFromReg(p, vo, Reg.RAX, size);
             }
+            return;
+        }
+        // *ptr = value (store to pointer)
+        if (var_name.len > 0 and var_name[0] == '*') {
+            const ptr_var = std.mem.trim(u8, var_name[1..], " \t");
+            if (try tryEmitWin32Call(p, expr, current_state)) {
+                if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
+                }
+            } else {
+                try emitExprToRAX(p, expr, current_state);
+                if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
+                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
+                }
+            }
+            return;
         }
         return;
     }
+}
+
+fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const u8) !bool {
+    const paren_open = std.mem.indexOfScalar(u8, body, '(');
+    if (paren_open) |po| {
+        const paren_close = std.mem.lastIndexOfScalar(u8, body, ')');
+        if (paren_close) |pc| {
+            if (pc == body.len - 1 and po > 0) {
+                const fn_name = std.mem.trim(u8, body[0..po], " \t");
+                for (IMPORT_FNS, 0..) |import_name, import_idx| {
+                    if (std.mem.eql(u8, fn_name, import_name)) {
+                        const args_str = std.mem.trim(u8, body[po+1..pc], " \t");
+                        const target_regs = [_]i16{ 1, 2, 8, 9 }; // RCX, RDX, R8, R9
+                        // Parse all args into fixed buffers
+                        var imm_buf: [12]i64 = undefined;
+                        var str_buf: [12]u32 = undefined;
+                        var var_buf: [12][]const u8 = undefined;
+                        var typ_buf: [12]u8 = undefined; // 0=imm, 1=str, 2=var
+                        var num_total: usize = 0;
+                        if (args_str.len > 0) {
+                            var it = std.mem.splitScalar(u8, args_str, ',');
+                            while (it.next()) |raw_arg| {
+                                if (num_total >= 12) break;
+                                const arg = std.mem.trim(u8, raw_arg, " \t");
+                                if (arg.len == 0) continue;
+                                if (arg[0] == '"' and arg[arg.len - 1] == '"') {
+                                    typ_buf[num_total] = 1;
+                                    str_buf[num_total] = try addPoolString(p, arg[1..arg.len - 1]);
+                                } else {
+                                    const n = parseNumber(arg);
+                                    if (n != 0 or (arg.len > 0 and (std.ascii.isDigit(arg[0]) or arg[0] == '-' or arg[0] == '+'))) {
+                                        typ_buf[num_total] = 0;
+                                        imm_buf[num_total] = n;
+                                    } else {
+                                        typ_buf[num_total] = 2;
+                                        var_buf[num_total] = arg;
+                                    }
+                                }
+                                num_total += 1;
+                            }
+                        }
+                        // Register args (first 4)
+                        for (0..@min(num_total, 4)) |i| {
+                            switch (typ_buf[i]) {
+                                0 => try emitLoadImm(p, target_regs[i], imm_buf[i]),
+                                1 => try emitRipLea(p, target_regs[i], str_buf[i]),
+                                2 => _ = try tryLoadVarToReg(p, target_regs[i], var_buf[i], current_state),
+                                else => {},
+                            }
+                        }
+                        try abi.emitCallArgs(&p.code, &.{});
+                        // Stack args (beyond 4) at [RSP + 0x20 + (i-4)*8]
+                        if (num_total > 4) {
+                            for (4..num_total) |i| {
+                                const stack_off: i32 = 0x20 + @as(i32, @intCast(i - 4)) * 8;
+                                switch (typ_buf[i]) {
+                                    0 => {
+                                        try emitLoadImm(p, Reg.RAX, imm_buf[i]);
+                                        try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, stack_off), x64.Operand.r(Reg.RAX) });
+                                    },
+                                    1 => {
+                                        try emitRipLea(p, Reg.RAX, str_buf[i]);
+                                        try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, stack_off), x64.Operand.r(Reg.RAX) });
+                                    },
+                                    2 => {
+                                        if (try tryLoadVarToReg(p, Reg.RAX, var_buf[i], current_state)) {
+                                            try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, stack_off), x64.Operand.r(Reg.RAX) });
+                                        } else {
+                                            try emitXorReg(p, Reg.RAX);
+                                            try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, stack_off), x64.Operand.r(Reg.RAX) });
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            }
+                        }
+                        try emitIatCall(p, @intCast(import_idx));
+                        try abi.emitCallCleanup(&p.code);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
 }
 
 fn getVarOffset(p: *PendingOutput, state_name: []const u8, var_name: []const u8) i32 {
@@ -2703,11 +2866,15 @@ fn emitExprAtomToRAX(p: *PendingOutput, atom: []const u8, current_state: []const
     if (std.mem.startsWith(u8, a, "malloc(") and std.mem.endsWith(u8, a, ")")) {
         const size_expr = std.mem.trim(u8, a["malloc(".len..a.len-1], " \t");
         const sz_val = parseNumber(size_expr);
-        try emitShadowCall(p, 4);
+        try abi.emitCallArgs(&p.code, &.{});
+        try emitIatCall(p, 4);
+        try abi.emitCallCleanup(&p.code);
         try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
         try emitXorReg(p, Reg.RDX);
         try x64.emit(&p.code, .MOV_R64_IMM64, &.{ x64.Operand.r(Reg.R8), x64.Operand.imm(sz_val) });
-        try emitShadowCall(p, 5);
+        try abi.emitCallArgs(&p.code, &.{});
+        try emitIatCall(p, 5);
+        try abi.emitCallCleanup(&p.code);
         return;
     }
     if (std.mem.startsWith(u8, a, "*")) {

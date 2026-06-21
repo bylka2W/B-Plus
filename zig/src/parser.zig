@@ -496,6 +496,32 @@ pub const Parser = struct {
                 const s = try p.parseStateDef();
                 s.variables.deinit();
                 s.transitions.deinit();
+            } else if (p.peek(.ident)) {
+                const name = p.identText();
+                p.advance();
+                try variables.append(.{
+                    .name = name,
+                    .type_name = "i64",
+                    .default_value = null,
+                    .is_fast_path = false,
+                    .cache_policy = null,
+                    .cache_align = null,
+                });
+                while (p.peek(.comma)) {
+                    p.advance();
+                    p.consumeNewlines();
+                    if (!p.peek(.ident)) break;
+                    const n = p.identText();
+                    p.advance();
+                    try variables.append(.{
+                        .name = n,
+                        .type_name = "i64",
+                        .default_value = null,
+                        .is_fast_path = false,
+                        .cache_policy = null,
+                        .cache_align = null,
+                    });
+                }
             } else if (p.peek(.string) or p.peek(.number) or p.peek(.char_lit) or p.peek(.minus) or p.peek(.plus) or p.peek(.star) or p.peek(.slash) or p.peek(.semicolon) or p.peek(.invalid)) {
                 const found = p.src[p.cur_tok.start..p.cur_tok.end];
                 std.debug.print("error: unexpected token '{s}' ({s}) in state body\n", .{ std.mem.trimRight(u8, found, "\x00\x0d\x0a"), @tagName(p.cur_tok.kind) });
