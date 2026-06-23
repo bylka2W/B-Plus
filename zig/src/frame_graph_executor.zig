@@ -5,6 +5,8 @@ const resource_system = @import("resource_system.zig");
 const dx12 = @import("dx12_compute.zig");
 const d3d = @import("d3d12_bindings.zig");
 const rs_builder = @import("root_signature_builder.zig");
+const render_graph = @import("render_graph.zig");
+const history_manager = @import("history_manager.zig");
 
 pub const FrameGraphGPUExecutor = struct {
     ctx: *dx12.ComputeContext,
@@ -163,5 +165,81 @@ pub const FrameGraphGPUExecutor = struct {
 
         // Wait for all GPU work
         _ = try self.ctx.submitAndWait();
+    }
+
+    pub fn executeRenderPlan(
+        self: *FrameGraphGPUExecutor,
+        plan: *const render_graph.RenderPlan,
+    ) !void {
+        for (plan.nodes, 0..) |node, ni| {
+            const pass_id = switch (node.kind) {
+                .gpu => |g| g.pass_id,
+                .render => |r| r.pass_id,
+                else => continue,
+            };
+
+            const gpu_pass = for (plan.gpu_passes) |gp| {
+                if (gp.pass_id == pass_id) break &gp;
+            } else continue;
+
+            const compiled_rs = try self.rs_bld.getOrBuild(gpu_pass.pipeline.layout);
+            const bytecode = try self.getOrCompileShader(gpu_pass.pipeline.shader);
+            const pso = try self.getOrCreatePSO(compiled_rs.root_signature, bytecode);
+
+            _ = d3d.getAllocatorVtbl(self.ctx.cmd_allocator.?).Reset(self.ctx.cmd_allocator.?);
+            _ = d3d.getCmdListVtbl(self.ctx.cmd_list.?).Reset(self.ctx.cmd_list.?, self.ctx.cmd_allocator, null);
+            d3d.getCmdListVtbl(self.ctx.cmd_list.?).SetPipelineState(self.ctx.cmd_list.?, pso);
+            d3d.getCmdListVtbl(self.ctx.cmd_list.?).SetComputeRootSignature(self.ctx.cmd_list.?, compiled_rs.root_signature);
+            var heaps = [_]?*anyopaque{ self.ctx.uav_heap, self.ctx.sampler_heap };
+            d3d.getCmdListVtbl(self.ctx.cmd_list.?).SetDescriptorHeaps(self.ctx.cmd_list.?, 2, &heaps);
+
+            // Auto-barriers for this pass
+            for (plan.auto_barriers) |b| {
+                if (b.pass_index == ni) {
+                    self.pool.transitionBarrier(self.ctx.cmd_list, b.barrier.resource_id, b.barrier.state_after);
+                }
+            }
+
+            // User barriers (if any)
+            self.pool.applyBarriers(self.ctx.cmd_list.?, gpu_pass.barriers_before);
+
+            self.pool.setupDescriptorHeap(gpu_pass.bindings.entries, compiled_rs);
+            d3d.getCmdListVtbl(self.ctx.cmd_list.?).SetComputeRootDescriptorTable(
+                self.ctx.cmd_list.?,
+                0,
+                self.ctx.getUAVGPUHandle(0),
+            );
+
+            d3d.getCmdListVtbl(self.ctx.cmd_list.?).Dispatch(
+                self.ctx.cmd_list.?,
+                gpu_pass.grid.x,
+                gpu_pass.grid.y,
+                gpu_pass.grid.z,
+            );
+
+            self.pool.applyBarriers(self.ctx.cmd_list.?, gpu_pass.barriers_after);
+
+            _ = d3d.getCmdListVtbl(self.ctx.cmd_list.?).Close(self.ctx.cmd_list.?);
+            var lists = [_]?*anyopaque{self.ctx.cmd_list};
+            d3d.getQueueVtbl(self.ctx.queue.?).ExecuteCommandLists(self.ctx.queue.?, 1, &lists);
+
+            std.debug.print("Render pass {}: '{s}' ({},{},{}) RS={d} descriptors\n", .{
+                gpu_pass.pass_id, gpu_pass.pipeline.shader.entry,
+                gpu_pass.grid.x,  gpu_pass.grid.y,
+                gpu_pass.grid.z,  compiled_rs.total_descriptors,
+            });
+        }
+
+        _ = try self.ctx.submitAndWait();
+    }
+
+    pub fn executeRenderPlanWithHistory(
+        self: *FrameGraphGPUExecutor,
+        plan: *const render_graph.RenderPlan,
+        history: *history_manager.HistoryManager,
+    ) !void {
+        history.beginFrame();
+        try self.executeRenderPlan(plan);
+        history.flip();
     }
 };
