@@ -2,28 +2,57 @@
 
 A self-contained compiler + runtime for a custom language on Windows x64. Generates native PE executables and DLLs with zero runtime dependencies.
 
-## D3D12 Compute Pipeline (Zig)
+## GPU Backend Architecture (Zig)
 
-Located in `src/`:
+The GPU backend is a layered architecture that bridges the FrameGraph temporal compute DAG to DX12 compute:
+
+```
+FrameGraph (ExecutionPlan)
+    ↓
+GPU IR (BindingKey, PipelineKey, DispatchDesc)
+    ↓
+Root Signature Builder (per-pass RS from BindLayout)
+    ↓
+Resource Pool (RS-driven descriptor allocation, state tracking)
+    ↓
+DX12 Compute (ComputeContext — command lists, barriers, dispatch)
+```
+
+### Source Files
 
 | File | Purpose |
 |------|---------|
-| `dx12_compute.zig` | `ComputeContext` — device init, buffer creation, UAV views, cmd list recording, dispatch, barriers, fence sync, readback |
-| `d3d12_bindings.zig` | Pure Zig COM vtbl bindings for D3D12 / DXGI — no `cImport`, no SDK headers at build time. All vtbl structs manually declared from `d3d12.h` / `d3d12sdklayers.h` ABI |
-| `gpu_compute_test.zig` | End-to-end test: creates UAV buffer → dispatches `float(tid.x * 2)` shader → barrier → copy to readback → fence sync → Map → verify 64 f32 elements |
+| `gpu_ir.zig` | GPU IR types: `BindingKey{reg,space,kind}`, `BindEntry`, `BindGroup`, `PipelineKey`, `DispatchDesc`, `ResourceId`, `ResourceState`, `BarrierDesc` |
+| `root_signature_builder.zig` | `RSRootSignatureBuilder` — per-pass root signature compiled from `BindLayout`, cached by layout hash. Produces `CompiledRS{root_signature, ranges, total_descriptors}` with validate/getHeapOffset |
+| `resource_system.zig` | `ResourcePool` — GPU resource lifecycle (create Buffer/Texture2D, state tracking via barriers, RS-driven descriptor heap writes with validation) |
+| `frame_graph_executor.zig` | `FrameGraphGPUExecutor` — orchestrates multi-pass GPU execution: per-pass RS/PSO, shader compilation cache, barrier application, dispatch, fence sync |
+| `frame_graph.zig` | FrameGraph: `Pass`, `ExecutionNode`, `ExecutionPlan` — temporal compute DAG IR with intra/inter-frame edges, topo sort, budget enforcement |
+| `gpu_job.zig` | `GPUJob` dispatch descriptor (dispatch dims, semaphores, priority) |
+| `gpu_scheduler.zig` | `GPUScheduler` — pure GPU dispatch sink (budget-aware, dropable jobs) |
+| `dx12_compute.zig` | `ComputeContext` — raw D3D12: device init, buffer/texture creation, SRV/UAV views, descriptor heaps, command list recording, barriers, fence sync, readback, shader compilation via `d3dcompiler_47` |
+| `d3d12_bindings.zig` | Pure Zig COM vtbl bindings for D3D12/DXGI — no `cImport`, no SDK headers at build time |
 
-### Build & Run
+### Key Design Decisions
+
+**Register-based binding model:**
+- `BindingKey(reg, space, kind)` replaces linear `slot_index`
+- `slotIndex()` provides deterministic mapping: SRV→0..255, UAV→256..511, CBV→512..767
+- No iteration-order dependency — sparse-safe
+
+**Per-pass root signature:**
+- `RSRootSignatureBuilder` derives exact RS from `BindLayout`
+- Only uses descriptors the shader actually needs (not 256+256 hardcoded)
+- Cached by layout hash; validated against bindings at dispatch time
+
+**Unified descriptor heap:**
+- 1024-entry CBV_SRV_UAV heap shared across all passes
+- RS defines which portions are accessible; `setupDescriptorHeap` writes at RS-computed offsets
+
+### Build & Run Tests
 
 ```
-zig build-exe src\gpu_compute_test.zig --name gpu_compute_test -I src
-.\gpu_compute_test.exe
+zig build-exe src\gpu_executor_test.zig --name gpu_executor_test -ld3d12 -ldxgi -ld3dcompiler_47
+.\gpu_executor_test.exe
 ```
 
-### Known Limitations
 
-- **COMPUTE queue + COMPUTE command list** works and passes. **DIRECT queue + COMPUTE list** crashes with `DXGI_ERROR_DEVICE_HUNG` (0x887A0001) on this driver (NVIDIA 32.0.15.7688 / RTX 5060 Ti) — suspect driver/runtime issue.
-- InfoQueue (`ID3D12InfoQueue`) vtbl is declared but QI on device returns `E_NOINTERFACE` even with debug layer enabled.
-
-### Architecture
-
-All COM interfaces are loaded via `LoadLibrary` + `GetProcAddress` at runtime from `d3d12.dll` and `dxgi.dll`. No import libs. Method calls go through manually-typed extern vtbl structs with `*const fn (*anyopaque, ...) callconv(CC) ...` declarations following the Windows ABI convention (out-param pattern for struct returns via `#else` branch in SDK headers).

@@ -3,6 +3,7 @@ const ast = @import("ast.zig");
 const parser = @import("parser.zig");
 const x64gen = @import("x64gen.zig");
 const pe = @import("pe.zig");
+const test_runner = @import("test_runner.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -17,6 +18,7 @@ pub fn main() !void {
         try stderr.writeAll("Usage: bpc build <input.b+> [-o <output>] [-exports <name1,name2,...>]\n");
         try stderr.writeAll("       bpc dll  <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]\n");
         try stderr.writeAll("       bpc run  <input.b+>\n");
+        try stderr.writeAll("       bpc test <test.bpt>\n");
         std.process.exit(1);
     }
 
@@ -40,6 +42,37 @@ pub fn main() !void {
 
     var src = try std.fs.cwd().readFileAlloc(allocator, input_path, std.math.maxInt(u32));
     defer allocator.free(src);
+
+    // Test command: parse .bpt, run tests, report
+    if (std.mem.eql(u8, command, "test")) {
+        const test_text = try std.fs.cwd().readFileAlloc(allocator, input_path, std.math.maxInt(u32));
+        defer allocator.free(test_text);
+
+        const dir = if (std.mem.lastIndexOfScalar(u8, input_path, '\\')) |idx| input_path[0..idx] else if (std.mem.lastIndexOfScalar(u8, input_path, '/')) |idx| input_path[0..idx] else ".";
+        const desc = try test_runner.parseTestDesc(allocator, test_text);
+        // Resolve source path relative to .bpt directory
+        const source_full = try std.fs.path.join(allocator, &.{ dir, desc.source });
+        defer allocator.free(source_full);
+
+        const stdout = std.io.getStdOut().writer();
+        try stdout.print("TEST: {s}\n", .{desc.name});
+
+        const result = try test_runner.runTest(allocator, source_full, desc, stdout);
+
+        if (result.frames.len > 0) {
+            var pass_count: usize = 0;
+            var fail_count: usize = 0;
+            for (result.frames) |fr| {
+                for (fr.expects) |er| {
+                    if (er.status == .pass) pass_count += 1 else fail_count += 1;
+                }
+            }
+            try stdout.print("STATUS: {s} ({d} expect passed, {d} failed)\n", .{ @tagName(result.status), pass_count, fail_count });
+        } else {
+            try stdout.print("STATUS: {s}\n", .{@tagName(result.status)});
+        }
+        std.process.exit(if (result.status == .pass) 0 else 1);
+    }
 
     if (std.mem.startsWith(u8, src, "\xEF\xBB\xBF")) {
         const stripped = try allocator.dupe(u8, src[3..]);
@@ -68,7 +101,7 @@ pub fn main() !void {
         }
     }
 
-    var output = try if (is_dll) x64gen.generateEx(allocator, program, true) else x64gen.generate(allocator, program);
+    var output = try if (is_dll) x64gen.generateEx(allocator, program, true, .off) else x64gen.generate(allocator, program);
     defer allocator.free(output.code);
     defer output.symbols.deinit();
 

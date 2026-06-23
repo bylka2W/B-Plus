@@ -1,5 +1,6 @@
 const std = @import("std");
 const gpu_job = @import("gpu_job.zig");
+const gpu_ir = @import("gpu_ir.zig");
 
 /// Per-resource history validity.
 pub const HistoryUsage = packed struct {
@@ -233,7 +234,7 @@ pub const FrameGraph = struct {
                             .job = base_job,
                             .history_reads = hr,
                             .history_writes = hw,
-                        }},
+                        } },
                     });
                 } else {
                     try node_list.append(ExecutionNode{
@@ -285,4 +286,14 @@ pub const FrameGraph = struct {
         allocator.free(plan.nodes);
         allocator.free(plan.edges);
     }
+};
+
+/// GPU pass descriptor — ties a FrameGraph pass to GPU IR data.
+pub const GPUPassDesc = struct {
+    pass_id: u32,
+    pipeline: gpu_ir.PipelineKey,
+    grid: gpu_ir.DispatchGrid,
+    bindings: gpu_ir.BindGroup,
+    barriers_before: []const gpu_ir.BarrierDesc = &.{},
+    barriers_after: []const gpu_ir.BarrierDesc = &.{},
 };

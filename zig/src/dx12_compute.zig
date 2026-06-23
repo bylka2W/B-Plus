@@ -157,7 +157,7 @@ pub const ComputeContext = struct {
         var heap: ?*anyopaque = null;
         const heap_desc = D3D12_DESCRIPTOR_HEAP_DESC{
             .Type = .CBV_SRV_UAV,
-            .NumDescriptors = 64,
+            .NumDescriptors = 1024,
             .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
             .NodeMask = 0,
         };

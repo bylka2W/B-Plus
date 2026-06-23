@@ -35,15 +35,28 @@ const IMPORT_FNS = [_][]const u8{
     "LoadLibraryA", "GetProcAddress",
     "OpenProcess", "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread", "WaitForSingleObject",
     "GetCurrentProcessId", "WinExec",
-    "TlsAlloc", "TlsGetValue", "TlsSetValue",
+    "TlsAlloc", "TlsGetValue", "TlsSetValue", "TlsFree",
 };
 
 const SectionRva: u32 = 0x1000;
 
 const ContextVarInfo = struct { name: []const u8, type_name: []const u8, default_value: []const u8 };
-const StateVarInfo = struct { name: []const u8, type_name: []const u8, default_value: []const u8, stack_offset: i32, size: u32, cache_policy: ?[]const u8 };
+const StateVarInfo = struct { name: []const u8, type_name: []const u8, default_value: []const u8, stack_offset: i32, size: u32, cache_policy: ?[]const u8, layout_offset: u32 };
 const Fixup = struct { offset: usize, disp_size: u32, label_id: u32 };
 const StateBounds = struct { start: usize, end: usize };
+
+const RetValue = union(enum) {
+    int: i16,
+    float: i16,
+    imm_int: i64,
+};
+
+pub const TraceMode = enum {
+    off,
+    writes,
+    reads,
+    full,
+};
 
 const Trace = struct {
     start_state: usize,
@@ -63,6 +76,7 @@ const PendingOutput = struct {
     state_index_map: std.StringHashMap(usize),
     ctx_vars: std.ArrayList(ContextVarInfo),
     state_vars: std.StringHashMap(std.ArrayList(StateVarInfo)),
+    state_layout_sizes: std.StringHashMap(u32),
     state_code_bounds: std.StringHashMap(StateBounds),
     stack_frame_size: u32,
     off_hstdin: i32, off_hstdout: i32,
@@ -114,14 +128,17 @@ const PendingOutput = struct {
     expr_arena: std.ArrayList(Expr),
     value_uses: std.ArrayList(u32), // use count per value (parallel to expr_arena)
     value_cache: std.AutoHashMap(usize, i16),
+    state_base_reg: i16,
+    pending_ret: ?RetValue,
+    trace_mode: TraceMode,
 };
 
 
 pub fn generate(allocator: Allocator, program: ast.ProgramNode) !X64Output {
-    return generateEx(allocator, program, false);
+    return generateEx(allocator, program, false, .off);
 }
 
-pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool) !X64Output {
+pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, trace_mode: TraceMode) !X64Output {
     var p = PendingOutput{
         .code = std.ArrayList(u8).init(allocator),
         .pending_fixups = std.ArrayList(Fixup).init(allocator),
@@ -134,6 +151,7 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool) 
         .state_index_map = std.StringHashMap(usize).init(allocator),
         .ctx_vars = std.ArrayList(ContextVarInfo).init(allocator),
         .state_vars = std.StringHashMap(std.ArrayList(StateVarInfo)).init(allocator),
+        .state_layout_sizes = std.StringHashMap(u32).init(allocator),
         .state_code_bounds = std.StringHashMap(StateBounds).init(allocator),
         .stack_frame_size = 0,
         .off_hstdin = -8, .off_hstdout = -16,
@@ -176,6 +194,9 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool) 
         .inline_enter = &.{},
         .allocator = allocator,
         .xmm_used = .{false} ** 16,
+        .trace_mode = trace_mode,
+        .state_base_reg = Reg.RBP,
+        .pending_ret = null,
         .symbols = sym.SymbolTable.init(allocator),
         .expr_arena = std.ArrayList(Expr).init(allocator),
         .value_uses = std.ArrayList(u32).init(allocator),
@@ -197,9 +218,11 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool) 
             .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0",
         });
     }
+    p.state_base_reg = Reg.R14;
     computeArenaSizes(&p, program);
     for (program.states.items) |s| p.total_transitions += @intCast(s.transitions.items.len);
     try computeStackLayout(&p, program);
+    try computeStateLayout(&p, program);
     try emitPrologueAndInit(&p, program);
     try emitRuntimeSection(&p);
     // Analyze traces and compute inline_enter before emitting enter funcs
@@ -238,6 +261,7 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool) 
     try emitEventLoop(&p, program, traces);
     try emitCacheBudgetChecks(&p, program);
     try embedStringPool(&p);
+    try embedStateGlobals(&p);
     const import_dir_rva = try emitImportTable(&p);
     try applyFixups(&p);
     // Fill jump table entries (base-relative disp = dp_N - jmp_table)
@@ -272,6 +296,7 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool) 
         var sit = p.state_vars.iterator();
         while (sit.next()) |e| e.value_ptr.deinit();
         p.state_vars.deinit();
+        p.state_layout_sizes.deinit();
     }
     {
         var it = p.state_code_bounds.iterator();
@@ -370,6 +395,7 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     for (p.ctx_vars.items) |_| off -= 8;
     p.off_state_data_base = off;
     p.state_vars.clearRetainingCapacity();
+    p.state_layout_sizes.clearRetainingCapacity();
     var shared = std.StringHashMap(i32).init(p.allocator);
     defer shared.deinit();
     for (program.states.items) |state| {
@@ -378,8 +404,8 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
         var sv = std.ArrayList(StateVarInfo).init(p.allocator);
         for (state.variables.items) |v| {
             const g = shared.get(v.name);
-            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = getTypeSize(v.type_name), .cache_policy = v.cache_policy }); }
-            else { const a = getTypeAlign(v.type_name); const sz = getTypeSize(v.type_name); off = @divFloor(off, @as(i32, @intCast(a))) * @as(i32, @intCast(a)) - @as(i32, @intCast(sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = sz, .cache_policy = v.cache_policy }); }
+            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = getTypeSize(v.type_name), .cache_policy = v.cache_policy, .layout_offset = 0 }); }
+            else { const a = getTypeAlign(v.type_name); const sz = getTypeSize(v.type_name); off = @divFloor(off, @as(i32, @intCast(a))) * @as(i32, @intCast(a)) - @as(i32, @intCast(sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = sz, .cache_policy = v.cache_policy, .layout_offset = 0 }); }
         }
         try p.state_vars.put(state.name, sv);
     }
@@ -389,8 +415,8 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
         var sv = std.ArrayList(StateVarInfo).init(p.allocator);
         for (state.variables.items) |v| {
             const g = shared.get(v.name);
-            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = getTypeSize(v.type_name), .cache_policy = v.cache_policy }); }
-            else { const sz = getTypeSize(v.type_name); off -= @as(i32, @intCast(sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = sz, .cache_policy = v.cache_policy }); }
+            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = getTypeSize(v.type_name), .cache_policy = v.cache_policy, .layout_offset = 0 }); }
+            else { const sz = getTypeSize(v.type_name); off -= @as(i32, @intCast(sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = sz, .cache_policy = v.cache_policy, .layout_offset = 0 }); }
         }
         try p.state_vars.put(state.name, sv);
     }
@@ -438,26 +464,122 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     if (p.stack_frame_size < 40) p.stack_frame_size = 40;
 }
 
+fn computeStateLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
+    const max_align: u32 = 16;
+    for (program.states.items) |state| {
+        var lo: u32 = 0;
+        const sv_list = p.state_vars.get(state.name) orelse continue;
+        for (sv_list.items) |*sv| {
+            const a = getTypeAlign(sv.type_name);
+            lo = (lo + a - 1) & ~(a - 1);
+            sv.layout_offset = lo;
+            lo += sv.size;
+        }
+        lo = (lo + max_align - 1) & ~(max_align - 1);
+        try p.state_layout_sizes.put(state.name, lo);
+    }
+}
+
 fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     if (p.is_dll) {
-        // DLL entry point
-        try abi.emitPrologue(&p.code);
+        // ============================================================
+        // DllMain entry point
+        // RCX = hinstDLL, RDX = fdwReason, R8 = lpvReserved
+        // ============================================================
+        const dll_main_attach = try allocLabelId(p, "dll_attach", .{});
+        const dll_main_detach = try allocLabelId(p, "dll_detach", .{});
+        try p.code.append(0x55); // push rbp
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBP), x64.Operand.r(Reg.RSP) });
+        try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(0x30) });
+        try emitCmpEdxImm(p, 1); // DLL_PROCESS_ATTACH
+        try emitJeRel32(p, dll_main_attach);
+        try emitCmpEdxImm(p, 0); // DLL_PROCESS_DETACH
+        try emitJeRel32(p, dll_main_detach);
+        // DLL_THREAD_ATTACH or DLL_THREAD_DETACH: return TRUE
         try emitXorReg(p, Reg.RAX);
         try emitInc(p, Reg.RAX);
-        try abi.emitEpilogue(&p.code);
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RSP), x64.Operand.r(Reg.RBP) });
+        try p.code.append(0x5D); // pop rbp
+        try p.code.append(0xC3); // ret
+        // --- ATTACH ---
+        try setLabel(p, dll_main_attach);
+        for (program.states.items, 0..) |state, si| {
+            const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{si});
+            const state_ptr_label = try allocLabelId(p, "state_ptr_{d}", .{si});
+            // Allocate TLS index
+            try emitIatCall(p, 28); // TlsAlloc
+            try emitRipRelativeStore32(p, Reg.RAX, tls_idx_label);
+            // Allocate heap state block
+            try emitIatCall(p, 4); // GetProcessHeap → RAX
+            // HeapAlloc(RAX, HEAP_ZERO_MEMORY(8), layout_size)
+            try emitMovRegImm32(p, Reg.R8, p.state_layout_sizes.get(state.name) orelse 0);
+            try emitMovRegImm32(p, Reg.RDX, 8); // HEAP_ZERO_MEMORY
+            // RCX = heap handle from RAX
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+            try emitWin32Call(p, 5, &.{}); // HeapAlloc (rcx/rdx/r8 already set)
+            // Store block pointer
+            try emitRipRelativeStore64(p, Reg.RAX, state_ptr_label);
+            // TlsSetValue(tls_idx, block_ptr)
+            try emitRipRelativeLoad32(p, Reg.RCX, tls_idx_label);
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
+            try emitWin32Call(p, 30, &.{}); // TlsSetValue
+        }
+        try emitXorReg(p, Reg.RAX);
+        try emitInc(p, Reg.RAX);
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RSP), x64.Operand.r(Reg.RBP) });
+        try p.code.append(0x5D); // pop rbp
+        try p.code.append(0xC3); // ret
+        // --- DETACH ---
+        try setLabel(p, dll_main_detach);
+        for (0..program.states.items.len) |si| {
+            const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{si});
+            // TlsGetValue(tls_idx) → block pointer
+            try emitRipRelativeLoad32(p, Reg.RCX, tls_idx_label);
+            try emitWin32Call(p, 29, &.{}); // TlsGetValue
+            // Save block pointer (R15 is non-volatile, preserved across calls below)
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R15), x64.Operand.r(Reg.RAX) });
+            // GetProcessHeap
+            try emitIatCall(p, 4); // → RAX = heap
+            // HeapFree(heap, 0, block_ptr)
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+            try emitXorReg(p, Reg.RDX); // dwFlags = 0
+            try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R8), x64.Operand.r(Reg.R15) });
+            try emitWin32Call(p, 6, &.{}); // HeapFree
+            // TlsFree(tls_idx)
+            try emitRipRelativeLoad32(p, Reg.RCX, tls_idx_label);
+            try emitWin32Call(p, 31, &.{}); // TlsFree
+        }
+        try emitXorReg(p, Reg.RAX);
+        try emitInc(p, Reg.RAX);
+        try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RSP), x64.Operand.r(Reg.RBP) });
+        try p.code.append(0x5D); // pop rbp
+        try p.code.append(0xC3); // ret
+        // ============================================================
         // Export stubs
+        // ============================================================
         for (program.entries.items) |*entry| {
             if (entry.is_export) {
                 const label_id = try allocLabelId(p, "exp_{s}", .{entry.name});
                 try setLabel(p, label_id);
                 try p.symbols.add(entry.name, sym.SymbolKind.exp, @intCast(p.code.items.len));
                 if (entry.body_lines.items.len > 0) {
-                    // Entry with body: full frame prologue, init, compile body, epilogue
+                    // Entry with body: full frame prologue, TLS state load, init, compile body, epilogue
                     try p.code.append(0x55); // push rbp
                     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBP), x64.Operand.r(Reg.RSP) });
                     try emitPushR64(p, Reg.RBX); try emitPushR64(p, Reg.R12);
                     try emitPushR64(p, Reg.R13); try emitPushR64(p, Reg.R14); try emitPushR64(p, Reg.R15);
                     try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
+                    // Load state block via TLS
+                    const state_ctx = if (program.states.items.len > 0) program.states.items[0].name else entry.name;
+                    const state_idx = p.state_index_map.get(state_ctx) orelse 0;
+                    const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{state_idx});
+                    try emitRipRelativeLoad32(p, Reg.RCX, tls_idx_label);
+                    try emitWin32Call(p, 29, &.{}); // TlsGetValue → RAX = state block
+                    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R14), x64.Operand.r(Reg.RAX) });
+                    // Load R15 with trace buffer pointer slot address (if tracing enabled)
+                    if (p.trace_mode != .off) {
+                        try emitTraceBufPtrLoad(p);
+                    }
                     // Init: zero all reserved slots, then init stdin/stdout handles
                     try emitXorReg(p, Reg.RAX);
                     // Zero telem counters
@@ -470,10 +592,12 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l2_allocs), x64.Operand.r(Reg.RAX) });
                     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l3_allocs), x64.Operand.r(Reg.RAX) });
                     // Init I/O handles
-                    try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -10 }});
-                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdin), x64.Operand.r(Reg.RAX) });
-                    try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -11 }});
-                    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdout), x64.Operand.r(Reg.RAX) });
+                    if (!p.is_dll) {
+                        try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -10 }});
+                        try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdin), x64.Operand.r(Reg.RAX) });
+                        try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -11 }});
+                        try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdout), x64.Operand.r(Reg.RAX) });
+                    }
                     // Compile body
                     var buf = std.ArrayList(u8).init(p.allocator);
                     for (entry.body_lines.items, 0..) |line, i| {
@@ -484,15 +608,18 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                         if (i > 0) try buf.append(';');
                         try buf.appendSlice(t);
                     }
-                    const state_ctx = if (program.states.items.len > 0) program.states.items[0].name else entry.name;
+                    p.pending_ret = null;
                     if (buf.items.len > 0) {
                         try emitAction(p, buf.items, state_ctx);
                     } else {
                         try emitXorReg(p, Reg.RAX);
                         try emitInc(p, Reg.RAX);
+                        p.pending_ret = RetValue{ .int = Reg.RAX };
                     }
                     buf.deinit();
-                    // Epilogue
+                    if (p.pending_ret) |rv| {
+                        try emitReturn(p, rv);
+                    }
                     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
                     try emitPopR64(p, Reg.R15); try emitPopR64(p, Reg.R14);
                     try emitPopR64(p, Reg.R13); try emitPopR64(p, Reg.R12);
@@ -507,6 +634,80 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                 }
             }
         }
+        // Auto-generate bpc_get_state export for test introspection
+        if (program.states.items.len > 0) {
+            const state_name = program.states.items[0].name;
+            const sv_list = p.state_vars.get(state_name) orelse return;
+
+            // --- bpc_get_state: returns state base pointer ---
+            {
+                const name = "bpc_get_state";
+                const label_id = try allocLabelId(p, "exp_{s}", .{name});
+                try setLabel(p, label_id);
+                try p.symbols.add(name, sym.SymbolKind.exp, @intCast(p.code.items.len));
+                try abi.emitFullPrologue(&p.code);
+                if (p.is_dll) {
+                    const state_idx: usize = 0;
+                    const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{state_idx});
+                    try emitRipRelativeLoad32(p, Reg.RCX, tls_idx_label);
+                    try emitWin32Call(p, 29, &.{}); // TlsGetValue
+                    try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R14), x64.Operand.r(Reg.RAX) });
+                }
+                try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R14) });
+                try abi.emitFullEpilogue(&p.code);
+            }
+
+            // --- Field metadata table ---
+            // Each entry: 32-byte zero-padded field name + 4-byte type_tag + 4-byte reserved + 8-byte layout_offset = 48 bytes
+            const field_table_label = try allocLabelId(p, "field_table", .{});
+            try setLabel(p, field_table_label);
+            const table_start_offset = p.code.items.len;
+            for (sv_list.items) |sv| {
+                // Write field name (32 bytes, zero-padded)
+                const name_bytes = sv.name;
+                var buf: [32]u8 = [_]u8{0} ** 32;
+                const copy_len = @min(name_bytes.len, 31);
+                @memcpy(buf[0..copy_len], name_bytes[0..copy_len]);
+                try p.code.appendSlice(&buf);
+                // Write type tag as 32-bit little-endian
+                const type_tag: u32 = if (std.mem.eql(u8, sv.type_name, "image<f32>")) 2
+                else if (std.mem.eql(u8, sv.type_name, "float")) 1
+                else 0; // INT = 0, FLOAT = 1, IMAGE_F32 = 2
+                const tag_bytes: [4]u8 = @bitCast(type_tag);
+                try p.code.appendSlice(&tag_bytes);
+                // Reserved (4 bytes, zero)
+                try p.code.appendSlice(&([_]u8{0} ** 4));
+                // Write layout_offset as 64-bit little-endian
+                const off_bytes: [8]u8 = @bitCast(@as(i64, @intCast(sv.layout_offset)));
+                try p.code.appendSlice(&off_bytes);
+            }
+            // End marker: 48 zero bytes
+            {
+                const zeros: [48]u8 = [_]u8{0} ** 48;
+                try p.code.appendSlice(&zeros);
+            }
+
+            // --- bpc_enum_fields: returns absolute address of field table ---
+            {
+                const name = "bpc_enum_fields";
+                const label_id = try allocLabelId(p, "exp_{s}", .{name});
+                try setLabel(p, label_id);
+                try p.symbols.add(name, sym.SymbolKind.exp, @intCast(p.code.items.len));
+                // LEA RAX, [RIP + field_table]
+                const disp = @as(i32, @truncate(@as(i64, @intCast(table_start_offset)) - @as(i64, @intCast(p.code.items.len + 7))));
+                try p.code.append(0x48); // REX.W
+                try p.code.append(0x8D); // LEA
+                try p.code.append(0x05); // ModRM: mod=00, reg=000(RAX), r/m=101(RIP-rel)
+                const disp_bytes: [4]u8 = @bitCast(disp);
+                try p.code.appendSlice(&disp_bytes);
+                try p.code.append(0xC3); // RET
+            }
+
+            // --- bpc_get_trace_buf_slot: returns address of trace buffer pointer slot ---
+            if (p.trace_mode != .off) {
+                try emitBpcGetTraceBufSlot(p);
+            }
+        }
         return;
     }
     try p.code.append(0x55);
@@ -514,6 +715,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     try emitPushR64(p, Reg.RBX); try emitPushR64(p, Reg.R12);
     try emitPushR64(p, Reg.R13); try emitPushR64(p, Reg.R14); try emitPushR64(p, Reg.R15);
     try x64.emit(&p.code, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
+    try x64.emit(&p.code, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R14), x64.Operand.mem(Reg.RBP, p.off_state_data_base) });
     var off = p.off_ctx_var_start;
     for (p.ctx_vars.items) |v| {
         if (isSimdType(v.type_name)) {
@@ -524,7 +726,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                 try emitLoadImm(p, Reg.RAX, val);
                 try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(XMM.XMM0), x64.Operand.r(Reg.RAX) });
             }
-            try emitStoreXmmFromReg(p, off, XMM.XMM0, 4);
+            try emitStoreXmmFromReg(p, off, XMM.XMM0, 4, Reg.RBP);
         } else {
             try emitLoadImm(p, Reg.RAX, parseNumber(v.default_value));
             try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, off), x64.Operand.r(Reg.RAX) });
@@ -545,10 +747,10 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                         try x64.emit(&p.code, .SSE_SHUFPS, &.{ x64.Operand.xmm(XMM.XMM0), x64.Operand.xmm(XMM.XMM0), x64.Operand.immU32(0) });
                     }
                 }
-                try emitStoreXmmFromReg(p, sv.stack_offset, XMM.XMM0, sv.size);
+                try emitStoreXmmFromReg(p, @as(i32, @intCast(sv.layout_offset)), XMM.XMM0, sv.size, p.state_base_reg);
             } else {
                 try emitLoadImm(p, Reg.RAX, parseNumber(sv.default_value));
-                try emitStoreVarFromReg(p, sv.stack_offset, Reg.RAX, sv.size);
+                try emitStoreVarFromReg(p, @as(i32, @intCast(sv.layout_offset)), Reg.RAX, sv.size, p.state_base_reg);
             }
         }
     }
@@ -651,7 +853,8 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                 if (i > 0) try buf.append(';');
                 try buf.appendSlice(t);
             }
-            try emitAction(p, buf.items, "");
+            const state_ctx = if (program.states.items.len > 0) program.states.items[0].name else "";
+            try emitAction(p, buf.items, state_ctx);
             buf.deinit();
         }
     }
@@ -666,7 +869,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
 }
 
 fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
-    try setLabel(p, try allocLabelId(p, "rt_{d}", .{@intFromEnum(intrinsic)}));
+    try setLabel(p, try allocLabelId(p, "rt_{d}", .{@as(u32, @intFromEnum(intrinsic))}));
     // Pre‑allocate all labels needed for this intrinsic subroutine.
     // The caller (emitRuntimeSection) iterates the Intrinsic enum and each
     // invocation of emitOneIntrinsic produces one self‑contained subroutine.
@@ -1240,9 +1443,9 @@ fn emitStateEnterBodyContent(p: *PendingOutput, state: *const ast.StateDefNode, 
                                 try x64.emit(&p.code, .SSE_SHUFPS, &.{ x64.Operand.xmm(XMM.XMM0), x64.Operand.xmm(XMM.XMM0), x64.Operand.immU32(0) });
                             }
                         }
-                        try emitStoreXmmFromReg(p, vo, XMM.XMM0, vsz);
+                        try emitStoreXmmFromReg(p, vo, XMM.XMM0, vsz, getVarBaseReg(p, state.name, v.name));
                     } else {
-                        try emitStoreVarFromReg(p, vo, Reg.RAX, vsz);
+                        try emitStoreVarFromReg(p, vo, Reg.RAX, vsz, getVarBaseReg(p, state.name, v.name));
                     }
                 }
             }
@@ -1289,7 +1492,7 @@ fn emitStateEnterFuncs(p: *PendingOutput, program: ast.ProgramNode) !void {
             const ti_idx = p.state_index_map.get(t.target).?;
             const ts = program.states.items[ti_idx];
             const level: i32 = if (ts.cache_policy) |cp| blk: { if (std.mem.eql(u8, cp, "L2")) break :blk 2; if (std.mem.eql(u8, cp, "L3")) break :blk 3; break :blk 1; } else 1;
-            if (p.state_vars.get(t.target)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, sv.stack_offset, level); }
+            if (p.state_vars.get(t.target)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, @as(i32, @intCast(sv.layout_offset)), level, p.state_base_reg); }
             if (level <= 1) try emitPrefetch(p, p.en_id[ti_idx]);
         }
         lv.deinit();
@@ -1937,6 +2140,18 @@ fn embedStringPool(p: *PendingOutput) !void {
     }
 }
 
+fn embedStateGlobals(p: *PendingOutput) !void {
+    for (0..p.state_names.items.len) |si| {
+        try setLabel(p, try allocLabelId(p, "tls_idx_{d}", .{si}));
+        try p.code.appendNTimes(0, 4); // dword TLS index
+        try setLabel(p, try allocLabelId(p, "state_ptr_{d}", .{si}));
+        try p.code.appendNTimes(0, 8); // qword state block pointer
+    }
+    // Trace buffer pointer slot (written by runner via bpc_set_trace_buffer)
+    try setLabel(p, try allocLabelId(p, "trace_buf_ptr", .{}));
+    try p.code.appendNTimes(0, 8); // qword: current write position in trace buffer
+}
+
 fn emitImportTable(p: *PendingOutput) !u32 {
     const base_off = @as(u32, @intCast(p.code.items.len));
     const nf = IMPORT_FNS.len;
@@ -2044,6 +2259,59 @@ fn emitIatCall(p: *PendingOutput, import_idx: usize) !void {
     const fixoff = p.code.items.len;
     try p.code.appendNTimes(0, 4);
     const label_id = try allocLabelId(p, "iat_{d}", .{import_idx});
+    try p.pending_fixups.append(.{ .offset = fixoff, .disp_size = 4, .label_id = label_id });
+}
+
+fn emitRipRelativeStore64(p: *PendingOutput, reg: i16, label_id: u32) !void {
+    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(255, 0), x64.Operand.r(reg) });
+    const disp_off = p.code.items.len - 4;
+    try p.pending_fixups.append(.{ .offset = disp_off, .disp_size = 4, .label_id = label_id });
+}
+
+fn emitRipRelativeStore32(p: *PendingOutput, reg: i16, label_id: u32) !void {
+    try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(255, 0), x64.Operand.r(reg) });
+    const disp_off = p.code.items.len - 4;
+    try p.pending_fixups.append(.{ .offset = disp_off, .disp_size = 4, .label_id = label_id });
+}
+
+fn emitRipRelativeLoad64(p: *PendingOutput, reg: i16, label_id: u32) !void {
+    try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(reg), x64.Operand.mem(255, 0) });
+    const disp_off = p.code.items.len - 4;
+    try p.pending_fixups.append(.{ .offset = disp_off, .disp_size = 4, .label_id = label_id });
+}
+
+fn emitRipRelativeLoad32(p: *PendingOutput, reg: i16, label_id: u32) !void {
+    try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(reg), x64.Operand.mem(255, 0) });
+    const disp_off = p.code.items.len - 4;
+    try p.pending_fixups.append(.{ .offset = disp_off, .disp_size = 4, .label_id = label_id });
+}
+
+fn emitCmpEdxImm(p: *PendingOutput, imm: u8) !void {
+    try p.code.append(0x83);
+    try p.code.append(0xFA);
+    try p.code.append(imm);
+}
+
+fn emitJeRel32(p: *PendingOutput, label_id: u32) !void {
+    try p.code.append(0x0F);
+    try p.code.append(0x84);
+    const fixoff = p.code.items.len;
+    try p.code.appendNTimes(0, 4);
+    try p.pending_fixups.append(.{ .offset = fixoff, .disp_size = 4, .label_id = label_id });
+}
+
+fn emitJneRel32(p: *PendingOutput, label_id: u32) !void {
+    try p.code.append(0x0F);
+    try p.code.append(0x85);
+    const fixoff = p.code.items.len;
+    try p.code.appendNTimes(0, 4);
+    try p.pending_fixups.append(.{ .offset = fixoff, .disp_size = 4, .label_id = label_id });
+}
+
+fn emitJmpRel32(p: *PendingOutput, label_id: u32) !void {
+    try p.code.append(0xE9);
+    const fixoff = p.code.items.len;
+    try p.code.appendNTimes(0, 4);
     try p.pending_fixups.append(.{ .offset = fixoff, .disp_size = 4, .label_id = label_id });
 }
 
@@ -2289,15 +2557,20 @@ fn alignTo16(p: *PendingOutput) !void {
     if (mod != 0) try emitNop(p, 16 - mod);
 }
 
-fn emitPrefetchData(p: *PendingOutput, stack_offset: i32, level: i32) !void {
+fn emitPrefetchData(p: *PendingOutput, offset: i32, level: i32, base_reg: i16) !void {
     try p.code.append(0x0F); try p.code.append(0x18);
-    const reg: u8 = if (level == 0) 0 else if (level == 1) 1 else if (level == 2) 2 else 3;
-    if (stack_offset >= -128 and stack_offset <= 127) {
-        try p.code.append(0x45 | (reg << 3));
-        try p.code.append(@as(u8, @bitCast(@as(i8, @intCast(stack_offset)))));
+    var reg: u8 = 3;
+    if (level == 0) { reg = 0; } else if (level == 1) { reg = 1; } else if (level == 2) { reg = 2; }
+    if (base_reg >= 8) {
+        try p.code.append(0x41);
+    }
+    const rm_low = @as(u8, @intCast(base_reg & 0x7));
+    if (offset >= -128 and offset <= 127) {
+        try p.code.append(0x40 | (reg << 3) | rm_low);
+        try p.code.append(@as(u8, @bitCast(@as(i8, @intCast(offset)))));
     } else {
-        try p.code.append(0x85 | (reg << 3));
-        try p.code.appendSlice(&@as([4]u8, @bitCast(stack_offset)));
+        try p.code.append(0x80 | (reg << 3) | rm_low);
+        try p.code.appendSlice(&@as([4]u8, @bitCast(offset)));
     }
 }
 
@@ -2308,14 +2581,14 @@ fn emitPrefetch(p: *PendingOutput, label_id: u32) !void {
 
 fn emitPrefetchColdData(p: *PendingOutput, state: *const ast.StateDefNode) !void {
     if ((state.hot_weight orelse 0.5) > 0.3) return;
-    if (p.state_vars.get(state.name)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, sv.stack_offset, 0); }
+    if (p.state_vars.get(state.name)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, @as(i32, @intCast(sv.layout_offset)), 0, p.state_base_reg); }
 }
 
 fn emitPrefetchForTransitionCacheAware(p: *PendingOutput, t: *const ast.TransitionNode) !void {
     const hw = t.hot_weight orelse 0.5;
     const level: i32 = if (hw >= 0.8) 1 else if (hw >= 0.4) 2 else 0;
     const ti = p.state_index_map.get(t.target).?;
-    if (p.state_vars.get(t.target)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, sv.stack_offset, level); }
+    if (p.state_vars.get(t.target)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, @as(i32, @intCast(sv.layout_offset)), level, p.state_base_reg); }
     try emitPrefetch(p, p.en_id[ti]);
 }
 
@@ -2367,11 +2640,11 @@ fn emitForLoop(p: *PendingOutput, w: u32, h: u32, body: []const u8, current_stat
     const end_lbl = try allocLabelId(p, "for_end_{d}", .{p.label_names.items.len});
 
     try emitLoadImm(p, Reg.RAX, 0);
-    try emitStoreVarFromReg(p, p.off_for_loop_x, Reg.RAX, 4);
-    try emitStoreVarFromReg(p, p.off_for_loop_y, Reg.RAX, 4);
+    try emitStoreVarFromReg(p, p.off_for_loop_x, Reg.RAX, 4, Reg.RBP);
+    try emitStoreVarFromReg(p, p.off_for_loop_y, Reg.RAX, 4, Reg.RBP);
 
     try setLabel(p, header_lbl);
-    try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_y, 4);
+    try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_y, 4, Reg.RBP);
     try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(h) });
     try emitCondLongJmp(p, .JGE_REL32, end_lbl);
 
@@ -2382,19 +2655,38 @@ fn emitForLoop(p: *PendingOutput, w: u32, h: u32, body: []const u8, current_stat
         p.in_for_loop = saved;
     }
 
-    try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_x, 4);
+    try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_x, 4, Reg.RBP);
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(1) });
-    try emitStoreVarFromReg(p, p.off_for_loop_x, Reg.RAX, 4);
+    try emitStoreVarFromReg(p, p.off_for_loop_x, Reg.RAX, 4, Reg.RBP);
     try x64.emit(&p.code, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(w) });
     try emitCondLongJmp(p, .JL_REL32, header_lbl);
 
     try emitLoadImm(p, Reg.RAX, 0);
-    try emitStoreVarFromReg(p, p.off_for_loop_x, Reg.RAX, 4);
-    try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_y, 4);
+    try emitStoreVarFromReg(p, p.off_for_loop_x, Reg.RAX, 4, Reg.RBP);
+    try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_y, 4, Reg.RBP);
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(1) });
-    try emitStoreVarFromReg(p, p.off_for_loop_y, Reg.RAX, 4);
+    try emitStoreVarFromReg(p, p.off_for_loop_y, Reg.RAX, 4, Reg.RBP);
     try emitLongJmp(p, header_lbl);
     try setLabel(p, end_lbl);
+}
+
+fn emitReturn(p: *PendingOutput, rv: RetValue) !void {
+    switch (rv) {
+        .float => |x| {
+            if (x != XMM.XMM0) {
+                try x64.emit(&p.code, .SSE_MOVAPS_LD, &.{ x64.Operand.xmm(XMM.XMM0), x64.Operand.xmm(x) });
+            }
+            try x64.emit(&p.code, .SSE_MOVD_ST, &.{ x64.Operand.r(Reg.RAX), x64.Operand.xmm(XMM.XMM0) });
+        },
+        .int => |reg| {
+            if (reg != Reg.RAX) {
+                try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(reg) });
+            }
+        },
+        .imm_int => |val| {
+            try x64.emit(&p.code, .MOV_R64_IMM64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.imm(val) });
+        },
+    }
 }
 
 fn emitAction(p: *PendingOutput, body: []const u8, current_state: []const u8) anyerror!void {
@@ -2503,11 +2795,10 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R12), x64.Operand.r(Reg.RAX) });
         try emitExprToRAX(p, w_str, current_state);
         try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R12, 0), x64.Operand.r(Reg.RAX) });
-        try emitExprToRAX(p, h_str, current_state);
         try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R12, 4), x64.Operand.r(Reg.RAX) });
-        try emitExprToRAX(p, w_str, current_state);
+        try emitExprToRAX(p, h_str, current_state);
         try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R12, 8), x64.Operand.r(Reg.RAX) });
-        try emitStoreVarFromReg(p, vo, Reg.R12, 8);
+        try emitStoreVarFromReg(p, vo, Reg.R12, 8, getVarBaseReg(p, current_state, name));
         return;
     }
     if (std.mem.startsWith(u8, body, "print(") and std.mem.endsWith(u8, body, ")")) {
@@ -2557,17 +2848,19 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
             const size = getVarSize(p, current_state, var_name);
             if (isFloatVar(p, current_state, var_name)) {
                 const rhs_reg = try emitExprToXmm(p, expr, current_state, size);
-                try emitLoadXmmToReg(p, XMM.XMM0, vo, size);
+                try emitLoadXmmToReg(p, XMM.XMM0, vo, size, getVarBaseReg(p, current_state, var_name));
                 try emitSseArith(p, XMM.XMM0, rhs_reg, .SSE_ADDPS, .SSE_ADDSS, size);
                 freeXmm(p, rhs_reg);
-                try emitStoreXmmFromReg(p, vo, XMM.XMM0, size);
+                try emitStoreXmmFromReg(p, vo, XMM.XMM0, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .float = XMM.XMM0 };
             } else {
-                try emitLoadVarToReg(p, Reg.RAX, vo, size);
+                try emitLoadVarToReg(p, Reg.RAX, vo, size, getVarBaseReg(p, current_state, var_name));
                 try emitExprToRAXAdd(p, expr, current_state);
-                try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .int = Reg.RAX };
             }
+            return;
         }
-        return;
     }
     if (std.mem.containsAtLeast(u8, body, 1, "-=")) {
         const idx = std.mem.indexOf(u8, body, "-=") orelse return;
@@ -2578,19 +2871,41 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
             const size = getVarSize(p, current_state, var_name);
             if (isFloatVar(p, current_state, var_name)) {
                 const rhs_reg = try emitExprToXmm(p, expr, current_state, size);
-                try emitLoadXmmToReg(p, XMM.XMM0, vo, size);
+                try emitLoadXmmToReg(p, XMM.XMM0, vo, size, getVarBaseReg(p, current_state, var_name));
                 try emitSseArith(p, XMM.XMM0, rhs_reg, .SSE_SUBPS, .SSE_SUBSS, size);
                 freeXmm(p, rhs_reg);
-                try emitStoreXmmFromReg(p, vo, XMM.XMM0, size);
+                try emitStoreXmmFromReg(p, vo, XMM.XMM0, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .float = XMM.XMM0 };
             } else {
-                try emitLoadVarToReg(p, Reg.RAX, vo, size);
+                try emitLoadVarToReg(p, Reg.RAX, vo, size, getVarBaseReg(p, current_state, var_name));
                 try emitExprToRAXSub(p, expr, current_state);
-                try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .int = Reg.RAX };
             }
         }
         return;
     }
     if (try tryEmitWin32Call(p, body, current_state)) return;
+    // return -> expr
+    if (std.mem.startsWith(u8, trimmed_body, "return ")) {
+        const after_return = std.mem.trimLeft(u8, trimmed_body["return ".len..], " \t\r\n");
+        if (std.mem.startsWith(u8, after_return, "-> ")) {
+            const expr = std.mem.trimLeft(u8, after_return["-> ".len..], " \t\r\n");
+            if (try tryEmitWin32Call(p, expr, current_state)) {
+                p.pending_ret = RetValue{ .int = Reg.RAX };
+                return;
+            }
+            if (isFloatExpr(p, current_state, expr)) {
+                const reg = try emitExprToXmm(p, expr, current_state, 4);
+                p.pending_ret = RetValue{ .float = reg };
+                freeXmm(p, reg);
+                return;
+            }
+            try emitExprToRAX(p, expr, current_state);
+            p.pending_ret = RetValue{ .int = Reg.RAX };
+            return;
+        }
+    }
     const eq = std.mem.indexOf(u8, body, "=");
     if (eq != null and eq.? > 0) {
         const var_name = std.mem.trim(u8, body[0..eq.?], " \t");
@@ -2606,6 +2921,7 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
             const elem_size: u32 = 4;
             const reg = try emitExprToXmm(p, expr, current_state, elem_size);
             try emitImagePixelStoreReg(p, img_name, x_expr, y_expr, current_state, elem_size, reg);
+            p.pending_ret = RetValue{ .float = reg };
             freeXmm(p, reg);
             return;
         }
@@ -2614,18 +2930,22 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
             const size = getVarSize(p, current_state, var_name);
             if (isFloatVar(p, current_state, var_name)) {
                 const reg = try emitExprToXmm(p, expr, current_state, size);
-                try emitStoreXmmFromReg(p, vo, reg, size);
+                try emitStoreXmmFromReg(p, vo, reg, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .float = reg };
                 freeXmm(p, reg);
             } else if (try tryEmitWin32Call(p, expr, current_state)) {
-                try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .int = Reg.RAX };
             } else if (isFloatExpr(p, current_state, expr)) {
                 const reg = try emitExprToXmm(p, expr, current_state, 4);
                 try x64.emit(&p.code, .SSE_CVTTSS2SI, &.{ x64.Operand.r(Reg.RAX), x64.Operand.xmm(reg) });
                 freeXmm(p, reg);
-                try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .int = Reg.RAX };
             } else {
                 try emitExprToRAX(p, expr, current_state);
-                try emitStoreVarFromReg(p, vo, Reg.RAX, size);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .int = Reg.RAX };
             }
             return;
         }
@@ -2637,16 +2957,19 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
                 if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
                     try x64.emit(&p.code, .SSE_MOVSS_ST, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.xmm(reg) });
                 }
+                p.pending_ret = RetValue{ .float = reg };
                 freeXmm(p, reg);
             } else if (try tryEmitWin32Call(p, expr, current_state)) {
                 if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
                     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
                 }
+                p.pending_ret = RetValue{ .int = Reg.RAX };
             } else {
                 try emitExprToRAX(p, expr, current_state);
                 if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
                     try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
                 }
+                p.pending_ret = RetValue{ .int = Reg.RAX };
             }
             return;
         }
@@ -2745,8 +3068,22 @@ fn getVarOffset(p: *PendingOutput, state_name: []const u8, var_name: []const u8)
         if (std.mem.eql(u8, var_name, "y")) return p.off_for_loop_y;
     }
     for (p.ctx_vars.items, 0..) |cv, i| { if (std.mem.eql(u8, cv.name, var_name)) return p.off_ctx_var_start - @as(i32, @intCast(i)) * 8; }
-    if (p.state_vars.get(state_name)) |sv_list| { for (sv_list.items) |sv| { if (std.mem.eql(u8, sv.name, var_name)) return sv.stack_offset; } }
+    if (p.state_vars.get(state_name)) |sv_list| { for (sv_list.items) |sv| { if (std.mem.eql(u8, sv.name, var_name)) return @as(i32, @intCast(sv.layout_offset)); } }
     return std.math.minInt(i32);
+}
+
+fn isStateVar(p: *PendingOutput, state_name: []const u8, var_name: []const u8) bool {
+    if (p.in_for_loop) {
+        if (std.mem.eql(u8, var_name, "x") or std.mem.eql(u8, var_name, "y")) return false;
+    }
+    for (p.ctx_vars.items) |cv| { if (std.mem.eql(u8, cv.name, var_name)) return false; }
+    if (p.state_vars.get(state_name)) |sv_list| { for (sv_list.items) |sv| { if (std.mem.eql(u8, sv.name, var_name)) return true; } }
+    return false;
+}
+
+fn getVarBaseReg(p: *PendingOutput, state_name: []const u8, var_name: []const u8) i16 {
+    if (isStateVar(p, state_name, var_name)) return p.state_base_reg;
+    return Reg.RBP;
 }
 
 fn getVarSize(p: *PendingOutput, state_name: []const u8, var_name: []const u8) u32 {
@@ -2759,42 +3096,162 @@ fn getVarSize(p: *PendingOutput, state_name: []const u8, var_name: []const u8) u
     return 8;
 }
 
-fn emitLoadVarToReg(p: *PendingOutput, reg: i16, offset: i32, size: u32) !void {
+fn emitLoadVarToReg(p: *PendingOutput, reg: i16, offset: i32, size: u32, base_reg: i16) !void {
     switch (size) {
-        1 => try x64.emit(&p.code, .MOVSX_R64_MEM8, &.{ x64.Operand.r(reg), x64.Operand.mem(Reg.RBP, offset) }),
-        2 => try x64.emit(&p.code, .MOVSX_R64_MEM16, &.{ x64.Operand.r(reg), x64.Operand.mem(Reg.RBP, offset) }),
-        4 => try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(reg), x64.Operand.mem(Reg.RBP, offset) }),
-        else => try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(reg), x64.Operand.mem(Reg.RBP, offset) }),
+        1 => try x64.emit(&p.code, .MOVSX_R64_MEM8, &.{ x64.Operand.r(reg), x64.Operand.mem(base_reg, offset) }),
+        2 => try x64.emit(&p.code, .MOVSX_R64_MEM16, &.{ x64.Operand.r(reg), x64.Operand.mem(base_reg, offset) }),
+        4 => try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(reg), x64.Operand.mem(base_reg, offset) }),
+        else => try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(reg), x64.Operand.mem(base_reg, offset) }),
+    }
+    // Trace read of state field
+    if (p.trace_mode == .reads or p.trace_mode == .full) {
+        if (base_reg == p.state_base_reg) {
+            try emitTraceRead(p, @as(u8, @intCast(size)), offset, reg);
+        }
     }
 }
 
-fn emitStoreVarFromReg(p: *PendingOutput, offset: i32, reg: i16, size: u32) !void {
+fn emitStoreVarFromReg(p: *PendingOutput, offset: i32, reg: i16, size: u32, base_reg: i16) !void {
     switch (size) {
-        1 => try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.RBP, offset), x64.Operand.r(reg) }),
-        2 => try x64.emit(&p.code, .MOV_MEM_R16, &.{ x64.Operand.mem(Reg.RBP, offset), x64.Operand.r(reg) }),
-        4 => try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, offset), x64.Operand.r(reg) }),
-        else => try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, offset), x64.Operand.r(reg) }),
+        1 => try x64.emit(&p.code, .MOV_MEM_R8, &.{ x64.Operand.mem(base_reg, offset), x64.Operand.r(reg) }),
+        2 => try x64.emit(&p.code, .MOV_MEM_R16, &.{ x64.Operand.mem(base_reg, offset), x64.Operand.r(reg) }),
+        4 => try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(base_reg, offset), x64.Operand.r(reg) }),
+        else => try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(base_reg, offset), x64.Operand.r(reg) }),
+    }
+    // Trace write of state field
+    if (p.trace_mode == .writes or p.trace_mode == .full) {
+        if (base_reg == p.state_base_reg) {
+            try emitTraceWrite(p, @as(u8, @intCast(size)), offset, reg);
+        }
     }
 }
 
-fn emitLoadXmmToReg(p: *PendingOutput, xmm: i16, offset: i32, size: u32) !void {
-    const mem = x64.Operand.mem(Reg.RBP, offset);
+fn emitLoadXmmToReg(p: *PendingOutput, xmm: i16, offset: i32, size: u32, base_reg: i16) !void {
+    const mem = x64.Operand.mem(base_reg, offset);
     switch (size) {
         4 => try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(xmm), mem }),
         8 => try x64.emit(&p.code, .SSE_MOVSD_LD, &.{ x64.Operand.xmm(xmm), mem }),
         16 => try x64.emit(&p.code, .SSE_MOVUPS_LD, &.{ x64.Operand.xmm(xmm), mem }),
         else => try x64.emit(&p.code, .SSE_MOVUPS_LD, &.{ x64.Operand.xmm(xmm), mem }),
     }
+    // Trace read of SIMD state field
+    if (p.trace_mode == .reads or p.trace_mode == .full) {
+        if (base_reg == p.state_base_reg) {
+            // Move XMM value to GPR for tracing
+            const tmp_reg = Reg.RCX;
+            if (size <= 4) {
+                try x64.emit(&p.code, .SSE_MOVD_ST, &.{ x64.Operand.r(tmp_reg), x64.Operand.xmm(xmm) });
+            } else {
+                try x64.emit(&p.code, .SSE_MOVQ_ST, &.{ x64.Operand.r(tmp_reg), x64.Operand.xmm(xmm) });
+            }
+            try emitTraceRead(p, @as(u8, @intCast(size)), offset, tmp_reg);
+        }
+    }
 }
 
-fn emitStoreXmmFromReg(p: *PendingOutput, offset: i32, xmm: i16, size: u32) !void {
-    const mem = x64.Operand.mem(Reg.RBP, offset);
+fn emitStoreXmmFromReg(p: *PendingOutput, offset: i32, xmm: i16, size: u32, base_reg: i16) !void {
+    const mem = x64.Operand.mem(base_reg, offset);
+    // For trace, capture value before store (XMM still holds it)
+    const should_trace = (p.trace_mode == .writes or p.trace_mode == .full) and base_reg == p.state_base_reg;
+    if (should_trace) {
+        // Move XMM value to GPR for tracing before the store
+        const tmp_reg = Reg.RCX;
+        if (size <= 4) {
+            try x64.emit(&p.code, .SSE_MOVD_ST, &.{ x64.Operand.r(tmp_reg), x64.Operand.xmm(xmm) });
+        } else {
+            try x64.emit(&p.code, .SSE_MOVQ_ST, &.{ x64.Operand.r(tmp_reg), x64.Operand.xmm(xmm) });
+        }
+    }
     switch (size) {
         4 => try x64.emit(&p.code, .SSE_MOVSS_ST, &.{ mem, x64.Operand.xmm(xmm) }),
         8 => try x64.emit(&p.code, .SSE_MOVSD_ST, &.{ mem, x64.Operand.xmm(xmm) }),
         16 => try x64.emit(&p.code, .SSE_MOVUPS_ST, &.{ mem, x64.Operand.xmm(xmm) }),
         else => try x64.emit(&p.code, .SSE_MOVUPS_ST, &.{ mem, x64.Operand.xmm(xmm) }),
     }
+    if (should_trace) {
+        try emitTraceWrite(p, @as(u8, @intCast(size)), offset, Reg.RCX);
+    }
+}
+
+// --- Trace Event Instrumentation ---
+// TraceEvent layout (16 bytes):
+//   [0] u8  opcode  (0=read, 1=write)
+//   [1] u8  size    (access size: 1/2/4/8)
+//   [2] u16 reserved
+//   [4] u32 field_offset (state field layout_offset)
+//   [8] u64 value (raw bits)
+//
+// R15 = address of trace_buf_ptr global slot (loaded in export prologue)
+// [R15] = current write position in trace buffer (advances with each event)
+
+fn emitTraceEvent(p: *PendingOutput, opcode: u8, size: u8, field_offset: i32, value_reg: i16) !void {
+    // Use R11 as buffer temp (R11 is volatile, unused by callers like emitImagePixelStoreReg)
+    // mov r11, [r15]         ; r11 = current buffer write position
+    try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.R15, 0) });
+    // mov byte [r11], opcode
+    try p.code.append(0x41); try p.code.append(0xC6); try p.code.append(0x03); try p.code.append(opcode);
+    // mov byte [r11+1], size
+    try p.code.append(0x41); try p.code.append(0xC6); try p.code.append(0x43); try p.code.append(0x01); try p.code.append(size);
+    // mov dword [r11+4], field_offset
+    try p.code.append(0x41); try p.code.append(0xC7); // MOV r/m32, imm32 with REX.B
+    try p.code.append(0x43); // ModRM: mod=01, reg=000, r/m=011(R11), disp8
+    try p.code.append(0x04); // disp8 = 4
+    const off_bytes: [4]u8 = @bitCast(@as(i32, @intCast(field_offset)));
+    try p.code.appendSlice(&off_bytes);
+    // mov [r11+8], value_reg  (64-bit store)
+    const rex_b: u8 = 0x01; // REX.B for R11 r/m
+    const rex_r: u8 = if (value_reg >= 8) 0x04 else 0; // REX.R for ModRM.reg (source in 0x89 encoding)
+    try p.code.append(0x48 | rex_b | rex_r);
+    try p.code.append(0x89); // MOV r/m64, r64
+    // ModRM: mod=01 (disp8), reg=value_reg&7, r/m=011(R11), disp8=8
+    try p.code.append(0x43 | (@as(u8, @intCast(value_reg & 7)) << 3));
+    try p.code.append(0x08); // disp8 = 8
+    // add r11, 16
+    try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(16) });
+    // mov [r15], r11          ; store back advanced position
+    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.R15, 0), x64.Operand.r(Reg.R11) });
+}
+
+fn emitTraceRead(p: *PendingOutput, size: u8, field_offset: i32, value_reg: i16) !void {
+    try emitTraceEvent(p, 0, size, field_offset, value_reg);
+}
+
+fn emitTraceWrite(p: *PendingOutput, size: u8, field_offset: i32, value_reg: i16) !void {
+    try emitTraceEvent(p, 1, size, field_offset, value_reg);
+}
+
+// Load R15 with address of trace_buf_ptr global slot (called in export prologue)
+fn emitTraceBufPtrLoad(p: *PendingOutput) !void {
+    const label_id = try allocLabelId(p, "trace_buf_ptr", .{});
+    // LEA R15, [RIP + trace_buf_ptr]
+    const rex: u8 = 0x48 | 0x04; // REX.W + REX.R (R15 in ModRM.reg)
+    try p.code.append(rex);
+    try p.code.append(0x8D); // LEA
+    try p.code.append(0x3D); // ModRM: mod=00, reg=111(R15), r/m=101(RIP-rel)
+    try p.pending_fixups.append(.{ .offset = @intCast(p.code.items.len), .disp_size = 4, .label_id = label_id });
+    try p.code.appendNTimes(0, 4);
+}
+
+fn emitRipRelativeLea(p: *PendingOutput, reg: i16, label_id: u32) !void {
+    const rex: u8 = 0x48 | (if (reg >= 8) @as(u8, 0x04) else 0); // REX.W + REX.R for extended reg
+    try p.code.append(rex);
+    try p.code.append(0x8D); // LEA
+    // ModRM: mod=00, reg=reg&7, r/m=101 (RIP-relative)
+    try p.code.append(0x05 | (@as(u8, @intCast(reg & 7)) << 3));
+    try p.pending_fixups.append(.{ .offset = @intCast(p.code.items.len), .disp_size = 4, .label_id = label_id });
+    try p.code.appendNTimes(0, 4);
+}
+
+// --- Expose trace buffer slot address to runner ---
+fn emitBpcGetTraceBufSlot(p: *PendingOutput) !void {
+    const name = "bpc_get_trace_buf_slot";
+    try setLabel(p, try allocLabelId(p, "exp_{s}", .{name}));
+    try p.symbols.add(name, sym.SymbolKind.exp, @intCast(p.code.items.len));
+    try abi.emitFullPrologue(&p.code);
+    // LEA RAX, [RIP + trace_buf_ptr]
+    const label_id = try allocLabelId(p, "trace_buf_ptr", .{});
+    try emitRipRelativeLea(p, Reg.RAX, label_id);
+    try abi.emitFullEpilogue(&p.code);
 }
 
 fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8) anyerror!void {
@@ -2926,7 +3383,7 @@ fn tryLoadVarToReg(p: *PendingOutput, reg: i16, name: []const u8, state: []const
     const vo = getVarOffset(p, state, name);
     if (vo != std.math.minInt(i32)) {
         const size = getVarSize(p, state, name);
-        try emitLoadVarToReg(p, reg, vo, size);
+        try emitLoadVarToReg(p, reg, vo, size, getVarBaseReg(p, state, name));
         return true;
     }
     return false;
@@ -2944,6 +3401,12 @@ fn isFloatExpr(p: *PendingOutput, state: []const u8, expr: []const u8) bool {
         if (c == '.' and i > 0 and i < expr.len - 1 and std.ascii.isDigit(expr[i-1]) and std.ascii.isDigit(expr[i+1])) {
             return true;
         }
+    }
+    const brk = std.mem.indexOfScalar(u8, expr, '[');
+    if (brk) |b| {
+        const img_name = std.mem.trim(u8, expr[0..b], " \t");
+        const t = getVarTypeName(p, state, img_name);
+        if (std.mem.eql(u8, t, "image<f32>")) return true;
     }
     var it = std.mem.tokenizeAny(u8, expr, " \t+-*/()");
     while (it.next()) |token| {
@@ -3276,13 +3739,17 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
             if (vo != std.math.minInt(i32)) {
                 const r = allocXmm(p);
                 if (p.in_for_loop and (std.mem.eql(u8, name, "x") or std.mem.eql(u8, name, "y"))) {
-                    try emitLoadVarToReg(p, Reg.RAX, vo, 4);
+                    try emitLoadVarToReg(p, Reg.RAX, vo, 4, Reg.RBP);
                     try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(r), x64.Operand.r(Reg.RAX) });
                 } else if (!isSimdType(getVarTypeName(p, state, name))) {
-                    try emitLoadVarToReg(p, Reg.RAX, vo, 4);
-                    try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(r), x64.Operand.r(Reg.RAX) });
+                    try emitLoadVarToReg(p, Reg.RAX, vo, 4, getVarBaseReg(p, state, name));
+                    if (std.mem.eql(u8, getVarTypeName(p, state, name), "float")) {
+                        try x64.emit(&p.code, .SSE_MOVD_LD, &.{ x64.Operand.xmm(r), x64.Operand.r(Reg.RAX) });
+                    } else {
+                        try x64.emit(&p.code, .SSE_CVTSI2SS, &.{ x64.Operand.xmm(r), x64.Operand.r(Reg.RAX) });
+                    }
                 } else {
-                    try emitLoadXmmToReg(p, r, vo, simd_size);
+                    try emitLoadXmmToReg(p, r, vo, simd_size, getVarBaseReg(p, state, name));
                 }
                 return r;
             }
@@ -3297,7 +3764,7 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
                 try emitXorXmm(p, r);
                 return r;
             }
-            try emitLoadVarToReg(p, Reg.RAX, ptr_vo, 8);
+            try emitLoadVarToReg(p, Reg.RAX, ptr_vo, 8, getVarBaseReg(p, state, ptr_var));
             const r = allocXmm(p);
             try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(r), x64.Operand.mem(Reg.RAX, 0) });
             return r;
@@ -3402,7 +3869,7 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
                 try emitXorXmm(p, r);
                 return r;
             }
-            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, state, il.img));
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RAX, 0) });
             try emitIntToRdx(p, il.y, state);
             try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RCX) });
@@ -3416,7 +3883,7 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
                     try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R8) });
                 },
             }
-            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, state, il.img));
             try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
             const r = allocXmm(p);
@@ -3444,7 +3911,7 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
             const p10 = allocXmm(p);
             const p01 = allocXmm(p);
             const p11 = allocXmm(p);
-            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, state, s.img));
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RAX, 0) });
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.R10), x64.Operand.mem(Reg.RAX, 4) });
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R12), x64.Operand.r(Reg.RCX) });
@@ -3471,13 +3938,13 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
             consumeValue(p, s.v);
             releaseValue(p, s.u, u_reg);
             releaseValue(p, s.v, v_reg);
-            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, state, s.img));
             try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RAX, 0) });
             try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R9) });
             try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R8) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(2) });
-            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, state, s.img));
             try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R11) });
             try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(p00), x64.Operand.mem(Reg.RAX, 0) });
@@ -3494,7 +3961,7 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
             }
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RDX) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(2) });
-            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, state, s.img));
             try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R11) });
             try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(p10), x64.Operand.mem(Reg.RAX, 0) });
@@ -3510,7 +3977,7 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
             try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RCX) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R8) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(2) });
-            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, state, s.img));
             try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R11) });
             try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(p01), x64.Operand.mem(Reg.RAX, 0) });
@@ -3535,7 +4002,7 @@ fn emitValueImpl(p: *PendingOutput, value_id: usize, state: []const u8, simd_siz
             }
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.RDX) });
             try x64.emit(&p.code, .SHIFT_LEFT, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(2) });
-            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+            try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, state, s.img));
             try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
             try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R11) });
             try x64.emit(&p.code, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(p11), x64.Operand.mem(Reg.RAX, 0) });
@@ -3568,7 +4035,7 @@ fn emitIntToRax(p: *PendingOutput, expr_idx: usize, state: []const u8) !void {
         .Var => |name| {
             const vo = getVarOffset(p, state, name);
             if (vo != std.math.minInt(i32)) {
-                try emitLoadVarToReg(p, Reg.RAX, vo, 4);
+                try emitLoadVarToReg(p, Reg.RAX, vo, 4, getVarBaseReg(p, state, name));
             } else {
                 try emitLoadImm(p, Reg.RAX, 0);
             }
@@ -3625,7 +4092,7 @@ fn emitImagePixelLoad(p: *PendingOutput, img: []const u8, x: []const u8, y: []co
         try emitXorXmm(p, r);
         return r;
     }
-    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, cs, img));
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RAX, 0) });
     try emitExprToRAX(p, y, cs);
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
@@ -3636,7 +4103,7 @@ fn emitImagePixelLoad(p: *PendingOutput, img: []const u8, x: []const u8, y: []co
         try emitLoadImm(p, Reg.R8, elem_size);
         try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R8) });
     }
-    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, cs, img));
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
     try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
     const r = allocXmm(p);
@@ -3653,7 +4120,7 @@ fn emitImagePixelLoad(p: *PendingOutput, img: []const u8, x: []const u8, y: []co
 fn emitImagePixelStoreReg(p: *PendingOutput, img: []const u8, x: []const u8, y: []const u8, cs: []const u8, elem_size: u32, xmm_reg: i16) !void {
     const img_vo = getVarOffset(p, cs, img);
     if (img_vo == std.math.minInt(i32)) return;
-    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, cs, img));
     try x64.emit(&p.code, .MOV_R32_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RAX, 0) });
     try emitExprToRAX(p, y, cs);
     try x64.emit(&p.code, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.RAX) });
@@ -3664,7 +4131,7 @@ fn emitImagePixelStoreReg(p: *PendingOutput, img: []const u8, x: []const u8, y: 
         try emitLoadImm(p, Reg.R8, elem_size);
         try x64.emit(&p.code, .IMUL_R64_R64, &.{ x64.Operand.r(Reg.RDX), x64.Operand.r(Reg.R8) });
     }
-    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8);
+    try emitLoadVarToReg(p, Reg.RAX, img_vo, 8, getVarBaseReg(p, cs, img));
     try x64.emit(&p.code, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(16) });
     try x64.emit(&p.code, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RDX) });
     const mem = x64.Operand.mem(Reg.RAX, 0);
