@@ -372,6 +372,22 @@ pub const D3D12_GPU_DESCRIPTOR_HANDLE = extern struct {
     ptr: u64,
 };
 
+pub const D3D12_SAMPLER_DESC = extern struct {
+    Filter: D3D12_FILTER,
+    AddressU: D3D12_TEXTURE_ADDRESS_MODE,
+    AddressV: D3D12_TEXTURE_ADDRESS_MODE,
+    AddressW: D3D12_TEXTURE_ADDRESS_MODE,
+    MipLODBias: f32,
+    MaxAnisotropy: UINT,
+    ComparisonFunc: D3D12_COMPARISON_FUNC,
+    BorderColor: [4]f32,
+    MinLOD: f32,
+    MaxLOD: f32,
+};
+comptime {
+    if (@sizeOf(D3D12_SAMPLER_DESC) != 52) @compileError("D3D12_SAMPLER_DESC size mismatch");
+}
+
 pub const D3D12_DESCRIPTOR_RANGE = extern struct {
     RangeType: D3D12_DESCRIPTOR_RANGE_TYPE,
     NumDescriptors: UINT,
@@ -657,7 +673,7 @@ pub const ID3D12DeviceVtbl = extern struct {
     CreateUnorderedAccessView: *const fn (*anyopaque, ?*anyopaque, ?*anyopaque, ?*const D3D12_UNORDERED_ACCESS_VIEW_DESC, D3D12_CPU_DESCRIPTOR_HANDLE) callconv(CC) void,
     _13: usize, // CreateRenderTargetView
     _14: usize, // CreateDepthStencilView
-    _15: usize, // CreateSampler
+    CreateSampler: *const fn (*anyopaque, *const D3D12_SAMPLER_DESC, D3D12_CPU_DESCRIPTOR_HANDLE) callconv(CC) void,
     _16: usize, // CopyDescriptors
     CopyDescriptorsSimple: *const fn (*anyopaque, UINT, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_DESCRIPTOR_HEAP_TYPE) callconv(CC) void,
     _18: usize, // GetResourceAllocationInfo
@@ -673,7 +689,7 @@ pub const ID3D12DeviceVtbl = extern struct {
     _28: usize, // Evict
     CreateFence: *const fn (*anyopaque, u64, UINT, *const GUID, *?*anyopaque) callconv(CC) HRESULT,
     GetDeviceRemovedReason: *const fn (*anyopaque) callconv(CC) HRESULT,
-    _31: usize, // GetCopyableFootprints
+    GetCopyableFootprints: *const fn (*anyopaque, *const D3D12_RESOURCE_DESC, UINT, UINT, u64, ?*D3D12_PLACED_SUBRESOURCE_FOOTPRINT, ?*UINT, ?*u64, ?*u64) callconv(CC) void,
     _32: usize, // CreateQueryHeap
     _33: usize, // SetStablePowerState
     _34: usize, // CreateCommandSignature
@@ -720,7 +736,7 @@ pub const ID3D12GraphicsCommandListVtbl = extern struct {
     _13: usize, // DrawIndexedInstanced
     Dispatch: *const fn (*anyopaque, u32, u32, u32) callconv(CC) void,
     _15: usize, // CopyBufferRegion
-    _16: usize, // CopyTextureRegion
+    CopyTextureRegion: *const fn (*anyopaque, *const D3D12_TEXTURE_COPY_LOCATION, UINT, UINT, UINT, *const D3D12_TEXTURE_COPY_LOCATION, ?*const D3D12_BOX) callconv(CC) void,
     CopyResource: *const fn (*anyopaque, ?*anyopaque, ?*anyopaque) callconv(CC) void,
     _18: usize, // CopyTiles
     _19: usize, // ResolveSubresource

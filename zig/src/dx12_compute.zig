@@ -39,6 +39,11 @@ const D3D12_CLEAR_VALUE = d3d.D3D12_CLEAR_VALUE;
 const D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE = d3d.D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 const D3D12_ROOT_SIGNATURE_FLAG_DENY_VERTEX_SHADER_ROOT_ACCESS = d3d.D3D12_ROOT_SIGNATURE_FLAG_DENY_VERTEX_SHADER_ROOT_ACCESS;
 const D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS = d3d.D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS;
+const D3D12_SAMPLER_DESC = d3d.D3D12_SAMPLER_DESC;
+const D3D12_SHADER_RESOURCE_VIEW_DESC = d3d.D3D12_SHADER_RESOURCE_VIEW_DESC;
+const D3D12_TEXTURE_COPY_LOCATION = d3d.D3D12_TEXTURE_COPY_LOCATION;
+const D3D12_PLACED_SUBRESOURCE_FOOTPRINT = d3d.D3D12_PLACED_SUBRESOURCE_FOOTPRINT;
+const D3D12_BOX = d3d.D3D12_BOX;
 
 const getDeviceVtbl = d3d.getDeviceVtbl;
 const getQueueVtbl = d3d.getQueueVtbl;
@@ -67,6 +72,8 @@ pub const ComputeContext = struct {
     event: usize,
     uav_heap: ?*anyopaque,
     uav_heap_increment: u32,
+    sampler_heap: ?*anyopaque,
+    sampler_heap_increment: u32,
     root_sig: ?*anyopaque,
     pso: ?*anyopaque,
     d3d12_module: ?*anyopaque,
@@ -163,6 +170,18 @@ pub const ComputeContext = struct {
         self.uav_heap = heap;
         self.uav_heap_increment = getDeviceVtbl(device.?).GetDescriptorHandleIncrementSize(device.?, .CBV_SRV_UAV);
         std.debug.print("heap_inc={}\n", .{self.uav_heap_increment});
+
+        var samp_heap: ?*anyopaque = null;
+        const samp_heap_desc = D3D12_DESCRIPTOR_HEAP_DESC{
+            .Type = .SAMPLER,
+            .NumDescriptors = 16,
+            .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
+            .NodeMask = 0,
+        };
+        hr_ = getDeviceVtbl(device.?).CreateDescriptorHeap(device.?, &samp_heap_desc, &IID_ID3D12DescriptorHeap, &samp_heap);
+        if (hr_ < 0) return error.SamplerHeapFailed;
+        self.sampler_heap = samp_heap;
+        self.sampler_heap_increment = getDeviceVtbl(device.?).GetDescriptorHandleIncrementSize(device.?, .SAMPLER);
 
         try self.createComputeRootSignature();
         try self.createTrivialPSO(
@@ -279,6 +298,7 @@ pub const ComputeContext = struct {
         release(self.pso);
         release(self.root_sig);
         release(self.uav_heap);
+        release(self.sampler_heap);
         release(self.cmd_list);
         release(self.cmd_allocator);
         release(self.queue);
@@ -406,6 +426,159 @@ pub const ComputeContext = struct {
             }},
         };
         getCmdListVtbl(cmd_list.?).ResourceBarrier(cmd_list.?, 1, &barrier);
+    }
+
+    pub fn createTexture2D(self: *ComputeContext, width: u32, height: u32, format: d3d.DXGI_FORMAT, initial_state: D3D12_RESOURCE_STATES, flags: u32) !?*anyopaque {
+        const props = D3D12_HEAP_PROPERTIES{
+            .Type = .DEFAULT,
+            .CPUPageProperty = 0,
+            .MemoryPoolPreference = 0,
+            .CreationNodeMask = 1,
+            .VisibleNodeMask = 1,
+        };
+        const desc = D3D12_RESOURCE_DESC{
+            .Dimension = .TEXTURE2D,
+            .Alignment = 0,
+            .Width = width,
+            .Height = height,
+            .DepthOrArraySize = 1,
+            .MipLevels = 1,
+            .Format = format,
+            .SampleDesc = .{ .Count = 1, .Quality = 0 },
+            .Layout = .UNKNOWN,
+            .Flags = flags,
+        };
+        var resource: ?*anyopaque = null;
+        const hr_ = getDeviceVtbl(self.device.?).CreateCommittedResource(
+            self.device.?,
+            &props,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            initial_state,
+            null,
+            &IID_ID3D12Resource,
+            &resource,
+        );
+        if (hr_ < 0) return error.TextureFailed;
+        return resource;
+    }
+
+    pub fn createUAVTexture2DDesc(_: *ComputeContext, mip_slice: u32) D3D12_UNORDERED_ACCESS_VIEW_DESC {
+        return .{
+            .Format = .R32_FLOAT,
+            .ViewDimension = .TEXTURE2D,
+            ._u = .{ .Texture2D = .{ .MipSlice = mip_slice, .PlaneSlice = 0 } },
+        };
+    }
+
+    pub fn createUAVViewTexture(self: *ComputeContext, resource: ?*anyopaque, desc: *const D3D12_UNORDERED_ACCESS_VIEW_DESC, cpu_handle: D3D12_CPU_DESCRIPTOR_HANDLE) void {
+        getDeviceVtbl(self.device.?).CreateUnorderedAccessView(self.device.?, resource, null, desc, cpu_handle);
+    }
+
+    pub fn createSRVTexture2DDesc(_: *ComputeContext, mip_levels: u32) D3D12_SHADER_RESOURCE_VIEW_DESC {
+        return .{
+            .Format = .R32_FLOAT,
+            .ViewDimension = .TEXTURE2D,
+            .Shader4ComponentMapping = 0x1608,
+            ._u = .{ .Texture2D = .{ .MostDetailedMip = 0, .MipLevels = mip_levels, .PlaneSlice = 0, .ResourceMinLODClamp = 0 } },
+        };
+    }
+
+    pub fn createSRV(self: *ComputeContext, resource: ?*anyopaque, desc: *const D3D12_SHADER_RESOURCE_VIEW_DESC, cpu_handle: D3D12_CPU_DESCRIPTOR_HANDLE) void {
+        getDeviceVtbl(self.device.?).CreateShaderResourceView(self.device.?, resource, desc, cpu_handle);
+    }
+
+    pub fn createSamplerDesc(self: *ComputeContext) D3D12_SAMPLER_DESC {
+        _ = self;
+        return .{
+            .Filter = .MIN_MAG_MIP_LINEAR,
+            .AddressU = .CLAMP,
+            .AddressV = .CLAMP,
+            .AddressW = .CLAMP,
+            .MipLODBias = 0,
+            .MaxAnisotropy = 1,
+            .ComparisonFunc = .NEVER,
+            .BorderColor = .{ 0, 0, 0, 0 },
+            .MinLOD = 0,
+            .MaxLOD = 3.40282347e+38,
+        };
+    }
+
+    pub fn createSampler(self: *ComputeContext, desc: *const D3D12_SAMPLER_DESC, cpu_handle: D3D12_CPU_DESCRIPTOR_HANDLE) void {
+        getDeviceVtbl(self.device.?).CreateSampler(self.device.?, desc, cpu_handle);
+    }
+
+    pub fn getSamplerCPUHandle(self: *ComputeContext, index: u32) D3D12_CPU_DESCRIPTOR_HANDLE {
+        var start: D3D12_CPU_DESCRIPTOR_HANDLE = undefined;
+        _ = getHeapVtbl(self.sampler_heap.?).GetCPUDescriptorHandleForHeapStart(self.sampler_heap.?, &start);
+        return .{ .ptr = start.ptr + index * self.sampler_heap_increment };
+    }
+
+    pub fn getTextureFootprint(self: *ComputeContext, width: u32, height: u32, format: d3d.DXGI_FORMAT) !u64 {
+        const desc = D3D12_RESOURCE_DESC{
+            .Dimension = .TEXTURE2D,
+            .Alignment = 0,
+            .Width = width,
+            .Height = height,
+            .DepthOrArraySize = 1,
+            .MipLevels = 1,
+            .Format = format,
+            .SampleDesc = .{ .Count = 1, .Quality = 0 },
+            .Layout = .UNKNOWN,
+            .Flags = 0,
+        };
+        var footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT = undefined;
+        var total_bytes: u64 = 0;
+        getDeviceVtbl(self.device.?).GetCopyableFootprints(
+            self.device.?,
+            &desc,
+            0,
+            1,
+            0,
+            &footprint,
+            null,
+            null,
+            &total_bytes,
+        );
+        return total_bytes;
+    }
+
+    pub fn copyTextureToBuffer(self: *ComputeContext, dst_buffer: ?*anyopaque, src_texture: ?*anyopaque, width: u32, height: u32, format: d3d.DXGI_FORMAT) void {
+        const desc = D3D12_RESOURCE_DESC{
+            .Dimension = .TEXTURE2D,
+            .Alignment = 0,
+            .Width = width,
+            .Height = height,
+            .DepthOrArraySize = 1,
+            .MipLevels = 1,
+            .Format = format,
+            .SampleDesc = .{ .Count = 1, .Quality = 0 },
+            .Layout = .UNKNOWN,
+            .Flags = 0,
+        };
+        var footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT = undefined;
+        getDeviceVtbl(self.device.?).GetCopyableFootprints(
+            self.device.?,
+            &desc,
+            0,
+            1,
+            0,
+            &footprint,
+            null,
+            null,
+            null,
+        );
+        const dst_loc = D3D12_TEXTURE_COPY_LOCATION{
+            .pResource = dst_buffer,
+            .Type = .PLACED_FOOTPRINT,
+            ._u = .{ .PlacedFootprint = footprint },
+        };
+        const src_loc = D3D12_TEXTURE_COPY_LOCATION{
+            .pResource = src_texture,
+            .Type = .SUBRESOURCE_INDEX,
+            ._u = .{ .SubresourceIndex = 0 },
+        };
+        getCmdListVtbl(self.cmd_list.?).CopyTextureRegion(self.cmd_list.?, &dst_loc, 0, 0, 0, &src_loc, null);
     }
 };
 
