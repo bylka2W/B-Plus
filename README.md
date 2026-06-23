@@ -566,7 +566,11 @@ zig/                    — компилятор (Zig, активная разр
     scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
     scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
     bench.zig            — Stage 7+ A/B benchmark: baseline vs smart scheduler (4 patterns) + Stage 9+ smoke tests
-    frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan (temporal compute DAG IR with intra/inter-frame edges)
+    gpu_ir.zig           — GPU IR: BindingKey{reg,space,kind}, BindGroup, PipelineKey, DispatchDesc, ResourceId
+    frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan, GPUPassDesc (unified compute DAG IR)
+    frame_graph_executor.zig — Stage 9+ FrameGraph GPU executor: per-pass RS/PSO, shader cache, barriers, dispatch
+    resource_system.zig  — Stage 9+ ResourcePool: GPU resource lifecycle, RS-driven descriptor allocation, state tracking
+    root_signature_builder.zig — Stage 9+ Per-pass root signature compiler: BindLayout → CompiledRS, cached by hash
     gpu_job.zig          — Stage 9 GPUJob dispatch descriptor
     gpu_scheduler.zig    — Stage 9+ Pure GPU dispatch sink (no graph awareness)
     scheduler_config.zig — Stage 8 SchedulerConfig (max_sticky_ns, max_queue_len, imbalance thresholds)
@@ -1333,7 +1337,11 @@ zig/                    — compiler (Zig, active development)
     bench.zig            — Stage 7+ A/B benchmark: baseline vs smart scheduler (4 patterns) + Stage 9+ smoke tests
     scheduler_config.zig — Stage 8 SchedulerConfig (max_sticky_ns, max_queue_len, imbalance thresholds)
     scheduler_state.zig  — Stage 8 GlobalSchedulerState (SystemLoad, adjustDecision)
-    frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan (unified compute DAG IR)
+    gpu_ir.zig           — GPU IR: BindingKey{reg,space,kind}, BindGroup, PipelineKey, DispatchDesc, ResourceId
+    frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan, GPUPassDesc (unified compute DAG IR)
+    frame_graph_executor.zig — Stage 9+ FrameGraph GPU executor: per-pass RS/PSO, shader cache, barriers, dispatch
+    resource_system.zig  — Stage 9+ ResourcePool: GPU resource lifecycle, RS-driven descriptor allocation, state tracking
+    root_signature_builder.zig — Stage 9+ Per-pass root signature compiler: BindLayout → CompiledRS, cached by hash
     gpu_job.zig          — Stage 9 GPUJob dispatch descriptor
     gpu_scheduler.zig    — Stage 9+ Pure GPU dispatch sink (no graph awareness)
     parser.zig          — lexer + parser for .b+
