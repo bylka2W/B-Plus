@@ -4,6 +4,7 @@ const parser = @import("parser.zig");
 const x64gen = @import("x64gen.zig");
 const pe = @import("pe.zig");
 const test_runner = @import("test_runner.zig");
+const hlslgen = @import("hlslgen.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -19,6 +20,7 @@ pub fn main() !void {
         try stderr.writeAll("       bpc dll  <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]\n");
         try stderr.writeAll("       bpc run  <input.b+>\n");
         try stderr.writeAll("       bpc test <test.bpt>\n");
+        try stderr.writeAll("       bpc hlsl <input.b+> [-o <output.hlsl>]\n");
         std.process.exit(1);
     }
 
@@ -72,6 +74,28 @@ pub fn main() !void {
             try stdout.print("STATUS: {s}\n", .{@tagName(result.status)});
         }
         std.process.exit(if (result.status == .pass) 0 else 1);
+    }
+
+    // HLSL mode: generate HLSL shader text
+    if (std.mem.eql(u8, command, "hlsl")) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        var p2 = parser.Parser.init(arena_alloc, src);
+        const prog = try p2.parse();
+
+        const output = try hlslgen.generate(arena_alloc, prog, src);
+        const out_path = output_path orelse blk: {
+            const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
+            const base = input_path[0..ext_idx];
+            break :blk try std.fmt.allocPrint(arena_alloc, "{s}.hlsl", .{base});
+        };
+
+        try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = output.text });
+        const stdout = std.io.getStdOut().writer();
+        try stdout.print("HLSL written to {s}\n", .{out_path});
+        return;
     }
 
     if (std.mem.startsWith(u8, src, "\xEF\xBB\xBF")) {
