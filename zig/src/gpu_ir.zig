@@ -1,5 +1,10 @@
 const std = @import("std");
 
+pub const QueueType = enum(u8) {
+    compute,
+    graphics,
+};
+
 pub const ShaderStage = enum(u8) {
     compute,
 };

@@ -58,14 +58,14 @@ pub const ResourcePool = struct {
         const resource = try self.ctx.createBuffer(
             size,
             .DEFAULT,
-            resourceStateToD3D12(.unordered_access),
+            resourceStateToD3D12(.common),
             d3d.D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         );
 
         const handle = ResourceHandle{
             .id = id,
             .d3d_resource = resource,
-            .current_state = .unordered_access,
+            .current_state = .common,
             .desc = .{ .buffer = desc },
         };
         try self.resources.put(id, handle);
@@ -80,14 +80,14 @@ pub const ResourcePool = struct {
             desc.width,
             desc.height,
             dxgi_format,
-            resourceStateToD3D12(.unordered_access),
+            resourceStateToD3D12(.common),
             d3d.D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         );
 
         const handle = ResourceHandle{
             .id = id,
             .d3d_resource = resource,
-            .current_state = .unordered_access,
+            .current_state = .common,
             .desc = .{ .texture2d = desc },
         };
         try self.resources.put(id, handle);
@@ -130,10 +130,73 @@ pub const ResourcePool = struct {
         }
     }
 
+    /// Write a single descriptor view (UAV or SRV) for a resource at a CPU handle.
+    pub fn writeView(self: *ResourcePool, resource_id: gpu_ir.ResourceId, bind_type: gpu_ir.BindType, cpu_handle: d3d.D3D12_CPU_DESCRIPTOR_HANDLE) void {
+        const handle = self.resources.getPtr(resource_id) orelse return;
+        switch (bind_type) {
+            .uav => {
+                switch (handle.desc) {
+                    .texture2d => |td| {
+                        const dxgi_format: d3d.DXGI_FORMAT = @enumFromInt(td.format.toDXGI());
+                        var desc: d3d.D3D12_UNORDERED_ACCESS_VIEW_DESC = undefined;
+                        desc.Format = dxgi_format;
+                        desc.ViewDimension = .TEXTURE2D;
+                        desc._u = .{ .Texture2D = .{ .MipSlice = 0, .PlaneSlice = 0 } };
+                        self.ctx.createUAVViewTexture(handle.d3d_resource.?, &desc, cpu_handle);
+                    },
+                    .buffer => |bd| {
+                        var desc: d3d.D3D12_UNORDERED_ACCESS_VIEW_DESC = undefined;
+                        desc.Format = .R32_FLOAT;
+                        desc.ViewDimension = .BUFFER;
+                        desc._u = .{ .Buffer = .{
+                            .FirstElement = 0,
+                            .NumElements = if (bd.elements > 0) bd.elements else @as(u32, @intCast(bd.size / 4)),
+                            .StructureByteStride = 0,
+                            .CounterOffsetInBytes = 0,
+                            .Flags = 0,
+                        } };
+                        self.ctx.createUAVView(handle.d3d_resource.?, &desc, cpu_handle);
+                    },
+                    .sampler => {},
+                }
+            },
+            .srv => {
+                switch (handle.desc) {
+                    .texture2d => |td| {
+                        const dxgi_format: d3d.DXGI_FORMAT = @enumFromInt(td.format.toDXGI());
+                        var desc: d3d.D3D12_SHADER_RESOURCE_VIEW_DESC = undefined;
+                        desc.Format = dxgi_format;
+                        desc.ViewDimension = .TEXTURE2D;
+                        desc.Shader4ComponentMapping = 0x1608;
+                        desc._u = .{ .Texture2D = .{ .MostDetailedMip = 0, .MipLevels = 1, .PlaneSlice = 0, .ResourceMinLODClamp = 0 } };
+                        self.ctx.createSRV(handle.d3d_resource.?, &desc, cpu_handle);
+                    },
+                    .buffer => |bd| {
+                        var desc: d3d.D3D12_SHADER_RESOURCE_VIEW_DESC = undefined;
+                        desc.Format = .R32_FLOAT;
+                        desc.ViewDimension = .BUFFER;
+                        desc.Shader4ComponentMapping = 0x1608;
+                        desc._u = .{ .Buffer = .{
+                            .FirstElement = 0,
+                            .NumElements = if (bd.elements > 0) bd.elements else @as(u32, @intCast(bd.size / 4)),
+                            .StructureByteStride = 0,
+                            .Flags = 0,
+                        } };
+                        self.ctx.createSRV(handle.d3d_resource.?, &desc, cpu_handle);
+                    },
+                    .sampler => {},
+                }
+            },
+            .cbv => {},
+            .sampler => {},
+        }
+    }
+
     pub fn setupDescriptorHeap(
         self: *ResourcePool,
         bindings: []const gpu_ir.BindEntry,
         compiled_rs: *const rs_builder.CompiledRS,
+        base_offset: u32,
     ) void {
         for (bindings) |entry| {
             // Validate binding exists in RS ranges
@@ -145,7 +208,7 @@ pub const ResourcePool = struct {
             }
             const slot = rs_builder.RSRootSignatureBuilder.getHeapOffset(compiled_rs, entry.key) orelse continue;
             const handle = self.resources.getPtr(entry.resource_id) orelse continue;
-            const cpu_handle = self.ctx.getUAVCPUHandle(slot);
+            const cpu_handle = self.ctx.getUAVCPUHandle(base_offset + slot);
             switch (entry.key.kind) {
                 .uav => {
                     switch (handle.desc) {

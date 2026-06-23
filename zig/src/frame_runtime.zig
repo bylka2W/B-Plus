@@ -5,15 +5,21 @@ const dx12 = @import("dx12_compute.zig");
 
 pub const MAX_FRAMES_IN_FLIGHT = 3;
 
+pub const QueueCmdLists = struct {
+    allocator: ?*anyopaque = null,
+    list: ?*anyopaque = null,
+};
+
 pub const FrameSlot = struct {
-    cmd_allocator: ?*anyopaque = null,
-    cmd_list: ?*anyopaque = null,
+    compute: QueueCmdLists = .{},
+    graphics: QueueCmdLists = .{},
     fence_value: u64 = 0,
 };
 
 pub const FrameRuntime = struct {
     device: ?*anyopaque,
     queue: ?*anyopaque,
+    gfx_queue: ?*anyopaque,
     fence: ?*anyopaque,
     event: usize,
     uav_heap: ?*anyopaque,
@@ -28,6 +34,7 @@ pub const FrameRuntime = struct {
         var rt = FrameRuntime{
             .device = ctx.device,
             .queue = ctx.queue,
+            .gfx_queue = ctx.queue,
             .fence = ctx.fence,
             .event = ctx.event,
             .uav_heap = ctx.uav_heap,
@@ -38,30 +45,36 @@ pub const FrameRuntime = struct {
         };
 
         for (&rt.slots) |*slot| {
-            var allocator_: ?*anyopaque = null;
-            var hr_ = d3d.getDeviceVtbl(ctx.device.?).CreateCommandAllocator(
-                ctx.device.?,
-                .COMPUTE,
-                &d3d.IID_ID3D12CommandAllocator,
-                &allocator_,
-            );
-            if (hr_ < 0) return error.CommandAllocatorFailed;
-            slot.cmd_allocator = allocator_;
+            inline for (.{ .COMPUTE, .DIRECT }) |qtype| {
+                var allocator_: ?*anyopaque = null;
+                var hr_ = d3d.getDeviceVtbl(ctx.device.?).CreateCommandAllocator(
+                    ctx.device.?,
+                    qtype,
+                    &d3d.IID_ID3D12CommandAllocator,
+                    &allocator_,
+                );
+                if (hr_ < 0) return error.CommandAllocatorFailed;
 
-            var cmd_list: ?*anyopaque = null;
-            hr_ = d3d.getDeviceVtbl(ctx.device.?).CreateCommandList(
-                ctx.device.?,
-                0,
-                .COMPUTE,
-                allocator_,
-                null,
-                &d3d.IID_ID3D12GraphicsCommandList,
-                &cmd_list,
-            );
-            if (hr_ < 0) return error.CommandListFailed;
-            slot.cmd_list = cmd_list;
+                var cmd_list: ?*anyopaque = null;
+                hr_ = d3d.getDeviceVtbl(ctx.device.?).CreateCommandList(
+                    ctx.device.?,
+                    0,
+                    qtype,
+                    allocator_,
+                    null,
+                    &d3d.IID_ID3D12GraphicsCommandList,
+                    &cmd_list,
+                );
+                if (hr_ < 0) return error.CommandListFailed;
 
-            _ = d3d.getCmdListVtbl(cmd_list.?).Close(cmd_list.?);
+                _ = d3d.getCmdListVtbl(cmd_list.?).Close(cmd_list.?);
+
+                if (qtype == .COMPUTE) {
+                    slot.compute = .{ .allocator = allocator_, .list = cmd_list };
+                } else {
+                    slot.graphics = .{ .allocator = allocator_, .list = cmd_list };
+                }
+            }
         }
 
         return rt;
@@ -69,8 +82,10 @@ pub const FrameRuntime = struct {
 
     pub fn deinit(self: *FrameRuntime) void {
         for (&self.slots) |*slot| {
-            if (slot.cmd_list) |cl| d3d.release(cl);
-            if (slot.cmd_allocator) |ca| d3d.release(ca);
+            if (slot.compute.list) |cl| d3d.release(cl);
+            if (slot.compute.allocator) |ca| d3d.release(ca);
+            if (slot.graphics.list) |cl| d3d.release(cl);
+            if (slot.graphics.allocator) |ca| d3d.release(ca);
         }
     }
 
@@ -90,20 +105,29 @@ pub const FrameRuntime = struct {
             }
         }
 
-        _ = d3d.getAllocatorVtbl(slot.cmd_allocator.?).Reset(slot.cmd_allocator.?);
-        _ = d3d.getCmdListVtbl(slot.cmd_list.?).Reset(slot.cmd_list.?, slot.cmd_allocator, null);
+        _ = d3d.getAllocatorVtbl(slot.compute.allocator.?).Reset(slot.compute.allocator.?);
+        _ = d3d.getCmdListVtbl(slot.compute.list.?).Reset(slot.compute.list.?, slot.compute.allocator, null);
+
+        _ = d3d.getAllocatorVtbl(slot.graphics.allocator.?).Reset(slot.graphics.allocator.?);
+        _ = d3d.getCmdListVtbl(slot.graphics.list.?).Reset(slot.graphics.list.?, slot.graphics.allocator, null);
 
         return slot;
     }
 
     pub fn endFrame(self: *FrameRuntime, slot: *FrameSlot) !void {
-        _ = d3d.getCmdListVtbl(slot.cmd_list.?).Close(slot.cmd_list.?);
-        var lists = [_]?*anyopaque{slot.cmd_list};
-        d3d.getQueueVtbl(self.queue.?).ExecuteCommandLists(self.queue.?, 1, &lists);
+        _ = d3d.getCmdListVtbl(slot.compute.list.?).Close(slot.compute.list.?);
+        _ = d3d.getCmdListVtbl(slot.graphics.list.?).Close(slot.graphics.list.?);
+
+        var compute_lists = [_]?*anyopaque{slot.compute.list};
+        d3d.getQueueVtbl(self.queue.?).ExecuteCommandLists(self.queue.?, 1, &compute_lists);
+
+        var graphics_lists = [_]?*anyopaque{slot.graphics.list};
+        d3d.getQueueVtbl(self.gfx_queue.?).ExecuteCommandLists(self.gfx_queue.?, 1, &graphics_lists);
 
         self.frame_index += 1;
         slot.fence_value = self.frame_index;
         _ = d3d.getQueueVtbl(self.queue.?).Signal(self.queue.?, self.fence, slot.fence_value);
+        _ = d3d.getQueueVtbl(self.gfx_queue.?).Signal(self.gfx_queue.?, self.fence, slot.fence_value);
     }
 
     pub fn drain(self: *FrameRuntime) void {

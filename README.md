@@ -568,7 +568,8 @@ zig/                    — компилятор (Zig, активная разр
     bench.zig            — Stage 7+ A/B benchmark: baseline vs smart scheduler (4 patterns) + Stage 9+ smoke tests
     gpu_ir.zig           — GPU IR: BindingKey{reg,space,kind}, BindGroup, PipelineKey, DispatchDesc, ResourceId
     frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan, GPUPassDesc (unified compute DAG IR)
-    frame_graph_executor.zig — Stage 9+ FrameGraph GPU executor: per-pass RS/PSO, shader cache, barriers, dispatch
+    frame_graph_executor.zig — Stage 9+ compileGraph() → immutable CompiledGraph; per-frame writeFrameDescriptors+executeCompiledGraph
+    compiled_graph.zig   — Stage 9+ CompiledGraph: CompiledPass, FrameInputs, BindSlot, DescriptorArena. Pre-baked PSOs/barriers/slots
     resource_system.zig  — Stage 9+ ResourcePool: GPU resource lifecycle, RS-driven descriptor allocation, state tracking
     root_signature_builder.zig — Stage 9+ Per-pass root signature compiler: BindLayout → CompiledRS, cached by hash
     gpu_job.zig          — Stage 9 GPUJob dispatch descriptor
@@ -1339,7 +1340,8 @@ zig/                    — compiler (Zig, active development)
     scheduler_state.zig  — Stage 8 GlobalSchedulerState (SystemLoad, adjustDecision)
     gpu_ir.zig           — GPU IR: BindingKey{reg,space,kind}, BindGroup, PipelineKey, DispatchDesc, ResourceId
     frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan, GPUPassDesc (unified compute DAG IR)
-    frame_graph_executor.zig — Stage 9+ FrameGraph GPU executor: per-pass RS/PSO, shader cache, barriers, dispatch
+    frame_graph_executor.zig — Stage 9+ compileGraph() → immutable CompiledGraph; per-frame writeFrameDescriptors+executeCompiledGraph
+    compiled_graph.zig   — Stage 9+ CompiledGraph: CompiledPass, FrameInputs, BindSlot, DescriptorArena. Pre-baked PSOs/barriers/slots
     resource_system.zig  — Stage 9+ ResourcePool: GPU resource lifecycle, RS-driven descriptor allocation, state tracking
     root_signature_builder.zig — Stage 9+ Per-pass root signature compiler: BindLayout → CompiledRS, cached by hash
     gpu_job.zig          — Stage 9 GPUJob dispatch descriptor

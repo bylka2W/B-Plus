@@ -291,6 +291,7 @@ pub const FrameGraph = struct {
 /// GPU pass descriptor — ties a FrameGraph pass to GPU IR data.
 pub const GPUPassDesc = struct {
     pass_id: u32,
+    queue: gpu_ir.QueueType = .compute,
     pipeline: gpu_ir.PipelineKey,
     grid: gpu_ir.DispatchGrid,
     bindings: gpu_ir.BindGroup,
