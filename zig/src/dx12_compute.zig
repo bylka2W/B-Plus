@@ -514,6 +514,12 @@ pub const ComputeContext = struct {
         return .{ .ptr = start.ptr + index * self.sampler_heap_increment };
     }
 
+    pub fn getSamplerGPUHandle(self: *ComputeContext, index: u32) D3D12_GPU_DESCRIPTOR_HANDLE {
+        var start: D3D12_GPU_DESCRIPTOR_HANDLE = undefined;
+        _ = getHeapVtbl(self.sampler_heap.?).GetGPUDescriptorHandleForHeapStart(self.sampler_heap.?, &start);
+        return .{ .ptr = start.ptr + index * self.sampler_heap_increment };
+    }
+
     pub fn getTextureFootprint(self: *ComputeContext, width: u32, height: u32, format: d3d.DXGI_FORMAT) !u64 {
         const desc = D3D12_RESOURCE_DESC{
             .Dimension = .TEXTURE2D,
