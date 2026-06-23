@@ -7,11 +7,6 @@ pub fn main() !void {
     try ctx.init();
     defer ctx.deinit();
 
-    // Query InfoQueue from device for debug messages
-    var info_queue: ?*anyopaque = null;
-    const qi_hr = d3d.getDeviceVtbl(ctx.device.?).base.QueryInterface(ctx.device.?, &d3d.IID_ID3D12InfoQueue, &info_queue);
-    _ = qi_hr;
-
     // Verify actual types at runtime
     var queue_desc: d3d.D3D12_COMMAND_QUEUE_DESC = undefined;
     _ = d3d.getQueueVtbl(ctx.queue.?).GetDesc(ctx.queue.?, &queue_desc);
@@ -75,6 +70,7 @@ pub fn main() !void {
     const ptr = dx12.ComputeContext.mapBuffer(readback) catch |err| {
         const reason = d3d.getDeviceVtbl(ctx.device.?).GetDeviceRemovedReason(ctx.device.?);
         std.debug.print("Map failed with {}. DeviceRemovedReason = 0x{x}\n", .{ err, @as(u32, @bitCast(reason)) });
+        dumpDred(ctx.device.?);
         return err;
     };
     defer dx12.ComputeContext.unmapBuffer(readback);
@@ -91,5 +87,48 @@ pub fn main() !void {
     }
     if (pass) {
         std.debug.print("PASS: All {} elements verified\n", .{num_elements});
+    }
+}
+
+fn dumpDred(device: *anyopaque) void {
+    var dred: ?*anyopaque = null;
+    const hr = d3d.getDeviceVtbl(device).base.QueryInterface(device, &d3d.IID_ID3D12DeviceRemovedExtendedData1, &dred);
+    if (hr < 0) {
+        std.debug.print("DRED QI failed hr=0x{x}\n", .{@as(u32, @bitCast(hr))});
+        return;
+    }
+    const d = dred orelse {
+        std.debug.print("DRED: null\n", .{});
+        return;
+    };
+    var output: d3d.D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 = .{ .pHeadAutoBreadcrumbNode = null };
+    const dred_hr = d3d.getDredVtbl(d).GetAutoBreadcrumbsOutput1(d, &output);
+    if (dred_hr < 0) {
+        std.debug.print("GetAutoBreadcrumbsOutput1 failed hr=0x{x}\n", .{@as(u32, @bitCast(dred_hr))});
+        return;
+    }
+    var node = output.pHeadAutoBreadcrumbNode;
+    while (node) |n| {
+        const last_val = if (n.pLastBreadcrumbValue) |v| v.* else @as(u32, 0);
+        std.debug.print("  BreadcrumbCount={d} last={d}\n", .{ n.BreadcrumbCount, last_val });
+        if (n.pCommandHistory) |hist| {
+            const hist_arr: [*]const d3d.D3D12_AUTO_BREADCRUMB_OP = @ptrCast(hist);
+            const last_op = if (last_val > 0 and last_val <= n.BreadcrumbCount) hist_arr[last_val - 1] else hist_arr[0];
+            std.debug.print("  Last completed OP: {s}\n", .{@tagName(last_op)});
+            if (last_val < n.BreadcrumbCount) {
+                const failed_op = hist_arr[last_val];
+                std.debug.print("  FAILED OP: {s}\n", .{@tagName(failed_op)});
+            }
+        }
+        node = n.pNext;
+    }
+    var pf_out: d3d.D3D12_DRED_PAGE_FAULT_OUTPUT1 = .{
+        .PageFaultVA = 0,
+        .pHeadExistingAllocationNode = null,
+        .pHeadRecentFreedAllocationNode = null,
+    };
+    const pf_hr = d3d.getDredVtbl(d).GetPageFaultAllocationOutput1(d, &pf_out);
+    if (pf_hr >= 0 and pf_out.PageFaultVA != 0) {
+        std.debug.print("  PageFaultVA=0x{x}\n", .{pf_out.PageFaultVA});
     }
 }

@@ -24,6 +24,7 @@ pub const IID_ID3D12PipelineState = GUID.parse("{765a30f3-f624-4c6f-a828-ace9486
 pub const IID_ID3D12DescriptorHeap = GUID.parse("{8efb471d-616c-4f49-90f7-127bb763fa51}");
 pub const IID_ID3D12Resource = GUID.parse("{696442be-a72e-4059-bc79-5b5c98040fad}");
 pub const IID_ID3D12InfoQueue = GUID.parse("{0742a90b-c387-483f-b946-30a7e4e61458}");
+pub const IID_ID3D12DeviceRemovedExtendedData1 = GUID.parse("{9727A022-CF1D-4DDA-9EBA-EFFA653FC506}");
 pub const IID_ID3D10Blob = GUID.parse("{8ba5fb08-5195-40e2-ac58-0d989c3a0102}");
 pub const IID_IDXGIFactory4 = GUID.parse("{1bc6ea02-ef36-464f-bf5c-21c39449e946}");
 pub const IID_IDXGIAdapter1 = GUID.parse("{29038f61-3839-4626-91fd-086879011a05}");
@@ -937,6 +938,60 @@ pub const D3D12_INFO_QUEUE_FILTER = extern struct {
     DenyList: D3D12_INFO_QUEUE_FILTER_DESC,
 };
 
+// ---------- DRED (Device Removed Extended Data) ----------
+pub const D3D12_AUTO_BREADCRUMB_OP = enum(u32) {
+    SETMARKER = 0,
+    CLEARSTATE = 9,
+    DRAWINSTANCED = 12,
+    DRAWINDEXEDINSTANCED = 13,
+    DISPATCH = 14,
+    COPYBUFFERREGION = 15,
+    COPYTEXTUREREGION = 16,
+    COPYRESOURCE = 17,
+    COPYTILES = 18,
+    RESOLVESUBRESOURCE = 19,
+    CLEARDEPTHSTENCILVIEW = 20,
+    CLEARRENDERTARGETVIEW = 21,
+    CLEARUNORDEREDACCESSVIEWUINT = 22,
+    CLEARUNORDEREDACCESSVIEWFLOAT = 23,
+    EXECUTEBUNDLE = 24,
+    BEGINQUERY = 28,
+    ENDQUERY = 29,
+    RESOLVEQUERYDATA = 30,
+    SETPREDICATION = 31,
+    _,
+};
+
+pub const D3D12_DRED_BREADCRUMB_CONTEXT = extern struct {
+    BreadcrumbIndex: u32,
+    pContextString: ?[*:0]const u16,
+};
+
+pub const D3D12_AUTO_BREADCRUMB_NODE1 = extern struct {
+    pCommandListDebugNameA: ?*const u8,
+    pCommandListDebugNameW: ?[*:0]const u16,
+    pCommandQueueDebugNameA: ?*const u8,
+    pCommandQueueDebugNameW: ?[*:0]const u16,
+    pCommandList: ?*anyopaque,
+    pCommandQueue: ?*anyopaque,
+    BreadcrumbCount: u32,
+    pLastBreadcrumbValue: ?*const u32,
+    pCommandHistory: ?*const D3D12_AUTO_BREADCRUMB_OP,
+    pNext: ?*const D3D12_AUTO_BREADCRUMB_NODE1,
+    BreadcrumbContextsCount: u32,
+    pBreadcrumbContexts: ?*D3D12_DRED_BREADCRUMB_CONTEXT,
+};
+
+pub const D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 = extern struct {
+    pHeadAutoBreadcrumbNode: ?*const D3D12_AUTO_BREADCRUMB_NODE1,
+};
+
+pub const D3D12_DRED_PAGE_FAULT_OUTPUT1 = extern struct {
+    PageFaultVA: u64,
+    pHeadExistingAllocationNode: ?*const anyopaque,
+    pHeadRecentFreedAllocationNode: ?*const anyopaque,
+};
+
 // vtbl slots verified against d3d12sdklayers.h lines 3516-3703
 pub const ID3D12InfoQueueVtbl = extern struct {
     base: IUnknownVtbl,
@@ -1011,6 +1066,20 @@ pub const ID3D12InfoQueueVtbl = extern struct {
     // slot 37
     GetMuteDebugOutput: *const fn (*anyopaque) callconv(CC) BOOL,
 };
+
+// ---------- ID3D12DeviceRemovedExtendedData1 ----------
+// Chain: IUnknown (3) → ID3D12DeviceRemovedExtendedData (2) → this (2)
+pub const ID3D12DeviceRemovedExtendedData1Vtbl = extern struct {
+    base: IUnknownVtbl,
+    _03: *const fn (*anyopaque, *anyopaque) callconv(CC) HRESULT, // GetAutoBreadcrumbsOutput (not used)
+    _04: *const fn (*anyopaque, *anyopaque) callconv(CC) HRESULT, // GetPageFaultAllocationOutput (not used)
+    GetAutoBreadcrumbsOutput1: *const fn (*anyopaque, *D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1) callconv(CC) HRESULT,
+    GetPageFaultAllocationOutput1: *const fn (*anyopaque, *D3D12_DRED_PAGE_FAULT_OUTPUT1) callconv(CC) HRESULT,
+};
+
+pub fn getDredVtbl(obj: *anyopaque) *const ID3D12DeviceRemovedExtendedData1Vtbl {
+    return @as(*const *const ID3D12DeviceRemovedExtendedData1Vtbl, @ptrCast(@alignCast(obj))).*;
+}
 
 // ---------- Typed vtbl accessors ----------
 pub fn getInfoQueueVtbl(obj: *anyopaque) *const ID3D12InfoQueueVtbl {
