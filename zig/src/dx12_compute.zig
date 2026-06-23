@@ -549,7 +549,7 @@ pub const ComputeContext = struct {
         return total_bytes;
     }
 
-    pub fn copyTextureToBuffer(self: *ComputeContext, dst_buffer: ?*anyopaque, src_texture: ?*anyopaque, width: u32, height: u32, format: d3d.DXGI_FORMAT) void {
+    pub fn copyTextureToBuffer(self: *ComputeContext, dst_buffer: ?*anyopaque, src_texture: ?*anyopaque, width: u32, height: u32, format: d3d.DXGI_FORMAT) u32 {
         const desc = D3D12_RESOURCE_DESC{
             .Dimension = .TEXTURE2D,
             .Alignment = 0,
@@ -585,6 +585,7 @@ pub const ComputeContext = struct {
             ._u = .{ .SubresourceIndex = 0 },
         };
         getCmdListVtbl(self.cmd_list.?).CopyTextureRegion(self.cmd_list.?, &dst_loc, 0, 0, 0, &src_loc, null);
+        return footprint.Footprint.RowPitch;
     }
 };
 
