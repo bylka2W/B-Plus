@@ -10,6 +10,7 @@ const render_graph = @import("render_graph.zig");
 const history_manager = @import("history_manager.zig");
 const camera_jitter = @import("camera_jitter.zig");
 const render_helpers = @import("render_helpers.zig");
+const frame_runtime = @import("frame_runtime.zig");
 
 pub fn main() !void {
     const W = 64;
@@ -30,6 +31,13 @@ pub fn main() !void {
     };
     try ctx.init();
     defer ctx.deinit();
+
+    // --- Frame runtime (3-slot ring buffer) ---
+    var runtime = try frame_runtime.FrameRuntime.init(allocator, &ctx);
+    defer {
+        runtime.drain();
+        runtime.deinit();
+    }
 
     // --- Resource pool ---
     var pool = resource_system.ResourcePool.init(allocator, &ctx);
@@ -156,12 +164,14 @@ pub fn main() !void {
         try rg.allocateTransients(&render_plan);
         defer rg.releaseTransients(&render_plan);
 
-        try executor.executeRenderPlanWithHistory(&render_plan, &history);
+        try executor.executeFramePipeline(&render_plan, &history, &runtime);
 
         std.debug.print("Frame {}: jitter=({d:.4},{d:.4}) history={} color_pass=0x{x}\n", .{
             frame, jitter.x, jitter.y, history.hasHistory(), scene_color_id,
         });
     }
 
-    std.debug.print("All {} frames passed with auto-barriers + history flip\n", .{num_frames});
+    runtime.drain();
+
+    std.debug.print("All {} frames passed with 3-slot frame pipeline\n", .{num_frames});
 }
