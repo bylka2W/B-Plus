@@ -39,6 +39,7 @@ const Token = struct {
         keyword_owned,
         keyword_borrowed,
         keyword_export,
+        keyword_forward,
         annotation,
         ident,
         number,
@@ -226,6 +227,7 @@ const Lexer = struct {
     const keywordMap = std.StaticStringMap(Token.Kind).initComptime(.{
         .{ "state", .keyword_state },
         .{ "export", .keyword_export },
+        .{ "forward", .keyword_forward },
         .{ "entry", .keyword_entry },
         .{ "kernel", .keyword_kernel },
         .{ "enum", .keyword_enum },
@@ -302,6 +304,13 @@ pub const Parser = struct {
         return p.src[p.cur_tok.start..p.cur_tok.end];
     }
 
+    fn stringText(p: *Parser) []const u8 {
+        const s = p.src[p.cur_tok.start..p.cur_tok.end];
+        if (s.len > 0 and s[0] == '"' and s[s.len - 1] == '"')
+            return s[1 .. s.len - 1];
+        return s;
+    }
+
     fn readAnnotationFull(p: *Parser) []const u8 {
         const start = p.cur_tok.start + 1;
         var end = p.cur_tok.end;
@@ -326,6 +335,7 @@ pub const Parser = struct {
             .kernels = std.ArrayList(ast.KernelDecl).init(p.allocator),
             .enums = std.ArrayList(ast.EnumDecl).init(p.allocator),
             .parallel_blocks = std.ArrayList(ast.ParallelBlock).init(p.allocator),
+            .forwarders = std.ArrayList(ast.ForwardDecl).init(p.allocator),
             .memory = null,
             .directives = std.ArrayList([]const u8).init(p.allocator),
             .context = null,
@@ -354,9 +364,13 @@ pub const Parser = struct {
                     e.is_export = true;
                     errdefer e.body_lines.deinit();
                     try program.entries.append(e);
+                } else if (p.peek(.keyword_forward)) {
+                    try program.forwarders.append(try p.parseForward());
                 } else {
-                    return error.ExpectedEntryAfterExport;
+                    return error.ExpectedEntryOrForwardAfterExport;
                 }
+            } else if (p.peek(.keyword_forward)) {
+                try program.forwarders.append(try p.parseForward());
             } else if (p.peek(.keyword_entry)) {
                 const e = try p.parseEntry();
                 errdefer e.body_lines.deinit();
@@ -731,7 +745,7 @@ pub const Parser = struct {
             p.lexer.char = if (scan_pos - 1 < p.src.len) p.src[scan_pos - 1] else 0;
             p.cur_tok = p.lexer.next();
         } else {
-            while (p.cur_tok.kind != .eof and !p.peek(.keyword_state) and !p.peek(.keyword_kernel) and !p.peek(.keyword_entry) and !p.peek(.keyword_enum) and !p.peek(.keyword_parallel) and !p.peek(.keyword_export)) {
+            while (p.cur_tok.kind != .eof and !p.peek(.keyword_state) and !p.peek(.keyword_kernel) and !p.peek(.keyword_entry) and !p.peek(.keyword_enum) and !p.peek(.keyword_parallel) and !p.peek(.keyword_export) and !p.peek(.keyword_forward)) {
                 const start = p.lexer.tok_start;
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 const line = std.mem.trim(u8, p.src[start..p.lexer.pos], " \t");
@@ -742,6 +756,19 @@ pub const Parser = struct {
         }
 
         return ast.EntryDecl{ .name = name, .body_lines = body_lines, .return_type = null, .is_export = false };
+    }
+
+    fn parseForward(p: *Parser) !ast.ForwardDecl {
+        try p.expect(.keyword_forward);
+        const name = p.identText();
+        p.advance();
+        p.consumeNewlines();
+        try p.expect(.eq);
+        const dll = p.stringText();
+        p.advance();
+        if (p.peek(.semicolon)) p.advance();
+        p.consumeNewlines();
+        return ast.ForwardDecl{ .export_name = name, .target_dll = dll };
     }
 
     fn parseKernel(p: *Parser) !ast.KernelDecl {

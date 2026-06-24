@@ -543,7 +543,8 @@ fn compileDllEx(allocator: std.mem.Allocator, source_path: []const u8, dll_path:
         if (s.kind == .exp) {
             try resolved.append(.{
                 .name = s.name,
-                .rva = pe.section_rva + s.rva,
+                .rva = if (s.forward_to == null) pe.section_rva + s.rva else 0,
+                .forward_to = s.forward_to,
             });
         }
     }

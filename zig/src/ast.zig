@@ -80,6 +80,11 @@ pub const MemoryMode = enum { smart, precise, none };
 pub const InlineHint = enum { default, always_inline, no_inline };
 pub const OwnershipHint = enum { default, owned, borrowed };
 
+pub const ForwardDecl = struct {
+    export_name: []const u8,
+    target_dll: []const u8,
+};
+
 pub const ProgramNode = struct {
     allocator: Allocator,
     states: std.ArrayList(StateDefNode),
@@ -87,6 +92,7 @@ pub const ProgramNode = struct {
     kernels: std.ArrayList(KernelDecl),
     enums: std.ArrayList(EnumDecl),
     parallel_blocks: std.ArrayList(ParallelBlock),
+    forwarders: std.ArrayList(ForwardDecl),
     memory: ?MemoryDirective,
     directives: std.ArrayList([]const u8),
     context: ?ContextDecl,
@@ -115,6 +121,7 @@ pub const ProgramNode = struct {
         self.enums.deinit();
         for (self.parallel_blocks.items) |*p| p.states.deinit();
         self.parallel_blocks.deinit();
+        self.forwarders.deinit();
         self.directives.deinit();
         self.extern_cpp_fns.deinit();
     }

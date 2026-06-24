@@ -5,6 +5,7 @@ pub const section_rva: u32 = 0x1000;
 pub const ResolvedExport = struct {
     name: []const u8,
     rva: u32,
+    forward_to: ?[]const u8,
 };
 
 pub fn write(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, idat_size: u32) ![]u8 {
@@ -32,7 +33,11 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
         var names_total: u32 = 0;
         for (exports) |e| names_total += @as(u32, @intCast(e.name.len)) + 1;
         const dll_name_size: u32 = 8;
-        const total_export_size = edt_size + eat_size + enpt_size + eot_size + names_total + dll_name_size;
+        var forwarders_total: u32 = 0;
+        for (exports) |e| {
+            if (e.forward_to) |f| forwarders_total += @as(u32, @intCast(f.len)) + 1;
+        }
+        const total_export_size = edt_size + eat_size + enpt_size + eot_size + names_total + dll_name_size + forwarders_total;
 
         var ed = std.ArrayList(u8).init(allocator);
         defer ed.deinit();
@@ -44,6 +49,7 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
         const eot_off = enpt_off + enpt_size;
         const names_off = eot_off + eot_size;
         const dll_name_off = names_off + names_total;
+        const forwarders_off = dll_name_off + dll_name_size;
 
         const export_base_rva = section_rva + @as(u32, @intCast(code.len));
 
@@ -57,6 +63,21 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
                 return std.mem.lessThan(u8, ctx.exports[a].name, ctx.exports[b].name);
             }
         }.lessThan);
+
+        // Forwarder RVA offsets for each export (ordinal order)
+        var forwarder_rvas = try allocator.alloc(u32, n);
+        defer allocator.free(forwarder_rvas);
+        {
+            var off: u32 = forwarders_off;
+            for (exports, 0..) |e, i| {
+                if (e.forward_to) |f| {
+                    forwarder_rvas[i] = off;
+                    off += @as(u32, @intCast(f.len)) + 1;
+                } else {
+                    forwarder_rvas[i] = 0;
+                }
+            }
+        }
 
         // Name string offsets in sorted order
         var name_offs = try allocator.alloc(u32, n);
@@ -84,8 +105,12 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
         try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + eot_off)));  // AddressOfNameOrdinals
 
         // Export Address Table (ordinal order)
-        for (exports) |e| {
-            try ed.appendSlice(&@as([4]u8, @bitCast(e.rva)));
+        for (exports, 0..) |e, i| {
+            if (e.forward_to) |_| {
+                try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + forwarder_rvas[i])));
+            } else {
+                try ed.appendSlice(&@as([4]u8, @bitCast(e.rva)));
+            }
         }
 
         // Export Name Pointer Table (sorted order)
@@ -108,6 +133,15 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
         while (ed.items.len < dll_name_off) try ed.append(0);
         try ed.appendSlice("TSS.dll");
         try ed.append(0);
+
+        // Forwarder strings (ordinal order)
+        while (ed.items.len < forwarders_off) try ed.append(0);
+        for (exports) |e| {
+            if (e.forward_to) |f| {
+                try ed.appendSlice(f);
+                try ed.append(0);
+            }
+        }
 
         export_data = try ed.toOwnedSlice();
         export_dir_rva = export_base_rva;

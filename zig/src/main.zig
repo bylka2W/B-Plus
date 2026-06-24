@@ -145,7 +145,8 @@ pub fn main() !void {
             if (s.kind == .exp) {
                 try resolved.append(.{
                     .name = s.name,
-                    .rva = pe.section_rva + s.rva,
+                    .rva = if (s.forward_to == null) pe.section_rva + s.rva else 0,
+                    .forward_to = s.forward_to,
                 });
             }
         }

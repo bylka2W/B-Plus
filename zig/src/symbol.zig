@@ -11,6 +11,7 @@ pub const Symbol = struct {
     name: []const u8,
     kind: SymbolKind,
     rva: u32,
+    forward_to: ?[]const u8,
 };
 
 pub const SymbolTable = struct {
@@ -25,13 +26,22 @@ pub const SymbolTable = struct {
     }
 
     pub fn deinit(self: *SymbolTable) void {
-        for (self.symbols.items) |s| self.allocator.free(s.name);
+        for (self.symbols.items) |s| {
+            self.allocator.free(s.name);
+            if (s.forward_to) |f| self.allocator.free(f);
+        }
         self.symbols.deinit();
     }
 
     pub fn add(self: *SymbolTable, name: []const u8, kind: SymbolKind, rva: u32) !void {
         const owned = try self.allocator.dupe(u8, name);
-        try self.symbols.append(.{ .name = owned, .kind = kind, .rva = rva });
+        try self.symbols.append(.{ .name = owned, .kind = kind, .rva = rva, .forward_to = null });
+    }
+
+    pub fn addForward(self: *SymbolTable, name: []const u8, target: []const u8) !void {
+        const owned_name = try self.allocator.dupe(u8, name);
+        const owned_target = try self.allocator.dupe(u8, target);
+        try self.symbols.append(.{ .name = owned_name, .kind = .exp, .rva = 0, .forward_to = owned_target });
     }
 
     pub fn lookup(self: *const SymbolTable, name: []const u8) ?u32 {
