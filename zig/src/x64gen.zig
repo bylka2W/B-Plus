@@ -4,6 +4,7 @@ const x64 = @import("x64enc.zig");
 const rt = @import("runtime.zig");
 const sym = @import("symbol.zig");
 const abi = @import("abi.zig");
+const layout = @import("layout.zig");
 const Allocator = std.mem.Allocator;
 
 pub const X64Output = struct {
@@ -83,6 +84,7 @@ const PendingOutput = struct {
     off_chars_read: i32, off_chars_written: i32,
     off_cur_state: i32, off_cursor: i32, off_remaining: i32, off_abudget: i32,
     off_buf: i32,
+    off_exit_code: i32,
     off_ctx_var_start: i32, off_state_data_base: i32,
     in_for_loop: bool,
     off_for_loop_x: i32, off_for_loop_y: i32,
@@ -157,7 +159,7 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         .off_hstdin = -8, .off_hstdout = -16,
         .off_chars_read = -24, .off_chars_written = -32,
         .off_cur_state = -40, .off_cursor = -48, .off_remaining = -56, .off_abudget = 0,
-        .off_buf = -64,
+        .off_buf = -64, .off_exit_code = 0,
         .off_ctx_var_start = -72, .off_state_data_base = -80,
         .off_core_type = -88, .off_numa_highest_node = -92, .off_numa_node_mask = -100,
         .off_l1_base = -108, .off_l1_ptr = -116, .off_l1_end = -124, .off_l1_buf_start = 0,
@@ -386,11 +388,29 @@ fn computeArenaSizes(p: *PendingOutput, program: ast.ProgramNode) void {
 }
 
 fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
-    var off: i32 = -8;
-    p.off_hstdin = off; off -= 8; p.off_hstdout = off; off -= 8;
-    p.off_chars_read = off; off -= 8; p.off_chars_written = off; off -= 8;
-    p.off_cur_state = off; off -= 8; p.off_cursor = off; off -= 8; p.off_remaining = off; off -= 8;
-    p.off_abudget = off; off -= 4;
+    var sf = layout.StackFrame.init(p.allocator);
+    defer sf.deinit();
+
+    try sf.addSlot(.hstdin, 8);
+    try sf.addSlot(.hstdout, 8);
+    try sf.addSlot(.chars_read, 8);
+    try sf.addSlot(.chars_written, 8);
+    try sf.addSlot(.cur_state, 8);
+    try sf.addSlot(.cursor, 8);
+    try sf.addSlot(.remaining, 8);
+    try sf.addSlot(.abudget, 4);
+
+    p.off_hstdin = sf.getOffset(.hstdin).?;
+    p.off_hstdout = sf.getOffset(.hstdout).?;
+    p.off_chars_read = sf.getOffset(.chars_read).?;
+    p.off_chars_written = sf.getOffset(.chars_written).?;
+    p.off_cur_state = sf.getOffset(.cur_state).?;
+    p.off_cursor = sf.getOffset(.cursor).?;
+    p.off_remaining = sf.getOffset(.remaining).?;
+    p.off_abudget = sf.getOffset(.abudget).?;
+
+    var off = sf.currentOff();
+
     p.off_ctx_var_start = off;
     for (p.ctx_vars.items) |_| off -= 8;
     p.off_state_data_base = off;
@@ -420,29 +440,58 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
         }
         try p.state_vars.put(state.name, sv);
     }
-    p.off_core_type = off; off -= 4;
-    p.off_numa_highest_node = off; off -= 4;
-    p.off_numa_node_mask = off; off -= 8;
-    p.off_pool_head = off; off -= 8;
-    p.off_l1_base = off; off -= 8;
-    p.off_l1_ptr = off; off -= 8;
-    p.off_l1_end = off; off -= 8;
-    p.off_l2_base = off; off -= 8;
-    p.off_l2_ptr = off; off -= 8;
-    p.off_l2_end = off; off -= 8;
-    p.off_l3_base = off; off -= 8;
-    p.off_l3_ptr = off; off -= 8;
-    p.off_l3_end = off; off -= 8;
-    p.off_telem_l1_spill = off; off -= 8;
-    p.off_telem_l2_spill = off; off -= 8;
-    p.off_telem_l1_peak = off; off -= 8;
-    p.off_telem_l2_peak = off; off -= 8;
-    p.off_telem_l3_peak = off; off -= 8;
-    p.off_telem_l1_allocs = off; off -= 8;
-    p.off_telem_l2_allocs = off; off -= 8;
-    p.off_telem_l3_allocs = off; off -= 8;
+
+    // Fixed slots (part 2)
+    try sf.addSlot(.core_type, 4);
+    try sf.addSlot(.numa_highest_node, 4);
+    try sf.addSlot(.numa_node_mask, 8);
+    try sf.addSlot(.pool_head, 8);
+    try sf.addSlot(.l1_base, 8);
+    try sf.addSlot(.l1_ptr, 8);
+    try sf.addSlot(.l1_end, 8);
+    try sf.addSlot(.l2_base, 8);
+    try sf.addSlot(.l2_ptr, 8);
+    try sf.addSlot(.l2_end, 8);
+    try sf.addSlot(.l3_base, 8);
+    try sf.addSlot(.l3_ptr, 8);
+    try sf.addSlot(.l3_end, 8);
+
+    // Telemetry counters
+    try sf.addSlot(.telem_l1_spill, 8);
+    try sf.addSlot(.telem_l2_spill, 8);
+    try sf.addSlot(.telem_l1_peak, 8);
+    try sf.addSlot(.telem_l2_peak, 8);
+    try sf.addSlot(.telem_l3_peak, 8);
+    try sf.addSlot(.telem_l1_allocs, 8);
+    try sf.addSlot(.telem_l2_allocs, 8);
+    try sf.addSlot(.telem_l3_allocs, 8);
+
+    p.off_core_type = sf.getOffset(.core_type).?;
+    p.off_numa_highest_node = sf.getOffset(.numa_highest_node).?;
+    p.off_numa_node_mask = sf.getOffset(.numa_node_mask).?;
+    p.off_pool_head = sf.getOffset(.pool_head).?;
+    p.off_l1_base = sf.getOffset(.l1_base).?;
+    p.off_l1_ptr = sf.getOffset(.l1_ptr).?;
+    p.off_l1_end = sf.getOffset(.l1_end).?;
+    p.off_l2_base = sf.getOffset(.l2_base).?;
+    p.off_l2_ptr = sf.getOffset(.l2_ptr).?;
+    p.off_l2_end = sf.getOffset(.l2_end).?;
+    p.off_l3_base = sf.getOffset(.l3_base).?;
+    p.off_l3_ptr = sf.getOffset(.l3_ptr).?;
+    p.off_l3_end = sf.getOffset(.l3_end).?;
+    p.off_telem_l1_spill = sf.getOffset(.telem_l1_spill).?;
+    p.off_telem_l2_spill = sf.getOffset(.telem_l2_spill).?;
+    p.off_telem_l1_peak = sf.getOffset(.telem_l1_peak).?;
+    p.off_telem_l2_peak = sf.getOffset(.telem_l2_peak).?;
+    p.off_telem_l3_peak = sf.getOffset(.telem_l3_peak).?;
+    p.off_telem_l1_allocs = sf.getOffset(.telem_l1_allocs).?;
+    p.off_telem_l2_allocs = sf.getOffset(.telem_l2_allocs).?;
+    p.off_telem_l3_allocs = sf.getOffset(.telem_l3_allocs).?;
+
+    off = sf.currentOff();
     p.off_state_hits = off - @as(i32, @intCast(program.states.items.len * 8)); off -= @as(i32, @intCast(program.states.items.len * 8));
     p.off_trans_hits = off - @as(i32, @intCast(p.total_transitions * 8)); off -= @as(i32, @intCast(p.total_transitions * 8));
+    p.off_exit_code = off; off -= 8;
     p.off_buf = off - 256; off -= 256;
     p.off_l1_buf_start = off - @as(i32, @intCast(p.arena_l1_size)); off -= @as(i32, @intCast(p.arena_l1_size));
     p.off_l2_buf_start = off - @as(i32, @intCast(p.arena_l2_size)); off -= @as(i32, @intCast(p.arena_l2_size));
@@ -833,6 +882,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     try setLabel(p, fl_done);
     try emitXorReg(p, Reg.RAX); // free_head = 0
     try x64.emit(&p.code, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_ht_free_head), x64.Operand.r(Reg.RAX) });
+    try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_exit_code), x64.Operand.r(Reg.RAX) }); // default exit code = 0
 
     if (!p.is_dll) {
         try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -10 }});
@@ -1882,8 +1932,9 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode, traces: std.ArrayL
     try emitCondLongJmp(p, .JNE_REL32, th_lp);
     try emitRet(p);
     try setLabel(p, try allocLabelId(p, "exit_end", .{}));
-    // ExitProcess
-    try emitWin32Call(p, 3, &.{abi.CallArg{ .imm = 0 }});
+    // ExitProcess with saved return value
+    try x64.emit(&p.code, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.mem(Reg.RBP, p.off_exit_code) });
+    try emitWin32Call(p, 3, &.{});
     try emitLongJmp(p, try allocLabelId(p, "exit_process", .{}));
 }
 
@@ -2892,16 +2943,20 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         if (std.mem.startsWith(u8, after_return, "-> ")) {
             const expr = std.mem.trimLeft(u8, after_return["-> ".len..], " \t\r\n");
             if (try tryEmitWin32Call(p, expr, current_state)) {
+                try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_exit_code), x64.Operand.r(Reg.RAX) });
                 p.pending_ret = RetValue{ .int = Reg.RAX };
                 return;
             }
             if (isFloatExpr(p, current_state, expr)) {
                 const reg = try emitExprToXmm(p, expr, current_state, 4);
+                try x64.emit(&p.code, .SSE_MOVD_ST, &.{ x64.Operand.r(Reg.RAX), x64.Operand.xmm(reg) });
+                try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_exit_code), x64.Operand.r(Reg.RAX) });
                 p.pending_ret = RetValue{ .float = reg };
                 freeXmm(p, reg);
                 return;
             }
             try emitExprToRAX(p, expr, current_state);
+            try x64.emit(&p.code, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_exit_code), x64.Operand.r(Reg.RAX) });
             p.pending_ret = RetValue{ .int = Reg.RAX };
             return;
         }

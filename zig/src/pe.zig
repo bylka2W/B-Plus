@@ -154,12 +154,12 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
     try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x18000000))));
     try pe.appendSlice(&@as([4]u8, @bitCast(sect_align)));
     try pe.appendSlice(&@as([4]u8, @bitCast(file_align)));
-    try pe.appendNTimes(0, 2);
-    try pe.appendNTimes(0, 2);
-    try pe.appendNTimes(0, 2);
-    try pe.appendNTimes(0, 2);
-    try pe.appendNTimes(0, 2);
-    try pe.appendNTimes(0, 2);
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 6))));   // MajorOSVersion
+    try pe.appendNTimes(0, 2);                                   // MinorOSVersion
+    try pe.appendNTimes(0, 2);                                   // MajorImageVersion
+    try pe.appendNTimes(0, 2);                                   // MinorImageVersion
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 6))));   // MajorSubsystemVersion
+    try pe.appendNTimes(0, 2);                                   // MinorSubsystemVersion
     try pe.appendNTimes(0, 4);
     try pe.appendSlice(&@as([4]u8, @bitCast(image_size)));
     try pe.appendSlice(&@as([4]u8, @bitCast(headers_size)));

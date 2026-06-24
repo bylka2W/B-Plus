@@ -578,10 +578,12 @@ zig/                    — компилятор (Zig, активная разр
     scheduler_state.zig  — Stage 8 GlobalSchedulerState (SystemLoad, adjustDecision)
     parser.zig          — лексер + парсер .b+
     ast.zig             — типы AST (состояния, переходы и т.д.)
-    x64gen.zig          — генератор машинного кода x64 (+ Intrinsic binding к runtime)
-    x64enc.zig          — кодировщик инструкций x64
-    symbol.zig          — SymbolTable: реестр символов (code/export/data) для линковки
-    pe.zig             — генератор PE (.exe/.dll) — чистый эмиттер, не знает про AST
+     x64gen.zig          — генератор машинного кода x64 (+ Intrinsic binding к runtime)
+     x64enc.zig          — кодировщик инструкций x64
+     layout.zig          — StackFrame/SlotKind: типобезопасная абстракция стекового
+                           фрейма, используется x64gen.zig для раскладки оффсетов
+     symbol.zig          — SymbolTable: реестр символов (code/export/data) для линковки
+     pe.zig             — генератор PE (.exe/.dll) — чистый эмиттер, не знает про AST
   build.zig            — сборка через zig build
 ```
 
@@ -1348,13 +1350,15 @@ zig/                    — compiler (Zig, active development)
     gpu_scheduler.zig    — Stage 9+ Pure GPU dispatch sink (no graph awareness)
     parser.zig          — lexer + parser for .b+
     ast.zig             — AST types (states, transitions, etc.)
-    x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime).
-                          Features: jump-table dispatch, superblock fusion,
-                          compiled event matching (inline CMP imm for ≤4B names),
-                          label interning (u32 IDs, zero formatting in hot paths),
-                          O(1) state lookup via HashMap.
-    x64enc.zig          — x64 instruction encoder
-    pe.zig             — PE (.exe) generator
+     x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime).
+                           Features: jump-table dispatch, superblock fusion,
+                           compiled event matching (inline CMP imm for ≤4B names),
+                           label interning (u32 IDs, zero formatting in hot paths),
+                           O(1) state lookup via HashMap.
+     x64enc.zig          — x64 instruction encoder
+     layout.zig          — StackFrame/SlotKind: type-safe stack layout abstraction
+                           used by x64gen.zig for frame offset computation
+     pe.zig             — PE (.exe/.dll) generator
   build.zig            — build script (zig build)
 ```
 
