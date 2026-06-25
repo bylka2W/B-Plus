@@ -15,6 +15,7 @@ pub const X64Output = struct {
     idat_size: u32,
     symbols: sym.SymbolTable,
     is_dll: bool,
+    entry_point_rva: u32,
 };
 
 const Reg = struct {
@@ -27,6 +28,33 @@ const Reg = struct {
 const XMM = struct {
     const XMM0: i16 = 0; const XMM1: i16 = 1; const XMM2: i16 = 2; const XMM3: i16 = 3;
     const XMM4: i16 = 4; const XMM5: i16 = 5; const XMM6: i16 = 6; const XMM7: i16 = 7;
+};
+
+const ImportGroup = struct {
+    dll: []const u8,
+    fns: []const []const u8,
+};
+
+const IMPORT_GROUPS = [_]ImportGroup{
+    .{ .dll = "kernel32.dll", .fns = &[_][]const u8{
+        "GetStdHandle", "WriteFile", "ReadFile", "ExitProcess",
+        "GetProcessHeap", "HeapAlloc", "HeapFree", "SetThreadAffinityMask",
+        "GetCurrentThread", "GetNumaHighestNodeNumber", "GetNumaNodeProcessorMask",
+        "VirtualAlloc", "VirtualFree", "CreateFileW", "GetFileSizeEx",
+        "CreateFileMappingW", "MapViewOfFile", "UnmapViewOfFile", "CloseHandle",
+        "LoadLibraryA", "LoadLibraryW", "GetProcAddress",
+        "GetModuleHandleA", "GetModuleHandleW",
+        "OpenProcess", "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread", "WaitForSingleObject",
+        "GetCurrentProcessId", "WinExec",
+        "TlsAlloc", "TlsGetValue", "TlsSetValue", "TlsFree",
+    } },
+    .{ .dll = "msvcrt.dll", .fns = &[_][]const u8{
+        "sinf", "cosf", "expf", "logf", "powf", "atanf", "tanf", "sqrtf",
+        "sin", "cos", "exp", "log", "pow", "atan", "tan", "sqrt",
+    } },
+    .{ .dll = "user32.dll", .fns = &[_][]const u8{
+        "MessageBoxW",
+    } },
 };
 
 const IMPORT_FNS = [_][]const u8{
@@ -43,6 +71,8 @@ const IMPORT_FNS = [_][]const u8{
     // CRT math functions (msvcrt.dll)
     "sinf", "cosf", "expf", "logf", "powf", "atanf", "tanf", "sqrtf",
     "sin", "cos", "exp", "log", "pow", "atan", "tan", "sqrt",
+    // user32.dll
+    "MessageBoxW",
 };
 
 const ComMethod = struct {
@@ -146,6 +176,9 @@ const PendingOutput = struct {
     cbuf: codebuffer.CodeBuffer,
     string_pool: std.StringHashMap(usize),
     string_list: std.ArrayList([]const u8),
+    entry_point_rva: u32,
+    wstring_pool: std.StringHashMap(usize),
+    wstring_list: std.ArrayList([]const u16),
     state_names: std.ArrayList([]const u8),
     state_index_map: std.StringHashMap(usize),
     ctx_vars: std.ArrayList(ContextVarInfo),
@@ -220,6 +253,8 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         .cbuf = codebuffer.CodeBuffer.init(allocator),
         .string_pool = std.StringHashMap(usize).init(allocator),
         .string_list = std.ArrayList([]const u8).init(allocator),
+        .wstring_pool = std.StringHashMap(usize).init(allocator),
+        .wstring_list = std.ArrayList([]const u16).init(allocator),
         .state_names = std.ArrayList([]const u8).init(allocator),
         .state_index_map = std.StringHashMap(usize).init(allocator),
         .ctx_vars = std.ArrayList(ContextVarInfo).init(allocator),
@@ -269,6 +304,7 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         .allocator = allocator,
         .xmm_used = .{false} ** 16,
         .trace_mode = trace_mode,
+        .entry_point_rva = 0,
         .state_base_reg = Reg.RBP,
         .pending_ret = null,
         .symbols = sym.SymbolTable.init(allocator),
@@ -380,6 +416,9 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
     for (p.string_list.items) |s| p.allocator.free(s);
     p.string_list.deinit();
     p.string_pool.deinit();
+    for (p.wstring_list.items) |ws| p.allocator.free(ws);
+    p.wstring_list.deinit();
+    p.wstring_pool.deinit();
     p.state_names.deinit();
     p.state_index_map.deinit();
     p.ctx_vars.deinit();
@@ -393,6 +432,7 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         .idat_size = idat_size,
         .symbols = p.symbols,
         .is_dll = p.is_dll,
+        .entry_point_rva = p.entry_point_rva,
     };
 }
 
@@ -620,7 +660,8 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     p.off_ht_free_head = off - 8; off -= 8;
     const neg = -off;
     p.stack_frame_size = @as(u32, @intCast(neg + 15)) & ~@as(u32, 15);
-    if (p.stack_frame_size < 40) p.stack_frame_size = 40;
+    if (p.stack_frame_size < 32) p.stack_frame_size = 32;
+    p.stack_frame_size |= 8;
 }
 
 fn computeStateLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
@@ -800,6 +841,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     if (p.is_dll) {
         return;
     }
+    p.entry_point_rva = @intCast(p.cbuf.bytes.items.len);
     try p.cbuf.bytes.append(0x55);
     try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBP), x64.Operand.r(Reg.RSP) });
     try emitPushR64(p, Reg.RBX); try emitPushR64(p, Reg.R12);
@@ -2344,6 +2386,10 @@ fn embedStringPool(p: *PendingOutput) !void {
         try p.cbuf.bytes.appendSlice(s);
         try p.cbuf.bytes.append(0);
     }
+    for (p.wstring_list.items, 0..) |ws, i| {
+        try setLabel(p, try allocLabelId(p, "wstr_{d}", .{i}));
+        try p.cbuf.bytes.appendSlice(std.mem.sliceAsBytes(ws));
+    }
 }
 
 fn embedStateGlobals(p: *PendingOutput) !void {
@@ -2360,63 +2406,121 @@ fn embedStateGlobals(p: *PendingOutput) !void {
 
 fn emitImportTable(p: *PendingOutput) !u32 {
     const base_off = @as(u32, @intCast(p.cbuf.bytes.items.len));
-    const nf = IMPORT_FNS.len;
-    const desc_size: u32 = 2 * 20;
-    const int_off = base_off + desc_size;
-    const int_sz: u32 = @as(u32, @intCast((nf + 1) * 8));
-    const dll_name_off = int_off + int_sz;
-    const dll_name = "kernel32.dll\x00";
-    const hint_base = dll_name_off + @as(u32, @intCast(dll_name.len));
+    const ng = IMPORT_GROUPS.len;
+    const desc_total: u32 = @as(u32, @intCast((ng + 1) * 20));
+    const int_off = base_off + desc_total;
+    var group_ints = std.ArrayList(u32).init(p.allocator);
+    var group_names = std.ArrayList(u32).init(p.allocator);
+    var group_iats = std.ArrayList(u32).init(p.allocator);
+    var cur_int = int_off;
+    var cur_name: u32 = undefined;
+    var cur_hint: u32 = undefined;
+    var cur_iat: u32 = undefined;
+    // pass 1: allocate INTs
+    for (IMPORT_GROUPS) |g| {
+        try group_ints.append(cur_int);
+        cur_int += @as(u32, @intCast((g.fns.len + 1) * 8));
+    }
+    cur_name = cur_int;
+    // pass 2: allocate DLL names
+    for (IMPORT_GROUPS) |g| {
+        try group_names.append(cur_name);
+        cur_name += @as(u32, @intCast(g.dll.len)) + 1;
+    }
+    cur_hint = cur_name;
+    // pass 3: allocate hint/name entries per group
+    var group_hint_bases = std.ArrayList(u32).init(p.allocator);
     var hint_offs = std.ArrayList(u32).init(p.allocator);
     var hint_dats = std.ArrayList([]const u8).init(p.allocator);
-    var cur = hint_base;
-    for (IMPORT_FNS) |fn_name| {
-        try hint_offs.append(cur);
-        const d = try std.fmt.allocPrint(p.allocator, "{s}\x00", .{fn_name});
-        try hint_dats.append(d);
-        cur += 2 + @as(u32, @intCast(d.len));
+    for (IMPORT_GROUPS) |g| {
+        try group_hint_bases.append(cur_hint);
+        for (g.fns) |fn_name| {
+            try hint_offs.append(cur_hint);
+            const d = try std.fmt.allocPrint(p.allocator, "{s}\x00", .{fn_name});
+            try hint_dats.append(d);
+            cur_hint += 2 + @as(u32, @intCast(d.len));
+        }
     }
-    const iat_off = cur;
-    // IMAGE_IMPORT_DESCRIPTOR
-    try p.cbuf.bytes.appendSlice(&@as([4]u8, @bitCast(SectionRva + int_off))); // OriginalFirstThunk
-    try p.cbuf.bytes.appendNTimes(0, 4); // TimeDateStamp
-    try p.cbuf.bytes.appendNTimes(0, 4); // ForwarderChain
-    try p.cbuf.bytes.appendSlice(&@as([4]u8, @bitCast(SectionRva + dll_name_off))); // Name
-    try p.cbuf.bytes.appendSlice(&@as([4]u8, @bitCast(SectionRva + iat_off))); // FirstThunk
-    try p.cbuf.bytes.appendNTimes(0, 20);
-
-    // INT
-    for (hint_offs.items) |ho| try p.cbuf.bytes.appendSlice(&@as([8]u8, @bitCast(@as(u64, SectionRva + ho))));
-    try p.cbuf.bytes.appendNTimes(0, 8);
-
-    // DLL name
-    try p.cbuf.bytes.appendSlice(dll_name);
-
-    // Hint/name entries
-    for (hint_dats.items) |hd| { try p.cbuf.bytes.append(0); try p.cbuf.bytes.append(0); try p.cbuf.bytes.appendSlice(hd); }
-
-    // IAT
-    for (hint_offs.items) |ho| try p.cbuf.bytes.appendSlice(&@as([8]u8, @bitCast(@as(u64, SectionRva + ho))));
-    try p.cbuf.bytes.appendNTimes(0, 8);
-
-    for (IMPORT_FNS, 0..) |_, i| {
-        const iat_label_val = @as(usize, @intCast(iat_off + @as(u32, @intCast(i)) * 8));
-        setLabelAt(p, try allocLabelId(p, "iat_{d}", .{i}), iat_label_val);
+    cur_iat = cur_hint;
+    // pass 4: IAT starts after all hint data
+    for (IMPORT_GROUPS) |g| {
+        try group_iats.append(cur_iat);
+        cur_iat += @as(u32, @intCast((g.fns.len + 1) * 8));
     }
+
+    // Emit import descriptors
+    for (IMPORT_GROUPS, 0..) |_, gi| {
+        try p.cbuf.bytes.appendSlice(&@as([4]u8, @bitCast(SectionRva + group_ints.items[gi]))); // OriginalFirstThunk
+        try p.cbuf.bytes.appendNTimes(0, 4); // TimeDateStamp
+        try p.cbuf.bytes.appendNTimes(0, 4); // ForwarderChain
+        try p.cbuf.bytes.appendSlice(&@as([4]u8, @bitCast(SectionRva + group_names.items[gi]))); // Name
+        try p.cbuf.bytes.appendSlice(&@as([4]u8, @bitCast(SectionRva + group_iats.items[gi]))); // FirstThunk
+    }
+    try p.cbuf.bytes.appendNTimes(0, 20); // zero terminator
+
+    // Emit per-group INT arrays
+    var fn_idx: u32 = 0;
+    for (IMPORT_GROUPS) |g| {
+        for (0..g.fns.len) |_| {
+            try p.cbuf.bytes.appendSlice(&@as([8]u8, @bitCast(@as(u64, SectionRva + hint_offs.items[fn_idx]))));
+            fn_idx += 1;
+        }
+        try p.cbuf.bytes.appendNTimes(0, 8); // null terminator
+    }
+
+    // Emit DLL names
+    for (IMPORT_GROUPS) |g| {
+        try p.cbuf.bytes.appendSlice(g.dll);
+        try p.cbuf.bytes.append(0);
+    }
+
+    // Emit hint/name entries
+    for (hint_dats.items) |hd| {
+        try p.cbuf.bytes.append(0); try p.cbuf.bytes.append(0); // hint
+        try p.cbuf.bytes.appendSlice(hd);
+    }
+
+    // Emit IAT arrays
+    fn_idx = 0;
+    for (IMPORT_GROUPS) |g| {
+        for (0..g.fns.len) |_| {
+            try p.cbuf.bytes.appendSlice(&@as([8]u8, @bitCast(@as(u64, SectionRva + hint_offs.items[fn_idx]))));
+            fn_idx += 1;
+        }
+        try p.cbuf.bytes.appendNTimes(0, 8); // null terminator
+    }
+
+    // Set iat_N labels for each function (flat IAT indices)
+    fn_idx = 0;
+    for (IMPORT_GROUPS, 0..) |g, gi| {
+        var i: u32 = 0;
+        while (i < g.fns.len) : (i += 1) {
+            const iat_label_val = group_iats.items[gi] + i * 8;
+            setLabelAt(p, try allocLabelId(p, "iat_{d}", .{fn_idx}), iat_label_val);
+            fn_idx += 1;
+        }
+    }
+
+    // cleanup
     for (hint_dats.items) |s| p.allocator.free(s);
     hint_offs.deinit(); hint_dats.deinit();
+    group_ints.deinit(); group_names.deinit(); group_iats.deinit(); group_hint_bases.deinit();
     return base_off;
 }
 
 fn computeImportTableSize() u32 {
-    const nf = IMPORT_FNS.len;
-    const desc: u32 = 2 * 20;
-    const int_sz: u32 = @as(u32, @intCast((nf + 1) * 8));
-    var hint_sz: u32 = 0;
-    for (IMPORT_FNS) |fn_name| hint_sz += 2 + @as(u32, @intCast(fn_name.len)) + 1;
-    const iat_sz: u32 = @as(u32, @intCast((nf + 1) * 8));
-    const dll_name_len: u32 = 13; // "kernel32.dll\0"
-    return desc + int_sz + dll_name_len + hint_sz + iat_sz;
+    const ng = IMPORT_GROUPS.len;
+    const desc_total: u32 = @as(u32, @intCast((ng + 1) * 20));
+    var total: u32 = desc_total;
+    for (IMPORT_GROUPS) |g| {
+        total += @as(u32, @intCast((g.fns.len + 1) * 8)); // INT
+        total += @as(u32, @intCast(g.dll.len)) + 1; // DLL name
+        for (g.fns) |fn_name| {
+            total += 2 + @as(u32, @intCast(fn_name.len)) + 1; // hint/name
+        }
+        total += @as(u32, @intCast((g.fns.len + 1) * 8)); // IAT
+    }
+    return total;
 }
 
 fn applyFixups(p: *PendingOutput) !void {
@@ -2471,6 +2575,13 @@ fn emitRipLea(p: *PendingOutput, dst: i16, string_idx: u32) !void {
     try x64.emit(&p.cbuf.bytes, .LEA_R64_MEM, &.{ x64.Operand.r(dst), x64.Operand.mem(255, 0) });
     const disp_off = p.cbuf.bytes.items.len - 4;
     const label_id = try allocLabelId(p, "str_{d}", .{string_idx});
+    try p.cbuf.fixups.append(.{ .offset = disp_off, .disp_size = 4, .label_id = label_id });
+}
+
+fn emitRipLeaWide(p: *PendingOutput, dst: i16, wstring_idx: u32) !void {
+    try x64.emit(&p.cbuf.bytes, .LEA_R64_MEM, &.{ x64.Operand.r(dst), x64.Operand.mem(255, 0) });
+    const disp_off = p.cbuf.bytes.items.len - 4;
+    const label_id = try allocLabelId(p, "wstr_{d}", .{wstring_idx});
     try p.cbuf.fixups.append(.{ .offset = disp_off, .disp_size = 4, .label_id = label_id });
 }
 
@@ -3008,6 +3119,37 @@ pub fn addPoolString(p: *PendingOutput, str: []const u8) !u32 {
     const idx = p.string_list.items.len;
     try p.string_list.append(try p.allocator.dupe(u8, str));
     try p.string_pool.put(str, idx);
+    return @intCast(idx);
+}
+
+fn utf8ToUtf16Le(allocator: std.mem.Allocator, utf8: []const u8) ![]u16 {
+    std.debug.print("  utf8ToUtf16Le: len={d}\n", .{utf8.len});
+    var result = std.ArrayList(u16).init(allocator);
+    errdefer result.deinit();
+    var i: usize = 0;
+    while (i < utf8.len) {
+        const seq_len = try std.unicode.utf8ByteSequenceLength(utf8[i]);
+        const cp = try std.unicode.utf8Decode(utf8[i..i+seq_len]);
+        i += seq_len;
+        if (cp >= 0x10000) {
+            const cp2 = cp - 0x10000;
+            try result.append(@as(u16, @intCast(0xD800 | (cp2 >> 10))));
+            try result.append(@as(u16, @intCast(0xDC00 | (cp2 & 0x3FF))));
+        } else {
+            try result.append(@as(u16, @intCast(cp)));
+        }
+    }
+    try result.append(0);
+    return result.toOwnedSlice();
+}
+
+fn addPoolWString(p: *PendingOutput, str: []const u8) !u32 {
+    const get_result = p.wstring_pool.get(str);
+    if (get_result) |idx| return @intCast(idx);
+    const wstr = try utf8ToUtf16Le(p.allocator, str);
+    const idx = p.wstring_list.items.len;
+    try p.wstring_list.append(wstr);
+    try p.wstring_pool.put(str, idx);
     return @intCast(idx);
 }
 
@@ -3674,10 +3816,11 @@ fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const 
                 for (IMPORT_FNS, 0..) |import_name, import_idx| {
                     if (std.mem.eql(u8, fn_name, import_name)) {
                         const args_str = std.mem.trim(u8, body[po+1..pc], " \t");
-                        if (isMathFn(fn_name)) {
+                         if (isMathFn(fn_name)) {
                             try emitMathCall(p, fn_name, args_str, @intCast(import_idx), current_state);
                             return true;
                         }
+                        const is_wide = fn_name.len > 0 and fn_name[fn_name.len - 1] == 'W';
                         const target_regs = [_]i16{ 1, 2, 8, 9 }; // RCX, RDX, R8, R9
                         // Parse all args into fixed buffers
                         var imm_buf: [12]i64 = undefined;
@@ -3693,7 +3836,10 @@ fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const 
                                 if (arg.len == 0) continue;
                                 if (arg[0] == '"' and arg[arg.len - 1] == '"') {
                                     typ_buf[num_total] = 1;
-                                    str_buf[num_total] = try addPoolString(p, arg[1..arg.len - 1]);
+                                    str_buf[num_total] = if (is_wide)
+                                        try addPoolWString(p, arg[1..arg.len - 1])
+                                    else
+                                        try addPoolString(p, arg[1..arg.len - 1]);
                                 } else {
                                     const n = parseNumber(arg);
                                     if (n != 0 or (arg.len > 0 and (std.ascii.isDigit(arg[0]) or arg[0] == '-' or arg[0] == '+'))) {
@@ -3711,7 +3857,10 @@ fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const 
                         for (0..@min(num_total, 4)) |i| {
                             switch (typ_buf[i]) {
                                 0 => try emitLoadImm(p, target_regs[i], imm_buf[i]),
-                                1 => try emitRipLea(p, target_regs[i], str_buf[i]),
+                                1 => {
+                                    std.debug.print("  emitStrArg i={d} is_wide={} str_idx={d}\n", .{i, is_wide, str_buf[i]});
+                                    if (is_wide) try emitRipLeaWide(p, target_regs[i], str_buf[i]) else try emitRipLea(p, target_regs[i], str_buf[i]);
+                                },
                                 2 => _ = try tryLoadVarToReg(p, target_regs[i], var_buf[i], current_state),
                                 else => {},
                             }
@@ -3727,7 +3876,7 @@ fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const 
                                         try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, stack_off), x64.Operand.r(Reg.RAX) });
                                     },
                                     1 => {
-                                        try emitRipLea(p, Reg.RAX, str_buf[i]);
+                                        if (is_wide) try emitRipLeaWide(p, Reg.RAX, str_buf[i]) else try emitRipLea(p, Reg.RAX, str_buf[i]);
                                         try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, stack_off), x64.Operand.r(Reg.RAX) });
                                     },
                                     2 => {

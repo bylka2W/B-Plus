@@ -1,6 +1,8 @@
-# B+ v4.3.0 — детерминированная машина переходов (x64)
+# B+ v4.3.1 — детерминированная машина переходов (x64)
 
 > [English version ↓](#b-v420--deterministic-transition-machine-x64)
+
+**v4.3.1:** Исправлено выравнивание стека в прологе entry point (x64gen.zig). `stack_frame_size` теперь всегда 8 mod 16, что даёт RSP = 0 mod 16 после сохранения 6 регистров. Устранён `ACCESS_VIOLATION` в `MOVAPS [RSP+0x30]` при вызове `MessageBoxW` через ucrtbase.dll.
 
 **B+** транслирует `.b+` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор написан с нуля на Zig.
@@ -959,9 +961,11 @@ entry main {
 
 ---
 
-# B+ v4.3.0 — deterministic transition machine (x64)
+# B+ v4.3.1 — deterministic transition machine (x64)
 
 > [Russian version ↑](#b-v420--детерминированная-машина-переходов-x64)
+
+**v4.3.1:** Fixed stack alignment in entry point prologue (x64gen.zig). `stack_frame_size` is now always 8 mod 16, ensuring RSP = 0 mod 16 after saving 6 registers. Resolved `ACCESS_VIOLATION` in `MOVAPS [RSP+0x30]` when calling `MessageBoxW` via ucrtbase.dll.
 
 **B+** compiles `.b+` files directly to x64 machine code and packages them into Windows PE executables (.exe).
 No assemblers, linkers, or LLVM — the entire code generator is written from scratch in Zig.
