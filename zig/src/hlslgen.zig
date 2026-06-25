@@ -63,7 +63,7 @@ pub fn generate(allocator: std.mem.Allocator, program: ast.ProgramNode, source: 
     }
 
     // Emit cbuffer for constant-like state variables (dimensions, config)
-    try emitConstantBufferDecl(w, &program);
+    try emitConstantBufferDecl(w, &program, &bindings);
     try w.writeAll("\n");
 
     for (program.entries.items) |*entry| {
@@ -231,22 +231,17 @@ fn emitCbufferDecls(w: anytype, cbuffers: *const std.StringHashMap([]const u8)) 
     }
 }
 
-const constant_state_vars = std.StaticStringMap(void).initComptime(.{
-    .{"w"}, .{"h"}, .{"ow"}, .{"oh"},
-});
-
-fn emitConstantBufferDecl(w: anytype, program: *const ast.ProgramNode) !void {
+fn emitConstantBufferDecl(w: anytype, program: *const ast.ProgramNode, bindings: *const std.StringHashMap([]const u8)) !void {
     var first = true;
     for (program.states.items) |*state| {
         for (state.variables.items) |*v| {
-            if (constant_state_vars.has(v.name)) {
-                if (first) {
-                    try w.writeAll("cbuffer TSS_Constants : register(b0) {\n");
-                    first = false;
-                }
-                const type_hlsl = if (std.mem.eql(u8, v.type_name, "float")) "float" else "int";
-                try w.print("    {s} {s};\n", .{ type_hlsl, v.name });
+            if (bindings.contains(v.name)) continue;
+            if (first) {
+                try w.writeAll("cbuffer TSS_Constants : register(b0) {\n");
+                first = false;
             }
+            const type_hlsl = if (std.mem.eql(u8, v.type_name, "float")) "float" else "int";
+            try w.print("    {s} {s};\n", .{ type_hlsl, v.name });
         }
     }
     if (!first) try w.writeAll("};\n");
@@ -329,17 +324,8 @@ fn emitEntryShader(w: anytype, entry: *const ast.EntryDecl, ctx: *Ctx) @TypeOf(w
         }
     }
 
-    for (ctx.program.states.items) |*state| {
-        for (state.variables.items) |*v| {
-            const type_hlsl: []const u8 = mapTypeToHlsl(v.type_name);
-            const is_resource = ctx.bindings.contains(v.name);
-            const is_for_var = std.mem.eql(u8, v.name, ctx.x_var) or std.mem.eql(u8, v.name, ctx.y_var);
-            const is_constant = constant_state_vars.has(v.name);
-            if (!is_resource and !is_for_var and !is_constant) {
-                try w.print("    {s} {s};\n", .{ type_hlsl, v.name });
-            }
-        }
-    }
+    _ = &ctx.x_var;
+    _ = &ctx.y_var;
 
     try transpileBodyLines(w, entry.body_lines.items[body_start_idx..], ctx);
     try w.writeAll("}\n");
@@ -358,6 +344,16 @@ fn transpileBodyLines(w: anytype, lines: []const []const u8, ctx: *Ctx) @TypeOf(
         if (std.mem.eql(u8, line, "@flatten")) { try w.writeAll("    [flatten]\n"); continue; }
         if (std.mem.eql(u8, line, "@fastopt")) { try w.writeAll("    [fastopt]\n"); continue; }
         if (std.mem.startsWith(u8, line, "@")) continue;
+
+        if (std.mem.startsWith(u8, line, "for (")) {
+            const fl_body = try extractBlockLines(ctx.allocator, lines, i + 1);
+            defer ctx.allocator.free(fl_body);
+            try w.print("    {s}\n", .{line});
+            try transpileBodyLines(w, fl_body, ctx);
+            try w.writeAll("    }\n");
+            i += fl_body.len + 1;
+            continue;
+        }
 
         if (std.mem.startsWith(u8, line, "for(")) {
             const body_lines = try extractBlockLines(ctx.allocator, lines, i + 1);
@@ -524,94 +520,116 @@ fn transpileBody(w: anytype, body: []const u8, ctx: *Ctx) @TypeOf(w).Error!void 
 }
 
 fn transpileStmt(w: anytype, stmt: []const u8, ctx: *Ctx) @TypeOf(w).Error!void {
-    if (std.mem.startsWith(u8, stmt, "for")) {
-        try transpileFor(w, stmt, ctx);
+    const s = std.mem.trimRight(u8, stmt, " \t;\r\n");
+    if (std.mem.startsWith(u8, s, "for")) {
+        try transpileFor(w, s, ctx);
         return;
     }
-    if (std.mem.startsWith(u8, stmt, "if")) {
-        try transpileIf(w, stmt, ctx);
+    if (std.mem.startsWith(u8, s, "if")) {
+        try transpileIf(w, s, ctx);
+        return;
+    }
+
+    // var name: type  →  type name
+    // var name: type = expr  →  type name = expr
+    if (std.mem.startsWith(u8, s, "var ")) {
+        const decl = std.mem.trim(u8, s["var ".len..], " \t");
+        if (std.mem.indexOfScalar(u8, decl, ':')) |colon| {
+            const name = std.mem.trim(u8, decl[0..colon], " \t");
+            const after_colon = std.mem.trim(u8, decl[colon + 1 ..], " \t");
+            try ctx.declared_locals.put(try ctx.allocator.dupe(u8, name), {});
+            if (std.mem.indexOfScalar(u8, after_colon, '=')) |eq| {
+                const typ = std.mem.trim(u8, after_colon[0..eq], " \t");
+                const val = std.mem.trim(u8, after_colon[eq + 1 ..], " \t");
+                try w.print("    {s} {s} = {s};\n", .{ typ, name, transpileExpr(val) });
+            } else {
+                try w.print("    {s} {s};\n", .{ after_colon, name });
+            }
+        } else {
+            try w.print("    {s};\n", .{s});
+        }
         return;
     }
 
     // Passthrough for HLSL intrinsics
-    if (std.mem.startsWith(u8, stmt, "InterlockedAdd") or
-        std.mem.startsWith(u8, stmt, "InterlockedMax") or
-        std.mem.startsWith(u8, stmt, "InterlockedMin") or
-        std.mem.startsWith(u8, stmt, "InterlockedOr") or
-        std.mem.startsWith(u8, stmt, "InterlockedAnd") or
-        std.mem.startsWith(u8, stmt, "InterlockedXor") or
-        std.mem.startsWith(u8, stmt, "InterlockedCompareExchange") or
-        std.mem.startsWith(u8, stmt, "InterlockedExchange") or
-        std.mem.startsWith(u8, stmt, "GroupMemoryBarrierWithGroupSync") or
-        std.mem.startsWith(u8, stmt, "GroupMemoryBarrier") or
-        std.mem.startsWith(u8, stmt, "DeviceMemoryBarrier") or
-        std.mem.startsWith(u8, stmt, "AllMemoryBarrier") or
-        std.mem.startsWith(u8, stmt, "WaveGetLaneIndex") or
-        std.mem.startsWith(u8, stmt, "WaveGetLaneCount") or
-        std.mem.startsWith(u8, stmt, "WaveReadLaneAt") or
-        std.mem.startsWith(u8, stmt, "WaveReadLaneFirst") or
-        std.mem.startsWith(u8, stmt, "WaveActiveSum") or
-        std.mem.startsWith(u8, stmt, "WaveActiveProduct") or
-        std.mem.startsWith(u8, stmt, "WaveActiveMin") or
-        std.mem.startsWith(u8, stmt, "WaveActiveMax") or
-        std.mem.startsWith(u8, stmt, "WaveActiveBitAnd") or
-        std.mem.startsWith(u8, stmt, "WaveActiveBitOr") or
-        std.mem.startsWith(u8, stmt, "WaveActiveBitXor") or
-        std.mem.startsWith(u8, stmt, "WaveActiveAllTrue") or
-        std.mem.startsWith(u8, stmt, "WaveActiveAnyTrue") or
-        std.mem.startsWith(u8, stmt, "WaveActiveBallot") or
-        std.mem.startsWith(u8, stmt, "WaveIsFirstLane") or
-        std.mem.startsWith(u8, stmt, "WavePrefixSum") or
-        std.mem.startsWith(u8, stmt, "WavePrefixProduct") or
-        std.mem.startsWith(u8, stmt, "WavePrefixCountBits") or
-        std.mem.startsWith(u8, stmt, "asuint") or
-        std.mem.startsWith(u8, stmt, "asfloat") or
-        std.mem.startsWith(u8, stmt, "asint") or
-        std.mem.startsWith(u8, stmt, "f32tof16") or
-        std.mem.startsWith(u8, stmt, "f16tof32") or
-        std.mem.startsWith(u8, stmt, "packHalf2x16") or
-        std.mem.startsWith(u8, stmt, "unpackHalf2x16") or
-        std.mem.startsWith(u8, stmt, "packUint2x32") or
-        std.mem.startsWith(u8, stmt, "unpackUint2x32") or
-        std.mem.startsWith(u8, stmt, "floor") or
-        std.mem.startsWith(u8, stmt, "ceil") or
-        std.mem.startsWith(u8, stmt, "frac") or
-        std.mem.startsWith(u8, stmt, "abs") or
-        std.mem.startsWith(u8, stmt, "saturate") or
-        std.mem.startsWith(u8, stmt, "rsqrt") or
-        std.mem.startsWith(u8, stmt, "normalize") or
-        std.mem.startsWith(u8, stmt, "cross") or
-        std.mem.startsWith(u8, stmt, "length") or
-        std.mem.startsWith(u8, stmt, "distance") or
-        std.mem.startsWith(u8, stmt, "round") or
-        std.mem.startsWith(u8, stmt, "sign") or
-        std.mem.startsWith(u8, stmt, "step") or
-        std.mem.startsWith(u8, stmt, "clamp") or
-        std.mem.startsWith(u8, stmt, "lerp") or
-        std.mem.startsWith(u8, stmt, "mad") or
-        std.mem.startsWith(u8, stmt, "sincos") or
-        std.mem.startsWith(u8, stmt, "ddx") or
-        std.mem.startsWith(u8, stmt, "ddy") or
-        std.mem.startsWith(u8, stmt, "ddx_coarse") or
-        std.mem.startsWith(u8, stmt, "ddy_coarse") or
-        std.mem.startsWith(u8, stmt, "ddx_fine") or
-        std.mem.startsWith(u8, stmt, "ddy_fine") or
-        std.mem.startsWith(u8, stmt, "ProcessLane") or
-        std.mem.startsWith(u8, stmt, "ProcessQuad") or
-        std.mem.startsWith(u8, stmt, "NonUniformResourceIndex"))
+    if (std.mem.startsWith(u8, s, "InterlockedAdd") or
+        std.mem.startsWith(u8, s, "InterlockedMax") or
+        std.mem.startsWith(u8, s, "InterlockedMin") or
+        std.mem.startsWith(u8, s, "InterlockedOr") or
+        std.mem.startsWith(u8, s, "InterlockedAnd") or
+        std.mem.startsWith(u8, s, "InterlockedXor") or
+        std.mem.startsWith(u8, s, "InterlockedCompareExchange") or
+        std.mem.startsWith(u8, s, "InterlockedExchange") or
+        std.mem.startsWith(u8, s, "GroupMemoryBarrierWithGroupSync") or
+        std.mem.startsWith(u8, s, "GroupMemoryBarrier") or
+        std.mem.startsWith(u8, s, "DeviceMemoryBarrier") or
+        std.mem.startsWith(u8, s, "AllMemoryBarrier") or
+        std.mem.startsWith(u8, s, "WaveGetLaneIndex") or
+        std.mem.startsWith(u8, s, "WaveGetLaneCount") or
+        std.mem.startsWith(u8, s, "WaveReadLaneAt") or
+        std.mem.startsWith(u8, s, "WaveReadLaneFirst") or
+        std.mem.startsWith(u8, s, "WaveActiveSum") or
+        std.mem.startsWith(u8, s, "WaveActiveProduct") or
+        std.mem.startsWith(u8, s, "WaveActiveMin") or
+        std.mem.startsWith(u8, s, "WaveActiveMax") or
+        std.mem.startsWith(u8, s, "WaveActiveBitAnd") or
+        std.mem.startsWith(u8, s, "WaveActiveBitOr") or
+        std.mem.startsWith(u8, s, "WaveActiveBitXor") or
+        std.mem.startsWith(u8, s, "WaveActiveAllTrue") or
+        std.mem.startsWith(u8, s, "WaveActiveAnyTrue") or
+        std.mem.startsWith(u8, s, "WaveActiveBallot") or
+        std.mem.startsWith(u8, s, "WaveIsFirstLane") or
+        std.mem.startsWith(u8, s, "WavePrefixSum") or
+        std.mem.startsWith(u8, s, "WavePrefixProduct") or
+        std.mem.startsWith(u8, s, "WavePrefixCountBits") or
+        std.mem.startsWith(u8, s, "asuint") or
+        std.mem.startsWith(u8, s, "asfloat") or
+        std.mem.startsWith(u8, s, "asint") or
+        std.mem.startsWith(u8, s, "f32tof16") or
+        std.mem.startsWith(u8, s, "f16tof32") or
+        std.mem.startsWith(u8, s, "packHalf2x16") or
+        std.mem.startsWith(u8, s, "unpackHalf2x16") or
+        std.mem.startsWith(u8, s, "packUint2x32") or
+        std.mem.startsWith(u8, s, "unpackUint2x32") or
+        std.mem.startsWith(u8, s, "floor") or
+        std.mem.startsWith(u8, s, "ceil") or
+        std.mem.startsWith(u8, s, "frac") or
+        std.mem.startsWith(u8, s, "abs") or
+        std.mem.startsWith(u8, s, "saturate") or
+        std.mem.startsWith(u8, s, "rsqrt") or
+        std.mem.startsWith(u8, s, "normalize") or
+        std.mem.startsWith(u8, s, "cross") or
+        std.mem.startsWith(u8, s, "length") or
+        std.mem.startsWith(u8, s, "distance") or
+        std.mem.startsWith(u8, s, "round") or
+        std.mem.startsWith(u8, s, "sign") or
+        std.mem.startsWith(u8, s, "step") or
+        std.mem.startsWith(u8, s, "clamp") or
+        std.mem.startsWith(u8, s, "lerp") or
+        std.mem.startsWith(u8, s, "mad") or
+        std.mem.startsWith(u8, s, "sincos") or
+        std.mem.startsWith(u8, s, "ddx") or
+        std.mem.startsWith(u8, s, "ddy") or
+        std.mem.startsWith(u8, s, "ddx_coarse") or
+        std.mem.startsWith(u8, s, "ddy_coarse") or
+        std.mem.startsWith(u8, s, "ddx_fine") or
+        std.mem.startsWith(u8, s, "ddy_fine") or
+        std.mem.startsWith(u8, s, "ProcessLane") or
+        std.mem.startsWith(u8, s, "ProcessQuad") or
+        std.mem.startsWith(u8, s, "NonUniformResourceIndex"))
     {
-        try w.print("    {s};\n", .{stmt});
+        try w.print("    {s};\n", .{s});
         return;
     }
 
     // *var + offset = expr  → UAV write
-    if (stmt.len > 2 and stmt[0] == '*') {
-        const eq_pos = std.mem.indexOfScalar(u8, stmt, '=') orelse {
-            try w.print("{s};\n", .{stmt});
+    if (s.len > 2 and s[0] == '*') {
+        const eq_pos = std.mem.indexOfScalar(u8, s, '=') orelse {
+            try w.print("{s};\n", .{s});
             return;
         };
-        const lhs = std.mem.trim(u8, stmt[1..eq_pos], " \t");
-        const rhs = std.mem.trim(u8, stmt[eq_pos + 1 ..], " \t");
+        const lhs = std.mem.trim(u8, s[1..eq_pos], " \t");
+        const rhs = std.mem.trim(u8, s[eq_pos + 1 ..], " \t");
 
         const tex_name = findBoundTexture(lhs, ctx.bindings, "u") orelse findBoundTexture(lhs, ctx.bindings, "t");
         if (tex_name) |tn| {
@@ -624,9 +642,9 @@ fn transpileStmt(w: anytype, stmt: []const u8, ctx: *Ctx) @TypeOf(w).Error!void 
     }
 
     // variable = *ptr + offset  (texture read)
-    if (std.mem.indexOf(u8, stmt, "= *")) |eq_pos| {
-        const lhs = std.mem.trim(u8, stmt[0..eq_pos], " \t");
-        const rhs = std.mem.trim(u8, stmt[eq_pos + 1 ..], " \t");
+    if (std.mem.indexOf(u8, s, "= *")) |eq_pos| {
+        const lhs = std.mem.trim(u8, s[0..eq_pos], " \t");
+        const rhs = std.mem.trim(u8, s[eq_pos + 1 ..], " \t");
         if (rhs.len >= 2 and rhs[0] == '*') {
             const ptr_part = std.mem.trim(u8, rhs[1..], " \t");
             const tex_name = findBoundTexture(ptr_part, ctx.bindings, "t") orelse findBoundTexture(ptr_part, ctx.bindings, "u");
@@ -647,15 +665,15 @@ fn transpileStmt(w: anytype, stmt: []const u8, ctx: *Ctx) @TypeOf(w).Error!void 
     }
 
     // Simple assignment (no *) → track var defs
-    if (std.mem.indexOfScalar(u8, stmt, '=')) |eq_pos| {
-        if (eq_pos > 0 and stmt[eq_pos - 1] != '*' and stmt[eq_pos + 1] != '*') {
-            const lhs = std.mem.trim(u8, stmt[0..eq_pos], " \t");
-            const rhs = std.mem.trim(u8, stmt[eq_pos + 1 ..], " \t");
+    if (std.mem.indexOfScalar(u8, s, '=')) |eq_pos| {
+        if (eq_pos > 0 and s[eq_pos - 1] != '*' and s[eq_pos + 1] != '*') {
+            const lhs = std.mem.trim(u8, s[0..eq_pos], " \t");
+            const rhs = std.mem.trim(u8, s[eq_pos + 1 ..], " \t");
             tryTrackVarDef(ctx, lhs, rhs);
         }
     }
 
-    try w.print("    {s};\n", .{stmt});
+    try w.print("    {s};\n", .{s});
 }
 
 fn tryTrackVarDef(ctx: *Ctx, lhs: []const u8, rhs: []const u8) void {
@@ -681,6 +699,12 @@ fn transpileFor(w: anytype, stmt: []const u8, ctx: *Ctx) @TypeOf(w).Error!void {
     const paren_end_rel = std.mem.indexOfScalar(u8, stmt[paren_start..], ')') orelse return;
     const paren_end = paren_start + paren_end_rel;
     const parens = std.mem.trim(u8, stmt[paren_start + 1 .. paren_end], " \t");
+
+    // Detect regular for loop (contains ;) vs dispatch loop (comma-separated)
+    if (std.mem.indexOfScalar(u8, parens, ';') != null) {
+        try w.print("    {s}\n", .{stmt});
+        return;
+    }
 
     var it = std.mem.splitScalar(u8, parens, ',');
     const x_var = std.mem.trim(u8, it.next() orelse "x", " \t");

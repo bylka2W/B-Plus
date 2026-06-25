@@ -122,21 +122,19 @@ bpc build traffic.b+ -o light.exe → light.exe
 bpc build source.b+               → source.exe
 ```
 
-#### `bpc hlsl <input.b+> [-o <output.hlsl>]`
+#### `bpc gpu <input.b+> [-o <output.hlsl>]` / `bpc hlsl <input.b+> [-o <output.hlsl>]`
 
-Генерирует HLSL-код из B+ файла с аннотациями `@bind`, `@cbuffer`, `@groupshared`.
-Предназначен для написания GPU-шейдеров (compute) на B+ с последующей
-компиляцией через DXC или FXC.
+Генерирует HLSL-код из B+ файла с новым блочным `kernel { ... }` синтаксисом
+или старым (legacy `@bind`/`@cbuffer`). `bpc hlsl` автодетектит синтаксис.
 
-| Шаг | Описание |
-|-----|----------|
+| Шаг | Описание (новый pipeline) |
+|-----|--------------------------|
 | 1 | Читает файл `.b+` целиком в память |
-| 2 | Разбирает (парсит) исходный код в AST |
-| 3 | Парсит аннотации `@bind(вид, регистр, формат)` |
-| 4 | Парсит аннотации `@cbuffer(переменная, cbName, регистр, тип)` |
-| 5 | Парсит аннотации `@groupshared(имя, размер)` |
-| 6 | Генерирует HLSL: cbuffer-ы, ресурсы, `[numthreads]`, тело шейдера |
-| 7 | Записывает результат на диск |
+| 2 | Разбирает (парсит) в GPU AST (`gpu_ast.zig`) |
+| 3 | Семантический анализ (`gpu_sema.zig`): дубликаты регистров, лимиты, numthreads |
+| 4 | Понижение до GPU IR (`gpu_lower.zig`): GPU AST → SSA IR |
+| 5 | Генерация HLSL из IR (`gpu_hlsl.zig`) |
+| 6 | Записывает результат на диск |
 
 **Аннотации:**
 
@@ -470,16 +468,63 @@ parallel <Имя> {
 
 Группировка состояний в параллельный блок (состояния не влияют друг на друга).
 
-### 3.15 Kernel-функции
+### 3.15 Kernel-функции (GPU)
 
+Два синтаксиса:
+
+1. **Старый** (legacy, аннотации на строках):
 ```rust
 kernel <имя>(<параметр>: <тип>, ...) -> <тип>
 ```
 
-Объявление kernel-функции (для генерации кода на стороне GPU/металла).
-
+2. **Новый** (блочный, с `globals`, `@binding`, `@cbuffer`, `@numthreads`):
 ```rust
-kernel matrixMul(a: int, b: int) -> int
+kernel <Имя> {
+    имя_ресурса : Тип @binding(t#)
+    имя_члена  : Тип @cbuffer(#)
+    globals {
+        float4 HelperFunc(float param) { ... }
+    }
+    @numthreads(x,y,z)
+    entry main(x:u32,y:u32) {
+        ... тело шейдера ...
+    }
+}
+```
+
+**Ключевые элементы:**
+
+| Элемент | Описание |
+|---------|----------|
+| `@binding(t#)` / `@binding(u#)` / `@binding(s#)` | Регистр привязки: `t` = SRV, `u` = UAV, `s` = Sampler |
+| `@cbuffer(#)` | Член константного буфера (все в один `cbuffer TSS_Constants : register(b#)`) |
+| `globals { ... }` | Функции и константы на глобальном уровне HLSL |
+| `@numthreads(x,y,z)` | Размер группы (Thread Group Size) |
+| `entry main(x:u32,y:u32)` | Точка входа: `x`, `y` = `SV_DispatchThreadID` |
+
+**Типы ресурсов:** `Texture2D<T>`, `RWTexture2D<T>`, `SamplerState`.  
+Типы `T`: `float`, `float2`, `float3`, `float4`, `uint`, `int`, `half`.
+
+**Пример RCAS:**
+```rust
+kernel RCAS {
+    g_InputColor  : Texture2D<float4> @binding(t0)
+    g_OutputColor : RWTexture2D<float4> @binding(u0)
+    linearClamp   : SamplerState @binding(s0)
+    sharpness     : float @cbuffer(0)
+    globals {
+        float4 RCASPass(float4 col[4][4], float sharp) { ... }
+    }
+    @numthreads(8,8,1)
+    entry main(x:u32,y:u32) {
+        uint outW, outH;
+        g_OutputColor.GetDimensions(outW, outH);
+        int2 ipos = int2(x, y);
+        if (ipos.x >= int(outW) || ipos.y >= int(outH)) return;
+        ...
+        g_OutputColor[ipos] = RCASPass(col, sharpness);
+    }
+}
 ```
 
 ### 3.16 Внешние функции (extern)
@@ -686,20 +731,33 @@ zig/                    — компилятор (Zig, активная разр
                            фрейма, используется x64gen.zig для раскладки оффсетов
      symbol.zig          — SymbolTable: реестр символов (code/export/data) для линковки
      pe.zig             — генератор PE (.exe/.dll) — чистый эмиттер, не знает про AST
-     hlslgen.zig         — HLSL-кодогенератор. Аннотации: @bind, @cbuffer, @groupshared.
-                           Типы FSR2: FfxFloat32/2/3/4, FfxInt32, FfxUInt32 → float/int/uint.
-                           50+ HLSL-интринсиков (wave ops, атомики, math, битовые касты).
-                           globallycoherent для RWTexture2D. @numthreads, @unroll, @branch.
+      hlslgen.zig         — HLSL-кодогенератор (legacy). Аннотации: @bind, @cbuffer, @groupshared.
+                            Типы FSR2: FfxFloat32/2/3/4, FfxInt32, FfxUInt32 → float/int/uint.
+                            50+ HLSL-интринсиков (wave ops, атомики, math, битовые касты).
+                            globallycoherent для RWTexture2D. @numthreads, @unroll, @branch.
+      gpu_ast.zig         — GPU AST (GpuKernel, ResourceDecl, CbufferMember, EntryDecl)
+      gpu_ir.zig          — GPU SSA IR (IrModule, IrFunction, IrInst с Op, TypeRef, ресурсы)
+      gpu_lower.zig       — Понижение GPU AST → GPU IR
+      gpu_sema.zig        — Семантический анализатор: дубликаты, лимиты, numthreads
+      gpu_hlsl.zig        — HLSL кодогенератор из GPU IR (новый pipeline)
 
-  shaders/fsr2/         — эталонные HLSL-шейдеры FSR2 (8 проходов):
-    fsr2_easu.hlsl       — EASU (Edge Adaptive Spatial Upsampling)
-    fsr2_rcas.hlsl       — RCAS (Robust Contrast Adaptive Sharpening)
-    fsr2_accumulate.hlsl — Temporal Accumulation (TAAU)
-    fsr2_depthclip.hlsl  — Depth Clip (анти-гостинг)
-    fsr2_lock.hlsl       — Lock Status
-    fsr2_luminance_pyramid.hlsl — Luminance Pyramid
-    fsr2_reconstruct_depth.hlsl — Depth Reconstruction
-    fsr2_dilate_velocity.hlsl   — Motion Vector Dilation
+   shaders/fsr2/         — эталонные HLSL-шейдеры FSR2 (8 проходов) + порты:
+     fsr2_easu.hlsl       — EASU (Edge Adaptive Spatial Upsampling)
+     fsr2_easu_new.b+     — порт на новом kernel-синтаксисе
+     fsr2_accumulate.hlsl — Temporal Accumulation (TAAU)
+     fsr2_accumulate_new.b+ — порт
+     fsr2_depthclip.hlsl  — Depth Clip (анти-гостинг)
+     fsr2_depthclip_new.b+ — порт
+     fsr2_lock.hlsl       — Lock Status
+     fsr2_lock_new.b+     — порт
+     fsr2_luminance_pyramid.hlsl — Luminance Pyramid
+     fsr2_luminance_pyramid_new.b+ — порт
+     fsr2_reconstruct_depth.hlsl — Depth Reconstruction
+     fsr2_reconstruct_depth_new.b+ — порт
+     fsr2_dilate_velocity.hlsl   — Motion Vector Dilation
+     fsr2_dilate_velocity_new.b+ — порт
+     fsr2_rcas.hlsl       — RCAS (Robust Contrast Adaptive Sharpening)
+     fsr2_rcas_new.b+     — порт на новом kernel-синтаксисе
   shaders/cso/          — скомпилированные .cso файлы (cs_6_6)
 
   fsr2_proxy.b+         — DXGI proxy DLL: перехватывает CreateSwapChain/Present,
@@ -962,35 +1020,51 @@ CopyResource) — через COM vtable dispatch, написана целико�
 - `fsr2_reconstruct_depth.cso` — Depth Reconstruction
 - `fsr2_dilate_velocity.cso` — Dilate Motion Vectors
 
-### Трек 2: B+ HLSL Codegen (`bpc hlsl`)
+### Трек 2: B+ GPU Pipeline (`bpc gpu`)
 
-Шейдеры FSR2 переписываются на B+ с аннотациями, `bpc hlsl` генерирует HLSL:
+Полный pipeline: B+ новый kernel-синтаксис → GPU AST → семантический анализ → GPU IR → HLSL → DXC.
 
+Все 8 шейдеров FSR2 портированы и компилируются через DXC (`dxc -T cs_6_0 -E main`).
+
+**Пример порта (RCAS):** `shaders/fsr2/fsr2_rcas_new.b+`
 ```rust
-g_InputColor: @bind(t, 0, float4)
-g_OutputColor: @bind(u, 0, float4)
-inputSize: @cbuffer(EASUConstants, 0, float2)
-
-@numthreads(8,8,1)
-entry main {
-    for(x, y, w, h) {
-        float2 uv = float2(x, y) * inputRcpSize
-        // ... EASU math ...
-        g_OutputColor[uint2(x, y)] = result
+kernel RCAS {
+    g_InputColor  : Texture2D<float4> @binding(t0)
+    g_OutputColor : RWTexture2D<float4> @binding(u0)
+    linearClamp   : SamplerState @binding(s0)
+    sharpness     : float @cbuffer(0)
+    globals {
+        float4 RCASPass(float4 col[4][4], float sharp) { ... }
+    }
+    @numthreads(8,8,1)
+    entry main(x:u32,y:u32) {
+        g_OutputColor[ipos] = RCASPass(col, sharpness);
     }
 }
 ```
 
-Поддерживаются FSR2-типы, globallycoherent, 50+ HLSL intrinsic, @cbuffer,
-@groupshared, @unroll, @branch.
+```bash
+bpc gpu shaders/fsr2/fsr2_rcas_new.b+ -o fsr2_rcas.hlsl
+dxc -T cs_6_0 -E main -Fo fsr2_rcas.cso fsr2_rcas.hlsl
+```
+
+**Портированные шейдеры:**
+- `fsr2_easu_new.b+` — EASU (Edge Adaptive Spatial Upsampling)
+- `fsr2_accumulate_new.b+` — Temporal Accumulation (TAAU)
+- `fsr2_depthclip_new.b+` — Depth Clip (анти-гостинг)
+- `fsr2_lock_new.b+` — Lock Status
+- `fsr2_luminance_pyramid_new.b+` — Luminance Pyramid
+- `fsr2_reconstruct_depth_new.b+` — Depth Reconstruction
+- `fsr2_dilate_velocity_new.b+` — Dilate Motion Vectors
+- `fsr2_rcas_new.b+` — RCAS (Robust Contrast Adaptive Sharpening)
 
 ### Что дальше
 
-1. EASU/RCAS шейдеры на B+ → HLSL через `bpc hlsl` + DXC
-2. Портировать остальные 6 проходов
-3. Temporal accumulation с motion vector reprojection
-4. Depth-based disocclusion + lock-механизм
-5. D3D12 host code на B+ x64
+1. ✅ EASU/RCAS шейдеры на B+ → HLSL через `bpc gpu` + DXC
+2. ✅ Портированы все 8 проходов FSR2
+3. SPIR-V backend (Phase 6)
+4. MSL backend (Phase 7)
+5. DXIL backend (Phase 8)
 
 ---
 

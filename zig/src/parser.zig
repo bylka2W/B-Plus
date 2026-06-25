@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("ast.zig");
+const gpu_ast = @import("gpu_ast.zig");
 const Allocator = std.mem.Allocator;
 
 const Token = struct {
@@ -411,9 +412,13 @@ pub const Parser = struct {
                 errdefer e.body_lines.deinit();
                 try program.entries.append(e);
             } else if (p.peek(.keyword_kernel)) {
-                const k = try p.parseKernel();
-                errdefer { k.params.deinit(); k.annotations.deinit(); }
-                try program.kernels.append(k);
+                if (p.isNewGpuKernelSyntax()) {
+                    try p.skipGpuKernelBlock();
+                } else {
+                    const k = try p.parseKernel();
+                    errdefer { k.params.deinit(); k.annotations.deinit(); }
+                    try program.kernels.append(k);
+                }
             } else if (p.peek(.keyword_struct)) {
                 const s = try p.parseStructDef();
                 errdefer s.fields.deinit();
@@ -844,6 +849,183 @@ pub const Parser = struct {
         return ast.KernelDecl{ .name = name, .params = params, .return_type = ret, .annotations = annotations };
     }
 
+    fn isNewGpuKernelSyntax(p: *Parser) bool {
+        var pos = p.cur_tok.end;
+        while (pos < p.src.len and (p.src[pos] == ' ' or p.src[pos] == '\t' or p.src[pos] == '\n' or p.src[pos] == '\r')) pos += 1;
+        while (pos < p.src.len and (std.ascii.isAlphanumeric(p.src[pos]) or p.src[pos] == '_')) pos += 1;
+        while (pos < p.src.len and (p.src[pos] == ' ' or p.src[pos] == '\t' or p.src[pos] == '\n' or p.src[pos] == '\r')) pos += 1;
+        return pos < p.src.len and p.src[pos] == '{';
+    }
+
+    fn skipGpuKernelBlock(p: *Parser) !void {
+        p.advance(); // skip kernel name
+        p.consumeNewlines();
+        try p.expect(.lbrace);
+        var depth: u32 = 1;
+        while (depth > 0) {
+            p.advance();
+            if (p.peek(.lbrace)) depth += 1;
+            if (p.peek(.rbrace)) depth -= 1;
+            if (p.peek(.eof)) break;
+        }
+    }
+
+    pub fn parseGpuKernelBlock(p: *Parser) !gpu_ast.GpuKernel {
+        try p.expect(.keyword_kernel);
+        const kname = try p.allocator.dupe(u8, p.identText());
+        p.advance();
+        p.consumeNewlines();
+        try p.expect(.lbrace);
+
+        var resources = std.ArrayList(gpu_ast.ResourceDecl).init(p.allocator);
+        errdefer resources.deinit();
+        var cbuffer_members = std.ArrayList(gpu_ast.CbufferMember).init(p.allocator);
+        errdefer cbuffer_members.deinit();
+        var entries = std.ArrayList(gpu_ast.EntryDecl).init(p.allocator);
+        var globals_lines = std.ArrayList([]const u8).init(p.allocator);
+        errdefer globals_lines.deinit();
+
+        var nt_x: u32 = 8;
+        var nt_y: u32 = 8;
+        var nt_z: u32 = 1;
+
+        while (!p.peek(.rbrace) and !p.peek(.eof)) {
+            p.consumeNewlines();
+            if (p.peek(.rbrace)) break;
+
+            // @numthreads(x,y,z)
+            if (p.peek(.annotation)) {
+                const ann_full = p.readAnnotationFull();
+                if (std.mem.startsWith(u8, ann_full, "numthreads(")) {
+                    const nrest = ann_full["numthreads(".len..ann_full.len -| 1];
+                    var it = std.mem.splitScalar(u8, nrest, ',');
+                    if (it.next()) |xs| nt_x = std.fmt.parseInt(u32, std.mem.trim(u8, xs, " \t"), 10) catch 8;
+                    if (it.next()) |ys| nt_y = std.fmt.parseInt(u32, std.mem.trim(u8, ys, " \t"), 10) catch 8;
+                    if (it.next()) |zs| nt_z = std.fmt.parseInt(u32, std.mem.trim(u8, zs, " \t"), 10) catch 1;
+                }
+                continue;
+            }
+
+            // entry main(x:u32,y:u32) { ... }
+            if (p.peek(.keyword_entry)) {
+                p.advance();
+                const ename = try p.allocator.dupe(u8, p.identText());
+                p.advance();
+                try p.expect(.lparen);
+                const xp = try p.allocator.dupe(u8, p.identText());
+                p.advance();
+                try p.expect(.colon);
+                _ = p.identText(); p.advance(); // type
+                try p.expect(.comma);
+                const yp = try p.allocator.dupe(u8, p.identText());
+                p.advance();
+                try p.expect(.colon);
+                _ = p.identText(); p.advance(); // type
+                try p.expect(.rparen);
+                p.consumeNewlines();
+                try p.expect(.lbrace);
+
+                var body = std.ArrayList([]const u8).init(p.allocator);
+                const brace_start = p.prev_tok.start;
+                var depth: u32 = 1;
+                var scan_pos = brace_start + 1;
+                while (scan_pos < p.src.len and depth > 0) {
+                    if (p.src[scan_pos] == '"') {
+                        scan_pos += 1;
+                        while (scan_pos < p.src.len and p.src[scan_pos] != '"') {
+                            if (p.src[scan_pos] == '\\') scan_pos += 1;
+                            scan_pos += 1;
+                        }
+                    }
+                    if (p.src[scan_pos] == '{') depth += 1;
+                    if (p.src[scan_pos] == '}') depth -= 1;
+                    if (depth > 0) scan_pos += 1;
+                }
+
+                if (scan_pos > brace_start + 1) {
+                    const body_text = p.src[brace_start + 1 .. scan_pos];
+                    var lines_iter = std.mem.splitScalar(u8, body_text, '\n');
+                    while (lines_iter.next()) |raw_line| {
+                        const trimmed = std.mem.trim(u8, raw_line, " \t\r");
+                        if (trimmed.len > 0) try body.append(try p.allocator.dupe(u8, trimmed));
+                    }
+                }
+
+                // Sync lexer to after }
+                p.lexer.pos = scan_pos + 1;
+                p.lexer.char = if (scan_pos + 1 < p.src.len) p.src[scan_pos + 1] else 0;
+                p.cur_tok = p.lexer.next();
+
+                try entries.append(gpu_ast.EntryDecl{
+                    .name = ename, .x_param = xp, .y_param = yp,
+                    .body_lines = body,
+                    .numthreads = .{ .x = nt_x, .y = nt_y, .z = nt_z },
+                });
+                continue;
+            }
+
+            // globals { ... }
+            if (std.mem.eql(u8, p.identText(), "globals")) {
+                p.advance();
+                p.consumeNewlines();
+                try p.expect(.lbrace);
+                const brace_start = p.prev_tok.start;
+                var scan_pos = brace_start + 1;
+                var depth: u32 = 1;
+                while (scan_pos < p.src.len and depth > 0) {
+                    if (p.src[scan_pos] == '"') {
+                        scan_pos += 1;
+                        while (scan_pos < p.src.len and p.src[scan_pos] != '"') {
+                            if (p.src[scan_pos] == '\\') scan_pos += 1;
+                            scan_pos += 1;
+                        }
+                    }
+                    if (p.src[scan_pos] == '{') depth += 1;
+                    if (p.src[scan_pos] == '}') depth -= 1;
+                    if (depth > 0) scan_pos += 1;
+                }
+                if (scan_pos > brace_start + 1) {
+                    const body_text = p.src[brace_start + 1 .. scan_pos];
+                    var lines_iter = std.mem.splitScalar(u8, body_text, '\n');
+                    while (lines_iter.next()) |raw_line| {
+                        const trimmed = std.mem.trim(u8, raw_line, " \t\r");
+                        if (trimmed.len > 0) try globals_lines.append(try p.allocator.dupe(u8, trimmed));
+                    }
+                }
+                p.lexer.pos = scan_pos + 1;
+                p.lexer.char = if (scan_pos + 1 < p.src.len) p.src[scan_pos + 1] else 0;
+                p.cur_tok = p.lexer.next();
+                continue;
+            }
+
+            // Variable declaration: name : Type @annotation
+            const vname = try p.allocator.dupe(u8, p.identText());
+            p.advance();
+            try p.expect(.colon);
+            const type_text = p.identText();
+            p.advance();
+
+            if (p.peek(.annotation)) {
+                const ann = p.readAnnotationFull();
+                if (std.mem.startsWith(u8, ann, "binding(")) {
+                    const reg_str = ann["binding(".len .. ann.len -| 1];
+                    const gpu_type = try gpuParseType(type_text);
+                    const reg = gpuParseBindingReg(reg_str);
+                    try resources.append(.{ .name = vname, .gpu_type = gpu_type, .binding = .{ .reg = reg } });
+                } else if (std.mem.startsWith(u8, ann, "cbuffer(")) {
+                    const reg_str = ann["cbuffer(".len .. ann.len -| 1];
+                    const reg = std.fmt.parseInt(u32, std.mem.trim(u8, reg_str, " \t"), 10) catch 0;
+                    const ct = gpuParseCbufferType(type_text);
+                    try cbuffer_members.append(.{ .name = vname, .scalar_type = ct.scalar, .vector_width = ct.width, .slot = .{ .reg = reg } });
+                }
+            }
+        }
+
+        try p.expect(.rbrace);
+
+        return gpu_ast.GpuKernel{ .name = kname, .resources = resources, .cbuffer_members = cbuffer_members, .entries = entries, .globals_lines = globals_lines };
+    }
+
     fn parseStructDef(p: *Parser) !ast.StructDef {
         try p.expect(.keyword_struct);
         const name = p.identText(); p.advance();
@@ -956,3 +1138,55 @@ pub const Parser = struct {
         return null;
     }
 };
+
+fn gpuParseFormatWidth(inner: []const u8) struct { format: gpu_ast.ScalarType, width: gpu_ast.VectorWidth } {
+    const format = gpuParseScalarType(inner);
+    var width: gpu_ast.VectorWidth = .one;
+    if (std.mem.endsWith(u8, inner, "2")) width = .two;
+    if (std.mem.endsWith(u8, inner, "3")) width = .three;
+    if (std.mem.endsWith(u8, inner, "4")) width = .four;
+    return .{ .format = format, .width = width };
+}
+
+// GPU type helpers (file scope)
+fn gpuParseType(type_str: []const u8) !gpu_ast.GpuType {
+    if (std.mem.startsWith(u8, type_str, "Texture2D<")) {
+        const inner = type_str["Texture2D<".len .. type_str.len - 1];
+        const fw = gpuParseFormatWidth(inner);
+        return .{ .kind = .{ .resource_typed = .{ .kind = .texture2d, .format = fw.format, .width = fw.width } } };
+    }
+    if (std.mem.startsWith(u8, type_str, "RWTexture2D<")) {
+        const inner = type_str["RWTexture2D<".len .. type_str.len - 1];
+        const fw = gpuParseFormatWidth(inner);
+        return .{ .kind = .{ .resource_typed = .{ .kind = .rw_texture2d, .format = fw.format, .width = fw.width } } };
+    }
+    if (std.mem.eql(u8, type_str, "SamplerState")) {
+        return .{ .kind = .{ .resource = .sampler_state } };
+    }
+    return gpu_ast.GpuType{ .kind = .{ .resource = .texture2d } };
+}
+
+fn gpuParseBindingReg(s: []const u8) u32 {
+    const trimmed = std.mem.trim(u8, s, " \t");
+    if (trimmed.len == 0) return 0;
+    if (std.ascii.isDigit(trimmed[0])) return std.fmt.parseInt(u32, trimmed, 10) catch 0;
+    if (trimmed.len >= 2) return std.fmt.parseInt(u32, trimmed[1..], 10) catch 0;
+    return 0;
+}
+
+fn gpuParseCbufferType(s: []const u8) struct { scalar: gpu_ast.ScalarType, width: gpu_ast.VectorWidth } {
+    const scalar = gpuParseScalarType(s);
+    var width: gpu_ast.VectorWidth = .one;
+    if (std.mem.endsWith(u8, s, "2")) width = .two;
+    if (std.mem.endsWith(u8, s, "3")) width = .three;
+    if (std.mem.endsWith(u8, s, "4")) width = .four;
+    return .{ .scalar = scalar, .width = width };
+}
+
+fn gpuParseScalarType(s: []const u8) gpu_ast.ScalarType {
+    if (std.mem.eql(u8, s, "float4") or std.mem.eql(u8, s, "float") or std.mem.eql(u8, s, "float3") or std.mem.eql(u8, s, "float2") or std.mem.eql(u8, s, "f32")) return .f32;
+    if (std.mem.eql(u8, s, "int") or std.mem.eql(u8, s, "i32") or std.mem.eql(u8, s, "int2") or std.mem.eql(u8, s, "int3") or std.mem.eql(u8, s, "int4")) return .i32;
+    if (std.mem.eql(u8, s, "uint") or std.mem.eql(u8, s, "u32") or std.mem.eql(u8, s, "uint2") or std.mem.eql(u8, s, "uint3") or std.mem.eql(u8, s, "uint4")) return .u32;
+    if (std.mem.eql(u8, s, "half") or std.mem.eql(u8, s, "f16")) return .f16;
+    return .f32;
+}

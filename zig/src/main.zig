@@ -5,6 +5,10 @@ const x64gen = @import("x64gen.zig");
 const pe = @import("pe.zig");
 const test_runner = @import("test_runner.zig");
 const hlslgen = @import("hlslgen.zig");
+const gpu_ast = @import("gpu_ast.zig");
+const gpu_hlsl = @import("gpu_hlsl.zig");
+const gpu_sema = @import("gpu_sema.zig");
+const gpu_lower = @import("gpu_lower.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -21,6 +25,7 @@ pub fn main() !void {
         try stderr.writeAll("       bpc run  <input.b+>\n");
         try stderr.writeAll("       bpc test <test.bpt>\n");
         try stderr.writeAll("       bpc hlsl <input.b+> [-o <output.hlsl>]\n");
+        try stderr.writeAll("       bpc gpu  <input.b+> [-o <output.hlsl>]\n");
         std.process.exit(1);
     }
 
@@ -44,6 +49,12 @@ pub fn main() !void {
 
     var src = try std.fs.cwd().readFileAlloc(allocator, input_path, std.math.maxInt(u32));
     defer allocator.free(src);
+
+    if (std.mem.startsWith(u8, src, "\xEF\xBB\xBF")) {
+        const stripped = try allocator.dupe(u8, src[3..]);
+        allocator.free(src);
+        src = stripped;
+    }
 
     // Test command: parse .bpt, run tests, report
     if (std.mem.eql(u8, command, "test")) {
@@ -82,6 +93,13 @@ pub fn main() !void {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
+        // Auto-detect GPU kernel syntax
+        const trimmed = std.mem.trim(u8, src, " \t\r\n");
+        if (std.mem.startsWith(u8, trimmed, "kernel ")) {
+            try gpuCompileAndWrite(arena_alloc, src, input_path, output_path);
+            return;
+        }
+
         var p2 = parser.Parser.init(arena_alloc, src);
         const prog = try p2.parse();
 
@@ -98,10 +116,13 @@ pub fn main() !void {
         return;
     }
 
-    if (std.mem.startsWith(u8, src, "\xEF\xBB\xBF")) {
-        const stripped = try allocator.dupe(u8, src[3..]);
-        allocator.free(src);
-        src = stripped;
+    // GPU mode: parse GPU kernel and generate HLSL via parser.zig
+    if (std.mem.eql(u8, command, "gpu")) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+        try gpuCompileAndWrite(arena_alloc, src, input_path, output_path);
+        return;
     }
 
     var p = parser.Parser.init(allocator, src);
@@ -152,25 +173,57 @@ pub fn main() !void {
         }
         pe_bytes = try pe.writeDll(allocator, output.code, output.import_dir_rva, output.idat_size, resolved.items);
     } else {
-        pe_bytes = try pe.write(allocator, output.code, output.import_dir_rva, output.idat_size);
+        pe_bytes = try pe.write(allocator, output.code, output.import_dir_rva, output.idat_size, output.entry_point_rva);
     }
     defer allocator.free(pe_bytes);
 
     try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = pe_bytes });
 
     if (std.mem.eql(u8, command, "run")) {
-        const result = try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &[_][]const u8{ out_path },
+        var child = std.process.Child.init(&[_][]const u8{ out_path }, allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+        const term = try child.spawnAndWait();
+        std.process.exit(switch (term) {
+            .Exited => |code| code,
+            else => 1,
         });
-        defer {
-            allocator.free(result.stdout);
-            allocator.free(result.stderr);
-        }
-        const stdout = std.io.getStdOut().writer();
-        try stdout.writeAll(result.stdout);
-        const stderr = std.io.getStdErr().writer();
-        if (result.stderr.len > 0) try stderr.writeAll(result.stderr);
-        std.process.exit(result.term.Exited);
     }
+}
+
+fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_path: []const u8, output_path_arg: ?[]const u8) !void {
+    var p = parser.Parser.init(arena_alloc, src);
+    const kernel = p.parseGpuKernelBlock() catch |err| {
+        const stderr = std.io.getStdErr().writer();
+        try stderr.print("GPU parse error: {}\n", .{err});
+        std.process.exit(1);
+    };
+
+    var module = gpu_ast.GpuModule{
+        .allocator = arena_alloc,
+        .kernels = std.ArrayList(gpu_ast.GpuKernel).init(arena_alloc),
+    };
+    try module.kernels.append(kernel);
+
+    var sema = gpu_sema.GpuSema.init(arena_alloc);
+    sema.analyze(&module);
+    if (sema.hasErrors()) {
+        const stderr = std.io.getStdErr().writer();
+        try stderr.writeAll("Semantic errors:\n");
+        try sema.printDiagnostics(stderr);
+        std.process.exit(1);
+    }
+
+    // Lower AST → IR, then generate HLSL from IR
+    const ir = try gpu_lower.lowerModule(arena_alloc, &module);
+    const hlsl = try gpu_hlsl.generateHlslFromIr(arena_alloc, &ir);
+    const out_path = output_path_arg orelse blk: {
+        const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
+        const base = input_path[0..ext_idx];
+        break :blk try std.fmt.allocPrint(arena_alloc, "{s}.hlsl", .{base});
+    };
+    try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = hlsl });
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("HLSL written to {s}\n", .{out_path});
 }

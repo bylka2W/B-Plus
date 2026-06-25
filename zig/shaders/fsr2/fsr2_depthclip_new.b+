@@ -1,0 +1,39 @@
+kernel DepthClip {
+    g_Depth          : Texture2D<float> @binding(t0)
+    g_HistoryDepth   : Texture2D<float> @binding(t1)
+    g_DepthClipWeight : RWTexture2D<float> @binding(u0)
+    g_DisocclusionMask : RWTexture2D<uint> @binding(u1)
+    pointClamp       : SamplerState @binding(s0)
+    inputSize        : float2 @cbuffer(0)
+    inputRcpSize     : float2 @cbuffer(0)
+    depthClipEpsilon : float @cbuffer(0)
+    depthClipTolerance : float @cbuffer(0)
+    @numthreads(8,8,1)
+    entry main(x:u32,y:u32) {
+        uint w, h;
+        g_Depth.GetDimensions(w, h);
+        int2 ipos = int2(x, y);
+        if (ipos.x >= int(w) || ipos.y >= int(h)) return;
+        float uvx = (float(x) + 0.5) * inputRcpSize.x;
+        float uvy = (float(y) + 0.5) * inputRcpSize.y;
+        float2 uv = float2(uvx, uvy);
+        float depth = g_Depth.SampleLevel(pointClamp, uv, 0.0).r;
+        float4 histDepths;
+        histDepths.x = g_HistoryDepth.SampleLevel(pointClamp, uv, 0.0, int2(0, 0)).r;
+        histDepths.y = g_HistoryDepth.SampleLevel(pointClamp, uv, 0.0, int2(1, 0)).r;
+        histDepths.z = g_HistoryDepth.SampleLevel(pointClamp, uv, 0.0, int2(0, 1)).r;
+        histDepths.w = g_HistoryDepth.SampleLevel(pointClamp, uv, 0.0, int2(1, 1)).r;
+        float minHistoryDepth = min(min(histDepths.x, histDepths.y), min(histDepths.z, histDepths.w));
+        float maxHistoryDepth = max(max(histDepths.x, histDepths.y), max(histDepths.z, histDepths.w));
+        float depthRange = max(maxHistoryDepth - minHistoryDepth, depthClipEpsilon);
+        float depthClip = depthClipEpsilon + abs(depth) * 0.05;
+        float depthDiff = abs(depth - minHistoryDepth);
+        float clipWeight = saturate(depthDiff / depthClip);
+        float depthDiffMax = abs(depth - maxHistoryDepth);
+        float clipWeightMax = saturate(depthDiffMax / depthClip);
+        clipWeight = max(clipWeight, clipWeightMax);
+        uint isDisoccluded = (clipWeight > 0.9) ? 1u : 0u;
+        g_DepthClipWeight[ipos] = clipWeight;
+        g_DisocclusionMask[ipos] = isDisoccluded;
+    }
+}

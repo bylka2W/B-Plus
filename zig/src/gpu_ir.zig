@@ -1,167 +1,166 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+const gpu_ast = @import("gpu_ast.zig");
 
-pub const QueueType = enum(u8) {
-    compute,
-    graphics,
+pub const ValueId = u32;
+pub const BlockId = u32;
+
+pub const Op = enum {
+    entry_point,
+    load,
+    store,
+    sample,
+    atomic,
+    barrier,
+    branch,
+    loop,
+    phi,
+    call,
+    ret,
+    @"const",
+    add,
+    sub,
+    mul,
+    div,
+    fma,
+    dot,
+    exp,
+    sqrt,
+    rsqrt,
+    saturate,
+    max,
+    min,
+    abs,
+    floor,
+    ceil,
+    frac,
+    sin,
+    cos,
+    cast,
+    composite,
+    extract,
 };
 
-pub const ShaderStage = enum(u8) {
-    compute,
-};
-
-pub const BindType = enum(u8) {
-    srv,
-    uav,
-    cbv,
+pub const TypeRef = enum {
+    void,
+    f32,
+    i32,
+    u32,
+    f16,
+    vec2f,
+    vec3f,
+    vec4f,
+    vec2i,
+    vec3i,
+    vec4i,
+    vec2u,
+    vec3u,
+    vec4u,
+    texture2d,
+    rw_texture2d,
     sampler,
 };
 
-pub const BindSlot = struct {
-    register: u32,
-    space: u32,
-    bind_type: BindType,
-    num_descriptors: u32 = 1,
-};
+pub const IrInst = struct {
+    op: Op,
+    ty: TypeRef,
+    result: ValueId,
+    operands: []ValueId,
+    data: Data,
 
-pub const BindLayout = struct {
-    slots: []const BindSlot,
-};
-
-pub const BindingKey = struct {
-    reg: u32,
-    space: u32,
-    kind: BindType,
-};
-
-/// Deterministic slot index within a unified CBV_SRV_UAV descriptor heap.
-/// Layout (for descriptor heap ~1024 slots):
-///   0..255    SRV (t registers)
-///   256..511  UAV (u registers)
-///   512..767  CBV (b registers)
-/// Within each band: slot = base + reg + (space << 5)
-pub fn slotIndex(key: BindingKey) u32 {
-    const band_base: u32 = switch (key.kind) {
-        .srv => 0,
-        .uav => 256,
-        .cbv => 512,
-        .sampler => 0,
+    pub const Data = union {
+        none: void,
+        int_val: i64,
+        float_val: f64,
+        string: []const u8,
+        block_target: BlockId,
+        cond_branch: struct { cond: ValueId, then_block: BlockId, else_block: BlockId },
+        phi_incoming: []struct { value: ValueId, block: BlockId },
+        sample_info: struct { tex: ValueId, sampler: ValueId, coord: ValueId },
+        atomic_info: struct { ptr: ValueId, val: ValueId, op: AtomicOp },
+        barrier_kind: BarrierKind,
+        composite_info: struct { count: u32 },
+        extract_info: struct { index: u32 },
+        cast_info: struct { from: TypeRef, to: TypeRef },
+        call_info: struct { callee: []const u8, args: []ValueId },
     };
-    return band_base + key.reg + (key.space << 5);
+
+    pub const AtomicOp = enum { add, sub, min, max, and_op, or_op, xor_op, exchange, compare_exchange };
+    pub const BarrierKind = enum { group, device, all };
+};
+
+pub const IrBasicBlock = struct {
+    label: []const u8,
+    instrs: std.ArrayList(IrInst),
+    next_value_id: ValueId,
+};
+
+pub fn scalarTypeToTypeRef(st: gpu_ast.ScalarType) TypeRef {
+    return switch (st) {
+        .f32 => .f32,
+        .i32 => .i32,
+        .u32 => .u32,
+        .f16 => .f16,
+        .boolean => .u32,
+    };
 }
 
-pub const ShaderKey = struct {
-    source: []const u8,
-    entry: []const u8 = "main",
-    target: []const u8 = "cs_5_1",
-    compile_flags: u32 = 0,
-};
+pub fn scalarTypeToTypeRefWithWidth(st: gpu_ast.ScalarType, w: gpu_ast.VectorWidth) TypeRef {
+    const width_val = @intFromEnum(w);
+    if (width_val == 1) return scalarTypeToTypeRef(st);
+    return switch (st) {
+        .f32 => @as(TypeRef, @enumFromInt(@intFromEnum(TypeRef.vec2f) + (width_val - 2))),
+        .i32 => @as(TypeRef, @enumFromInt(@intFromEnum(TypeRef.vec2i) + (width_val - 2))),
+        .u32 => @as(TypeRef, @enumFromInt(@intFromEnum(TypeRef.vec2u) + (width_val - 2))),
+        else => scalarTypeToTypeRef(st),
+    };
+}
 
-pub const PipelineKey = struct {
-    shader: ShaderKey,
-    layout: BindLayout,
-    compiled_bytecode: ?[]const u8 = null,
-};
-
-pub const ResourceType = enum(u8) {
-    buffer,
-    texture2d,
-    sampler,
-};
-
-pub const ResourceFormat = enum(u8) {
-    unknown,
-    r32_float,
-    r32g32_float,
-    r32g32b32a32_float,
-    r8_unorm,
-    r8g8b8a8_unorm,
-    r16_float,
-    r16g16_float,
-    r16g16b16a16_float,
-
-    pub fn toDXGI(fmt: ResourceFormat) u32 {
-        return switch (fmt) {
-            .unknown => 0,
-            .r32_float => 41,
-            .r32g32_float => 16,
-            .r32g32b32a32_float => 2,
-            .r8_unorm => 61,
-            .r8g8b8a8_unorm => 28,
-            .r16_float => 54,
-            .r16g16_float => 34,
-            .r16g16b16a16_float => 10,
-        };
-    }
-};
-
-pub const BufferDesc = struct {
-    size: u64,
-    stride: u64 = 0,
-    elements: u32 = 0,
-};
-
-pub const TextureDesc = struct {
-    width: u32,
-    height: u32,
-    format: ResourceFormat,
-    mip_levels: u32 = 1,
-};
-
-pub const ResourceDesc = union(enum) {
-    buffer: BufferDesc,
-    texture2d: TextureDesc,
-    sampler: void,
-};
-
-pub const ResourceId = u64;
-
-pub const BindEntry = struct {
-    key: BindingKey,
-    resource_id: ResourceId,
-    subresource: u32 = 0,
-};
-
-pub const BindGroup = struct {
-    entries: []const BindEntry,
-};
-
-pub const DispatchGrid = struct {
-    x: u32,
-    y: u32,
-    z: u32 = 1,
-};
-
-pub const DispatchDesc = struct {
-    pipeline: PipelineKey,
-    grid: DispatchGrid,
-    bindings: BindGroup,
-};
-
-pub const BarrierType = enum(u8) {
-    transition,
-    uav,
-};
-
-pub const ResourceState = enum(u8) {
-    common,
-    unordered_access,
-    non_pixel_shader_resource,
-    pixel_shader_resource,
-    copy_source,
-    copy_dest,
-};
-
-pub const BarrierDesc = struct {
-    resource_id: ResourceId,
-    barrier_type: BarrierType = .transition,
-    state_before: ResourceState = .unordered_access,
-    state_after: ResourceState = .non_pixel_shader_resource,
-};
-
-pub const GPUIRPass = struct {
-    id: u32,
+pub const IrResourceDecl = struct {
     name: []const u8,
-    dispatch: DispatchDesc,
-    barriers_before: []const BarrierDesc = &.{},
-    barriers_after: []const BarrierDesc = &.{},
+    type_ref: TypeRef,
+    binding_prefix: u8,
+    binding_reg: u32,
+    format: TypeRef,
+};
+
+pub const IrCbufferMember = struct {
+    name: []const u8,
+    type_ref: TypeRef,
+    slot: u32,
+};
+
+pub const IrFunction = struct {
+    name: []const u8,
+    blocks: std.ArrayList(IrBasicBlock),
+    next_block_id: BlockId,
+    numthreads: struct { x: u32, y: u32, z: u32 },
+    x_param: []const u8,
+    y_param: []const u8,
+    passthrough_body: std.ArrayList([]const u8),
+    globals_lines: std.ArrayList([]const u8),
+};
+
+pub const IrModule = struct {
+    allocator: Allocator,
+    resources: std.ArrayList(IrResourceDecl),
+    cbuffer_members: std.ArrayList(IrCbufferMember),
+    functions: std.ArrayList(IrFunction),
+
+    pub fn deinit(self: *IrModule) void {
+        for (self.functions.items) |*f| {
+            for (f.blocks.items) |*b| {
+                for (b.instrs.items) |*inst| {
+                    if (inst.operands.len > 0) inst.operands.deinit();
+                    if (inst.data == .phi_incoming) self.allocator.free(inst.data.phi_incoming);
+                    if (inst.data == .call_info) self.allocator.free(inst.data.call_info.args);
+                }
+                b.instrs.deinit();
+            }
+            f.blocks.deinit();
+        }
+        self.functions.deinit();
+        self.resources.deinit();
+        self.cbuffer_members.deinit();
+    }
 };
