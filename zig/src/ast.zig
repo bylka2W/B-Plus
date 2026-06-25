@@ -1,6 +1,16 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+pub const StructField = struct {
+    name: []const u8,
+    type_name: []const u8,
+};
+
+pub const StructDef = struct {
+    name: []const u8,
+    fields: std.ArrayList(StructField),
+};
+
 pub const VariableNode = struct {
     name: []const u8,
     type_name: []const u8,
@@ -97,6 +107,7 @@ pub const ProgramNode = struct {
     directives: std.ArrayList([]const u8),
     context: ?ContextDecl,
     extern_cpp_fns: std.ArrayList(ExternCppFn),
+    struct_defs: std.StringHashMap(StructDef),
 
     pub fn deinit(self: *ProgramNode) void {
         for (self.states.items) |*s| {
@@ -122,8 +133,17 @@ pub const ProgramNode = struct {
         for (self.parallel_blocks.items) |*p| p.states.deinit();
         self.parallel_blocks.deinit();
         self.forwarders.deinit();
+        if (self.context) |*ctx| ctx.variables.deinit();
         self.directives.deinit();
         self.extern_cpp_fns.deinit();
+        {
+            var it = self.struct_defs.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.fields.deinit();
+            }
+            self.struct_defs.deinit();
+        }
     }
 };
 

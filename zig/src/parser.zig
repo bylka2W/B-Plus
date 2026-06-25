@@ -9,6 +9,7 @@ const Token = struct {
 
     const Kind = enum {
         keyword_state,
+        keyword_struct,
         keyword_entry,
         keyword_kernel,
         keyword_enum,
@@ -230,6 +231,7 @@ const Lexer = struct {
         .{ "forward", .keyword_forward },
         .{ "entry", .keyword_entry },
         .{ "kernel", .keyword_kernel },
+        .{ "struct", .keyword_struct },
         .{ "enum", .keyword_enum },
         .{ "parallel", .keyword_parallel },
         .{ "on", .keyword_on },
@@ -340,6 +342,7 @@ pub const Parser = struct {
             .directives = std.ArrayList([]const u8).init(p.allocator),
             .context = null,
             .extern_cpp_fns = std.ArrayList(ast.ExternCppFn).init(p.allocator),
+            .struct_defs = std.StringHashMap(ast.StructDef).init(p.allocator),
         };
         errdefer program.deinit();
 
@@ -379,6 +382,14 @@ pub const Parser = struct {
                 const k = try p.parseKernel();
                 errdefer { k.params.deinit(); k.annotations.deinit(); }
                 try program.kernels.append(k);
+            } else if (p.peek(.keyword_struct)) {
+                const s = try p.parseStructDef();
+                errdefer s.fields.deinit();
+                if (program.struct_defs.get(s.name)) |_| {
+                    std.debug.print("error: duplicate struct definition '{s}'\n", .{s.name});
+                    return error.DuplicateStruct;
+                }
+                try program.struct_defs.put(try p.allocator.dupe(u8, s.name), s);
             } else if (p.peek(.keyword_enum)) {
                 const e = try p.parseEnum();
                 errdefer e.members.deinit();
@@ -392,8 +403,8 @@ pub const Parser = struct {
                 try program.parallel_blocks.append(pb);
             } else if (p.peek(.keyword_context)) {
                 p.advance();
-                var ctx_vars = p.parseVariables() catch std.ArrayList(ast.VariableNode).init(p.allocator);
-                ctx_vars.deinit();
+                const ctx_vars = try p.parseVariables();
+                program.context = ast.ContextDecl{ .variables = ctx_vars };
             } else if (p.peek(.keyword_extern)) {
                 p.advance();
                 _ = p.parseString();
@@ -796,6 +807,25 @@ pub const Parser = struct {
         var ret: ?[]const u8 = null;
         if (p.peek(.arrow)) { p.advance(); ret = p.identText(); p.advance(); }
         return ast.KernelDecl{ .name = name, .params = params, .return_type = ret, .annotations = annotations };
+    }
+
+    fn parseStructDef(p: *Parser) !ast.StructDef {
+        try p.expect(.keyword_struct);
+        const name = p.identText(); p.advance();
+        p.consumeNewlines();
+        try p.expect(.lbrace);
+        var fields = std.ArrayList(ast.StructField).init(p.allocator);
+        errdefer fields.deinit();
+        while (!p.peek(.rbrace)) {
+            p.consumeNewlines();
+            const fname = p.identText(); p.advance();
+            try p.expect(.colon);
+            const ftype = p.identText(); p.advance();
+            try fields.append(.{ .name = fname, .type_name = ftype });
+            if (p.peek(.comma)) p.advance();
+        }
+        try p.expect(.rbrace);
+        return ast.StructDef{ .name = name, .fields = fields };
     }
 
     fn parseEnum(p: *Parser) !ast.EnumDecl {

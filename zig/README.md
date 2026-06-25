@@ -2,6 +2,8 @@
 
 A self-contained compiler + runtime for a custom language on Windows x64. Generates native PE executables and DLLs with zero runtime dependencies.
 
+Язык B+ поддерживает `struct`, `enum`, `parallel`, `kernel`, `extern`, `context`, `guard`, `export entry`, `forward` (прокси-DLL), аннотации (`@hot/@cold/@cache`), компиляцию в HLSL (`bpc hlsl`) с wave-операциями, cbuffer, groupshared, Texture2D/RWTexture2D.
+
 ## GPU Backend Architecture (Zig)
 
 The GPU backend is a layered architecture that bridges the FrameGraph temporal compute DAG to DX12 compute:
