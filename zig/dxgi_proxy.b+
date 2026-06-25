@@ -1,0 +1,362 @@
+state DXGI {
+    real_dxgi,
+    real_CreateDXGIFactory,
+    real_CreateDXGIFactory1,
+    real_CreateDXGIFactory2,
+    orig_CreateSwapChain,
+    orig_CreateSwapChainForHwnd,
+    factory,
+    hr,
+    orig_vtbl,
+    new_vtbl,
+    entry13,
+    out_addr,
+    swapchain,
+    sw_orig_vtbl,
+    sw_new_vtbl,
+    orig_present,
+    entry,
+    cso_data,
+    cso_size,
+    init_done,
+    file,
+    size_hi,
+    size_lo,
+    buf,
+    read,
+    device,
+    context,
+    compute_shader,
+    backbuffer,
+    guid_buf,
+    fn_ptr,
+    buf_addr,
+    width,
+    height,
+}
+
+export entry CreateDXGIFactory {
+    if (real_dxgi == 0) {
+        real_dxgi = LoadLibraryA("C:\\Windows\\System32\\dxgi.dll\0");
+        real_CreateDXGIFactory = GetProcAddress(real_dxgi, "CreateDXGIFactory\0");
+        real_CreateDXGIFactory1 = GetProcAddress(real_dxgi, "CreateDXGIFactory1\0");
+        real_CreateDXGIFactory2 = GetProcAddress(real_dxgi, "CreateDXGIFactory2\0");
+    }
+    factory = 0;
+    out_addr = addr(factory);
+    hr = call_indirect(real_CreateDXGIFactory, addr(factory), out_addr);
+    if (hr < 0) { ret hr; }
+    orig_vtbl = ptr_load(factory);
+    new_vtbl = HeapAlloc(GetProcessHeap(), 8, 120);
+    entry = ptr_load(orig_vtbl);
+    ptr_store(new_vtbl, entry);
+    entry = ptr_load(orig_vtbl + 8);
+    ptr_store(new_vtbl + 8, entry);
+    entry = ptr_load(orig_vtbl + 16);
+    ptr_store(new_vtbl + 16, entry);
+    entry = ptr_load(orig_vtbl + 24);
+    ptr_store(new_vtbl + 24, entry);
+    entry = ptr_load(orig_vtbl + 32);
+    ptr_store(new_vtbl + 32, entry);
+    entry = ptr_load(orig_vtbl + 40);
+    ptr_store(new_vtbl + 40, entry);
+    entry = ptr_load(orig_vtbl + 48);
+    ptr_store(new_vtbl + 48, entry);
+    entry = ptr_load(orig_vtbl + 56);
+    ptr_store(new_vtbl + 56, entry);
+    entry = ptr_load(orig_vtbl + 64);
+    ptr_store(new_vtbl + 64, entry);
+    entry = ptr_load(orig_vtbl + 72);
+    ptr_store(new_vtbl + 72, entry);
+    entry = ptr_load(orig_vtbl + 80);
+    ptr_store(new_vtbl + 80, entry);
+    entry = ptr_load(orig_vtbl + 88);
+    ptr_store(new_vtbl + 88, entry);
+    entry = ptr_load(orig_vtbl + 96);
+    ptr_store(new_vtbl + 96, entry);
+    entry = ptr_load(orig_vtbl + 104);
+    ptr_store(new_vtbl + 104, entry);
+    orig_CreateSwapChain = ptr_load(orig_vtbl + 80);
+    ptr_store(new_vtbl + 80, @entry_addr("OnCreateSwapChain"));
+    entry13 = ptr_load(orig_vtbl + 104);
+    if (entry13 != 0) {
+        orig_CreateSwapChainForHwnd = ptr_load(orig_vtbl + 104);
+        ptr_store(new_vtbl + 104, @entry_addr("OnCreateSwapChainForHwnd"));
+    }
+    ptr_store(factory, new_vtbl);
+    ret hr;
+}
+
+export entry CreateDXGIFactory1 {
+    if (real_dxgi == 0) {
+        real_dxgi = LoadLibraryA("C:\\Windows\\System32\\dxgi.dll\0");
+        real_CreateDXGIFactory = GetProcAddress(real_dxgi, "CreateDXGIFactory\0");
+        real_CreateDXGIFactory1 = GetProcAddress(real_dxgi, "CreateDXGIFactory1\0");
+        real_CreateDXGIFactory2 = GetProcAddress(real_dxgi, "CreateDXGIFactory2\0");
+    }
+    factory = 0;
+    out_addr = addr(factory);
+    hr = call_indirect(real_CreateDXGIFactory1, addr(factory), out_addr);
+    if (hr < 0) { ret hr; }
+    orig_vtbl = ptr_load(factory);
+    new_vtbl = HeapAlloc(GetProcessHeap(), 8, 120);
+    entry = ptr_load(orig_vtbl);
+    ptr_store(new_vtbl, entry);
+    entry = ptr_load(orig_vtbl + 8);
+    ptr_store(new_vtbl + 8, entry);
+    entry = ptr_load(orig_vtbl + 16);
+    ptr_store(new_vtbl + 16, entry);
+    entry = ptr_load(orig_vtbl + 24);
+    ptr_store(new_vtbl + 24, entry);
+    entry = ptr_load(orig_vtbl + 32);
+    ptr_store(new_vtbl + 32, entry);
+    entry = ptr_load(orig_vtbl + 40);
+    ptr_store(new_vtbl + 40, entry);
+    entry = ptr_load(orig_vtbl + 48);
+    ptr_store(new_vtbl + 48, entry);
+    entry = ptr_load(orig_vtbl + 56);
+    ptr_store(new_vtbl + 56, entry);
+    entry = ptr_load(orig_vtbl + 64);
+    ptr_store(new_vtbl + 64, entry);
+    entry = ptr_load(orig_vtbl + 72);
+    ptr_store(new_vtbl + 72, entry);
+    entry = ptr_load(orig_vtbl + 80);
+    ptr_store(new_vtbl + 80, entry);
+    entry = ptr_load(orig_vtbl + 88);
+    ptr_store(new_vtbl + 88, entry);
+    entry = ptr_load(orig_vtbl + 96);
+    ptr_store(new_vtbl + 96, entry);
+    entry = ptr_load(orig_vtbl + 104);
+    ptr_store(new_vtbl + 104, entry);
+    orig_CreateSwapChain = ptr_load(orig_vtbl + 80);
+    ptr_store(new_vtbl + 80, @entry_addr("OnCreateSwapChain"));
+    entry13 = ptr_load(orig_vtbl + 104);
+    if (entry13 != 0) {
+        orig_CreateSwapChainForHwnd = ptr_load(orig_vtbl + 104);
+        ptr_store(new_vtbl + 104, @entry_addr("OnCreateSwapChainForHwnd"));
+    }
+    ptr_store(factory, new_vtbl);
+    ret hr;
+}
+
+export entry CreateDXGIFactory2 {
+    if (real_dxgi == 0) {
+        real_dxgi = LoadLibraryA("C:\\Windows\\System32\\dxgi.dll\0");
+        real_CreateDXGIFactory = GetProcAddress(real_dxgi, "CreateDXGIFactory\0");
+        real_CreateDXGIFactory1 = GetProcAddress(real_dxgi, "CreateDXGIFactory1\0");
+        real_CreateDXGIFactory2 = GetProcAddress(real_dxgi, "CreateDXGIFactory2\0");
+    }
+    factory = 0;
+    out_addr = addr(factory);
+    hr = call_indirect(real_CreateDXGIFactory2, 0, addr(factory), out_addr);
+    if (hr < 0) { ret hr; }
+    orig_vtbl = ptr_load(factory);
+    new_vtbl = HeapAlloc(GetProcessHeap(), 8, 176);
+    entry = ptr_load(orig_vtbl);
+    ptr_store(new_vtbl, entry);
+    entry = ptr_load(orig_vtbl + 8);
+    ptr_store(new_vtbl + 8, entry);
+    entry = ptr_load(orig_vtbl + 16);
+    ptr_store(new_vtbl + 16, entry);
+    entry = ptr_load(orig_vtbl + 24);
+    ptr_store(new_vtbl + 24, entry);
+    entry = ptr_load(orig_vtbl + 32);
+    ptr_store(new_vtbl + 32, entry);
+    entry = ptr_load(orig_vtbl + 40);
+    ptr_store(new_vtbl + 40, entry);
+    entry = ptr_load(orig_vtbl + 48);
+    ptr_store(new_vtbl + 48, entry);
+    entry = ptr_load(orig_vtbl + 56);
+    ptr_store(new_vtbl + 56, entry);
+    entry = ptr_load(orig_vtbl + 64);
+    ptr_store(new_vtbl + 64, entry);
+    entry = ptr_load(orig_vtbl + 72);
+    ptr_store(new_vtbl + 72, entry);
+    entry = ptr_load(orig_vtbl + 80);
+    ptr_store(new_vtbl + 80, entry);
+    entry = ptr_load(orig_vtbl + 88);
+    ptr_store(new_vtbl + 88, entry);
+    entry = ptr_load(orig_vtbl + 96);
+    ptr_store(new_vtbl + 96, entry);
+    entry = ptr_load(orig_vtbl + 104);
+    ptr_store(new_vtbl + 104, entry);
+    entry = ptr_load(orig_vtbl + 112);
+    ptr_store(new_vtbl + 112, entry);
+    entry = ptr_load(orig_vtbl + 120);
+    ptr_store(new_vtbl + 120, entry);
+    entry = ptr_load(orig_vtbl + 128);
+    ptr_store(new_vtbl + 128, entry);
+    entry = ptr_load(orig_vtbl + 136);
+    ptr_store(new_vtbl + 136, entry);
+    entry = ptr_load(orig_vtbl + 144);
+    ptr_store(new_vtbl + 144, entry);
+    entry = ptr_load(orig_vtbl + 152);
+    ptr_store(new_vtbl + 152, entry);
+    entry = ptr_load(orig_vtbl + 160);
+    ptr_store(new_vtbl + 160, entry);
+    orig_CreateSwapChain = ptr_load(orig_vtbl + 80);
+    ptr_store(new_vtbl + 80, @entry_addr("OnCreateSwapChain"));
+    orig_CreateSwapChainForHwnd = ptr_load(orig_vtbl + 104);
+    ptr_store(new_vtbl + 104, @entry_addr("OnCreateSwapChainForHwnd"));
+    ptr_store(factory, new_vtbl);
+    ret hr;
+}
+
+export entry OnCreateSwapChain {
+    let this = @arg(0);
+    let device = @arg(1);
+    let desc = @arg(2);
+    let swapchain_out = @arg(3);
+    hr = call_indirect(orig_CreateSwapChain, this, device, desc, swapchain_out);
+    if (hr < 0) { ret hr; }
+    swapchain = ptr_load(swapchain_out);
+    if (swapchain != 0) {
+        sw_orig_vtbl = ptr_load(swapchain);
+        sw_new_vtbl = HeapAlloc(GetProcessHeap(), 8, 128);
+        entry = ptr_load(sw_orig_vtbl);
+        ptr_store(sw_new_vtbl, entry);
+        entry = ptr_load(sw_orig_vtbl + 8);
+        ptr_store(sw_new_vtbl + 8, entry);
+        entry = ptr_load(sw_orig_vtbl + 16);
+        ptr_store(sw_new_vtbl + 16, entry);
+        entry = ptr_load(sw_orig_vtbl + 24);
+        ptr_store(sw_new_vtbl + 24, entry);
+        entry = ptr_load(sw_orig_vtbl + 32);
+        ptr_store(sw_new_vtbl + 32, entry);
+        entry = ptr_load(sw_orig_vtbl + 40);
+        ptr_store(sw_new_vtbl + 40, entry);
+        entry = ptr_load(sw_orig_vtbl + 48);
+        ptr_store(sw_new_vtbl + 48, entry);
+        entry = ptr_load(sw_orig_vtbl + 56);
+        ptr_store(sw_new_vtbl + 56, entry);
+        entry = ptr_load(sw_orig_vtbl + 64);
+        ptr_store(sw_new_vtbl + 64, entry);
+        entry = ptr_load(sw_orig_vtbl + 72);
+        ptr_store(sw_new_vtbl + 72, entry);
+        entry = ptr_load(sw_orig_vtbl + 80);
+        ptr_store(sw_new_vtbl + 80, entry);
+        entry = ptr_load(sw_orig_vtbl + 88);
+        ptr_store(sw_new_vtbl + 88, entry);
+        entry = ptr_load(sw_orig_vtbl + 96);
+        ptr_store(sw_new_vtbl + 96, entry);
+        entry = ptr_load(sw_orig_vtbl + 104);
+        ptr_store(sw_new_vtbl + 104, entry);
+        entry = ptr_load(sw_orig_vtbl + 112);
+        ptr_store(sw_new_vtbl + 112, entry);
+        orig_present = ptr_load(sw_orig_vtbl + 64);
+        ptr_store(sw_new_vtbl + 64, @entry_addr("OnPresent"));
+        ptr_store(swapchain, sw_new_vtbl);
+    }
+    ret hr;
+}
+
+export entry OnCreateSwapChainForHwnd {
+    let this = @arg(0);
+    let device = @arg(1);
+    let hwnd = @arg(2);
+    let desc = @arg(3);
+    let fullscreen_desc = @arg(4);
+    let swapchain_out = @arg(5);
+    hr = call_indirect(orig_CreateSwapChainForHwnd, this, device, hwnd, desc, fullscreen_desc, swapchain_out);
+    if (hr < 0) { ret hr; }
+    swapchain = ptr_load(swapchain_out);
+    if (swapchain != 0) {
+        sw_orig_vtbl = ptr_load(swapchain);
+        sw_new_vtbl = HeapAlloc(GetProcessHeap(), 8, 128);
+        entry = ptr_load(sw_orig_vtbl);
+        ptr_store(sw_new_vtbl, entry);
+        entry = ptr_load(sw_orig_vtbl + 8);
+        ptr_store(sw_new_vtbl + 8, entry);
+        entry = ptr_load(sw_orig_vtbl + 16);
+        ptr_store(sw_new_vtbl + 16, entry);
+        entry = ptr_load(sw_orig_vtbl + 24);
+        ptr_store(sw_new_vtbl + 24, entry);
+        entry = ptr_load(sw_orig_vtbl + 32);
+        ptr_store(sw_new_vtbl + 32, entry);
+        entry = ptr_load(sw_orig_vtbl + 40);
+        ptr_store(sw_new_vtbl + 40, entry);
+        entry = ptr_load(sw_orig_vtbl + 48);
+        ptr_store(sw_new_vtbl + 48, entry);
+        entry = ptr_load(sw_orig_vtbl + 56);
+        ptr_store(sw_new_vtbl + 56, entry);
+        entry = ptr_load(sw_orig_vtbl + 64);
+        ptr_store(sw_new_vtbl + 64, entry);
+        entry = ptr_load(sw_orig_vtbl + 72);
+        ptr_store(sw_new_vtbl + 72, entry);
+        entry = ptr_load(sw_orig_vtbl + 80);
+        ptr_store(sw_new_vtbl + 80, entry);
+        entry = ptr_load(sw_orig_vtbl + 88);
+        ptr_store(sw_new_vtbl + 88, entry);
+        entry = ptr_load(sw_orig_vtbl + 96);
+        ptr_store(sw_new_vtbl + 96, entry);
+        entry = ptr_load(sw_orig_vtbl + 104);
+        ptr_store(sw_new_vtbl + 104, entry);
+        entry = ptr_load(sw_orig_vtbl + 112);
+        ptr_store(sw_new_vtbl + 112, entry);
+        orig_present = ptr_load(sw_orig_vtbl + 64);
+        ptr_store(sw_new_vtbl + 64, @entry_addr("OnPresent"));
+        ptr_store(swapchain, sw_new_vtbl);
+    }
+    ret hr;
+}
+
+export entry OnPresent {
+    let this = @arg(0);
+    let sync_interval = @arg(1);
+    let flags = @arg(2);
+    let sw_vtbl = ptr_load(this);
+    orig_present = ptr_load(sw_vtbl + 120);
+    if (init_done == 0) {
+        init_done = 1;
+        file = CreateFileA("tss_easu.cso\0", 0x80000000, 0, 0, 3, 0, 0);
+        size_hi = 0;
+        size_lo = GetFileSize(file, addr(size_hi));
+        cso_size = size_lo;
+        buf = HeapAlloc(GetProcessHeap(), 8, size_lo);
+        ReadFile(file, buf, size_lo, addr(read), 0);
+        CloseHandle(file);
+        cso_data = buf;
+        guid_buf = HeapAlloc(GetProcessHeap(), 8, 16);
+        // IID_ID3D11Texture2D = {6f15aaf2-d208-4e89-9ab4-489535d34f9c}
+        ptr_store(guid_buf, 0x4e89d2086f15aaf2);
+        ptr_store(guid_buf + 8, 0x9c4fd3359548b49a);
+        // Get backbuffer from swapchain via GetBuffer (vtbl index 9, offset 72)
+        fn_ptr = ptr_load(sw_vtbl + 72);
+        buf_addr = addr(backbuffer);
+        hr = call_indirect(fn_ptr, this, 0, guid_buf, buf_addr);
+        if (hr >= 0) {
+            // Get device from backbuffer via GetDevice (ID3D11DeviceChild vtbl index 3, offset 24)
+            let bb_vtbl = ptr_load(backbuffer);
+            fn_ptr = ptr_load(bb_vtbl + 24);
+            device = 0;
+            buf_addr = addr(device);
+            hr = call_indirect(fn_ptr, backbuffer, buf_addr);
+            if (hr >= 0) {
+                // Create compute shader via CreateComputeShader (ID3D11Device vtbl index 18, offset 144)
+                let dev_vtbl = ptr_load(device);
+                fn_ptr = ptr_load(dev_vtbl + 144);
+                compute_shader = 0;
+                buf_addr = addr(compute_shader);
+                hr = call_indirect(fn_ptr, device, cso_data, cso_size, 0, buf_addr);
+                if (hr >= 0) {
+                    // Get immediate context via GetImmediateContext (ID3D11Device vtbl index 40, offset 320)
+                    fn_ptr = ptr_load(dev_vtbl + 320);
+                    context = 0;
+                    buf_addr = addr(context);
+                    hr = call_indirect(fn_ptr, device, buf_addr);
+                }
+            }
+        }
+    }
+    if (context != 0 and compute_shader != 0) {
+        let ctx_vtbl = ptr_load(context);
+        // CSSetShader (ID3D11DeviceContext vtbl index 69, offset 552)
+        fn_ptr = ptr_load(ctx_vtbl + 552);
+        hr = call_indirect(fn_ptr, context, compute_shader, 0, 0);
+        // Dispatch fixed thread groups (ID3D11DeviceContext vtbl index 41, offset 328)
+        fn_ptr = ptr_load(ctx_vtbl + 328);
+        hr = call_indirect(fn_ptr, context, 64, 64, 1);
+    }
+    hr = call_indirect(orig_present, this, sync_interval, flags);
+    ret hr;
+}

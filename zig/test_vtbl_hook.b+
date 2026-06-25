@@ -1,0 +1,23 @@
+entry main {
+    // Test that @entry_addr returns our handler address
+    var handler = @entry_addr("OnPresentHook");
+    var local = @entry_addr("main");
+    // Verify handler is non-zero (compiler should have emitted real code)
+    if (handler == 0) {
+        call_indirect(ExitProcess, 1);
+    }
+    // Simulate vtbl hook: allocate vtbl storage
+    var vtbl = call_indirect(HeapAlloc, call_indirect(GetProcessHeap), 8, 64);
+    // Store handler in vtbl[8] (Present slot)
+    *(vtbl + 8 * 8) = handler;
+    // Read it back and verify
+    var readback = *(vtbl + 8 * 8);
+    if (readback != handler) {
+        call_indirect(ExitProcess, 2);
+    }
+    call_indirect(ExitProcess, 0);
+}
+
+export entry OnPresentHook {
+    ret 0;
+}

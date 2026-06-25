@@ -59,7 +59,7 @@ pub fn main() !void {
         .{ .ParameterType = .DESCRIPTOR_TABLE, ._u = .{ .DescriptorTable = .{ .NumDescriptorRanges = 1, .pDescriptorRanges = @as(*const d3d.D3D12_DESCRIPTOR_RANGE, @ptrCast(&r2r_srv)) } }, .ShaderVisibility = .ALL },
         .{ .ParameterType = .DESCRIPTOR_TABLE, ._u = .{ .DescriptorTable = .{ .NumDescriptorRanges = 1, .pDescriptorRanges = @as(*const d3d.D3D12_DESCRIPTOR_RANGE, @ptrCast(&r2r_uav)) } }, .ShaderVisibility = .ALL },
     };
-    var r2sam = [1]d3d.D3D12_STATIC_SAMPLER_DESC{ .Filter = .MIN_MAG_LINEAR_MIP_POINT, .AddressU = .CLAMP, .AddressV = .CLAMP, .AddressW = .CLAMP, .MipLODBias = 0, .MaxAnisotropy = 1, .ComparisonFunc = .NEVER, .BorderColor = .OPAQUE_BLACK, .MinLOD = 0, .MaxLOD = 0, .ShaderRegister = 0, .RegisterSpace = 0, .ShaderVisibility = .ALL };
+    var r2sam = [_]d3d.D3D12_STATIC_SAMPLER_DESC{.{ .Filter = .MIN_MAG_LINEAR_MIP_POINT, .AddressU = .CLAMP, .AddressV = .CLAMP, .AddressW = .CLAMP, .MipLODBias = 0, .MaxAnisotropy = 1, .ComparisonFunc = .NEVER, .BorderColor = .OPAQUE_BLACK, .MinLOD = 0, .MaxLOD = 0, .ShaderRegister = 0, .RegisterSpace = 0, .ShaderVisibility = .ALL }};
     var r2d = d3d.D3D12_ROOT_SIGNATURE_DESC{ .NumParameters = 2, .pParameters = @as(?*const d3d.D3D12_ROOT_PARAMETER, @ptrCast(&r2p)), .NumStaticSamplers = 1, .pStaticSamplers = @as(?*const d3d.D3D12_STATIC_SAMPLER_DESC, @ptrCast(&r2sam)), .Flags = 0 };
     hr_ = ctx.D3D12SerializeRootSignature.?(&r2d, 1, &blob, &eblob);
     if (hr_ < 0) return error.RS2;
@@ -330,7 +330,7 @@ pub fn main() !void {
         _ = d3d.getAllocatorVtbl(ctx.cmd_allocator.?).Reset(ctx.cmd_allocator.?);
         _ = d3d.getCmdListVtbl(cmd.?).Reset(cmd.?, ctx.cmd_allocator, null);
         dx12.ComputeContext.bufferBarrier(cmd.?, tex_up, d3d.D3D12_RESOURCE_STATE_UNORDERED_ACCESS, d3d.D3D12_RESOURCE_STATE_COPY_SOURCE);
-        var rb_rp = ctx.copyTextureToBuffer(rb_result, tex_up, W_HIGH, H_HIGH, .R32_FLOAT);
+        const rb_rp = ctx.copyTextureToBuffer(rb_result, tex_up, W_HIGH, H_HIGH, .R32_FLOAT);
         if (d3d.getCmdListVtbl(cmd.?).Close(cmd.?) < 0) return error.Close;
         var lists = [_]?*anyopaque{cmd};
         d3d.getQueueVtbl(ctx.queue.?).ExecuteCommandLists(ctx.queue.?, 1, &lists);

@@ -1,0 +1,81 @@
+state d3d {
+    device: int64,
+    context: int64,
+    shader: int64,
+    hr: int64,
+    hFile: int64,
+    file_size: int64,
+    bytes_read: int64,
+    cs_data: int64,
+    feature_level: int64
+}
+
+entry main {
+    // Load D3D11 device
+    let d3d11 = LoadLibraryA("d3d11.dll");
+    let D3D11CreateDevice = GetProcAddress(d3d11, "D3D11CreateDevice");
+    let feature_level = 0xb000;
+    feature_level = feature_level;
+    let hr = call_indirect(D3D11CreateDevice,
+        0, 1, 0, 0,
+        addr(feature_level), 1, 7,
+        addr(device), 0, addr(context));
+    hr = hr;
+    if (hr == 0) {
+        // Load kernel32 functions for file I/O
+        let kernel32 = LoadLibraryA("kernel32.dll");
+        let CreateFileA = GetProcAddress(kernel32, "CreateFileA");
+        let ReadFile = GetProcAddress(kernel32, "ReadFile");
+        let GetFileSize = GetProcAddress(kernel32, "GetFileSize");
+        let CloseHandle = GetProcAddress(kernel32, "CloseHandle");
+        let GetProcessHeap = GetProcAddress(kernel32, "GetProcessHeap");
+        let HeapAlloc = GetProcAddress(kernel32, "HeapAlloc");
+        // Open CSO file
+        let hFile = call_indirect(CreateFileA,
+            "C:\\B-Plus\\zig\\tss_easu.cso",
+            0x80000000, 1, 0, 3, 0x80, 0);
+        hFile = hFile;
+        if (hFile != -1) {
+            // Get file size
+            let file_size = call_indirect(GetFileSize, hFile, 0);
+            file_size = file_size;
+            if (file_size > 0) {
+                // HeapAlloc
+                let heap = call_indirect(GetProcessHeap);
+                let cs_data = call_indirect(HeapAlloc, heap, 8, file_size);
+                cs_data = cs_data;
+                if (cs_data != 0) {
+                    // ReadFile(hFile, cs_data, file_size, &bytes_read, NULL)
+                    let ok = call_indirect(ReadFile,
+                        hFile, cs_data, file_size, addr(bytes_read), 0);
+                    // CloseHandle
+                    call_indirect(CloseHandle, hFile);
+                    // CreateComputeShader
+                    let vtbl = ptr_load(device);
+                    let CreateComputeShader = ptr_load(vtbl + 144);
+                    let hr3 = call_indirect(CreateComputeShader,
+                        device, cs_data, file_size, 0, addr(shader));
+                    hr3 = hr3;
+                    if (hr3 == 0) {
+                        // GetImmediateContext
+                        let GetImmediateContext = ptr_load(vtbl + 320);
+                        let hr4 = call_indirect(GetImmediateContext,
+                            device, addr(context));
+                        if (hr4 == 0) {
+                            let ctx_vtbl = ptr_load(context);
+                            // CSSetShader(context, shader, NULL, 0)
+                            let CSSetShader = ptr_load(ctx_vtbl + 552);
+                            call_indirect(CSSetShader, context, shader, 0, 0);
+                            // Dispatch(context, 32, 32, 1)
+                            let Dispatch = ptr_load(ctx_vtbl + 328);
+                            call_indirect(Dispatch, context, 32, 32, 1);
+                            // Flush(context)
+                            let Flush = ptr_load(ctx_vtbl + 888);
+                            call_indirect(Flush, context);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

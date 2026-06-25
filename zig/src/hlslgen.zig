@@ -14,6 +14,8 @@ const Ctx = struct {
     allocator: std.mem.Allocator,
     program: *const ast.ProgramNode,
     bindings: *const std.StringHashMap([]const u8),
+    groupshared: std.StringHashMap(u32), // name -> size (elements)
+    cbuffers: *const std.StringHashMap([]const u8), // var_name -> "cbName,reg,type"
     x_var: []const u8 = "x",
     y_var: []const u8 = "y",
     var_defs: std.StringHashMap(VarDef),
@@ -33,6 +35,27 @@ pub fn generate(allocator: std.mem.Allocator, program: ast.ProgramNode, source: 
         }
         bindings.deinit();
     }
+
+    var groupshared = try parseGroupsharedAnnotations(allocator, source);
+    defer {
+        var it = groupshared.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+        }
+        groupshared.deinit();
+    }
+
+    var cbuffers = try parseCbufferAnnotations(allocator, source);
+    defer {
+        var it = cbuffers.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+        }
+        cbuffers.deinit();
+    }
+
+    // Emit cbuffers grouped by cb_name
+    try emitCbufferDecls(w, &cbuffers);
 
     var key_it = bindings.keyIterator();
     while (key_it.next()) |key| {
@@ -57,6 +80,8 @@ pub fn generate(allocator: std.mem.Allocator, program: ast.ProgramNode, source: 
             .allocator = allocator,
             .program = &program,
             .bindings = &bindings,
+            .groupshared = groupshared,
+            .cbuffers = &cbuffers,
             .var_defs = var_defs,
             .declared_locals = decl_locals,
         };
@@ -101,6 +126,111 @@ fn parseBindAnnotations(allocator: std.mem.Allocator, source: []const u8) !std.S
     return map;
 }
 
+fn parseGroupsharedAnnotations(allocator: std.mem.Allocator, source: []const u8) !std.StringHashMap(u32) {
+    var map = std.StringHashMap(u32).init(allocator);
+    var pos: usize = 0;
+    while (pos < source.len) {
+        const gs_start = std.mem.indexOfPos(u8, source, pos, "@groupshared(") orelse break;
+        var end = gs_start + 13;
+        var depth: u32 = 1;
+        while (end < source.len and depth > 0) : (end += 1) {
+            switch (source[end]) {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                else => {},
+            }
+        }
+        if (depth != 0) { pos = gs_start + 13; continue; }
+        const ann_text = source[gs_start + 13 .. end - 1];
+
+        const comma = std.mem.indexOfScalar(u8, ann_text, ',') orelse { pos = end; continue; };
+        const var_name = std.mem.trim(u8, ann_text[0..comma], " \t\"");
+        const size_str = std.mem.trim(u8, ann_text[comma + 1 ..], " \t");
+        const size = std.fmt.parseInt(u32, size_str, 10) catch { pos = end; continue; };
+        if (var_name.len > 0) {
+            try map.put(try allocator.dupe(u8, var_name), size);
+        }
+        pos = end;
+    }
+    return map;
+}
+
+fn parseCbufferAnnotations(allocator: std.mem.Allocator, source: []const u8) !std.StringHashMap([]const u8) {
+    var map = std.StringHashMap([]const u8).init(allocator);
+    var pos: usize = 0;
+    while (pos < source.len) {
+        const cb_start = std.mem.indexOfPos(u8, source, pos, "@cbuffer(") orelse break;
+        var end = cb_start + 9;
+        var depth: u32 = 1;
+        while (end < source.len and depth > 0) : (end += 1) {
+            switch (source[end]) {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                else => {},
+            }
+        }
+        if (depth != 0) { pos = cb_start + 9; continue; }
+        const ann_text = source[cb_start + 9 .. end - 1];
+
+        // Format: var_name, cb_name, reg [, type]
+        var it = std.mem.splitScalar(u8, ann_text, ',');
+        const var_name = std.mem.trim(u8, it.next() orelse "", " \t\"");
+        const cb_name = std.mem.trim(u8, it.next() orelse "", " \t\"");
+        const reg = std.mem.trim(u8, it.next() orelse "0", " \t");
+        const cb_type = std.mem.trim(u8, it.next() orelse "float4", " \t");
+        if (var_name.len > 0 and cb_name.len > 0) {
+            const val = try std.fmt.allocPrint(allocator, "{s},{s},{s}", .{ cb_name, reg, cb_type });
+            try map.put(try allocator.dupe(u8, var_name), val);
+        }
+        pos = end;
+    }
+    return map;
+}
+
+fn emitCbufferDecls(w: anytype, cbuffers: *const std.StringHashMap([]const u8)) !void {
+    // Collect unique cb_names and their fields
+    var order = std.ArrayList([]const u8).init(std.heap.page_allocator);
+    defer order.deinit();
+    var cb_to_vars = std.StringHashMap(std.ArrayList([]const u8)).init(std.heap.page_allocator);
+    defer {
+        var it = cb_to_vars.iterator();
+        while (it.next()) |e| e.value_ptr.deinit();
+        cb_to_vars.deinit();
+    }
+    var cb_it = cbuffers.iterator();
+    while (cb_it.next()) |entry| {
+        const val = entry.value_ptr.*;
+        var val_it = std.mem.splitScalar(u8, val, ',');
+        const cb_name = val_it.next() orelse continue;
+        const reg = val_it.next() orelse "0";
+        const typ = val_it.next() orelse "float4";
+        const field_info = try std.fmt.allocPrint(std.heap.page_allocator, "{s},{s},{s}", .{ entry.key_ptr.*, typ, reg });
+        const g = cb_to_vars.getOrPut(cb_name) catch continue;
+        if (!g.found_existing) {
+            try order.append(cb_name);
+            g.value_ptr.* = std.ArrayList([]const u8).init(std.heap.page_allocator);
+        }
+        try g.value_ptr.*.append(field_info);
+    }
+    for (order.items) |cb_name| {
+        const fields = cb_to_vars.get(cb_name) orelse continue;
+        if (fields.items.len == 0) continue;
+        // Get register from first field
+        var first_it = std.mem.splitScalar(u8, fields.items[0], ',');
+        _ = first_it.next(); // var name
+        _ = first_it.next(); // type
+        const reg = first_it.next() orelse "0";
+        try w.print("cbuffer {s} : register(b{s}) {{\n", .{ cb_name, reg });
+        for (fields.items) |f| {
+            var f_it = std.mem.splitScalar(u8, f, ',');
+            const vn = f_it.next() orelse continue;
+            const vt = f_it.next() orelse "float4";
+            try w.print("    {s} {s};\n", .{ vt, vn });
+        }
+        try w.writeAll("};\n");
+    }
+}
+
 const constant_state_vars = std.StaticStringMap(void).initComptime(.{
     .{"w"}, .{"h"}, .{"ow"}, .{"oh"},
 });
@@ -126,13 +256,28 @@ fn emitResourceDecl(w: anytype, name: []const u8, ann: []const u8) !void {
     var it = std.mem.splitScalar(u8, ann, ',');
     const kind = std.mem.trim(u8, it.next() orelse "t", " \t");
     const reg = std.mem.trim(u8, it.next() orelse "0", " \t");
+    const fmt = std.mem.trim(u8, it.next() orelse "float", " \t");
+    var extra = std.mem.trim(u8, it.next() orelse "", " \t");
+
+    var global_coherent = false;
+    if (std.mem.eql(u8, extra, "globallycoherent")) { global_coherent = true; extra = ""; }
 
     if (std.mem.eql(u8, kind, "t")) {
-        try w.print("Texture2D<float> {s} : register(t{s});\n", .{ name, reg });
+        try w.print("Texture2D<{s}> {s} : register(t{s});\n", .{ fmt, name, reg });
     } else if (std.mem.eql(u8, kind, "u")) {
-        try w.print("RWTexture2D<float> {s} : register(u{s});\n", .{ name, reg });
+        if (global_coherent) {
+            try w.print("globallycoherent RWTexture2D<{s}> {s} : register(u{s});\n", .{ fmt, name, reg });
+        } else {
+            try w.print("RWTexture2D<{s}> {s} : register(u{s});\n", .{ fmt, name, reg });
+        }
     } else if (std.mem.eql(u8, kind, "s")) {
         try w.print("SamplerState {s} : register(s{s});\n", .{ name, reg });
+    } else if (std.mem.eql(u8, kind, "b")) {
+        try w.print("cbuffer {s} : register(b{s}) {{ {s} {s}[{s}]; }};\n", .{ name, reg, fmt, name, extra });
+    } else if (std.mem.eql(u8, kind, "t2")) {
+        try w.print("Texture2D<{s}> {s} : register(t{s});\n", .{ fmt, name, reg });
+    } else if (std.mem.eql(u8, kind, "u2")) {
+        try w.print("RWTexture2D<{s}> {s} : register(u{s});\n", .{ fmt, name, reg });
     }
 }
 
@@ -173,11 +318,20 @@ fn emitEntryShader(w: anytype, entry: *const ast.EntryDecl, ctx: *Ctx) @TypeOf(w
     }
 
     try w.print("[numthreads({d},{d},{d})]\n", .{ nt_x, nt_y, nt_z });
-    try w.print("void {s}(uint3 tid : SV_DispatchThreadID) {{\n", .{ entry.name });
+    try w.print("void {s}(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID, uint gi : SV_GroupIndex) {{\n", .{ entry.name });
+
+    // Emit groupshared declarations first
+    {
+        var gs_it = ctx.groupshared.keyIterator();
+        while (gs_it.next()) |name| {
+            const size = ctx.groupshared.get(name.*).?;
+            try w.print("    groupshared float {s}[{d}];\n", .{ name.*, size });
+        }
+    }
 
     for (ctx.program.states.items) |*state| {
         for (state.variables.items) |*v| {
-            const type_hlsl: []const u8 = if (std.mem.eql(u8, v.type_name, "float")) "float" else "int";
+            const type_hlsl: []const u8 = mapTypeToHlsl(v.type_name);
             const is_resource = ctx.bindings.contains(v.name);
             const is_for_var = std.mem.eql(u8, v.name, ctx.x_var) or std.mem.eql(u8, v.name, ctx.y_var);
             const is_constant = constant_state_vars.has(v.name);
@@ -198,6 +352,11 @@ fn transpileBodyLines(w: anytype, lines: []const []const u8, ctx: *Ctx) @TypeOf(
         const line = std.mem.trim(u8, raw, " \t\r\n");
         if (line.len == 0) continue;
         if (std.mem.eql(u8, line, "{") or std.mem.eql(u8, line, "}")) continue;
+        if (std.mem.eql(u8, line, "@unroll")) { try w.writeAll("    [unroll]\n"); continue; }
+        if (std.mem.eql(u8, line, "@unroll(loop)")) { try w.writeAll("    [unroll]\n"); continue; }
+        if (std.mem.eql(u8, line, "@branch")) { try w.writeAll("    [branch]\n"); continue; }
+        if (std.mem.eql(u8, line, "@flatten")) { try w.writeAll("    [flatten]\n"); continue; }
+        if (std.mem.eql(u8, line, "@fastopt")) { try w.writeAll("    [fastopt]\n"); continue; }
         if (std.mem.startsWith(u8, line, "@")) continue;
 
         if (std.mem.startsWith(u8, line, "for(")) {
@@ -374,6 +533,77 @@ fn transpileStmt(w: anytype, stmt: []const u8, ctx: *Ctx) @TypeOf(w).Error!void 
         return;
     }
 
+    // Passthrough for HLSL intrinsics
+    if (std.mem.startsWith(u8, stmt, "InterlockedAdd") or
+        std.mem.startsWith(u8, stmt, "InterlockedMax") or
+        std.mem.startsWith(u8, stmt, "InterlockedMin") or
+        std.mem.startsWith(u8, stmt, "InterlockedOr") or
+        std.mem.startsWith(u8, stmt, "InterlockedAnd") or
+        std.mem.startsWith(u8, stmt, "InterlockedXor") or
+        std.mem.startsWith(u8, stmt, "InterlockedCompareExchange") or
+        std.mem.startsWith(u8, stmt, "InterlockedExchange") or
+        std.mem.startsWith(u8, stmt, "GroupMemoryBarrierWithGroupSync") or
+        std.mem.startsWith(u8, stmt, "GroupMemoryBarrier") or
+        std.mem.startsWith(u8, stmt, "DeviceMemoryBarrier") or
+        std.mem.startsWith(u8, stmt, "AllMemoryBarrier") or
+        std.mem.startsWith(u8, stmt, "WaveGetLaneIndex") or
+        std.mem.startsWith(u8, stmt, "WaveGetLaneCount") or
+        std.mem.startsWith(u8, stmt, "WaveReadLaneAt") or
+        std.mem.startsWith(u8, stmt, "WaveReadLaneFirst") or
+        std.mem.startsWith(u8, stmt, "WaveActiveSum") or
+        std.mem.startsWith(u8, stmt, "WaveActiveProduct") or
+        std.mem.startsWith(u8, stmt, "WaveActiveMin") or
+        std.mem.startsWith(u8, stmt, "WaveActiveMax") or
+        std.mem.startsWith(u8, stmt, "WaveActiveBitAnd") or
+        std.mem.startsWith(u8, stmt, "WaveActiveBitOr") or
+        std.mem.startsWith(u8, stmt, "WaveActiveBitXor") or
+        std.mem.startsWith(u8, stmt, "WaveActiveAllTrue") or
+        std.mem.startsWith(u8, stmt, "WaveActiveAnyTrue") or
+        std.mem.startsWith(u8, stmt, "WaveActiveBallot") or
+        std.mem.startsWith(u8, stmt, "WaveIsFirstLane") or
+        std.mem.startsWith(u8, stmt, "WavePrefixSum") or
+        std.mem.startsWith(u8, stmt, "WavePrefixProduct") or
+        std.mem.startsWith(u8, stmt, "WavePrefixCountBits") or
+        std.mem.startsWith(u8, stmt, "asuint") or
+        std.mem.startsWith(u8, stmt, "asfloat") or
+        std.mem.startsWith(u8, stmt, "asint") or
+        std.mem.startsWith(u8, stmt, "f32tof16") or
+        std.mem.startsWith(u8, stmt, "f16tof32") or
+        std.mem.startsWith(u8, stmt, "packHalf2x16") or
+        std.mem.startsWith(u8, stmt, "unpackHalf2x16") or
+        std.mem.startsWith(u8, stmt, "packUint2x32") or
+        std.mem.startsWith(u8, stmt, "unpackUint2x32") or
+        std.mem.startsWith(u8, stmt, "floor") or
+        std.mem.startsWith(u8, stmt, "ceil") or
+        std.mem.startsWith(u8, stmt, "frac") or
+        std.mem.startsWith(u8, stmt, "abs") or
+        std.mem.startsWith(u8, stmt, "saturate") or
+        std.mem.startsWith(u8, stmt, "rsqrt") or
+        std.mem.startsWith(u8, stmt, "normalize") or
+        std.mem.startsWith(u8, stmt, "cross") or
+        std.mem.startsWith(u8, stmt, "length") or
+        std.mem.startsWith(u8, stmt, "distance") or
+        std.mem.startsWith(u8, stmt, "round") or
+        std.mem.startsWith(u8, stmt, "sign") or
+        std.mem.startsWith(u8, stmt, "step") or
+        std.mem.startsWith(u8, stmt, "clamp") or
+        std.mem.startsWith(u8, stmt, "lerp") or
+        std.mem.startsWith(u8, stmt, "mad") or
+        std.mem.startsWith(u8, stmt, "sincos") or
+        std.mem.startsWith(u8, stmt, "ddx") or
+        std.mem.startsWith(u8, stmt, "ddy") or
+        std.mem.startsWith(u8, stmt, "ddx_coarse") or
+        std.mem.startsWith(u8, stmt, "ddy_coarse") or
+        std.mem.startsWith(u8, stmt, "ddx_fine") or
+        std.mem.startsWith(u8, stmt, "ddy_fine") or
+        std.mem.startsWith(u8, stmt, "ProcessLane") or
+        std.mem.startsWith(u8, stmt, "ProcessQuad") or
+        std.mem.startsWith(u8, stmt, "NonUniformResourceIndex"))
+    {
+        try w.print("    {s};\n", .{stmt});
+        return;
+    }
+
     // *var + offset = expr  → UAV write
     if (stmt.len > 2 and stmt[0] == '*') {
         const eq_pos = std.mem.indexOfScalar(u8, stmt, '=') orelse {
@@ -519,6 +749,38 @@ fn isStateVar(name: []const u8, program: *const ast.ProgramNode) bool {
         }
     }
     return false;
+}
+
+fn mapTypeToHlsl(type_name: []const u8) []const u8 {
+    // FSR2 abstract types
+    if (std.mem.eql(u8, type_name, "float")) return "float";
+    if (std.mem.eql(u8, type_name, "float2")) return "float2";
+    if (std.mem.eql(u8, type_name, "float3")) return "float3";
+    if (std.mem.eql(u8, type_name, "float4")) return "float4";
+    if (std.mem.eql(u8, type_name, "int")) return "int";
+    if (std.mem.eql(u8, type_name, "int2")) return "int2";
+    if (std.mem.eql(u8, type_name, "int3")) return "int3";
+    if (std.mem.eql(u8, type_name, "int4")) return "int4";
+    if (std.mem.eql(u8, type_name, "uint")) return "uint";
+    if (std.mem.eql(u8, type_name, "uint2")) return "uint2";
+    if (std.mem.eql(u8, type_name, "uint3")) return "uint3";
+    if (std.mem.eql(u8, type_name, "uint4")) return "uint4";
+    // FSR2 abstract type aliases
+    if (std.mem.eql(u8, type_name, "FfxFloat32")) return "float";
+    if (std.mem.eql(u8, type_name, "FfxFloat32x2")) return "float2";
+    if (std.mem.eql(u8, type_name, "FfxFloat32x3")) return "float3";
+    if (std.mem.eql(u8, type_name, "FfxFloat32x4")) return "float4";
+    if (std.mem.eql(u8, type_name, "FfxInt32")) return "int";
+    if (std.mem.eql(u8, type_name, "FfxInt32x2")) return "int2";
+    if (std.mem.eql(u8, type_name, "FfxInt32x3")) return "int3";
+    if (std.mem.eql(u8, type_name, "FfxInt32x4")) return "int4";
+    if (std.mem.eql(u8, type_name, "FfxUInt32")) return "uint";
+    if (std.mem.eql(u8, type_name, "FfxUInt32x2")) return "uint2";
+    if (std.mem.eql(u8, type_name, "FfxUInt32x3")) return "uint3";
+    if (std.mem.eql(u8, type_name, "FfxUInt32x4")) return "uint4";
+    if (std.mem.eql(u8, type_name, "FfxBoolean")) return "bool";
+    if (std.mem.eql(u8, type_name, "FfxInt32")) return "int";
+    return "float";
 }
 
 fn inferType(name: []const u8, program: *const ast.ProgramNode) []const u8 {

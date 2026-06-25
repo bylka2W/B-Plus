@@ -1,0 +1,4 @@
+﻿entry main {
+    var p = @entry_addr("main");
+    ret -> p;
+}

@@ -1,0 +1,17 @@
+struct Foo { a: int, b: int }
+
+state Work {
+    var f: Foo = 0
+    var sum: int = 0
+    enter {
+        f.a = 10
+        f.b = 20
+        sum = f.a + f.b
+        return -> sum
+    }
+    always -> Work
+}
+
+entry main {
+    always { }
+}

@@ -1,0 +1,5 @@
+state T { x }
+export entry main {
+    x = 42
+    ret x
+}

@@ -69,6 +69,7 @@ pub const OpCode = enum(u16) {
     JBE_REL32,
     JAE_REL32,
     CALL_REL32,
+    CALL_R64,
     CQO,
     RET,
     NOP,
@@ -433,6 +434,13 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             try code.append(0xE8);
             const disp_bytes: [4]u8 = @bitCast(@as(i32, @bitCast(@as(u32, @truncate(operands[0].imm64)))));
             try code.appendSlice(&disp_bytes);
+        },
+        .CALL_R64 => {
+            if (operands.len < 1) return error.MissingOperands;
+            const reg = operands[0].reg;
+            if (reg >= 8) try code.append(0x41);
+            try code.append(0xFF);
+            try code.append(0xD0 | @as(u8, @intCast(reg & 7)));
         },
         .CALL_RIPDISP => {
             if (operands.len < 2) return error.MissingOperands;

@@ -2,6 +2,7 @@ const std = @import("std");
 const windows = std.os.windows;
 const d3d = @import("d3d12_bindings.zig");
 const dx12 = @import("dx12_compute.zig");
+const sched = @import("scheduler.zig");
 
 pub const MAX_FRAMES_IN_FLIGHT = 3;
 
@@ -151,3 +152,87 @@ pub const FrameRuntime = struct {
         return self.frame_index;
     }
 };
+
+pub const FrameResources = struct {
+    input: []f32,
+    output: []f32,
+    history: []f32,
+    motion_x: []f32,
+    motion_y: []f32,
+    reactive: []f32,
+    depth: []f32,
+};
+
+pub const FrameCtx = struct {
+    id: u64,
+    width: u32,
+    height: u32,
+    scale: f32,
+    resources: *FrameResources,
+    jitter_x: f32,
+    jitter_y: f32,
+};
+
+const FrameStageCtx = struct {
+    ctx: *FrameCtx,
+    stage: Stage,
+    tile_x: u32,
+    tile_y: u32,
+    tile_w: u32,
+    tile_h: u32,
+    allocator: std.mem.Allocator,
+};
+
+pub const Stage = enum { upsample, sharpen, temporal };
+
+const TileStream = struct {
+    jobs: []sched.Job,
+
+    pub fn deinit(ts: *TileStream, allocator: std.mem.Allocator) void {
+        allocator.free(ts.jobs);
+    }
+};
+
+pub const FrameBatch = struct {
+    upsample: TileStream,
+    sharpen: TileStream,
+    temporal: TileStream,
+
+    pub fn deinit(fb: *FrameBatch, allocator: std.mem.Allocator) void {
+        fb.upsample.deinit(allocator);
+        fb.sharpen.deinit(allocator);
+        fb.temporal.deinit(allocator);
+    }
+};
+
+fn buildStage(allocator: std.mem.Allocator, ctx: *FrameCtx, stage: Stage) !TileStream {
+    _ = ctx;
+    _ = stage;
+    return TileStream{ .jobs = try allocator.alloc(sched.Job, 0) };
+}
+
+fn submitStage(pool: *sched.WorkerPool, allocator: std.mem.Allocator, ctx: *FrameCtx, stage: Stage) !TileStream {
+    const ts = try buildStage(allocator, ctx, stage);
+    for (ts.jobs) |*j| pool.submit(j);
+    return ts;
+}
+
+pub fn submitFrame(s: *sched.Scheduler, allocator: std.mem.Allocator, ctx: *FrameCtx) !FrameBatch {
+    const pool = &s.pool.?;
+    var batch = FrameBatch{
+        .upsample = try submitStage(pool, allocator, ctx, .upsample),
+        .sharpen = TileStream{ .jobs = &.{} },
+        .temporal = TileStream{ .jobs = &.{} },
+    };
+    s.waitAll();
+
+    batch.sharpen = try submitStage(pool, allocator, ctx, .sharpen);
+    s.waitAll();
+
+    if (ctx.resources.history.len > 0) {
+        batch.temporal = try submitStage(pool, allocator, ctx, .temporal);
+        s.waitAll();
+    }
+
+    return batch;
+}

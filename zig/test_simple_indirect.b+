@@ -1,0 +1,4 @@
+entry main {
+    // Basic call_indirect with ExitProcess
+    call_indirect(ExitProcess, 42);
+}

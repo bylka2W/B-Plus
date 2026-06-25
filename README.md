@@ -1,4 +1,4 @@
-# B+ v4.2.0 — детерминированная машина переходов (x64)
+# B+ v4.3.0 — детерминированная машина переходов (x64)
 
 > [English version ↓](#b-v420--deterministic-transition-machine-x64)
 
@@ -67,6 +67,7 @@ bpc build <входной.b+>              — скомпилировать в <
 bpc build <входной.b+> -o <выход.exe> — скомпилировать с указанием имени
 bpc dll   <входной.b+>              — скомпилировать в DLL
 bpc run   <входной.b+>              — скомпилировать и сразу запустить
+bpc hlsl  <входной.b+>              — сгенерировать HLSL шейдер
 ```
 
 #### `bpc dll <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]`
@@ -114,6 +115,48 @@ bpc dll module.b+
 bpc build traffic.b+              → traffic.exe
 bpc build traffic.b+ -o light.exe → light.exe
 bpc build source.b+               → source.exe
+```
+
+#### `bpc hlsl <input.b+> [-o <output.hlsl>]`
+
+Генерирует HLSL-код из B+ файла с аннотациями `@bind`, `@cbuffer`, `@groupshared`.
+Предназначен для написания GPU-шейдеров (compute) на B+ с последующей
+компиляцией через DXC или FXC.
+
+| Шаг | Описание |
+|-----|----------|
+| 1 | Читает файл `.b+` целиком в память |
+| 2 | Разбирает (парсит) исходный код в AST |
+| 3 | Парсит аннотации `@bind(вид, регистр, формат)` |
+| 4 | Парсит аннотации `@cbuffer(переменная, cbName, регистр, тип)` |
+| 5 | Парсит аннотации `@groupshared(имя, размер)` |
+| 6 | Генерирует HLSL: cbuffer-ы, ресурсы, `[numthreads]`, тело шейдера |
+| 7 | Записывает результат на диск |
+
+**Аннотации:**
+
+```rust
+// Текстуры
+g_InputColor: @bind(t, 0, float4)     // Texture2D<float4> : register(t0)
+g_OutputColor: @bind(u, 0, float4)    // RWTexture2D<float4> : register(u0)
+g_OutputUAV: @bind(u, 1, uint, globallycoherent)  // globallycoherent RWTexture2D<uint>
+// Сэмплер
+linearClamp: @bind(s, 0)              // SamplerState : register(s0)
+
+// Константный буфер
+inputSize: @cbuffer(FSR2Constants, 0, float2)   // cbuffer FSR2Constants : register(b0) { float2 inputSize; ... }
+
+// Shared memory
+sharedMem: @groupshared(sharedMem, 256)           // groupshared float sharedMem[256];
+```
+
+В теле `entry` цикл `for(x, y, w, h)` транслируется в `uint x = tid.x; if (x >= w) return;`.
+HLSL-интринсики (WaveActiveSum, InterlockedAdd, mad, lerp и др.) проходят насквозь.
+
+**Пример:**
+```bash
+bpc hlsl fsr2_easu.b+ -o fsr2_easu.hlsl
+dxc -T cs_6_6 -E main -Fo fsr2_easu.cso fsr2_easu.hlsl
 ```
 
 #### `bpc run <input.b+>`
@@ -578,12 +621,49 @@ zig/                    — компилятор (Zig, активная разр
     scheduler_state.zig  — Stage 8 GlobalSchedulerState (SystemLoad, adjustDecision)
     parser.zig          — лексер + парсер .b+
     ast.zig             — типы AST (состояния, переходы и т.д.)
-     x64gen.zig          — генератор машинного кода x64 (+ Intrinsic binding к runtime)
+     x64gen.zig          — генератор машинного кода x64 (+ Intrinsic binding к runtime).
+                           **Новые возможности:**
+                           - Структуры: `struct Name { field: type, ... }` — packed layout
+                           - `arr[idx]` — индексация массивов через SIB (scale=3 для *8)
+                           - `reinterpret_cast<T>(expr)` — удаление внешнего каста
+                           - `obj->method(args)` — COM-вызовы через vtable
+                           - `ptr_store(dest, value)` — запись по указателю (depth-aware)
+                           - `rcp(x)`, `lerp(a,b,t)`, `med3(a,b,c)` — математические
+                             интринсики в парсере выражений
+                           - 16 CRT-функций через IAT (msvcrt.dll), XMM0/XMM1 для float
+                           - `GetModuleHandleW/A` в IMPORT_FNS
+                           - D3D12 COM-методы в COM_METHODS (ID3D12Device,
+                             ID3D12GraphicsCommandList, ID3D12DescriptorHeap)
+                           - `context { var x: type }` — контекстные переменные (фикс бага)
+                           - `forward Name = "dll.dll"` — DLL export forwarding для proxy DLL
      x64enc.zig          — кодировщик инструкций x64
      layout.zig          — StackFrame/SlotKind: типобезопасная абстракция стекового
                            фрейма, используется x64gen.zig для раскладки оффсетов
      symbol.zig          — SymbolTable: реестр символов (code/export/data) для линковки
      pe.zig             — генератор PE (.exe/.dll) — чистый эмиттер, не знает про AST
+     hlslgen.zig         — HLSL-кодогенератор. Аннотации: @bind, @cbuffer, @groupshared.
+                           Типы FSR2: FfxFloat32/2/3/4, FfxInt32, FfxUInt32 → float/int/uint.
+                           50+ HLSL-интринсиков (wave ops, атомики, math, битовые касты).
+                           globallycoherent для RWTexture2D. @numthreads, @unroll, @branch.
+
+  shaders/fsr2/         — эталонные HLSL-шейдеры FSR2 (8 проходов):
+    fsr2_easu.hlsl       — EASU (Edge Adaptive Spatial Upsampling)
+    fsr2_rcas.hlsl       — RCAS (Robust Contrast Adaptive Sharpening)
+    fsr2_accumulate.hlsl — Temporal Accumulation (TAAU)
+    fsr2_depthclip.hlsl  — Depth Clip (анти-гостинг)
+    fsr2_lock.hlsl       — Lock Status
+    fsr2_luminance_pyramid.hlsl — Luminance Pyramid
+    fsr2_reconstruct_depth.hlsl — Depth Reconstruction
+    fsr2_dilate_velocity.hlsl   — Motion Vector Dilation
+  shaders/cso/          — скомпилированные .cso файлы (cs_6_6)
+
+  fsr2_proxy.b+         — DXGI proxy DLL: перехватывает CreateSwapChain/Present,
+                          создаёт D3D11 device, загружает 8 CSO, управляет текстурами,
+                          выполняет полный пайплайн FSR2 на каждом кадре.
+                          Написана полностью на B+ (x64 codegen), ~500 строк.
+
+  tss_easu.b+           — CPU-эталон EASU на B+ (программный апскейл)
+  tss_easu_faithful.b+  — Точная реализация EASU (12 tap, градиентное направление)
   build.zig            — сборка через zig build
 ```
 
@@ -807,17 +887,79 @@ zig test src\scheduler_test.zig # 16 tests: sync/threaded/priority/steal/latency
 
 ---
 
+---
+
+## Порт FSR2 — Полный Temporal Upscaler на B+
+
+B+ используется для портирования AMD FidelityFX Super Resolution 2 (FSR2) —
+полноценного temporal upscaler с 11+ шейдерными проходами, целиком на B+.
+
+### Трек 1: DXGI Proxy DLL (`fsr2_proxy.b+`)
+
+D3D11 proxy DLL, перехватывающая `CreateDXGIFactory`/`Present` и выполняющая
+FSR2 на каждом кадре:
+
+```
+Present → Luminance Pyramid → Reconstruct Depth → Dilate Motion Vectors →
+Depth Clip → Lock → Temporal Accumulate → RCAS Sharpen → Copy to Backbuffer
+```
+
+Все вызовы D3D11 API (CreateTexture2D, CreateShaderResourceView, Dispatch,
+CopyResource) — через COM vtable dispatch, написана целиком на B+ (x64 asm).
+
+8 предварительно скомпилированных CSO-шейдеров из `shaders/cso/`:
+- `fsr2_easu.cso` — EASU (Edge Adaptive Spatial Upsampling)
+- `fsr2_rcas.cso` — RCAS (Robust Contrast Adaptive Sharpening)
+- `fsr2_accumulate.cso` — Temporal Accumulation (ядро TAAU)
+- `fsr2_depthclip.cso` — Depth Clip (анти-гостинг)
+- `fsr2_lock.cso` — Lock Status
+- `fsr2_luminance_pyramid.cso` — Luminance Pyramid
+- `fsr2_reconstruct_depth.cso` — Depth Reconstruction
+- `fsr2_dilate_velocity.cso` — Dilate Motion Vectors
+
+### Трек 2: B+ HLSL Codegen (`bpc hlsl`)
+
+Шейдеры FSR2 переписываются на B+ с аннотациями, `bpc hlsl` генерирует HLSL:
+
+```rust
+g_InputColor: @bind(t, 0, float4)
+g_OutputColor: @bind(u, 0, float4)
+inputSize: @cbuffer(EASUConstants, 0, float2)
+
+@numthreads(8,8,1)
+entry main {
+    for(x, y, w, h) {
+        float2 uv = float2(x, y) * inputRcpSize
+        // ... EASU math ...
+        g_OutputColor[uint2(x, y)] = result
+    }
+}
+```
+
+Поддерживаются FSR2-типы, globallycoherent, 50+ HLSL intrinsic, @cbuffer,
+@groupshared, @unroll, @branch.
+
+### Что дальше
+
+1. EASU/RCAS шейдеры на B+ → HLSL через `bpc hlsl` + DXC
+2. Портировать остальные 6 проходов
+3. Temporal accumulation с motion vector reprojection
+4. Depth-based disocclusion + lock-механизм
+5. D3D12 host code на B+ x64
+
+---
+
 **Ограничения:**
 - Только Windows x64.
 - Минимальные сообщения об ошибках.
 - Чтение ввода через stdin (одна строка = одно событие).
-- Нет поддержки LLVM, WASM, GPU, LSP, DISK tier.
+- Нет поддержки LLVM, WASM, LSP, DISK tier.
 
 ---
 
 ---
 
-# B+ v4.2.0 — deterministic transition machine (x64)
+# B+ v4.3.0 — deterministic transition machine (x64)
 
 > [Russian version ↑](#b-v420--детерминированная-машина-переходов-x64)
 
@@ -883,7 +1025,9 @@ bpc.exe run hello.b+
 ```text
 bpc build <input.b+>              — compile to <input>.exe
 bpc build <input.b+> -o <out.exe> — compile with custom output name
+bpc dll   <input.b+>              — compile to DLL
 bpc run   <input.b+>              — compile and run immediately
+bpc hlsl  <input.b+>              — generate HLSL shader code
 ```
 
 #### `bpc build <input.b+> [-o <output.exe>]`
@@ -910,6 +1054,47 @@ If `-o` is omitted, the output name = input name with `.exe` extension.
 bpc build traffic.b+              → traffic.exe
 bpc build traffic.b+ -o light.exe → light.exe
 bpc build source.b+               → source.exe
+```
+
+#### `bpc hlsl <input.b+> [-o <output.hlsl>]`
+
+Generates HLSL shader code from a B+ file using `@bind`, `@cbuffer`, `@groupshared` annotations.
+Designed for authoring GPU compute shaders in B+ and compiling them via DXC or FXC.
+
+| Step | Description |
+|------|-------------|
+| 1 | Reads the entire `.b+` file |
+| 2 | Parses source into AST |
+| 3 | Parses `@bind(kind, reg, format)` annotations |
+| 4 | Parses `@cbuffer(var, cbName, reg, type)` annotations |
+| 5 | Parses `@groupshared(name, size)` annotations |
+| 6 | Generates HLSL: cbuffers, resource declarations, `[numthreads]`, shader body |
+| 7 | Writes output `.hlsl` file |
+
+**Annotations:**
+
+```rust
+// Textures
+g_InputColor: @bind(t, 0, float4)     // Texture2D<float4> : register(t0)
+g_OutputColor: @bind(u, 0, float4)    // RWTexture2D<float4> : register(u0)
+g_OutputUAV: @bind(u, 1, uint, globallycoherent)  // globallycoherent RWTexture2D<uint>
+// Sampler
+linearClamp: @bind(s, 0)              // SamplerState : register(s0)
+
+// Constant buffer
+inputSize: @cbuffer(FSR2Constants, 0, float2)   // cbuffer FSR2Constants : register(b0) { float2 inputSize; ... }
+
+// Groupshared
+sharedMem: @groupshared(sharedMem, 256)           // groupshared float sharedMem[256];
+```
+
+Inside `entry`, `for(x, y, w, h)` loops translate to `uint x = tid.x; if (x >= w) return;`.
+HLSL intrinsics (WaveActiveSum, InterlockedAdd, mad, lerp, etc.) pass through verbatim.
+
+**Example:**
+```bash
+bpc hlsl fsr2_easu.b+ -o fsr2_easu.hlsl
+dxc -T cs_6_6 -E main -Fo fsr2_easu.cso fsr2_easu.hlsl
 ```
 
 #### `bpc run <input.b+>`
@@ -1355,10 +1540,43 @@ zig/                    — compiler (Zig, active development)
                            compiled event matching (inline CMP imm for ≤4B names),
                            label interning (u32 IDs, zero formatting in hot paths),
                            O(1) state lookup via HashMap.
+                           **New features:**
+                           - Structs: `struct Name { field: type, ... }` — packed layout
+                           - `arr[idx]` — array indexing via SIB (scale=3 for *8)
+                           - `reinterpret_cast<T>(expr)` — outer cast stripping
+                           - `obj->method(args)` — COM calls via vtable
+                           - `ptr_store(dest, value)` — pointer write (depth-aware)
+                           - `rcp(x)`, `lerp(a,b,t)`, `med3(a,b,c)` — math intrinsics
+                           - 16 CRT functions via IAT (msvcrt.dll), XMM0/XMM1 for float
+                           - D3D12 COM methods in COM_METHODS
+                           - `context { var x: type }` — context variables (bugfix)
+                           - `forward Name = "dll.dll"` — DLL export forwarding
      x64enc.zig          — x64 instruction encoder
      layout.zig          — StackFrame/SlotKind: type-safe stack layout abstraction
                            used by x64gen.zig for frame offset computation
+     symbol.zig          — SymbolTable: re-exports table (code/export/data)
      pe.zig             — PE (.exe/.dll) generator
+     hlslgen.zig         — HLSL codegen. Annotations: @bind, @cbuffer, @groupshared.
+                           FSR2 type mapping, 50+ HLSL intrinsic pass-through,
+                           globallycoherent RWTexture2D support.
+
+  shaders/fsr2/         — Reference HLSL shaders (8 FSR2 passes)
+    fsr2_easu.hlsl       — EASU upscale
+    fsr2_rcas.hlsl       — RCAS sharpen
+    fsr2_accumulate.hlsl — Temporal Accumulation
+    fsr2_depthclip.hlsl  — Depth Clip
+    fsr2_lock.hlsl       — Lock Status
+    fsr2_luminance_pyramid.hlsl
+    fsr2_reconstruct_depth.hlsl
+    fsr2_dilate_velocity.hlsl
+  shaders/cso/          — Pre-compiled .cso files (cs_6_6)
+
+  fsr2_proxy.b+         — DXGI proxy DLL (~500 lines, pure B+ x64):
+                          hooks CreateSwapChain/Present, initializes D3D11,
+                          loads 8 CSOs, runs full FSR2 pipeline per-frame.
+
+  tss_easu.b+           — CPU reference EASU implementation
+  tss_easu_faithful.b+  — Faithful 12-tap EASU with gradient direction
   build.zig            — build script (zig build)
 ```
 
@@ -1723,8 +1941,74 @@ linear scans. Built once at initialization after parsing.
 
 ---
 
+## FSR2 Port — Full Temporal Upscaler in B+
+
+B+ is being used to port AMD FidelityFX Super Resolution 2 (FSR2) — a full temporal
+upscaler with 11+ shader passes — entirely in B+ language. The project has two tracks:
+
+### Track 1: DXGI Proxy DLL (`fsr2_proxy.b+`)
+
+A D3D11 proxy DLL that hooks `CreateDXGIFactory`/`Present` and runs FSR2 per-frame:
+
+```
+Present → Luminance Pyramid → Reconstruct Depth → Dilate Motion Vectors →
+Depth Clip → Lock → Temporal Accumulate → RCAS Sharpen → Copy to Backbuffer
+```
+
+All D3D11 API calls (CreateTexture2D, CreateShaderResourceView, CSSetShader,
+Dispatch, CopyResource) are made via COM vtable dispatch — written entirely in
+B+ x64 assembly (no C++ runtime, no FidelityFX SDK).
+
+8 pre-compiled CSO shaders are loaded from `shaders/cso/`:
+- `fsr2_easu.cso` — Edge Adaptive Spatial Upsampling
+- `fsr2_rcas.cso` — Robust Contrast Adaptive Sharpening
+- `fsr2_accumulate.cso` — Temporal Accumulation (TAAU core)
+- `fsr2_depthclip.cso` — Depth-based disocclusion detection
+- `fsr2_lock.cso` — Temporal lock status
+- `fsr2_luminance_pyramid.cso` — Luminance downsampling
+- `fsr2_reconstruct_depth.cso` — Depth mip chain
+- `fsr2_dilate_velocity.cso` — Motion vector dilation
+
+### Track 2: B+ HLSL Codegen (`bpc hlsl`)
+
+FSR2 shaders are being rewritten in B+ syntax using annotations, so `bpc hlsl`
+generates the HLSL, replacing hand-written shaders:
+
+```rust
+g_InputColor: @bind(t, 0, float4)
+g_OutputColor: @bind(u, 0, float4)
+linearClamp: @bind(s, 0)
+inputSize: @cbuffer(EASUConstants, 0, float2)
+
+@numthreads(8,8,1)
+entry main {
+    for(x, y, w, h) {
+        float2 pp = float2(x, y) + 0.5
+        float2 uv = pp * outputSize * inputRcpSize
+        // ... EASU math ...
+        g_OutputColor[uint2(x, y)] = result
+    }
+}
+```
+
+The HLSL codegen supports:
+- FSR2 type aliases (`FfxFloat32` → `float`, etc.)
+- `@bind(u,N,type,globallycoherent)` → `globallycoherent RWTexture2D`
+- 50+ HLSL intrinsic passthrough (wave ops, atomics, math, casts)
+- `@cbuffer`, `@groupshared`, `@numthreads`, `@unroll`, `@branch`
+
+### Next Steps
+
+1. Write EASU/RCAS shaders in B+ → HLSL via `bpc hlsl` + DXC compilation
+2. Port remaining 6 passes from HLSL to B+ syntax
+3. Implement temporal accumulation with motion vector reprojection
+4. Depth-based disocclusion rejection + lock mechanism
+5. Wire D3D12 host code in B+ x64 (CreateComputePipelineState, Dispatch)
+
+---
+
 **Limitations:**
 - Windows x64 only.
 - Minimal error messages.
 - Reads input from stdin (one line = one event).
-- No LLVM, WASM, GPU, LSP, DISK tier support.
+- No LLVM, WASM, LSP, DISK tier support.

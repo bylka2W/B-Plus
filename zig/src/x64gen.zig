@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs = std.fs;
 const ast = @import("ast.zig");
 const x64 = @import("x64enc.zig");
 const rt = @import("runtime.zig");
@@ -34,10 +35,85 @@ const IMPORT_FNS = [_][]const u8{
     "GetCurrentThread", "GetNumaHighestNodeNumber", "GetNumaNodeProcessorMask",
     "VirtualAlloc", "VirtualFree", "CreateFileW", "GetFileSizeEx",
     "CreateFileMappingW", "MapViewOfFile", "UnmapViewOfFile", "CloseHandle",
-    "LoadLibraryA", "GetProcAddress",
+    "LoadLibraryA", "LoadLibraryW", "GetProcAddress",
+    "GetModuleHandleA", "GetModuleHandleW",
     "OpenProcess", "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread", "WaitForSingleObject",
     "GetCurrentProcessId", "WinExec",
     "TlsAlloc", "TlsGetValue", "TlsSetValue", "TlsFree",
+    // CRT math functions (msvcrt.dll)
+    "sinf", "cosf", "expf", "logf", "powf", "atanf", "tanf", "sqrtf",
+    "sin", "cos", "exp", "log", "pow", "atan", "tan", "sqrt",
+};
+
+const ComMethod = struct {
+    name: []const u8,
+    iface: []const u8,
+    slot: u8,
+};
+
+const COM_METHODS = [_]ComMethod{
+    // DXGI
+    .{ .name = "Present",       .iface = "IDXGISwapChain",   .slot = 8  },
+    .{ .name = "GetBuffer",     .iface = "IDXGISwapChain",   .slot = 9  },
+    .{ .name = "ResizeBuffers", .iface = "IDXGISwapChain",   .slot = 10 },
+    .{ .name = "ResizeTarget",  .iface = "IDXGISwapChain",   .slot = 11 },
+    // IUnknown
+    .{ .name = "QueryInterface", .iface = "IUnknown",        .slot = 0  },
+    .{ .name = "AddRef",        .iface = "IUnknown",         .slot = 1  },
+    .{ .name = "Release",       .iface = "IUnknown",         .slot = 2  },
+    // D3D11
+    .{ .name = "CreateBuffer",  .iface = "ID3D11Device",     .slot = 5  },
+    .{ .name = "CreateTexture2D", .iface = "ID3D11Device",   .slot = 7  },
+    .{ .name = "CreateRenderTargetView", .iface = "ID3D11Device", .slot = 15 },
+    .{ .name = "VSSetShader",   .iface = "ID3D11DeviceContext", .slot = 17 },
+    .{ .name = "PSSetShader",   .iface = "ID3D11DeviceContext", .slot = 20 },
+    .{ .name = "DrawIndexed",   .iface = "ID3D11DeviceContext", .slot = 38 },
+    .{ .name = "Draw",          .iface = "ID3D11DeviceContext", .slot = 39 },
+    .{ .name = "Map",           .iface = "ID3D11DeviceContext", .slot = 43 },
+    .{ .name = "Unmap",         .iface = "ID3D11DeviceContext", .slot = 44 },
+    // D3D12 Device (slots 7+ = index after D3D12BaseVtbl: 3 IUnknown + 4 ID3D12Object)
+    .{ .name = "CreateCommandQueue",       .iface = "ID3D12Device",          .slot = 8  },
+    .{ .name = "CreateCommandAllocator",   .iface = "ID3D12Device",          .slot = 9  },
+    .{ .name = "CreateComputePipelineState",.iface = "ID3D12Device",         .slot = 11 },
+    .{ .name = "CreateCommandList",        .iface = "ID3D12Device",          .slot = 12 },
+    .{ .name = "CreateDescriptorHeap",     .iface = "ID3D12Device",          .slot = 14 },
+    .{ .name = "CreateRootSignature",      .iface = "ID3D12Device",          .slot = 16 },
+    .{ .name = "GetDescriptorHandleIncrementSize", .iface = "ID3D12Device",  .slot = 15 },
+    .{ .name = "CreateConstantBufferView",  .iface = "ID3D12Device",         .slot = 17 },
+    .{ .name = "CreateShaderResourceView",  .iface = "ID3D12Device",         .slot = 18 },
+    .{ .name = "CreateUnorderedAccessView", .iface = "ID3D12Device",         .slot = 19 },
+    .{ .name = "CreateCommittedResource",  .iface = "ID3D12Device",          .slot = 27 },
+    .{ .name = "CreateHeap",               .iface = "ID3D12Device",          .slot = 28 },
+    .{ .name = "CreatePlacedResource",     .iface = "ID3D12Device",          .slot = 29 },
+    .{ .name = "CreateFence",              .iface = "ID3D12Device",          .slot = 36 },
+    .{ .name = "GetCopyableFootprints",    .iface = "ID3D12Device",          .slot = 38 },
+    // D3D12 CommandQueue (slots 10+ = index after D3D12BaseVtbl + DeviceChild)
+    .{ .name = "ExecuteCommandLists",      .iface = "ID3D12CommandQueue",    .slot = 10 },
+    .{ .name = "Signal",                   .iface = "ID3D12CommandQueue",    .slot = 14 },
+    .{ .name = "Wait",                     .iface = "ID3D12CommandQueue",    .slot = 15 },
+    // D3D12 GraphicsCommandList (slots 8+ = index after D3D12BaseVtbl + DeviceChild + CmdList base)
+    .{ .name = "Close",                    .iface = "ID3D12GraphicsCommandList", .slot = 9  },
+    .{ .name = "Reset",                    .iface = "ID3D12GraphicsCommandList", .slot = 10 },
+    .{ .name = "Dispatch",                 .iface = "ID3D12GraphicsCommandList", .slot = 14 },
+    .{ .name = "CopyBufferRegion",         .iface = "ID3D12GraphicsCommandList", .slot = 15 },
+    .{ .name = "CopyTextureRegion",        .iface = "ID3D12GraphicsCommandList", .slot = 16 },
+    .{ .name = "CopyResource",             .iface = "ID3D12GraphicsCommandList", .slot = 17 },
+    .{ .name = "SetPipelineState",         .iface = "ID3D12GraphicsCommandList", .slot = 25 },
+    .{ .name = "ResourceBarrier",          .iface = "ID3D12GraphicsCommandList", .slot = 26 },
+    .{ .name = "SetDescriptorHeaps",       .iface = "ID3D12GraphicsCommandList", .slot = 28 },
+    .{ .name = "SetComputeRootSignature",  .iface = "ID3D12GraphicsCommandList", .slot = 29 },
+    .{ .name = "SetComputeRootDescriptorTable", .iface = "ID3D12GraphicsCommandList", .slot = 31 },
+    .{ .name = "SetComputeRoot32BitConstants",  .iface = "ID3D12GraphicsCommandList", .slot = 35 },
+    .{ .name = "SetComputeRootConstantBufferView", .iface = "ID3D12GraphicsCommandList", .slot = 37 },
+    .{ .name = "ClearUnorderedAccessViewFloat", .iface = "ID3D12GraphicsCommandList", .slot = 50 },
+    // D3D12 Fence (slots 8+ = index after D3D12BaseVtbl + DeviceChild)
+    .{ .name = "GetCompletedValue",        .iface = "ID3D12Fence",           .slot = 8  },
+    .{ .name = "SetEventOnCompletion",     .iface = "ID3D12Fence",           .slot = 9  },
+    // D3D12 Resource (slots 8+ = index after D3D12BaseVtbl + DeviceChild)
+    .{ .name = "GetGPUVirtualAddress",     .iface = "ID3D12Resource",        .slot = 11 },
+    // D3D12 DescriptorHeap (slots 9+ = index after D3D12BaseVtbl + DeviceChild)
+    .{ .name = "GetCPUDescriptorHandleForHeapStart", .iface = "ID3D12DescriptorHeap", .slot = 9 },
+    .{ .name = "GetGPUDescriptorHandleForHeapStart", .iface = "ID3D12DescriptorHeap", .slot = 10 },
 };
 
 const SectionRva: u32 = 0x1000;
@@ -83,6 +159,7 @@ const PendingOutput = struct {
     off_buf: i32,
     off_exit_code: i32,
     off_ctx_var_start: i32, off_state_data_base: i32,
+    entry_vars: std.StringHashMap(i32),
     in_for_loop: bool,
     off_for_loop_x: i32, off_for_loop_y: i32,
     off_core_type: i32, off_numa_highest_node: i32, off_numa_node_mask: i32,
@@ -124,6 +201,7 @@ const PendingOutput = struct {
     allocator: Allocator,
     xmm_used: [16]bool,
     symbols: sym.SymbolTable,
+    struct_defs: std.StringHashMap(ast.StructDef),
     expr_arena: std.ArrayList(Expr),
     value_uses: std.ArrayList(u32), // use count per value (parallel to expr_arena)
     value_cache: std.AutoHashMap(usize, i16),
@@ -145,6 +223,7 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         .state_names = std.ArrayList([]const u8).init(allocator),
         .state_index_map = std.StringHashMap(usize).init(allocator),
         .ctx_vars = std.ArrayList(ContextVarInfo).init(allocator),
+        .entry_vars = std.StringHashMap(i32).init(allocator),
         .state_vars = std.StringHashMap(std.ArrayList(StateVarInfo)).init(allocator),
         .state_layout_sizes = std.StringHashMap(u32).init(allocator),
         .state_code_bounds = std.StringHashMap(StateBounds).init(allocator),
@@ -193,6 +272,7 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         .state_base_reg = Reg.RBP,
         .pending_ret = null,
         .symbols = sym.SymbolTable.init(allocator),
+        .struct_defs = program.struct_defs,
         .expr_arena = std.ArrayList(Expr).init(allocator),
         .value_uses = std.ArrayList(u32).init(allocator),
         .value_cache = std.AutoHashMap(usize, i16).init(allocator),
@@ -303,6 +383,7 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
     p.state_names.deinit();
     p.state_index_map.deinit();
     p.ctx_vars.deinit();
+    p.entry_vars.deinit();
     p.expr_arena.deinit();
     p.value_uses.deinit();
     p.value_cache.deinit();
@@ -339,6 +420,35 @@ fn getTypeSize(t: []const u8) u32 {
     if (std.mem.eql(u8, t, "vec4f") or std.mem.eql(u8, t, "vec4i") or std.mem.eql(u8, t, "vec4h")) return 16;
     if (std.mem.startsWith(u8, t, "image<")) return 8;
     return 8;
+}
+
+fn getStructFieldSize(p: *const PendingOutput, type_name: []const u8) u32 {
+    if (p.struct_defs.get(type_name)) |sd| {
+        var total: u32 = 0;
+        for (sd.fields.items) |f| { total += getStructFieldSize(p, f.type_name); }
+        return total;
+    }
+    return getTypeSize(type_name);
+}
+
+fn getStructFieldOffset(p: *const PendingOutput, struct_type: []const u8, field_name: []const u8) ?u32 {
+    const sd = p.struct_defs.get(struct_type) orelse return null;
+    var offset: u32 = 0;
+    for (sd.fields.items) |f| {
+        if (std.mem.eql(u8, f.name, field_name)) return offset;
+        offset += getStructFieldSize(p, f.type_name);
+    }
+    return null;
+}
+
+fn getStructFieldType(p: *const PendingOutput, struct_type: []const u8, field_name: []const u8) []const u8 {
+    const sd = p.struct_defs.get(struct_type) orelse return "int";
+    for (sd.fields.items) |f| { if (std.mem.eql(u8, f.name, field_name)) return f.type_name; }
+    return "int";
+}
+
+fn isStructType(p: *const PendingOutput, type_name: []const u8) bool {
+    return p.struct_defs.contains(type_name);
 }
 
 fn isSimdType(t: []const u8) bool {
@@ -394,6 +504,23 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
 
     p.off_ctx_var_start = off;
     for (p.ctx_vars.items) |_| off -= 8;
+    // Allocate stack slots for entry body variables
+    for (program.entries.items) |entry| {
+        for (entry.body_lines.items) |line| {
+            const t = std.mem.trim(u8, line, " \t");
+            if (std.mem.startsWith(u8, t, "var ")) {
+                const rest = std.mem.trimLeft(u8, t["var ".len..], " \t\r\n");
+                const eq_idx = std.mem.indexOfScalar(u8, rest, '=');
+                if (eq_idx) |ei| {
+                    const name = std.mem.trim(u8, rest[0..ei], " \t\r\n");
+                    if (!p.entry_vars.contains(name)) {
+                        off -= 8;
+                        try p.entry_vars.put(name, off);
+                    }
+                }
+            }
+        }
+    }
     p.off_state_data_base = off;
     p.state_vars.clearRetainingCapacity();
     p.state_layout_sizes.clearRetainingCapacity();
@@ -405,8 +532,9 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
         var sv = std.ArrayList(StateVarInfo).init(p.allocator);
         for (state.variables.items) |v| {
             const g = shared.get(v.name);
-            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = getTypeSize(v.type_name), .cache_policy = v.cache_policy, .layout_offset = 0 }); }
-            else { const a = getTypeAlign(v.type_name); const sz = getTypeSize(v.type_name); off = @divFloor(off, @as(i32, @intCast(a))) * @as(i32, @intCast(a)) - @as(i32, @intCast(sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = sz, .cache_policy = v.cache_policy, .layout_offset = 0 }); }
+            const v_sz = if (isStructType(p, v.type_name)) getStructFieldSize(p, v.type_name) else getTypeSize(v.type_name);
+            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = v_sz, .cache_policy = v.cache_policy, .layout_offset = 0 }); }
+            else { const a = getTypeAlign(v.type_name); off = @divFloor(off, @as(i32, @intCast(a))) * @as(i32, @intCast(a)) - @as(i32, @intCast(v_sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = v_sz, .cache_policy = v.cache_policy, .layout_offset = 0 }); }
         }
         try p.state_vars.put(state.name, sv);
     }
@@ -416,8 +544,9 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
         var sv = std.ArrayList(StateVarInfo).init(p.allocator);
         for (state.variables.items) |v| {
             const g = shared.get(v.name);
-            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = getTypeSize(v.type_name), .cache_policy = v.cache_policy, .layout_offset = 0 }); }
-            else { const sz = getTypeSize(v.type_name); off -= @as(i32, @intCast(sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = sz, .cache_policy = v.cache_policy, .layout_offset = 0 }); }
+            const v_sz = if (isStructType(p, v.type_name)) getStructFieldSize(p, v.type_name) else getTypeSize(v.type_name);
+            if (g) |eo| { try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = eo, .size = v_sz, .cache_policy = v.cache_policy, .layout_offset = 0 }); }
+            else { off -= @as(i32, @intCast(v_sz)); try shared.put(v.name, off); try sv.append(.{ .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0", .stack_offset = off, .size = v_sz, .cache_policy = v.cache_policy, .layout_offset = 0 }); }
         }
         try p.state_vars.put(state.name, sv);
     }
@@ -584,166 +713,91 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
         try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RSP), x64.Operand.r(Reg.RBP) });
         try p.cbuf.bytes.append(0x5D); // pop rbp
         try p.cbuf.bytes.append(0xC3); // ret
-        // ============================================================
-        // Export stubs
-        // ============================================================
-        for (program.entries.items) |*entry| {
-            if (entry.is_export) {
-                const label_id = try allocLabelId(p, "exp_{s}", .{entry.name});
-                try setLabel(p, label_id);
-                try p.symbols.add(entry.name, sym.SymbolKind.exp, @intCast(p.cbuf.bytes.items.len));
-                if (entry.body_lines.items.len > 0) {
-                    // Entry with body: full frame prologue, TLS state load, init, compile body, epilogue
-                    try p.cbuf.bytes.append(0x55); // push rbp
-                    try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBP), x64.Operand.r(Reg.RSP) });
-                    try emitPushR64(p, Reg.RBX); try emitPushR64(p, Reg.R12);
-                    try emitPushR64(p, Reg.R13); try emitPushR64(p, Reg.R14); try emitPushR64(p, Reg.R15);
-                    try x64.emit(&p.cbuf.bytes, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
-                    // Load state block via TLS
-                    const state_ctx = if (program.states.items.len > 0) program.states.items[0].name else entry.name;
-                    const state_idx = p.state_index_map.get(state_ctx) orelse 0;
-                    const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{state_idx});
-                    try emitRipRelativeLoad32(p, Reg.RCX, tls_idx_label);
-                    try emitWin32Call(p, 29, &.{}); // TlsGetValue → RAX = state block
-                    try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R14), x64.Operand.r(Reg.RAX) });
-                    // Load R15 with trace buffer pointer slot address (if tracing enabled)
-                    if (p.trace_mode != .off) {
-                        try emitTraceBufPtrLoad(p);
-                    }
-                    // Init: zero all reserved slots, then init stdin/stdout handles
-                    try emitXorReg(p, Reg.RAX);
-                    // Zero telem counters
-                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l1_spill), x64.Operand.r(Reg.RAX) });
-                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l2_spill), x64.Operand.r(Reg.RAX) });
-                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l1_peak), x64.Operand.r(Reg.RAX) });
-                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l2_peak), x64.Operand.r(Reg.RAX) });
-                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l3_peak), x64.Operand.r(Reg.RAX) });
-                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l1_allocs), x64.Operand.r(Reg.RAX) });
-                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l2_allocs), x64.Operand.r(Reg.RAX) });
-                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l3_allocs), x64.Operand.r(Reg.RAX) });
-                    // Init I/O handles
-                    if (!p.is_dll) {
-                        try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -10 }});
-                        try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdin), x64.Operand.r(Reg.RAX) });
-                        try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -11 }});
-                        try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdout), x64.Operand.r(Reg.RAX) });
-                    }
-                    // Compile body
-                    var buf = std.ArrayList(u8).init(p.allocator);
-                    for (entry.body_lines.items, 0..) |line, i| {
-                        const t = std.mem.trim(u8, line, " \t");
-                        if (t.len == 0) continue;
-                        if (std.mem.startsWith(u8, t, "var ")) continue;
-                        if (std.mem.startsWith(u8, t, "state ")) continue;
-                        if (i > 0) try buf.append(';');
-                        try buf.appendSlice(t);
-                    }
-                    p.pending_ret = null;
-                    if (buf.items.len > 0) {
-                        try emitAction(p, buf.items, state_ctx);
-                    } else {
-                        try emitXorReg(p, Reg.RAX);
-                        try emitInc(p, Reg.RAX);
-                        p.pending_ret = RetValue{ .int = Reg.RAX };
-                    }
-                    buf.deinit();
-                    if (p.pending_ret) |rv| {
-                        try emitReturn(p, rv);
-                    }
-                    try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
-                    try emitPopR64(p, Reg.R15); try emitPopR64(p, Reg.R14);
-                    try emitPopR64(p, Reg.R13); try emitPopR64(p, Reg.R12);
-                    try emitPopR64(p, Reg.RBX);
-                    try p.cbuf.bytes.append(0x5D); // pop rbp
-                    try p.cbuf.bytes.append(0xC3); // ret
-                } else {
-                    try abi.emitFullPrologue(&p.cbuf.bytes);
-                    try emitXorReg(p, Reg.RAX);
-                    try emitInc(p, Reg.RAX);
-                    try abi.emitFullEpilogue(&p.cbuf.bytes);
-                }
+    }
+
+    // Process forwarders
+    for (program.forwarders.items) |fwd| {
+        const forward_str = try std.fmt.allocPrint(p.allocator, "{s}.{s}", .{ fwd.target_dll, fwd.export_name });
+        try p.symbols.addForward(fwd.export_name, forward_str);
+        p.allocator.free(forward_str);
+    }
+    // Auto-generate bpc_get_state export for test introspection
+    if (program.states.items.len > 0) {
+        const state_name = program.states.items[0].name;
+        const sv_list = p.state_vars.get(state_name) orelse return error.NoStateVars;
+
+        // --- bpc_get_state: returns state base pointer ---
+        {
+            const name = "bpc_get_state";
+            const label_id = try allocLabelId(p, "exp_{s}", .{name});
+            try setLabel(p, label_id);
+            try p.symbols.add(name, sym.SymbolKind.exp, @intCast(p.cbuf.bytes.items.len));
+            try abi.emitFullPrologue(&p.cbuf.bytes);
+            if (p.is_dll) {
+                const state_idx: usize = 0;
+                const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{state_idx});
+                try emitRipRelativeLoad32(p, Reg.RCX, tls_idx_label);
+                try emitWin32Call(p, 29, &.{}); // TlsGetValue
+                try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R14), x64.Operand.r(Reg.RAX) });
+            } else {
+                try x64.emit(&p.cbuf.bytes, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R14), x64.Operand.mem(Reg.RBP, p.off_state_data_base) });
             }
+            try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R14) });
+            try abi.emitFullEpilogue(&p.cbuf.bytes);
         }
-        // Process forwarders
-        for (program.forwarders.items) |fwd| {
-            const forward_str = try std.fmt.allocPrint(p.allocator, "{s}.{s}", .{ fwd.target_dll, fwd.export_name });
-            try p.symbols.addForward(fwd.export_name, forward_str);
-            p.allocator.free(forward_str);
+
+        // --- Field metadata table ---
+        // Each entry: 32-byte zero-padded field name + 4-byte type_tag + 4-byte reserved + 8-byte layout_offset = 48 bytes
+        const field_table_label = try allocLabelId(p, "field_table", .{});
+        try setLabel(p, field_table_label);
+        const table_start_offset = p.cbuf.bytes.items.len;
+        for (sv_list.items) |sv| {
+            // Write field name (32 bytes, zero-padded)
+            const name_bytes = sv.name;
+            var buf: [32]u8 = [_]u8{0} ** 32;
+            const copy_len = @min(name_bytes.len, 31);
+            @memcpy(buf[0..copy_len], name_bytes[0..copy_len]);
+            try p.cbuf.bytes.appendSlice(&buf);
+            // Write type tag as 32-bit little-endian
+            const type_tag: u32 = if (std.mem.eql(u8, sv.type_name, "image<f32>")) 2
+            else if (std.mem.eql(u8, sv.type_name, "float")) 1
+            else 0; // INT = 0, FLOAT = 1, IMAGE_F32 = 2
+            const tag_bytes: [4]u8 = @bitCast(type_tag);
+            try p.cbuf.bytes.appendSlice(&tag_bytes);
+            // Reserved (4 bytes, zero)
+            try p.cbuf.bytes.appendSlice(&([_]u8{0} ** 4));
+            // Write layout_offset as 64-bit little-endian
+            const off_bytes: [8]u8 = @bitCast(@as(i64, @intCast(sv.layout_offset)));
+            try p.cbuf.bytes.appendSlice(&off_bytes);
         }
-        // Auto-generate bpc_get_state export for test introspection
-        if (program.states.items.len > 0) {
-            const state_name = program.states.items[0].name;
-            const sv_list = p.state_vars.get(state_name) orelse return;
-
-            // --- bpc_get_state: returns state base pointer ---
-            {
-                const name = "bpc_get_state";
-                const label_id = try allocLabelId(p, "exp_{s}", .{name});
-                try setLabel(p, label_id);
-                try p.symbols.add(name, sym.SymbolKind.exp, @intCast(p.cbuf.bytes.items.len));
-                try abi.emitFullPrologue(&p.cbuf.bytes);
-                if (p.is_dll) {
-                    const state_idx: usize = 0;
-                    const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{state_idx});
-                    try emitRipRelativeLoad32(p, Reg.RCX, tls_idx_label);
-                    try emitWin32Call(p, 29, &.{}); // TlsGetValue
-                    try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R14), x64.Operand.r(Reg.RAX) });
-                }
-                try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.R14) });
-                try abi.emitFullEpilogue(&p.cbuf.bytes);
-            }
-
-            // --- Field metadata table ---
-            // Each entry: 32-byte zero-padded field name + 4-byte type_tag + 4-byte reserved + 8-byte layout_offset = 48 bytes
-            const field_table_label = try allocLabelId(p, "field_table", .{});
-            try setLabel(p, field_table_label);
-            const table_start_offset = p.cbuf.bytes.items.len;
-            for (sv_list.items) |sv| {
-                // Write field name (32 bytes, zero-padded)
-                const name_bytes = sv.name;
-                var buf: [32]u8 = [_]u8{0} ** 32;
-                const copy_len = @min(name_bytes.len, 31);
-                @memcpy(buf[0..copy_len], name_bytes[0..copy_len]);
-                try p.cbuf.bytes.appendSlice(&buf);
-                // Write type tag as 32-bit little-endian
-                const type_tag: u32 = if (std.mem.eql(u8, sv.type_name, "image<f32>")) 2
-                else if (std.mem.eql(u8, sv.type_name, "float")) 1
-                else 0; // INT = 0, FLOAT = 1, IMAGE_F32 = 2
-                const tag_bytes: [4]u8 = @bitCast(type_tag);
-                try p.cbuf.bytes.appendSlice(&tag_bytes);
-                // Reserved (4 bytes, zero)
-                try p.cbuf.bytes.appendSlice(&([_]u8{0} ** 4));
-                // Write layout_offset as 64-bit little-endian
-                const off_bytes: [8]u8 = @bitCast(@as(i64, @intCast(sv.layout_offset)));
-                try p.cbuf.bytes.appendSlice(&off_bytes);
-            }
-            // End marker: 48 zero bytes
-            {
-                const zeros: [48]u8 = [_]u8{0} ** 48;
-                try p.cbuf.bytes.appendSlice(&zeros);
-            }
-
-            // --- bpc_enum_fields: returns absolute address of field table ---
-            {
-                const name = "bpc_enum_fields";
-                const label_id = try allocLabelId(p, "exp_{s}", .{name});
-                try setLabel(p, label_id);
-                try p.symbols.add(name, sym.SymbolKind.exp, @intCast(p.cbuf.bytes.items.len));
-                // LEA RAX, [RIP + field_table]
-                const disp = @as(i32, @truncate(@as(i64, @intCast(table_start_offset)) - @as(i64, @intCast(p.cbuf.bytes.items.len + 7))));
-                try p.cbuf.bytes.append(0x48); // REX.W
-                try p.cbuf.bytes.append(0x8D); // LEA
-                try p.cbuf.bytes.append(0x05); // ModRM: mod=00, reg=000(RAX), r/m=101(RIP-rel)
-                const disp_bytes: [4]u8 = @bitCast(disp);
-                try p.cbuf.bytes.appendSlice(&disp_bytes);
-                try p.cbuf.bytes.append(0xC3); // RET
-            }
-
-            // --- bpc_get_trace_buf_slot: returns address of trace buffer pointer slot ---
-            if (p.trace_mode != .off) {
-                try emitBpcGetTraceBufSlot(p);
-            }
+        // End marker: 48 zero bytes
+        {
+            const zeros: [48]u8 = [_]u8{0} ** 48;
+            try p.cbuf.bytes.appendSlice(&zeros);
         }
+
+        // --- bpc_enum_fields: returns absolute address of field table ---
+        {
+            const name = "bpc_enum_fields";
+            const label_id = try allocLabelId(p, "exp_{s}", .{name});
+            try setLabel(p, label_id);
+            try p.symbols.add(name, sym.SymbolKind.exp, @intCast(p.cbuf.bytes.items.len));
+            // LEA RAX, [RIP + field_table]
+            const disp = @as(i32, @truncate(@as(i64, @intCast(table_start_offset)) - @as(i64, @intCast(p.cbuf.bytes.items.len + 7))));
+            try p.cbuf.bytes.append(0x48); // REX.W
+            try p.cbuf.bytes.append(0x8D); // LEA
+            try p.cbuf.bytes.append(0x05); // ModRM: mod=00, reg=000(RAX), r/m=101(RIP-rel)
+            const disp_bytes: [4]u8 = @bitCast(disp);
+            try p.cbuf.bytes.appendSlice(&disp_bytes);
+            try p.cbuf.bytes.append(0xC3); // RET
+        }
+
+        // --- bpc_get_trace_buf_slot: returns address of trace buffer pointer slot ---
+        if (p.trace_mode != .off) {
+            try emitBpcGetTraceBufSlot(p);
+        }
+    }
+    if (p.is_dll) {
         return;
     }
     try p.cbuf.bytes.append(0x55);
@@ -878,14 +932,28 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
         try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdout), x64.Operand.r(Reg.RAX) });
         try emitAffinityInit(p);
     }
-    if (!p.is_dll and program.entries.items.len > 0) {
+    if (!p.is_dll and program.entries.items.len > 0 and !program.entries.items[0].is_export) {
         const entry = &program.entries.items[0];
         if (entry.body_lines.items.len > 0) {
             var buf = std.ArrayList(u8).init(p.allocator);
             for (entry.body_lines.items, 0..) |line, i| {
                 const t = std.mem.trim(u8, line, " \t");
                 if (t.len == 0) continue;
-                if (std.mem.startsWith(u8, t, "var ")) continue;
+                if (std.mem.startsWith(u8, t, "var ")) {
+                    const rest = std.mem.trimLeft(u8, t["var ".len..], " \t\r\n");
+                    const eq_idx = std.mem.indexOfScalar(u8, rest, '=');
+                    if (eq_idx) |ei| {
+                        const name = std.mem.trim(u8, rest[0..ei], " \t\r\n");
+                        var expr = std.mem.trim(u8, rest[ei+1..], " \t\r\n");
+                        if (expr.len > 0 and expr[expr.len-1] == ';') expr = expr[0..expr.len-1];
+                        const vo = getVarOffset(p, "", name);
+                        if (vo != std.math.minInt(i32)) {
+                            try emitExprToRAX(p, expr, "");
+                            try emitStoreVarFromReg(p, vo, Reg.RAX, 8, Reg.RBP);
+                        }
+                    }
+                    continue;
+                }
                 if (std.mem.startsWith(u8, t, "state ")) continue;
                 if (i > 0) try buf.append(';');
                 try buf.appendSlice(t);
@@ -902,6 +970,106 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
         try emitCallToLabel(p, p.en_id[0]); try emitLongJmp(p, try allocLabelId(p, "always_entry", .{}));
     } else {
         try emitLongJmp(p, try allocLabelId(p, "exit_process", .{}));
+    }
+    // ============================================================
+    // Export stubs for all export entries (emitted after main code
+    // so the PE/ELF entry point points to the main function, not
+    // to an export stub).
+    // ============================================================
+    for (program.entries.items) |*entry| {
+        if (entry.is_export) {
+            const label_id = try allocLabelId(p, "exp_{s}", .{entry.name});
+            try setLabel(p, label_id);
+            try p.symbols.add(entry.name, sym.SymbolKind.exp, @intCast(p.cbuf.bytes.items.len));
+            if (entry.body_lines.items.len > 0) {
+                // Entry with body: full frame prologue, state load, init, compile body, epilogue
+                try p.cbuf.bytes.append(0x55); // push rbp
+                try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBP), x64.Operand.r(Reg.RSP) });
+                try emitPushR64(p, Reg.RBX); try emitPushR64(p, Reg.R12);
+                try emitPushR64(p, Reg.R13); try emitPushR64(p, Reg.R14); try emitPushR64(p, Reg.R15);
+                try x64.emit(&p.cbuf.bytes, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
+                // Load state block
+                const state_ctx = if (program.states.items.len > 0) program.states.items[0].name else entry.name;
+                if (p.is_dll) {
+                    const state_idx = p.state_index_map.get(state_ctx) orelse 0;
+                    const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{state_idx});
+                    try emitRipRelativeLoad32(p, Reg.RCX, tls_idx_label);
+                    try emitWin32Call(p, 29, &.{}); // TlsGetValue → RAX = state block
+                    try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.R14), x64.Operand.r(Reg.RAX) });
+                } else {
+                    try x64.emit(&p.cbuf.bytes, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.R14), x64.Operand.mem(Reg.RBP, p.off_state_data_base) });
+                }
+                // Load R15 with trace buffer pointer slot address (if tracing enabled)
+                if (p.trace_mode != .off) {
+                    try emitTraceBufPtrLoad(p);
+                }
+                // Init: zero all reserved slots, then init stdin/stdout handles
+                try emitXorReg(p, Reg.RAX);
+                // Zero telem counters
+                try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l1_spill), x64.Operand.r(Reg.RAX) });
+                try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l2_spill), x64.Operand.r(Reg.RAX) });
+                try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l1_peak), x64.Operand.r(Reg.RAX) });
+                try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l2_peak), x64.Operand.r(Reg.RAX) });
+                try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l3_peak), x64.Operand.r(Reg.RAX) });
+                try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l1_allocs), x64.Operand.r(Reg.RAX) });
+                try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l2_allocs), x64.Operand.r(Reg.RAX) });
+                try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_telem_l3_allocs), x64.Operand.r(Reg.RAX) });
+                // Init I/O handles (EXE only)
+                if (!p.is_dll) {
+                    try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -10 }});
+                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdin), x64.Operand.r(Reg.RAX) });
+                    try emitWin32Call(p, 0, &.{abi.CallArg{ .imm = -11 }});
+                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdout), x64.Operand.r(Reg.RAX) });
+                }
+                // Compile body
+                var buf = std.ArrayList(u8).init(p.allocator);
+                for (entry.body_lines.items, 0..) |line, i| {
+                    const t = std.mem.trim(u8, line, " \t");
+                    if (t.len == 0) continue;
+                    if (std.mem.startsWith(u8, t, "var ")) {
+                        const rest = std.mem.trimLeft(u8, t["var ".len..], " \t\r\n");
+                        const eq_idx = std.mem.indexOfScalar(u8, rest, '=');
+                        if (eq_idx) |ei| {
+                            const name = std.mem.trim(u8, rest[0..ei], " \t\r\n");
+                            var expr = std.mem.trim(u8, rest[ei+1..], " \t\r\n");
+                            if (expr.len > 0 and expr[expr.len-1] == ';') expr = expr[0..expr.len-1];
+                            const vo = getVarOffset(p, state_ctx, name);
+                            if (vo != std.math.minInt(i32)) {
+                                try emitExprToRAX(p, expr, state_ctx);
+                                try emitStoreVarFromReg(p, vo, Reg.RAX, 8, Reg.RBP);
+                            }
+                        }
+                        continue;
+                    }
+                    if (std.mem.startsWith(u8, t, "state ")) continue;
+                    if (i > 0) try buf.append(';');
+                    try buf.appendSlice(t);
+                }
+                p.pending_ret = null;
+                if (buf.items.len > 0) {
+                    try emitAction(p, buf.items, state_ctx);
+                } else {
+                    try emitXorReg(p, Reg.RAX);
+                    try emitInc(p, Reg.RAX);
+                    p.pending_ret = RetValue{ .int = Reg.RAX };
+                }
+                buf.deinit();
+                if (p.pending_ret) |rv| {
+                    try emitReturn(p, rv);
+                }
+                try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
+                try emitPopR64(p, Reg.R15); try emitPopR64(p, Reg.R14);
+                try emitPopR64(p, Reg.R13); try emitPopR64(p, Reg.R12);
+                try emitPopR64(p, Reg.RBX);
+                try p.cbuf.bytes.append(0x5D); // pop rbp
+                try p.cbuf.bytes.append(0xC3); // ret
+            } else {
+                try abi.emitFullPrologue(&p.cbuf.bytes);
+                try emitXorReg(p, Reg.RAX);
+                try emitInc(p, Reg.RAX);
+                try abi.emitFullEpilogue(&p.cbuf.bytes);
+            }
+        }
     }
 }
 
@@ -2252,10 +2420,24 @@ fn computeImportTableSize() u32 {
 }
 
 fn applyFixups(p: *PendingOutput) !void {
+    // Dump all labels
+    std.debug.print("LABELS:\n", .{});
+    for (p.cbuf.label_names.items, 0..) |name, i| {
+        const off = getLabel(p, @as(u32, @intCast(i)));
+        std.debug.print("  label[{}] = \"{s}\" offset={?}\n", .{i, name, off});
+    }
+    std.debug.print("FIXUPS:\n", .{});
     for (p.cbuf.fixups.items) |fx| {
-        const target = getLabel(p, fx.label_id) orelse continue;
-        if (fx.offset >= p.cbuf.bytes.items.len) continue;
+        const target = getLabel(p, fx.label_id) orelse {
+            std.debug.print("applyFixups: label_id={} TARGET NULL (skipped)\n", .{fx.label_id});
+            continue;
+        };
+        if (fx.offset >= p.cbuf.bytes.items.len) {
+            std.debug.print("applyFixups: label_id={} offset={} >= bytes.len={} (skipped)\n", .{fx.label_id, fx.offset, p.cbuf.bytes.items.len});
+            continue;
+        }
         const disp: i32 = @intCast(@as(i64, @intCast(target)) - @as(i64, @intCast(fx.offset + fx.disp_size)));
+        std.debug.print("applyFixups: label_id={} target={} offset={} disp_size={} disp={}\n", .{fx.label_id, target, fx.offset, fx.disp_size, disp});
         if (fx.disp_size == 1) {
             p.cbuf.bytes.items[fx.offset] = @as(u8, @bitCast(@as(i8, @truncate(disp))));
         } else if (fx.disp_size == 4) {
@@ -2298,6 +2480,189 @@ fn emitIatCall(p: *PendingOutput, import_idx: usize) !void {
     try p.cbuf.bytes.appendNTimes(0, 4);
     const label_id = try allocLabelId(p, "iat_{d}", .{import_idx});
     try p.cbuf.fixups.append(.{ .offset = fixoff, .disp_size = 4, .label_id = label_id });
+}
+
+fn emitRipLeaIat(p: *PendingOutput, dst: i16, import_idx: usize) !void {
+    try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM_RIP, &.{ x64.Operand.r(dst), x64.Operand.mem(255, 0) });
+    const disp_off = p.cbuf.bytes.items.len - 4;
+    const label_id = try allocLabelId(p, "iat_{d}", .{import_idx});
+    try p.cbuf.fixups.append(.{ .offset = disp_off, .disp_size = 4, .label_id = label_id });
+}
+
+fn emitCallIndirect(p: *PendingOutput, args_str: []const u8, current_state: []const u8) anyerror!void {
+    var args = std.ArrayList([]const u8).init(p.allocator);
+    defer args.deinit();
+    {
+        var depth: u32 = 0;
+        var start: usize = 0;
+        for (args_str, 0..) |c, i| {
+            switch (c) {
+                '(' => depth += 1,
+                ')' => { if (depth > 0) depth -= 1; },
+                ',' => {
+                    if (depth == 0) {
+                        const arg = std.mem.trim(u8, args_str[start..i], " \t");
+                        if (arg.len > 0) try args.append(arg);
+                        start = i + 1;
+                    }
+                },
+                else => {},
+            }
+        }
+        const last = std.mem.trim(u8, args_str[start..], " \t");
+        if (last.len > 0) try args.append(last);
+    }
+    if (args.items.len == 0) return;
+
+    const fn_expr = args.items[0];
+    const call_args = args.items[1..];
+    const num_args = call_args.len;
+
+    // Stack needed: shadow space (0x20) + stack args beyond 4
+    const extra_stack: i32 = if (num_args > 4) @as(i32, @intCast((num_args - 4) * 8)) else 0;
+    const total_alloc: i32 = 0x20 + extra_stack;
+    try x64.emit(&p.cbuf.bytes, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(@as(u32, @intCast(total_alloc))) });
+
+    // Save fn ptr to temp at bottom of allocated space
+    try emitExprToRAX(p, fn_expr, current_state);
+    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, 0), x64.Operand.r(Reg.RAX) });
+
+    // Set up first 4 args in registers
+    const regs = [_]i16{ Reg.RCX, Reg.RDX, Reg.R8, Reg.R9 };
+    const max_reg_args = @min(num_args, 4);
+    for (0..max_reg_args) |i| {
+        try emitExprToRAX(p, call_args[i], current_state);
+        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(regs[i]), x64.Operand.r(Reg.RAX) });
+    }
+
+    // Place remaining args on the stack (above shadow space)
+    if (num_args > 4) {
+        for (4..num_args) |i| {
+            const stack_off: i32 = 0x20 + @as(i32, @intCast(i - 4)) * 8;
+            try emitExprToRAX(p, call_args[i], current_state);
+            try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, stack_off), x64.Operand.r(Reg.RAX) });
+        }
+    }
+
+    // Load fn ptr from temp and call
+    try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RSP, 0) });
+    try x64.emit(&p.cbuf.bytes, .CALL_R64, &.{x64.Operand.r(Reg.RAX)});
+
+    // Restore stack
+    try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(@as(u32, @intCast(total_alloc))) });
+}
+
+fn emitArgToRAX(p: *PendingOutput, arg: []const u8, current_state: []const u8) anyerror!void {
+    if (std.mem.startsWith(u8, arg, "call_indirect(") and std.mem.endsWith(u8, arg, ")")) {
+        const inner = arg["call_indirect(".len..arg.len - 1];
+        try emitCallIndirect(p, inner, current_state);
+    } else {
+        try emitExprToRAX(p, arg, current_state);
+    }
+}
+
+fn emitComCall(p: *PendingOutput, obj_expr: []const u8, method_name: []const u8, args_str: []const u8, current_state: []const u8) !void {
+    // Look up method slot
+    var slot: u8 = 0;
+    var found = false;
+    for (COM_METHODS) |m| {
+        if (std.mem.eql(u8, m.name, method_name)) {
+            slot = m.slot;
+            found = true;
+            break;
+        }
+    }
+    if (!found) return;
+
+    // Parse args
+    var args = std.ArrayList([]const u8).init(p.allocator);
+    defer args.deinit();
+    {
+        var depth: u32 = 0;
+        var start: usize = 0;
+        const s = args_str;
+        for (s, 0..) |c, i| {
+            switch (c) {
+                '(' => depth += 1,
+                ')' => { if (depth > 0) depth -= 1; },
+                ',' => {
+                    if (depth == 0) {
+                        const arg = std.mem.trim(u8, s[start..i], " \t");
+                        if (arg.len > 0) try args.append(arg);
+                        start = i + 1;
+                    }
+                },
+                else => {},
+            }
+        }
+        const last = std.mem.trim(u8, s[start..], " \t");
+        if (last.len > 0) try args.append(last);
+    }
+
+    // RCX = this, RDX/R8/R9 for next 3 args, then stack
+    const num_args = args.items.len;
+    const extra_stack: i32 = if (num_args > 3) @as(i32, @intCast((num_args - 3) * 8)) else 0;
+    const total_alloc: i32 = 0x20 + extra_stack;
+    try x64.emit(&p.cbuf.bytes, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(@as(u32, @intCast(total_alloc))) });
+
+    // Evaluate obj ptr into RCX (this)
+    try emitExprToRAX(p, obj_expr, current_state);
+    try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+
+    // Load vtable ptr, then method ptr
+    try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RCX, 0) });
+    try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RAX, @as(i32, @intCast(slot)) * 8) });
+    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, 0), x64.Operand.r(Reg.RAX) });
+
+    // Evaluate args into RDX, R8, R9 (skipping RCX which holds this)
+    const regs = [_]i16{ Reg.RDX, Reg.R8, Reg.R9 };
+    const max_reg_args = @min(num_args, 3);
+    for (0..max_reg_args) |i| {
+        try emitExprToRAX(p, args.items[i], current_state);
+        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(regs[i]), x64.Operand.r(Reg.RAX) });
+    }
+
+    // Place remaining args on the stack (above shadow space)
+    if (num_args > 3) {
+        for (3..num_args) |i| {
+            const stack_off: i32 = 0x20 + @as(i32, @intCast(i - 3)) * 8;
+            try emitExprToRAX(p, args.items[i], current_state);
+            try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, stack_off), x64.Operand.r(Reg.RAX) });
+        }
+    }
+
+    // Restore method ptr and call
+    try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RSP, 0) });
+    try x64.emit(&p.cbuf.bytes, .CALL_R64, &.{x64.Operand.r(Reg.RAX)});
+
+    try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(@as(u32, @intCast(total_alloc))) });
+}
+
+fn isComCallExpr(body: []const u8) bool {
+    const sep = std.mem.indexOfScalar(u8, body, '.') orelse std.mem.indexOf(u8, body, "->");
+    const paren_open = std.mem.indexOfScalar(u8, body, '(');
+    if (sep) |si| {
+        if (paren_open) |po| {
+            if (si > 0 and po > si + 1) {
+                const paren_close = std.mem.lastIndexOfScalar(u8, body, ')');
+                if (paren_close == body.len - 1) return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn parseComCall(body: []const u8) !struct { obj: []const u8, method: []const u8, args: []const u8 } {
+    const arrow = std.mem.indexOf(u8, body, "->");
+    const dot_idx = if (arrow) |_| arrow.? else std.mem.indexOfScalar(u8, body, '.') orelse return error.InvalidComCall;
+    const sep_len: usize = if (arrow != null) 2 else 1;
+    const paren_open = std.mem.indexOfScalar(u8, body, '(') orelse return error.InvalidComCall;
+    const paren_close = std.mem.lastIndexOfScalar(u8, body, ')') orelse return error.InvalidComCall;
+    return .{
+        .obj = std.mem.trim(u8, body[0..dot_idx], " \t"),
+        .method = std.mem.trim(u8, body[dot_idx + sep_len .. paren_open], " \t"),
+        .args = std.mem.trim(u8, body[paren_open + 1 .. paren_close], " \t"),
+    };
 }
 
 fn emitRipRelativeStore64(p: *PendingOutput, reg: i16, label_id: u32) !void {
@@ -2659,18 +3024,71 @@ fn findMatching(src: []const u8, start: usize, open: u8, close: u8) usize {
 fn emitIfElse(p: *PendingOutput, cond: []const u8, then_body: []const u8, else_body: []const u8, current_state: []const u8) !void {
     const else_lbl = try allocLabelId(p, "if_else_{d}", .{p.cbuf.label_names.items.len});
     const merge_lbl = try allocLabelId(p, "if_merge_{d}", .{p.cbuf.label_names.items.len});
-    const cond_reg = try emitExprToXmm(p, cond, current_state, 4);
-    const zero_reg = allocXmm(p);
-    try emitXorXmm(p, zero_reg);
-    try x64.emit(&p.cbuf.bytes, .SSE_UCOMISS, &.{ x64.Operand.xmm(cond_reg), x64.Operand.xmm(zero_reg) });
-    try emitCondLongJmp(p, .JE_REL32, else_lbl);
-    freeXmm(p, zero_reg);
-    freeXmm(p, cond_reg);
+
+    // Check for integer comparison operators (order matters: check >=/<= before >/<)
+    const eq_idx = std.mem.indexOf(u8, cond, "==");
+    const ne_idx = std.mem.indexOf(u8, cond, "!=");
+    const ge_idx = std.mem.indexOf(u8, cond, ">=");
+    const le_idx = std.mem.indexOf(u8, cond, "<=");
+    const gt_idx = if (ge_idx == null) std.mem.indexOf(u8, cond, ">") else null;
+    const lt_idx = if (le_idx == null) std.mem.indexOf(u8, cond, "<") else null;
+
+    if (eq_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JNE_REL32, else_lbl); // != → else (false)
+    } else if (ne_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JE_REL32, else_lbl); // == → else (false)
+    } else if (ge_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JL_REL32, else_lbl); // < → else (false)
+    } else if (le_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JG_REL32, else_lbl); // > → else (false)
+    } else if (gt_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+1..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JLE_REL32, else_lbl); // <= → else (false)
+    } else if (lt_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+1..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JGE_REL32, else_lbl); // >= → else (false)
+    } else {
+        // Truthy check: evaluate as integer, jump to else if zero
+        try emitExprToRAX(p, cond, current_state);
+        try x64.emit(&p.cbuf.bytes, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.imm(0) });
+        try emitCondLongJmp(p, .JE_REL32, else_lbl);
+    }
     try emitAction(p, then_body, current_state);
     try emitLongJmp(p, merge_lbl);
     try setLabel(p, else_lbl);
     if (else_body.len > 0) try emitAction(p, else_body, current_state);
     try setLabel(p, merge_lbl);
+}
+
+fn emitCmpR64ImmOrVar(p: *PendingOutput, rhs: []const u8, current_state: []const u8) !void {
+    if (try tryLoadVarToReg(p, Reg.RBX, rhs, current_state)) {
+        try x64.emit(&p.cbuf.bytes, .CMP_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
+    } else {
+        const val = parseNumber(rhs);
+        try x64.emit(&p.cbuf.bytes, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.imm(val) });
+    }
 }
 
 fn emitForLoop(p: *PendingOutput, w: u32, h: u32, body: []const u8, current_state: []const u8) !void {
@@ -2923,6 +3341,61 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         }
         return;
     }
+    // call_indirect(fn_ptr, arg1, arg2, ...)
+    if (std.mem.startsWith(u8, body, "call_indirect(") and std.mem.endsWith(u8, body, ")")) {
+        const inner = body["call_indirect(".len..body.len - 1];
+        try emitCallIndirect(p, inner, current_state);
+        return;
+    }
+    // ptr_store(dest, value) — store value into pointer dest
+    if (std.mem.startsWith(u8, trimmed_body, "ptr_store(") and trimmed_body[trimmed_body.len-1] == ')') {
+        const inner = std.mem.trim(u8, trimmed_body["ptr_store(".len..trimmed_body.len-1], " \t");
+        var depth: u32 = 0;
+        var comma_idx: ?usize = null;
+        for (inner, 0..) |c, j| {
+            switch (c) {
+                '(' => depth += 1,
+                ')' => { if (depth > 0) depth -= 1; },
+                ',' => { if (depth == 0) { comma_idx = j; break; } },
+                else => {},
+            }
+        }
+        if (comma_idx) |ci| {
+            const dest_expr = std.mem.trim(u8, inner[0..ci], " \t");
+            const value_expr = std.mem.trim(u8, inner[ci+1..], " \t");
+            try emitExprToRAX(p, dest_expr, current_state);
+            try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+            try emitExprToRAX(p, value_expr, current_state);
+            try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
+        }
+        return;
+    }
+    // obj.Method(arg1, ...) or obj->Method(arg1, ...) — COM vtbl call
+    {
+        const paren_open = std.mem.indexOfScalar(u8, body, '(');
+        if (paren_open != null) {
+            const po = paren_open.?;
+            const arrow = std.mem.indexOf(u8, body, "->");
+            const dot_idx = std.mem.indexOfScalar(u8, body, '.');
+            const sep = if (arrow) |a| blk: {
+                if (a > 0 and po > a + 1) break :blk a;
+                break :blk null;
+            } else dot_idx;
+            if (sep) |si| {
+                if (si > 0 and po > si + 1) {
+                    const paren_close = std.mem.lastIndexOfScalar(u8, body, ')');
+                    if (paren_close == body.len - 1) {
+                        const sep_len: usize = if (arrow != null) 2 else 1;
+                        const obj_expr = std.mem.trim(u8, body[0..si], " \t");
+                        const method_name = std.mem.trim(u8, body[si+sep_len..po], " \t");
+                        const args = std.mem.trim(u8, body[po+1..paren_close.?], " \t");
+                        try emitComCall(p, obj_expr, method_name, args, current_state);
+                        return;
+                    }
+                }
+            }
+        }
+    }
     if (try tryEmitWin32Call(p, body, current_state)) return;
     // return -> expr
     if (std.mem.startsWith(u8, trimmed_body, "return ")) {
@@ -2930,6 +3403,20 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         if (std.mem.startsWith(u8, after_return, "-> ")) {
             const expr = std.mem.trimLeft(u8, after_return["-> ".len..], " \t\r\n");
             if (try tryEmitWin32Call(p, expr, current_state)) {
+                try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_exit_code), x64.Operand.r(Reg.RAX) });
+                p.pending_ret = RetValue{ .int = Reg.RAX };
+                return;
+            }
+            if (std.mem.startsWith(u8, expr, "call_indirect(") and std.mem.endsWith(u8, expr, ")")) {
+                const inner = expr["call_indirect(".len..expr.len - 1];
+                try emitCallIndirect(p, inner, current_state);
+                try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_exit_code), x64.Operand.r(Reg.RAX) });
+                p.pending_ret = RetValue{ .int = Reg.RAX };
+                return;
+            }
+            if (isComCallExpr(expr)) {
+                const parsed = try parseComCall(expr);
+                try emitComCall(p, parsed.obj, parsed.method, parsed.args, current_state);
                 try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_exit_code), x64.Operand.r(Reg.RAX) });
                 p.pending_ret = RetValue{ .int = Reg.RAX };
                 return;
@@ -2967,21 +3454,120 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
             freeXmm(p, reg);
             return;
         }
+        // Array index assignment: arr[idx] = expr
+        const bracket_pos = std.mem.indexOfScalar(u8, var_name, '[');
+        if (bracket_pos != null and bracket_pos.? > 0) {
+            const close_bracket = std.mem.indexOfScalar(u8, var_name, ']');
+            if (close_bracket != null) {
+                const base_name = std.mem.trim(u8, var_name[0..bracket_pos.?], " \t");
+                const index_expr = std.mem.trim(u8, var_name[bracket_pos.?+1..close_bracket.?], " \t");
+                // Compute base address
+                try emitExprAtomToRAX(p, base_name, current_state);
+                try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
+                // Compute address: base + index*8
+                try emitExprToRAX(p, index_expr, current_state);
+                try x64.emit(&p.cbuf.bytes, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RCX), x64.Operand.memIdx(Reg.RBX, Reg.RAX, 3, 0) });
+                // Evaluate RHS and store to [RCX]
+                if (try tryEmitWin32Call(p, expr, current_state)) {
+                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
+                    p.pending_ret = RetValue{ .int = Reg.RAX };
+                } else if (isComCallExpr(expr)) {
+                    const parsed = try parseComCall(expr);
+                    try emitComCall(p, parsed.obj, parsed.method, parsed.args, current_state);
+                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
+                    p.pending_ret = RetValue{ .int = Reg.RAX };
+                } else if (isFloatExpr(p, current_state, expr)) {
+                    const reg = try emitExprToXmm(p, expr, current_state, 4);
+                    try x64.emit(&p.cbuf.bytes, .SSE_MOVD_ST, &.{ x64.Operand.r(Reg.RAX), x64.Operand.xmm(reg) });
+                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
+                    p.pending_ret = RetValue{ .float = reg };
+                    freeXmm(p, reg);
+                } else {
+                    try emitExprToRAX(p, expr, current_state);
+                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
+                    p.pending_ret = RetValue{ .int = Reg.RAX };
+                }
+                return;
+            }
+        }
+        // Struct field assignment: var.field = expr
+        if (std.mem.indexOfScalar(u8, var_name, '.')) |dot| {
+            const struct_var = std.mem.trim(u8, var_name[0..dot], " \t");
+            const field_name = std.mem.trim(u8, var_name[dot+1..], " \t");
+            const struct_vo = getVarOffset(p, current_state, struct_var);
+            if (struct_vo != std.math.minInt(i32)) {
+                const struct_type = getVarTypeName(p, current_state, struct_var);
+                if (isStructType(p, struct_type)) {
+                    if (getStructFieldOffset(p, struct_type, field_name)) |field_off| {
+                        const base_reg = getVarBaseReg(p, current_state, struct_var);
+                        const field_addr = struct_vo + @as(i32, @intCast(field_off));
+                        const field_type = getStructFieldType(p, struct_type, field_name);
+                        const field_size = if (isStructType(p, field_type)) getStructFieldSize(p, field_type) else getTypeSize(field_type);
+                        // Evaluate RHS and store to field
+                        if (try tryEmitWin32Call(p, expr, current_state)) {
+                            try emitStoreVarFromReg(p, field_addr, Reg.RAX, field_size, base_reg);
+                            p.pending_ret = RetValue{ .int = Reg.RAX };
+                        } else if (std.mem.startsWith(u8, expr, "call_indirect(") and std.mem.endsWith(u8, expr, ")")) {
+                            const inner = expr["call_indirect(".len..expr.len - 1];
+                            try emitCallIndirect(p, inner, current_state);
+                            try emitStoreVarFromReg(p, field_addr, Reg.RAX, field_size, base_reg);
+                            p.pending_ret = RetValue{ .int = Reg.RAX };
+                        } else if (isComCallExpr(expr)) {
+                            const parsed = try parseComCall(expr);
+                            try emitComCall(p, parsed.obj, parsed.method, parsed.args, current_state);
+                            try emitStoreVarFromReg(p, field_addr, Reg.RAX, field_size, base_reg);
+                            p.pending_ret = RetValue{ .int = Reg.RAX };
+                        } else if (isFloatExpr(p, current_state, expr)) {
+                            const reg = try emitExprToXmm(p, expr, current_state, 4);
+                            try emitStoreXmmFromReg(p, field_addr, reg, field_size, base_reg);
+                            p.pending_ret = RetValue{ .float = reg };
+                            freeXmm(p, reg);
+                        } else {
+                            try emitExprToRAX(p, expr, current_state);
+                            try emitStoreVarFromReg(p, field_addr, Reg.RAX, field_size, base_reg);
+                            p.pending_ret = RetValue{ .int = Reg.RAX };
+                        }
+                        return;
+                    }
+                }
+            }
+        }
         const vo = getVarOffset(p, current_state, var_name);
         if (vo != std.math.minInt(i32)) {
             const size = getVarSize(p, current_state, var_name);
             if (isFloatVar(p, current_state, var_name)) {
-                const reg = try emitExprToXmm(p, expr, current_state, size);
-                try emitStoreXmmFromReg(p, vo, reg, size, getVarBaseReg(p, current_state, var_name));
-                p.pending_ret = RetValue{ .float = reg };
-                freeXmm(p, reg);
+                // Try win32/math call first (handles sinf/cosf/etc)
+                if (try tryEmitWin32Call(p, expr, current_state)) {
+                    try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
+                    p.pending_ret = RetValue{ .int = Reg.RAX };
+                } else {
+                    const reg = try emitExprToXmm(p, expr, current_state, size);
+                    try emitStoreXmmFromReg(p, vo, reg, size, getVarBaseReg(p, current_state, var_name));
+                    p.pending_ret = RetValue{ .float = reg };
+                    freeXmm(p, reg);
+                }
             } else if (try tryEmitWin32Call(p, expr, current_state)) {
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .int = Reg.RAX };
+            } else if (std.mem.startsWith(u8, expr, "call_indirect(") and std.mem.endsWith(u8, expr, ")")) {
+                const inner = expr["call_indirect(".len..expr.len - 1];
+                try emitCallIndirect(p, inner, current_state);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .int = Reg.RAX };
+            } else if (isComCallExpr(expr)) {
+                const parsed = try parseComCall(expr);
+                try emitComCall(p, parsed.obj, parsed.method, parsed.args, current_state);
                 try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
                 p.pending_ret = RetValue{ .int = Reg.RAX };
             } else if (isFloatExpr(p, current_state, expr)) {
                 const reg = try emitExprToXmm(p, expr, current_state, 4);
                 try x64.emit(&p.cbuf.bytes, .SSE_CVTTSS2SI, &.{ x64.Operand.r(Reg.RAX), x64.Operand.xmm(reg) });
                 freeXmm(p, reg);
+                try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .int = Reg.RAX };
+            } else if (isComCallExpr(expr)) {
+                const parsed = try parseComCall(expr);
+                try emitComCall(p, parsed.obj, parsed.method, parsed.args, current_state);
                 try emitStoreVarFromReg(p, vo, Reg.RAX, size, getVarBaseReg(p, current_state, var_name));
                 p.pending_ret = RetValue{ .int = Reg.RAX };
             } else {
@@ -2994,14 +3580,28 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         // *ptr = value (store to pointer)
         if (var_name.len > 0 and var_name[0] == '*') {
             const ptr_var = std.mem.trim(u8, var_name[1..], " \t");
-            if (isFloatExpr(p, current_state, expr)) {
+            if (try tryEmitWin32Call(p, expr, current_state)) {
+                if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
+                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
+                }
+                p.pending_ret = RetValue{ .int = Reg.RAX };
+            } else if (isFloatExpr(p, current_state, expr)) {
                 const reg = try emitExprToXmm(p, expr, current_state, 4);
                 if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
                     try x64.emit(&p.cbuf.bytes, .SSE_MOVSS_ST, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.xmm(reg) });
                 }
                 p.pending_ret = RetValue{ .float = reg };
                 freeXmm(p, reg);
-            } else if (try tryEmitWin32Call(p, expr, current_state)) {
+            } else if (std.mem.startsWith(u8, expr, "call_indirect(") and std.mem.endsWith(u8, expr, ")")) {
+                const inner = expr["call_indirect(".len..expr.len - 1];
+                try emitCallIndirect(p, inner, current_state);
+                if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
+                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
+                }
+                p.pending_ret = RetValue{ .int = Reg.RAX };
+            } else if (isComCallExpr(expr)) {
+                const parsed = try parseComCall(expr);
+                try emitComCall(p, parsed.obj, parsed.method, parsed.args, current_state);
                 if (try tryLoadVarToReg(p, Reg.RCX, ptr_var, current_state)) {
                     try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RCX, 0), x64.Operand.r(Reg.RAX) });
                 }
@@ -3019,6 +3619,51 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
     }
 }
 
+fn isMathFn(name: []const u8) bool {
+    return std.mem.eql(u8, name, "sinf") or std.mem.eql(u8, name, "cosf") or
+        std.mem.eql(u8, name, "expf") or std.mem.eql(u8, name, "logf") or
+        std.mem.eql(u8, name, "powf") or std.mem.eql(u8, name, "atanf") or
+        std.mem.eql(u8, name, "tanf") or std.mem.eql(u8, name, "sqrtf") or
+        std.mem.eql(u8, name, "sin") or std.mem.eql(u8, name, "cos") or
+        std.mem.eql(u8, name, "exp") or std.mem.eql(u8, name, "log") or
+        std.mem.eql(u8, name, "pow") or std.mem.eql(u8, name, "atan") or
+        std.mem.eql(u8, name, "tan") or std.mem.eql(u8, name, "sqrt");
+}
+
+fn emitMathCall(p: *PendingOutput, name: []const u8, args_str: []const u8, import_idx: usize, current_state: []const u8) !void {
+    // Float-arg calling convention: args in XMM0, XMM1, ..., result in XMM0
+    const simd_size: u32 = if (name[name.len - 1] == 'f') 4 else 8; // sinf=float(4), sin=double(8)
+    var xmm_args: [4]i16 = [_]i16{-1} ** 4;
+    var num_xmm: usize = 0;
+    if (args_str.len > 0) {
+        var it = std.mem.splitScalar(u8, args_str, ',');
+        while (it.next()) |raw_arg| {
+            if (num_xmm >= 4) break;
+            const arg = std.mem.trim(u8, raw_arg, " \t");
+            if (arg.len == 0) continue;
+            const reg = try emitExprToXmm(p, arg, current_state, simd_size);
+            xmm_args[num_xmm] = reg;
+            num_xmm += 1;
+        }
+    }
+    // Move args to XMM0, XMM1, etc
+    if (num_xmm >= 1 and xmm_args[0] != 0) {
+        try x64.emit(&p.cbuf.bytes, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(0), x64.Operand.xmm(xmm_args[0]) });
+    }
+    if (num_xmm >= 2 and xmm_args[1] != 1) {
+        try x64.emit(&p.cbuf.bytes, .SSE_MOVSS_LD, &.{ x64.Operand.xmm(1), x64.Operand.xmm(xmm_args[1]) });
+    }
+    // Free temp regs
+    for (0..num_xmm) |i| {
+        if (xmm_args[i] >= 0) freeXmm(p, xmm_args[i]);
+    }
+    try abi.emitCallArgs(&p.cbuf.bytes, &.{});
+    try emitIatCall(p, import_idx);
+    try abi.emitCallCleanup(&p.cbuf.bytes);
+    // Move result from XMM0 to RAX
+    try x64.emit(&p.cbuf.bytes, .SSE_MOVD_ST, &.{ x64.Operand.r(Reg.RAX), x64.Operand.xmm(0) });
+}
+
 fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const u8) !bool {
     const paren_open = std.mem.indexOfScalar(u8, body, '(');
     if (paren_open) |po| {
@@ -3029,6 +3674,10 @@ fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const 
                 for (IMPORT_FNS, 0..) |import_name, import_idx| {
                     if (std.mem.eql(u8, fn_name, import_name)) {
                         const args_str = std.mem.trim(u8, body[po+1..pc], " \t");
+                        if (isMathFn(fn_name)) {
+                            try emitMathCall(p, fn_name, args_str, @intCast(import_idx), current_state);
+                            return true;
+                        }
                         const target_regs = [_]i16{ 1, 2, 8, 9 }; // RCX, RDX, R8, R9
                         // Parse all args into fixed buffers
                         var imm_buf: [12]i64 = undefined;
@@ -3110,6 +3759,7 @@ fn getVarOffset(p: *PendingOutput, state_name: []const u8, var_name: []const u8)
         if (std.mem.eql(u8, var_name, "y")) return p.off_for_loop_y;
     }
     for (p.ctx_vars.items, 0..) |cv, i| { if (std.mem.eql(u8, cv.name, var_name)) return p.off_ctx_var_start - @as(i32, @intCast(i)) * 8; }
+    if (p.entry_vars.get(var_name)) |off| return off;
     if (p.state_vars.get(state_name)) |sv_list| { for (sv_list.items) |sv| { if (std.mem.eql(u8, sv.name, var_name)) return @as(i32, @intCast(sv.layout_offset)); } }
     return std.math.minInt(i32);
 }
@@ -3119,6 +3769,7 @@ fn isStateVar(p: *PendingOutput, state_name: []const u8, var_name: []const u8) b
         if (std.mem.eql(u8, var_name, "x") or std.mem.eql(u8, var_name, "y")) return false;
     }
     for (p.ctx_vars.items) |cv| { if (std.mem.eql(u8, cv.name, var_name)) return false; }
+    if (p.entry_vars.contains(var_name)) return false;
     if (p.state_vars.get(state_name)) |sv_list| { for (sv_list.items) |sv| { if (std.mem.eql(u8, sv.name, var_name)) return true; } }
     return false;
 }
@@ -3134,6 +3785,7 @@ fn getVarSize(p: *PendingOutput, state_name: []const u8, var_name: []const u8) u
         if (std.mem.eql(u8, var_name, "y")) return 4;
     }
     for (p.ctx_vars.items) |cv| { if (std.mem.eql(u8, cv.name, var_name)) return 8; }
+    if (p.entry_vars.contains(var_name)) return 8;
     if (p.state_vars.get(state_name)) |sv_list| { for (sv_list.items) |sv| { if (std.mem.eql(u8, sv.name, var_name)) return sv.size; } }
     return 8;
 }
@@ -3298,6 +3950,7 @@ fn emitBpcGetTraceBufSlot(p: *PendingOutput) !void {
 
 fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8) anyerror!void {
     const e = std.mem.trim(u8, expr, " \t");
+    if (std.mem.indexOf(u8, e, "@entry")) |_| std.debug.print("emitExprToRAX: e=\"{s}\"\n", .{e});
     if (e.len == 0) { try emitXorReg(p, Reg.RAX); return; }
     if (std.mem.eql(u8, e, "true")) { try emitLoadImm(p, Reg.RAX, 1); return; }
     if (std.mem.eql(u8, e, "false")) { try emitXorReg(p, Reg.RAX); return; }
@@ -3325,24 +3978,20 @@ fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8)
         const lhs = std.mem.trim(u8, e[0..plus_idx.?], " \t");
         const rhs = std.mem.trim(u8, e[plus_idx.?+1..], " \t");
         try emitExprAtomToRAX(p, lhs, current_state);
-        if (try tryLoadVarToReg(p, Reg.RBX, rhs, current_state)) {
-            try x64.emit(&p.cbuf.bytes, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
-        } else {
-            const rn = parseNumber(rhs);
-            if (rn != 0) try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.imm(rn) });
-        }
+        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
+        try emitExprAtomToRAX(p, rhs, current_state);
+        try x64.emit(&p.cbuf.bytes, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
         return;
     }
     if (minus_idx != null and minus_idx.? > 0) {
         const lhs = std.mem.trim(u8, e[0..minus_idx.?], " \t");
         const rhs = std.mem.trim(u8, e[minus_idx.?+1..], " \t");
         try emitExprAtomToRAX(p, lhs, current_state);
-        if (try tryLoadVarToReg(p, Reg.RBX, rhs, current_state)) {
-            try x64.emit(&p.cbuf.bytes, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
-        } else {
-            const rn = parseNumber(rhs);
-            if (rn != 0) try x64.emit(&p.cbuf.bytes, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.imm(rn) });
-        }
+        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
+        try emitExprAtomToRAX(p, rhs, current_state);
+        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
+        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
+        try x64.emit(&p.cbuf.bytes, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RCX) });
         return;
     }
     try emitExprAtomToRAX(p, e, current_state);
@@ -3391,6 +4040,18 @@ fn emitExprAtomToRAX(p: *PendingOutput, atom: []const u8, current_state: []const
         try emitIntrinsicCall(p, .handle_access);
         return;
     }
+    if (std.mem.startsWith(u8, a, "@entry_addr(") and std.mem.endsWith(u8, a, ")")) {
+        var entry_name = std.mem.trim(u8, a["@entry_addr(".len..a.len-1], " \t");
+        if (entry_name.len >= 2 and entry_name[0] == '"' and entry_name[entry_name.len-1] == '"') {
+            entry_name = entry_name[1..entry_name.len-1];
+        }
+        const label_id = try allocLabelId(p, "exp_{s}", .{entry_name});
+        try x64.emit(&p.cbuf.bytes, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(255, 0) });
+        const disp_off = p.cbuf.bytes.items.len - 4;
+        std.debug.print("@entry_addr: entry_name={s} label_id={} disp_off={}\n", .{entry_name, label_id, disp_off});
+        try p.cbuf.fixups.append(.{ .offset = disp_off, .disp_size = 4, .label_id = label_id });
+        return;
+    }
     if (std.mem.startsWith(u8, a, "malloc(") and std.mem.endsWith(u8, a, ")")) {
         const size_expr = std.mem.trim(u8, a["malloc(".len..a.len-1], " \t");
         const sz_val = parseNumber(size_expr);
@@ -3405,18 +4066,100 @@ fn emitExprAtomToRAX(p: *PendingOutput, atom: []const u8, current_state: []const
         try abi.emitCallCleanup(&p.cbuf.bytes);
         return;
     }
+    if (std.mem.startsWith(u8, a, "ptr_load(") and std.mem.endsWith(u8, a, ")")) {
+        const inner = std.mem.trim(u8, a["ptr_load(".len..a.len-1], " \t");
+        try emitExprToRAX(p, inner, current_state);
+        try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RAX, 0) });
+        return;
+    }
+    if (std.mem.startsWith(u8, a, "addr(") and std.mem.endsWith(u8, a, ")")) {
+        const var_name = std.mem.trim(u8, a["addr(".len..a.len-1], " \t");
+        const vo = getVarOffset(p, current_state, var_name);
+        if (vo != std.math.minInt(i32)) {
+            const base_reg = getVarBaseReg(p, current_state, var_name);
+            try x64.emit(&p.cbuf.bytes, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(base_reg, vo) });
+        } else {
+            try emitXorReg(p, Reg.RAX);
+        }
+        return;
+    }
     if (std.mem.startsWith(u8, a, "*")) {
         const ptr_name = std.mem.trim(u8, a[1..], " \t");
         if (!try tryLoadVarToReg(p, Reg.RAX, ptr_name, current_state)) try emitXorReg(p, Reg.RAX);
         try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RAX, 0) });
         return;
     }
+    // reinterpret_cast<T>(expr) → strip cast, eval inner expr
+    if (std.mem.startsWith(u8, a, "reinterpret_cast<")) {
+        const gt = std.mem.indexOfScalar(u8, a, '>') orelse {
+            try emitXorReg(p, Reg.RAX);
+            return;
+        };
+        const after_gt = std.mem.trimLeft(u8, a[gt+1..], " \t");
+        if (after_gt.len > 0 and after_gt[0] == '(') {
+            const close_paren = std.mem.lastIndexOfScalar(u8, after_gt, ')') orelse {
+                try emitXorReg(p, Reg.RAX);
+                return;
+            };
+            const inner = std.mem.trim(u8, after_gt[1..close_paren], " \t");
+            try emitExprToRAX(p, inner, current_state);
+            return;
+        }
+    }
+    // Array index: base[index]
+    if (std.mem.indexOfScalar(u8, a, '[')) |bracket| {
+        if (bracket > 0) {
+            const close_bracket = std.mem.indexOfScalar(u8, a, ']') orelse {
+                try emitXorReg(p, Reg.RAX);
+                return;
+            };
+            const base_name = std.mem.trim(u8, a[0..bracket], " \t");
+            const index_expr = std.mem.trim(u8, a[bracket+1..close_bracket], " \t");
+            // Compute base address
+            try emitExprAtomToRAX(p, base_name, current_state);
+            try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
+            // Compute address: base + index*8
+            try emitExprToRAX(p, index_expr, current_state);
+            try x64.emit(&p.cbuf.bytes, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.memIdx(Reg.RBX, Reg.RAX, 3, 0) });
+            // Load from computed address
+            try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RAX, 0) });
+            return;
+        }
+    }
+    // Struct field access: var.fieldname
+    if (std.mem.indexOfScalar(u8, a, '.')) |dot| {
+        const struct_var = a[0..dot];
+        const field_name = a[dot+1..];
+        const struct_vo = getVarOffset(p, current_state, struct_var);
+        if (struct_vo != std.math.minInt(i32)) {
+            const struct_type = getVarTypeName(p, current_state, struct_var);
+            if (isStructType(p, struct_type)) {
+                if (getStructFieldOffset(p, struct_type, field_name)) |field_off| {
+                    const base_reg = getVarBaseReg(p, current_state, struct_var);
+                    const field_addr = struct_vo + @as(i32, @intCast(field_off));
+                    const field_type = getStructFieldType(p, struct_type, field_name);
+                    const field_size = if (isStructType(p, field_type)) getStructFieldSize(p, field_type) else getTypeSize(field_type);
+                    try emitLoadVarToReg(p, Reg.RAX, field_addr, field_size, base_reg);
+                    return;
+                }
+            }
+        }
+    }
     if (!try tryLoadVarToReg(p, Reg.RAX, a, current_state)) {
         const n = parseNumber(a);
         if (n != 0 or (a.len > 0 and (std.ascii.isDigit(a[0]) or a[0] == '-'))) {
             try emitLoadImm(p, Reg.RAX, n);
         } else {
-            try emitXorReg(p, Reg.RAX);
+            // Try import table (Win32 API function as expression)
+            var found_import = false;
+            for (IMPORT_FNS, 0..) |import_name, import_idx| {
+                if (std.mem.eql(u8, a, import_name)) {
+                    try emitRipLeaIat(p, Reg.RAX, import_idx);
+                    found_import = true;
+                    break;
+                }
+            }
+            if (!found_import) try emitXorReg(p, Reg.RAX);
         }
     }
 }
@@ -3577,6 +4320,44 @@ fn parseAtom(p: *PendingOutput, src: []const u8, pos: *usize) anyerror!usize {
                 if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
                 if (std.mem.eql(u8, name, "min")) return pushExpr(p, .{ .Min = .{ .lhs = a, .rhs = b } });
                 return pushExpr(p, .{ .Max = .{ .lhs = a, .rhs = b } });
+            }
+            if (std.mem.eql(u8, name, "rcp")) {
+                const a = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+                const one = try pushExpr(p, .{ .Const = 1.0 });
+                return pushExpr(p, .{ .Div = .{ .lhs = one, .rhs = a } });
+            }
+            if (std.mem.eql(u8, name, "lerp")) {
+                const a = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const b = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const t = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+                // a + t * (b - a)
+                const b_minus_a = try pushExpr(p, .{ .Sub = .{ .lhs = b, .rhs = a } });
+                const t_times = try pushExpr(p, .{ .Mul = .{ .lhs = t, .rhs = b_minus_a } });
+                return pushExpr(p, .{ .Add = .{ .lhs = a, .rhs = t_times } });
+            }
+            if (std.mem.eql(u8, name, "med3")) {
+                const a = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const b = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ',') pos.* += 1;
+                const c = try parseAddSub(p, src, pos);
+                skipSpaces(src, pos);
+                if (pos.* < src.len and src[pos.*] == ')') pos.* += 1;
+                // max(min(a,b), min(max(a,b), c))
+                const min_ab = try pushExpr(p, .{ .Min = .{ .lhs = a, .rhs = b } });
+                const max_ab = try pushExpr(p, .{ .Max = .{ .lhs = a, .rhs = b } });
+                const min_maxab_c = try pushExpr(p, .{ .Min = .{ .lhs = max_ab, .rhs = c } });
+                return pushExpr(p, .{ .Max = .{ .lhs = min_ab, .rhs = min_maxab_c } });
             }
             if (std.mem.eql(u8, name, "floor") or std.mem.eql(u8, name, "sqrt") or std.mem.eql(u8, name, "rsqrt") or std.mem.eql(u8, name, "abs") or std.mem.eql(u8, name, "frac") or std.mem.eql(u8, name, "saturate")) {
                 const a = try parseAddSub(p, src, pos);

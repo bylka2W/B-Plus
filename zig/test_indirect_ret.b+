@@ -1,0 +1,6 @@
+entry main {
+    var heap = call_indirect(GetProcessHeap);
+    var ptr = call_indirect(HeapAlloc, heap, 8, 16);
+    call_indirect(HeapFree, heap, 0, ptr);
+    call_indirect(ExitProcess, 0);
+}

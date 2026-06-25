@@ -1,0 +1,517 @@
+state DXGI {
+    real_dxgi, factory, hr, orig_vtbl, new_vtbl, orig_CreateSwapChain, out_addr
+    swapchain, sw_orig_vtbl, sw_new_vtbl, orig_present, entry
+    bb_width, bb_height, out_width, out_height, frame_idx, p, tmp
+
+    // Init flag + device/context
+    init_done, device, context, backbuffer, buf_addr, swap_desc_addr, sw_vtbl
+
+    // CSO file handles (4 passes: accumulate/RCAS/EASU/luminance)
+    cso_a, cso_r, cso_e, cso_lp, cso_dc, cso_lk, cso_rd, cso_dv
+    cso_size, cso_buf, read, file, size_hi, size_lo
+
+    // Shader pointers
+    sh_a, sh_r, sh_e, sh_lp, sh_dc, sh_lk, sh_rd, sh_dv
+
+    // GUID buffers
+    g_buf
+
+    // Intermediate texture ptrs — reused variables
+    t0, t1, t2, t3, t4, t5, t6
+
+    // SRV views
+    sv_bb, sv_hc, sv_up, sv_hd, sv_hl, sv_lu
+
+    // UAV views
+    uv_hc, uv_up, uv_dc, uv_lk, uv_lu, uv_dm
+
+    // Cached vtbl entries
+    dv_cs, dv_t2d, dv_srv, dv_uav, dv_immctx
+    cv_dispatch, cv_css, cv_cssr, cv_csuav, cv_copy
+    bb_vtbl
+}
+
+export entry CreateDXGIFactory {
+    if (real_dxgi == 0) {
+        real_dxgi = LoadLibraryA("C:\\Windows\\System32\\dxgi.dll\0")
+    }
+    factory = 0
+    out_addr = addr(factory)
+    hr = call_indirect(GetProcAddress(real_dxgi, "CreateDXGIFactory\0"), addr(factory), out_addr)
+    if (hr < 0) { ret hr }
+    orig_vtbl = ptr_load(factory)
+    new_vtbl = HeapAlloc(GetProcessHeap(), 8, 120)
+    entry = ptr_load(orig_vtbl)       ; ptr_store(new_vtbl, entry)
+    entry = ptr_load(orig_vtbl + 8)   ; ptr_store(new_vtbl + 8, entry)
+    entry = ptr_load(orig_vtbl + 16)  ; ptr_store(new_vtbl + 16, entry)
+    entry = ptr_load(orig_vtbl + 24)  ; ptr_store(new_vtbl + 24, entry)
+    entry = ptr_load(orig_vtbl + 32)  ; ptr_store(new_vtbl + 32, entry)
+    entry = ptr_load(orig_vtbl + 40)  ; ptr_store(new_vtbl + 40, entry)
+    entry = ptr_load(orig_vtbl + 48)  ; ptr_store(new_vtbl + 48, entry)
+    entry = ptr_load(orig_vtbl + 56)  ; ptr_store(new_vtbl + 56, entry)
+    entry = ptr_load(orig_vtbl + 64)  ; ptr_store(new_vtbl + 64, entry)
+    entry = ptr_load(orig_vtbl + 72)  ; ptr_store(new_vtbl + 72, entry)
+    entry = ptr_load(orig_vtbl + 80)  ; ptr_store(new_vtbl + 80, entry)
+    entry = ptr_load(orig_vtbl + 88)  ; ptr_store(new_vtbl + 88, entry)
+    entry = ptr_load(orig_vtbl + 96)  ; ptr_store(new_vtbl + 96, entry)
+    entry = ptr_load(orig_vtbl + 104) ; ptr_store(new_vtbl + 104, entry)
+    orig_CreateSwapChain = ptr_load(orig_vtbl + 80)
+    ptr_store(new_vtbl + 80, @entry_addr("OnCreateSwapChain"))
+    entry = ptr_load(orig_vtbl + 104)
+    if (entry != 0) { ptr_store(new_vtbl + 104, @entry_addr("OnCreateSwapChainForHwnd")) }
+    ptr_store(factory, new_vtbl)
+    ret hr
+}
+
+export entry CreateDXGIFactory1 {
+    if (real_dxgi == 0) {
+        real_dxgi = LoadLibraryA("C:\\Windows\\System32\\dxgi.dll\0")
+    }
+    factory = 0
+    out_addr = addr(factory)
+    hr = call_indirect(GetProcAddress(real_dxgi, "CreateDXGIFactory1\0"), addr(factory), out_addr)
+    if (hr < 0) { ret hr }
+    orig_vtbl = ptr_load(factory)
+    new_vtbl = HeapAlloc(GetProcessHeap(), 8, 120)
+    entry = ptr_load(orig_vtbl)       ; ptr_store(new_vtbl, entry)
+    entry = ptr_load(orig_vtbl + 8)   ; ptr_store(new_vtbl + 8, entry)
+    entry = ptr_load(orig_vtbl + 16)  ; ptr_store(new_vtbl + 16, entry)
+    entry = ptr_load(orig_vtbl + 24)  ; ptr_store(new_vtbl + 24, entry)
+    entry = ptr_load(orig_vtbl + 32)  ; ptr_store(new_vtbl + 32, entry)
+    entry = ptr_load(orig_vtbl + 40)  ; ptr_store(new_vtbl + 40, entry)
+    entry = ptr_load(orig_vtbl + 48)  ; ptr_store(new_vtbl + 48, entry)
+    entry = ptr_load(orig_vtbl + 56)  ; ptr_store(new_vtbl + 56, entry)
+    entry = ptr_load(orig_vtbl + 64)  ; ptr_store(new_vtbl + 64, entry)
+    entry = ptr_load(orig_vtbl + 72)  ; ptr_store(new_vtbl + 72, entry)
+    entry = ptr_load(orig_vtbl + 80)  ; ptr_store(new_vtbl + 80, entry)
+    entry = ptr_load(orig_vtbl + 88)  ; ptr_store(new_vtbl + 88, entry)
+    entry = ptr_load(orig_vtbl + 96)  ; ptr_store(new_vtbl + 96, entry)
+    entry = ptr_load(orig_vtbl + 104) ; ptr_store(new_vtbl + 104, entry)
+    orig_CreateSwapChain = ptr_load(orig_vtbl + 80)
+    ptr_store(new_vtbl + 80, @entry_addr("OnCreateSwapChain"))
+    entry = ptr_load(orig_vtbl + 104)
+    if (entry != 0) { ptr_store(new_vtbl + 104, @entry_addr("OnCreateSwapChainForHwnd")) }
+    ptr_store(factory, new_vtbl)
+    ret hr
+}
+
+export entry CreateDXGIFactory2 {
+    if (real_dxgi == 0) {
+        real_dxgi = LoadLibraryA("C:\\Windows\\System32\\dxgi.dll\0")
+    }
+    factory = 0
+    out_addr = addr(factory)
+    hr = call_indirect(GetProcAddress(real_dxgi, "CreateDXGIFactory2\0"), 0, addr(factory), out_addr)
+    if (hr < 0) { ret hr }
+    orig_vtbl = ptr_load(factory)
+    new_vtbl = HeapAlloc(GetProcessHeap(), 8, 176)
+    entry = ptr_load(orig_vtbl)       ; ptr_store(new_vtbl, entry)
+    entry = ptr_load(orig_vtbl + 8)   ; ptr_store(new_vtbl + 8, entry)
+    entry = ptr_load(orig_vtbl + 16)  ; ptr_store(new_vtbl + 16, entry)
+    entry = ptr_load(orig_vtbl + 24)  ; ptr_store(new_vtbl + 24, entry)
+    entry = ptr_load(orig_vtbl + 32)  ; ptr_store(new_vtbl + 32, entry)
+    entry = ptr_load(orig_vtbl + 40)  ; ptr_store(new_vtbl + 40, entry)
+    entry = ptr_load(orig_vtbl + 48)  ; ptr_store(new_vtbl + 48, entry)
+    entry = ptr_load(orig_vtbl + 56)  ; ptr_store(new_vtbl + 56, entry)
+    entry = ptr_load(orig_vtbl + 64)  ; ptr_store(new_vtbl + 64, entry)
+    entry = ptr_load(orig_vtbl + 72)  ; ptr_store(new_vtbl + 72, entry)
+    entry = ptr_load(orig_vtbl + 80)  ; ptr_store(new_vtbl + 80, entry)
+    entry = ptr_load(orig_vtbl + 88)  ; ptr_store(new_vtbl + 88, entry)
+    entry = ptr_load(orig_vtbl + 96)  ; ptr_store(new_vtbl + 96, entry)
+    entry = ptr_load(orig_vtbl + 104) ; ptr_store(new_vtbl + 104, entry)
+    entry = ptr_load(orig_vtbl + 112) ; ptr_store(new_vtbl + 112, entry)
+    entry = ptr_load(orig_vtbl + 120) ; ptr_store(new_vtbl + 120, entry)
+    entry = ptr_load(orig_vtbl + 128) ; ptr_store(new_vtbl + 128, entry)
+    entry = ptr_load(orig_vtbl + 136) ; ptr_store(new_vtbl + 136, entry)
+    entry = ptr_load(orig_vtbl + 144) ; ptr_store(new_vtbl + 144, entry)
+    entry = ptr_load(orig_vtbl + 152) ; ptr_store(new_vtbl + 152, entry)
+    entry = ptr_load(orig_vtbl + 160) ; ptr_store(new_vtbl + 160, entry)
+    orig_CreateSwapChain = ptr_load(orig_vtbl + 80)
+    ptr_store(new_vtbl + 80, @entry_addr("OnCreateSwapChain"))
+    ptr_store(new_vtbl + 104, @entry_addr("OnCreateSwapChainForHwnd"))
+    ptr_store(factory, new_vtbl)
+    ret hr
+}
+
+export entry OnCreateSwapChain {
+    hr = call_indirect(orig_CreateSwapChain, @arg(0), @arg(1), @arg(2), @arg(3))
+    if (hr < 0) { ret hr }
+    swapchain = ptr_load(@arg(3))
+    if (swapchain == 0) { ret hr }
+    sw_orig_vtbl = ptr_load(swapchain)
+    sw_new_vtbl = HeapAlloc(GetProcessHeap(), 8, 128)
+    entry = ptr_load(sw_orig_vtbl)       ; ptr_store(sw_new_vtbl, entry)
+    entry = ptr_load(sw_orig_vtbl + 8)   ; ptr_store(sw_new_vtbl + 8, entry)
+    entry = ptr_load(sw_orig_vtbl + 16)  ; ptr_store(sw_new_vtbl + 16, entry)
+    entry = ptr_load(sw_orig_vtbl + 24)  ; ptr_store(sw_new_vtbl + 24, entry)
+    entry = ptr_load(sw_orig_vtbl + 32)  ; ptr_store(sw_new_vtbl + 32, entry)
+    entry = ptr_load(sw_orig_vtbl + 40)  ; ptr_store(sw_new_vtbl + 40, entry)
+    entry = ptr_load(sw_orig_vtbl + 48)  ; ptr_store(sw_new_vtbl + 48, entry)
+    entry = ptr_load(sw_orig_vtbl + 56)  ; ptr_store(sw_new_vtbl + 56, entry)
+    entry = ptr_load(sw_orig_vtbl + 64)  ; ptr_store(sw_new_vtbl + 64, entry)
+    entry = ptr_load(sw_orig_vtbl + 72)  ; ptr_store(sw_new_vtbl + 72, entry)
+    entry = ptr_load(sw_orig_vtbl + 80)  ; ptr_store(sw_new_vtbl + 80, entry)
+    entry = ptr_load(sw_orig_vtbl + 88)  ; ptr_store(sw_new_vtbl + 88, entry)
+    entry = ptr_load(sw_orig_vtbl + 96)  ; ptr_store(sw_new_vtbl + 96, entry)
+    entry = ptr_load(sw_orig_vtbl + 104) ; ptr_store(sw_new_vtbl + 104, entry)
+    entry = ptr_load(sw_orig_vtbl + 112) ; ptr_store(sw_new_vtbl + 112, entry)
+    orig_present = ptr_load(sw_orig_vtbl + 64)
+    ptr_store(sw_new_vtbl + 64, @entry_addr("OnPresent"))
+    ptr_store(swapchain, sw_new_vtbl)
+    ret hr
+}
+
+export entry OnCreateSwapChainForHwnd {
+    hr = call_indirect(orig_CreateSwapChainForHwnd, @arg(0), @arg(1), @arg(2), @arg(3), @arg(4), @arg(5))
+    if (hr < 0) { ret hr }
+    swapchain = ptr_load(@arg(5))
+    if (swapchain == 0) { ret hr }
+    sw_orig_vtbl = ptr_load(swapchain)
+    sw_new_vtbl = HeapAlloc(GetProcessHeap(), 8, 128)
+    entry = ptr_load(sw_orig_vtbl)       ; ptr_store(sw_new_vtbl, entry)
+    entry = ptr_load(sw_orig_vtbl + 8)   ; ptr_store(sw_new_vtbl + 8, entry)
+    entry = ptr_load(sw_orig_vtbl + 16)  ; ptr_store(sw_new_vtbl + 16, entry)
+    entry = ptr_load(sw_orig_vtbl + 24)  ; ptr_store(sw_new_vtbl + 24, entry)
+    entry = ptr_load(sw_orig_vtbl + 32)  ; ptr_store(sw_new_vtbl + 32, entry)
+    entry = ptr_load(sw_orig_vtbl + 40)  ; ptr_store(sw_new_vtbl + 40, entry)
+    entry = ptr_load(sw_orig_vtbl + 48)  ; ptr_store(sw_new_vtbl + 48, entry)
+    entry = ptr_load(sw_orig_vtbl + 56)  ; ptr_store(sw_new_vtbl + 56, entry)
+    entry = ptr_load(sw_orig_vtbl + 64)  ; ptr_store(sw_new_vtbl + 64, entry)
+    entry = ptr_load(sw_orig_vtbl + 72)  ; ptr_store(sw_new_vtbl + 72, entry)
+    entry = ptr_load(sw_orig_vtbl + 80)  ; ptr_store(sw_new_vtbl + 80, entry)
+    entry = ptr_load(sw_orig_vtbl + 88)  ; ptr_store(sw_new_vtbl + 88, entry)
+    entry = ptr_load(sw_orig_vtbl + 96)  ; ptr_store(sw_new_vtbl + 96, entry)
+    entry = ptr_load(sw_orig_vtbl + 104) ; ptr_store(sw_new_vtbl + 104, entry)
+    entry = ptr_load(sw_orig_vtbl + 112) ; ptr_store(sw_new_vtbl + 112, entry)
+    orig_present = ptr_load(sw_orig_vtbl + 64)
+    ptr_store(sw_new_vtbl + 64, @entry_addr("OnPresent"))
+    ptr_store(swapchain, sw_new_vtbl)
+    ret hr
+}
+
+export entry OnPresent {
+    // let silently dropped — use @arg(N) directly
+    sw_vtbl = ptr_load(@arg(0))
+    p = ptr_load(sw_vtbl + 120)
+    orig_present = p
+
+    if (init_done == 0) {
+        init_done = 1
+
+        // Cache device vtbl entries
+        ptr_store(g_buf, 0x4e89d2086f15aaf2)
+        ptr_store(g_buf + 8, 0x9c4fd3359548b49a)
+        backbuffer = 0
+        buf_addr = addr(backbuffer)
+        p = ptr_load(sw_vtbl + 72)
+        hr = call_indirect(p, @arg(0), 0, g_buf, buf_addr)
+        if (hr < 0) { ret hr }
+
+        bb_vtbl = ptr_load(backbuffer)
+        p = ptr_load(bb_vtbl + 24)
+        device = 0
+        buf_addr = addr(device)
+        hr = call_indirect(p, backbuffer, buf_addr)
+        if (hr < 0) { ret hr }
+
+        dv_t2d = ptr_load(ptr_load(device) + 40)
+        dv_srv = ptr_load(ptr_load(device) + 56)
+        dv_uav = ptr_load(ptr_load(device) + 64)
+        dv_cs  = ptr_load(ptr_load(device) + 144)
+        dv_immctx = ptr_load(ptr_load(device) + 320)
+
+        context = 0
+        buf_addr = addr(context)
+        hr = call_indirect(dv_immctx, device, buf_addr)
+        cv_css = ptr_load(ptr_load(context) + 552)
+        cv_cssr = ptr_load(ptr_load(context) + 560)
+        cv_csuav = ptr_load(ptr_load(context) + 584)
+        cv_dispatch = ptr_load(ptr_load(context) + 328)
+
+        // Get swapchain desc for resolution (index 12 = offset 96)
+        p = ptr_load(sw_vtbl + 96)
+        swap_desc_addr = HeapAlloc(GetProcessHeap(), 8, 28)
+        call_indirect(p, @arg(0), swap_desc_addr)
+        bb_width = ptr_load(swap_desc_addr)
+        bb_height = ptr_load(swap_desc_addr + 4)
+        HeapFree(GetProcessHeap(), 0, swap_desc_addr)
+        out_width = bb_width * 2
+        out_height = bb_height * 2
+        frame_idx = 0
+
+        // Load all 8 CSOs
+        p = "shaders\\cso\\fsr2_accumulate.cso\0"
+        file = CreateFileA(p, 0x80000000, 0, 0, 3, 0, 0)
+        if (file == -1) { init_done = 0 ret hr }
+        size_lo = GetFileSize(file, addr(size_hi))
+        cso_size = size_lo
+        cso_buf = HeapAlloc(GetProcessHeap(), 8, size_lo)
+        ReadFile(file, cso_buf, size_lo, addr(read), 0)
+        CloseHandle(file)
+        cso_a = cso_buf
+        buf_addr = addr(sh_a)
+        hr = call_indirect(dv_cs, device, cso_a, cso_size, 0, buf_addr)
+
+        p = "shaders\\cso\\fsr2_rcas.cso\0"
+        file = CreateFileA(p, 0x80000000, 0, 0, 3, 0, 0)
+        if (file == -1) { init_done = 0 ret hr }
+        size_lo = GetFileSize(file, addr(size_hi))
+        cso_size = size_lo
+        cso_buf = HeapAlloc(GetProcessHeap(), 8, size_lo)
+        ReadFile(file, cso_buf, size_lo, addr(read), 0)
+        CloseHandle(file)
+        cso_r = cso_buf
+        buf_addr = addr(sh_r)
+        hr = call_indirect(dv_cs, device, cso_r, cso_size, 0, buf_addr)
+
+        p = "shaders\\cso\\fsr2_easu.cso\0"
+        file = CreateFileA(p, 0x80000000, 0, 0, 3, 0, 0)
+        if (file == -1) { init_done = 0 ret hr }
+        size_lo = GetFileSize(file, addr(size_hi))
+        cso_size = size_lo
+        cso_buf = HeapAlloc(GetProcessHeap(), 8, size_lo)
+        ReadFile(file, cso_buf, size_lo, addr(read), 0)
+        CloseHandle(file)
+        cso_e = cso_buf
+        buf_addr = addr(sh_e)
+        hr = call_indirect(dv_cs, device, cso_e, cso_size, 0, buf_addr)
+
+        p = "shaders\\cso\\fsr2_luminance_pyramid.cso\0"
+        file = CreateFileA(p, 0x80000000, 0, 0, 3, 0, 0)
+        if (file == -1) { init_done = 0 ret hr }
+        size_lo = GetFileSize(file, addr(size_hi))
+        cso_size = size_lo
+        cso_buf = HeapAlloc(GetProcessHeap(), 8, size_lo)
+        ReadFile(file, cso_buf, size_lo, addr(read), 0)
+        CloseHandle(file)
+        cso_lp = cso_buf
+        buf_addr = addr(sh_lp)
+        hr = call_indirect(dv_cs, device, cso_lp, cso_size, 0, buf_addr)
+
+        p = "shaders\\cso\\fsr2_depthclip.cso\0"
+        file = CreateFileA(p, 0x80000000, 0, 0, 3, 0, 0)
+        if (file == -1) { init_done = 0 ret hr }
+        size_lo = GetFileSize(file, addr(size_hi))
+        cso_size = size_lo
+        cso_buf = HeapAlloc(GetProcessHeap(), 8, size_lo)
+        ReadFile(file, cso_buf, size_lo, addr(read), 0)
+        CloseHandle(file)
+        cso_dc = cso_buf
+        buf_addr = addr(sh_dc)
+        hr = call_indirect(dv_cs, device, cso_dc, cso_size, 0, buf_addr)
+
+        p = "shaders\\cso\\fsr2_lock.cso\0"
+        file = CreateFileA(p, 0x80000000, 0, 0, 3, 0, 0)
+        if (file == -1) { init_done = 0 ret hr }
+        size_lo = GetFileSize(file, addr(size_hi))
+        cso_size = size_lo
+        cso_buf = HeapAlloc(GetProcessHeap(), 8, size_lo)
+        ReadFile(file, cso_buf, size_lo, addr(read), 0)
+        CloseHandle(file)
+        cso_lk = cso_buf
+        buf_addr = addr(sh_lk)
+        hr = call_indirect(dv_cs, device, cso_lk, cso_size, 0, buf_addr)
+
+        p = "shaders\\cso\\fsr2_reconstruct_depth.cso\0"
+        file = CreateFileA(p, 0x80000000, 0, 0, 3, 0, 0)
+        if (file == -1) { init_done = 0 ret hr }
+        size_lo = GetFileSize(file, addr(size_hi))
+        cso_size = size_lo
+        cso_buf = HeapAlloc(GetProcessHeap(), 8, size_lo)
+        ReadFile(file, cso_buf, size_lo, addr(read), 0)
+        CloseHandle(file)
+        cso_rd = cso_buf
+        buf_addr = addr(sh_rd)
+        hr = call_indirect(dv_cs, device, cso_rd, cso_size, 0, buf_addr)
+
+        p = "shaders\\cso\\fsr2_dilate_velocity.cso\0"
+        file = CreateFileA(p, 0x80000000, 0, 0, 3, 0, 0)
+        if (file == -1) { init_done = 0 ret hr }
+        size_lo = GetFileSize(file, addr(size_hi))
+        cso_size = size_lo
+        cso_buf = HeapAlloc(GetProcessHeap(), 8, size_lo)
+        ReadFile(file, cso_buf, size_lo, addr(read), 0)
+        CloseHandle(file)
+        cso_dv = cso_buf
+        buf_addr = addr(sh_dv)
+        hr = call_indirect(dv_cs, device, cso_dv, cso_size, 0, buf_addr)
+
+        // Create intermediate textures (1 descriptor buffer reused)
+        p = HeapAlloc(GetProcessHeap(), 8, 48)
+        ptr_store(p, bb_width)
+        ptr_store(p + 4, bb_height)
+        ptr_store(p + 8, 1)
+        ptr_store(p + 12, 1)
+        ptr_store(p + 16, 41)      // R16G16B16A16_FLOAT
+        ptr_store(p + 20, 1)
+        ptr_store(p + 24, 0)
+        ptr_store(p + 28, 0)
+        ptr_store(p + 32, 0x27)    // UAV|SRV|RT
+        ptr_store(p + 36, 0)
+        ptr_store(p + 40, 0)
+
+        ptr_store(g_buf, 0x4e89d2086f15aaf2)
+        ptr_store(g_buf + 8, 0x9c4fd3359548b49a)
+        t0 = 0
+        buf_addr = addr(t0)
+        hr = call_indirect(dv_t2d, device, p, 0, 0, buf_addr)
+
+        t1 = 0
+        buf_addr = addr(t1)
+        hr = call_indirect(dv_t2d, device, p, 0, 0, buf_addr)
+
+        ptr_store(p + 16, 28)      // R32_FLOAT
+        t2 = 0
+        buf_addr = addr(t2)
+        hr = call_indirect(dv_t2d, device, p, 0, 0, buf_addr)
+
+        ptr_store(p + 16, 2)       // R32_UINT
+        ptr_store(p + 32, 8)       // UAV only
+        t3 = 0
+        buf_addr = addr(t3)
+        hr = call_indirect(dv_t2d, device, p, 0, 0, buf_addr)
+
+        ptr_store(p + 16, 28)      // R32_FLOAT
+        ptr_store(p + 32, 0x0C)    // UAV|SRV
+        t4 = 0
+        buf_addr = addr(t4)
+        hr = call_indirect(dv_t2d, device, p, 0, 0, buf_addr)
+
+        ptr_store(p + 16, 40)      // R16G16_FLOAT
+        t5 = 0
+        buf_addr = addr(t5)
+        hr = call_indirect(dv_t2d, device, p, 0, 0, buf_addr)
+
+        HeapFree(GetProcessHeap(), 0, p)
+
+        // --- Create SRV/UAV views for all textures ---
+        // IID_ID3D11ShaderResourceView = {037e866e-f56d-4357-a8af-9dabbe6e250e}
+        // IID_ID3D11UnorderedAccessView = {28acf509-7f5c-48f5-8611-f316510a6380}
+        // Use NULL desc for default views (all mips, first slice, texture format)
+
+        // SRV for backbuffer (register t0 in shaders — input color)
+        ptr_store(g_buf, 0x4357f56d037e866e)
+        ptr_store(g_buf + 8, 0x80516a13beab9daf)
+        sv_bb = 0
+        buf_addr = addr(sv_bb)
+        hr = call_indirect(dv_srv, device, backbuffer, 0, buf_addr)
+
+        // SRV + UAV for history color t0/hc
+        ptr_store(g_buf, 0x4357f56d037e866e)
+        ptr_store(g_buf + 8, 0x80516a13beab9daf)
+        sv_hc = 0
+        buf_addr = addr(sv_hc)
+        hr = call_indirect(dv_srv, device, t0, 0, buf_addr)
+        ptr_store(g_buf, 0x48f5861128acf509)
+        ptr_store(g_buf + 8, 0x80516a13beab9daf)
+        uv_hc = 0
+        buf_addr = addr(uv_hc)
+        hr = call_indirect(dv_uav, device, t0, 0, buf_addr)
+
+        // UAV for upscaled output t1
+        ptr_store(g_buf, 0x48f5861128acf509)
+        ptr_store(g_buf + 8, 0x80516a13beab9daf)
+        uv_up = 0
+        buf_addr = addr(uv_up)
+        hr = call_indirect(dv_uav, device, t1, 0, buf_addr)
+
+        // SRV for history depth t2
+        ptr_store(g_buf, 0x4357f56d037e866e)
+        ptr_store(g_buf + 8, 0x80516a13beab9daf)
+        sv_hd = 0
+        buf_addr = addr(sv_hd)
+        hr = call_indirect(dv_srv, device, t2, 0, buf_addr)
+
+        // SRV for lock t3
+        ptr_store(g_buf, 0x4357f56d037e866e)
+        ptr_store(g_buf + 8, 0x80516a13beab9daf)
+        sv_hl = 0
+        buf_addr = addr(sv_hl)
+        hr = call_indirect(dv_srv, device, t3, 0, buf_addr)
+
+        // SRV for luma t4
+        ptr_store(g_buf, 0x4357f56d037e866e)
+        ptr_store(g_buf + 8, 0x80516a13beab9daf)
+        sv_lu = 0
+        buf_addr = addr(sv_lu)
+        hr = call_indirect(dv_srv, device, t4, 0, buf_addr)
+
+        // SRV for upscaled t1 (read as input for RCAS)
+        ptr_store(g_buf, 0x4357f56d037e866e)
+        ptr_store(g_buf + 8, 0x80516a13beab9daf)
+        sv_up = 0
+        buf_addr = addr(sv_up)
+        hr = call_indirect(dv_srv, device, t1, 0, buf_addr)
+
+        // UAVs for depth clip t2, lock t3, luma t4, dilated MV t5
+        ptr_store(g_buf, 0x48f5861128acf509)
+        ptr_store(g_buf + 8, 0x80516a13beab9daf)
+        uv_dc = 0
+        buf_addr = addr(uv_dc)
+        hr = call_indirect(dv_uav, device, t2, 0, buf_addr)
+
+        uv_lk = 0
+        buf_addr = addr(uv_lk)
+        hr = call_indirect(dv_uav, device, t3, 0, buf_addr)
+
+        uv_lu = 0
+        buf_addr = addr(uv_lu)
+        hr = call_indirect(dv_uav, device, t4, 0, buf_addr)
+
+        uv_dm = 0
+        buf_addr = addr(uv_dm)
+        hr = call_indirect(dv_uav, device, t5, 0, buf_addr)
+
+        // Cache CopyResource fn ptr from context vtbl (index 47, offset 376)
+        cv_copy = ptr_load(ptr_load(context) + 376)
+    }
+
+    // Per-frame: FSR2 pipeline dispatch
+    frame_idx = frame_idx + 1
+
+    // Pass 1: Luminance Pyramid — downsample input to luma
+    call_indirect(cv_css, context, sh_lp, 0, 0)
+    call_indirect(cv_csuav, context, 0, 1, addr(uv_lu), 0)
+    call_indirect(cv_dispatch, context, (bb_width + 7) / 8, (bb_height + 7) / 8, 1)
+
+    // Pass 2: Reconstruct & Dilate Depth
+    call_indirect(cv_css, context, sh_rd, 0, 0)
+    call_indirect(cv_dispatch, context, bb_width / 8, bb_height / 8, 1)
+
+    // Pass 3: Dilate Motion Vectors
+    call_indirect(cv_css, context, sh_dv, 0, 0)
+    call_indirect(cv_dispatch, context, bb_width / 8, bb_height / 8, 1)
+
+    // Pass 4: Depth Clip — anti-ghosting
+    call_indirect(cv_css, context, sh_dc, 0, 0)
+    call_indirect(cv_csuav, context, 0, 1, addr(uv_dc), 0)
+    call_indirect(cv_dispatch, context, bb_width / 8, bb_height / 8, 1)
+
+    // Pass 5: Lock Creation
+    call_indirect(cv_css, context, sh_lk, 0, 0)
+    call_indirect(cv_csuav, context, 0, 1, addr(uv_lk), 0)
+    call_indirect(cv_dispatch, context, bb_width / 8, bb_height / 8, 1)
+
+    // Pass 6: Accumulate (main TAAU)
+    call_indirect(cv_css, context, sh_a, 0, 0)
+    // Bind: SRV t0=backbuffer, t3=history color, t5=lock; UAV u0=upscaled, u1=history color
+    call_indirect(cv_cssr, context, 0, 1, addr(sv_bb), 0)
+    call_indirect(cv_cssr, context, 3, 1, addr(sv_hc), 0)
+    call_indirect(cv_cssr, context, 5, 1, addr(sv_hl), 0)
+    call_indirect(cv_csuav, context, 0, 1, addr(uv_up), 0)
+    call_indirect(cv_csuav, context, 1, 1, addr(uv_hc), 0)
+    call_indirect(cv_dispatch, context, (out_width + 7) / 8, (out_height + 7) / 8, 1)
+
+    // Pass 7: RCAS Sharpening
+    call_indirect(cv_css, context, sh_r, 0, 0)
+    call_indirect(cv_cssr, context, 0, 1, addr(sv_up), 0)
+    call_indirect(cv_csuav, context, 0, 1, addr(uv_up), 0)
+    call_indirect(cv_dispatch, context, (out_width + 7) / 8, (out_height + 7) / 8, 1)
+
+    // Copy final upscaled result to backbuffer
+    call_indirect(cv_copy, context, backbuffer, t1)
+
+    // Call original Present
+    hr = call_indirect(orig_present, @arg(0), @arg(1), @arg(2))
+    ret hr
+}

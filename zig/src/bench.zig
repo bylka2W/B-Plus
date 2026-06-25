@@ -446,8 +446,7 @@ fn runFrameGraph(allocator: std.mem.Allocator) !u64 {
 
 fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
     _ = smart;
-    var gs: gpu_scheduler.GPUScheduler = undefined;
-    gs.init(allocator, 16_600_000);
+    var gs = gpu_scheduler.GPUScheduler.init(allocator);
 
     const passes = [_]frame_graph.Pass{
         .{ .id = 0, .name = "depth", .deps = &.{}, .gpu = true, .gpu_wait_for = &.{}, .gpu_signal = &.{}, .cost_us = 200, .critical = true },

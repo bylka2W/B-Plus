@@ -1,0 +1,7 @@
+export entry GetHandlerAddr {
+    var h = @entry_addr("GetHandlerAddr");
+    ret h;
+}
+export entry OnPresentHook {
+    ret 0;
+}

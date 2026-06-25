@@ -1,0 +1,6 @@
+entry main {
+    var obj = @entry_addr("main");
+    // Test direct win32 call + COM call compilation
+    var result = obj.AddRef();
+    call_indirect(ExitProcess, 0);
+}
