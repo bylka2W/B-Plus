@@ -7,6 +7,8 @@ const sched_state = @import("scheduler_state.zig");
 const frame_graph = @import("frame_graph.zig");
 const gpu_job = @import("gpu_job.zig");
 const gpu_scheduler = @import("gpu_scheduler.zig");
+const render_graph = @import("render_graph.zig");
+const gpu_ir = @import("gpu_ir.zig");
 
 const NUM_WORKERS: u32 = 4;
 const ALLOC_SIZE = 64 * 1024 * 1024;
@@ -456,32 +458,55 @@ fn runGPUScheduler(allocator: std.mem.Allocator, smart: bool) !RunResult {
     const plan = try fg.compile(allocator, 16_600);
     defer frame_graph.FrameGraph.deinitPlan(allocator, &plan);
 
-    // Validate edge: upscale (node[1]) ← depth (node[0])
-    var has_edge: bool = false;
-    for (plan.edges) |e| {
-        if (e.from == 0 and e.to == 1) has_edge = true;
+    // Build RenderPlan from execution plan nodes
+    var gpu_passes_list = std.ArrayList(frame_graph.GPUPassDesc).init(allocator);
+    defer {
+        for (gpu_passes_list.items) |*gp| allocator.free(gp.bindings.entries);
+        gpu_passes_list.deinit();
     }
-    if (!has_edge) return error.MissingEdgeInGPUScheduler;
-
-    gs.frameStart();
     for (plan.nodes) |*node| {
         switch (node.kind) {
-            .gpu => |*g| gs.submit(g.job),
-            .render => |*r| gs.submit(r.job),
+            .gpu => |g| {
+                const entries = try allocator.alloc(gpu_ir.BindEntry, 0);
+                try gpu_passes_list.append(.{
+                    .pass_id = g.pass_id,
+                    .pipeline = .{ .shader = .{ .source = "dummy" }, .layout = .{ .slots = &.{} } },
+                    .grid = .{ .x = g.job.dispatch_x, .y = g.job.dispatch_y, .z = g.job.dispatch_z },
+                    .bindings = .{ .entries = entries },
+                });
+            },
+            .render => |r| {
+                const entries = try allocator.alloc(gpu_ir.BindEntry, 0);
+                try gpu_passes_list.append(.{
+                    .pass_id = r.pass_id,
+                    .pipeline = .{ .shader = .{ .source = "dummy" }, .layout = .{ .slots = &.{} } },
+                    .grid = .{ .x = r.job.dispatch_x, .y = r.job.dispatch_y, .z = r.job.dispatch_z },
+                    .bindings = .{ .entries = entries },
+                });
+            },
             else => {},
         }
     }
-    gs.tick();
 
-    const dispatched = gs.total_dispatched;
-    gs.deinit();
+    const render_plan = render_graph.RenderPlan{
+        .nodes = plan.nodes,
+        .edges = plan.edges,
+        .budget_us = plan.budget_us,
+        .gpu_passes = gpu_passes_list.items,
+        .transients = &.{},
+        .auto_barriers = &.{},
+    };
+    const sf = try gs.build(&render_plan);
+    defer gpu_scheduler.GPUScheduler.deinitScheduledFrame(allocator, &sf);
+
+    const total = sf.stats.total_passes;
     return RunResult{
         .label = "gpu-scheduler",
         .p50_ns = 0,
         .p95_ns = 0,
         .p99_ns = 0,
         .p999_ns = 0,
-        .throughput = @as(f64, @floatFromInt(dispatched)),
+        .throughput = @as(f64, @floatFromInt(total)),
         .steals = 0,
         .rejected = 0,
         .steal_attempts = 0,
