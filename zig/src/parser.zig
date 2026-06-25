@@ -220,8 +220,8 @@ const Lexer = struct {
         return .{ .kind = kind, .start = self.tok_start, .end = self.pos };
     }
 
-    fn isIdentStart(c: u8) bool { return std.ascii.isAlphabetic(c) or c == '_'; }
-    fn isIdentChar(c: u8) bool { return std.ascii.isAlphanumeric(c) or c == '_' or c == '?' or c == '<' or c == '>'; }
+    fn isIdentStart(c: u8) bool { return std.ascii.isAlphabetic(c) or c == '_' or c >= 0x80; }
+    fn isIdentChar(c: u8) bool { return std.ascii.isAlphanumeric(c) or c == '_' or c == '?' or c == '<' or c == '>' or c >= 0x80; }
     fn isDigit(c: u8) bool { return std.ascii.isDigit(c); }
     fn isHexDigit(c: u8) bool { return std.ascii.isDigit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F'); }
 
@@ -259,6 +259,38 @@ const Lexer = struct {
         .{ "false", .keyword_false },
         .{ "owned", .keyword_owned },
         .{ "borrowed", .keyword_borrowed },
+        // Russian keyword aliases
+        .{ "состояние", .keyword_state },
+        .{ "экспорт", .keyword_export },
+        .{ "вход", .keyword_entry },
+        .{ "ядро", .keyword_kernel },
+        .{ "структура", .keyword_struct },
+        .{ "перечисление", .keyword_enum },
+        .{ "параллельно", .keyword_parallel },
+        .{ "на", .keyword_on },
+        .{ "всегда", .keyword_always },
+        .{ "пер", .keyword_var },
+        .{ "контекст", .keyword_context },
+        .{ "внешний", .keyword_extern },
+        .{ "фн", .keyword_fn },
+        .{ "конвейер", .keyword_pipeline },
+        .{ "импорт", .keyword_import },
+        .{ "использовать", .keyword_use },
+        .{ "если", .keyword_if },
+        .{ "иначе", .keyword_else },
+        .{ "вернуть", .keyword_return },
+        .{ "запуск", .keyword_run },
+        .{ "печать", .keyword_print },
+        .{ "освободить", .keyword_free },
+        .{ "тело", .keyword_body },
+        .{ "шаг", .keyword_step },
+        .{ "опубликовать", .keyword_publish },
+        .{ "войти", .keyword_enter },
+        .{ "выйти", .keyword_exit },
+        .{ "истина", .keyword_true },
+        .{ "ложь", .keyword_false },
+        .{ "владение", .keyword_owned },
+        .{ "заимствовано", .keyword_borrowed },
     });
 };
 
@@ -483,15 +515,18 @@ pub const Parser = struct {
 
         try p.expect(.lbrace);
 
+        var state_enter_body: ?[]const u8 = null;
+        var state_exit_body: ?[]const u8 = null;
         p.nesting_depth += 1;
         var variables = std.ArrayList(ast.VariableNode).init(p.allocator);
         var transitions = std.ArrayList(ast.TransitionNode).init(p.allocator);
         errdefer {
             variables.deinit();
             transitions.deinit();
+            if (state_enter_body) |b| p.allocator.free(b);
+            if (state_exit_body) |b| p.allocator.free(b);
+            if (cache_policy) |c| p.allocator.free(c);
         }
-        var state_enter_body: ?[]const u8 = null;
-        var state_exit_body: ?[]const u8 = null;
 
         while (p.cur_tok.kind != .rbrace and p.cur_tok.kind != .eof) {
             p.consumeNewlines();
