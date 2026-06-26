@@ -3,7 +3,7 @@
 > [English version ↓](#b-v420--deterministic-transition-machine-x64)
 
 **v4.3.2:**
-- Все примеры в README переведены на русский (имена состояний, событий, переменных — `Зелёный`, `таймер`, `ключ`, `всего`). Проверена компиляция: `russian_traffic.b+`, `russian_door.b+`, `russian_counter.b+` → `.exe`.
+- Все примеры в README переведены на русский (имена состояний, событий, переменных — `Зелёный`, `таймер`, `ключ`, `всего`). Компиляция проверена (`zig/`).
 - Body parser (gpu_body_parser.zig): полный трекинг типов SSA-значений. `int2 * int` → `int2` (было `float`), `.x`/`.y` на векторе даёт скалярный тип. HLSL-генерация из IR теперь выдаёт корректные типы.
 - GPU IR: BackendApi, ShaderKey, PipelineKey, CompileOptions/Result.
 - DXIL backend (черновик): GPU IR → HLSL → DXC subprocess → DXBC.
