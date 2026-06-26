@@ -39,6 +39,7 @@ pub const Op = enum {
     cast,
     composite,
     extract,
+    select,
 };
 
 pub const TypeRef = enum {
@@ -68,14 +69,14 @@ pub const IrInst = struct {
     operands: []ValueId,
     data: Data,
 
-    pub const Data = union {
+    pub const Data = union(enum) {
         none: void,
         int_val: i64,
         float_val: f64,
         string: []const u8,
         block_target: BlockId,
         cond_branch: struct { cond: ValueId, then_block: BlockId, else_block: BlockId },
-        phi_incoming: []struct { value: ValueId, block: BlockId },
+        phi_incoming: []PhiIncoming,
         sample_info: struct { tex: ValueId, sampler: ValueId, coord: ValueId },
         atomic_info: struct { ptr: ValueId, val: ValueId, op: AtomicOp },
         barrier_kind: BarrierKind,
@@ -88,6 +89,8 @@ pub const IrInst = struct {
     pub const AtomicOp = enum { add, sub, min, max, and_op, or_op, xor_op, exchange, compare_exchange };
     pub const BarrierKind = enum { group, device, all };
 };
+
+pub const PhiIncoming = struct { value: ValueId, block: BlockId };
 
 pub const IrBasicBlock = struct {
     label: []const u8,
@@ -130,6 +133,11 @@ pub const IrCbufferMember = struct {
     slot: u32,
 };
 
+pub const LocalDecl = struct {
+    name: []const u8,
+    type_ref: TypeRef,
+};
+
 pub const IrFunction = struct {
     name: []const u8,
     blocks: std.ArrayList(IrBasicBlock),
@@ -139,6 +147,77 @@ pub const IrFunction = struct {
     y_param: []const u8,
     passthrough_body: std.ArrayList([]const u8),
     globals_lines: std.ArrayList([]const u8),
+    locals: std.ArrayList(LocalDecl),
+};
+
+// ── Runtime interface types ──
+
+pub const ResourceId = u64;
+
+pub const QueueType = enum { compute, graphics };
+
+pub const BindingKind = enum { srv, uav, cbv, sampler };
+
+pub const BindingKey = struct {
+    reg: u32,
+    space: u32,
+    kind: BindingKind,
+};
+
+pub const DispatchGrid = struct { x: u32, y: u32, z: u32 };
+
+pub const BarrierDesc = struct {
+    resource_id: ResourceId,
+    state_before: u32,
+    state_after: u32,
+};
+
+pub const BindEntry = struct {
+    resource_id: ResourceId,
+    key: BindingKey,
+};
+
+pub const BindGroup = struct {
+    entries: []const BindEntry = &.{},
+};
+
+pub const ShaderKey = struct {
+    source: []const u8,
+    entry: []const u8 = "main",
+};
+
+pub const PipelineKey = struct {
+    shader: ShaderKey,
+    layout: []const BindingKey = &.{},
+};
+
+pub const BackendType = enum {
+    dxil,
+    spirv,
+    msl,
+};
+
+pub const CompileResult = struct {
+    bytecode: []const u8,
+    allocator: ?Allocator = null,
+
+    pub fn deinit(self: *CompileResult) void {
+        if (self.allocator) |a| a.free(self.bytecode);
+    }
+};
+
+pub const CompileOptions = struct {
+    target: BackendType = .dxil,
+    shader_model: []const u8 = "cs_6_6",
+    optimize: bool = true,
+    debug: bool = false,
+    entry: []const u8 = "main",
+};
+
+pub const BackendApi = struct {
+    name: []const u8,
+    target: BackendType,
+    compile: *const fn (allocator: Allocator, ir: *const IrModule, options: CompileOptions) anyerror!CompileResult,
 };
 
 pub const IrModule = struct {
@@ -151,13 +230,35 @@ pub const IrModule = struct {
         for (self.functions.items) |*f| {
             for (f.blocks.items) |*b| {
                 for (b.instrs.items) |*inst| {
-                    if (inst.operands.len > 0) inst.operands.deinit();
-                    if (inst.data == .phi_incoming) self.allocator.free(inst.data.phi_incoming);
-                    if (inst.data == .call_info) self.allocator.free(inst.data.call_info.args);
+                    if (inst.operands.len > 0) self.allocator.free(inst.operands);
+                    switch (inst.data) {
+                        .phi_incoming => self.allocator.free(inst.data.phi_incoming),
+                        .call_info => {
+                            if (inst.data.call_info.args.len > 0) self.allocator.free(inst.data.call_info.args);
+                            if (inst.data.call_info.callee.len > 0) self.allocator.free(inst.data.call_info.callee);
+                        },
+                        .string => if (inst.data.string.len > 0) self.allocator.free(inst.data.string),
+                        else => {},
+                    }
                 }
                 b.instrs.deinit();
             }
             f.blocks.deinit();
+            for (f.passthrough_body.items) |line| {
+                if (line.len > 0) self.allocator.free(line);
+            }
+            f.passthrough_body.deinit();
+            for (f.globals_lines.items) |line| {
+                if (line.len > 0) self.allocator.free(line);
+            }
+            f.globals_lines.deinit();
+            for (f.locals.items) |local| {
+                if (local.name.len > 0) self.allocator.free(local.name);
+            }
+            f.locals.deinit();
+            if (f.name.len > 0) self.allocator.free(f.name);
+            if (f.x_param.len > 0) self.allocator.free(f.x_param);
+            if (f.y_param.len > 0) self.allocator.free(f.y_param);
         }
         self.functions.deinit();
         self.resources.deinit();

@@ -8,15 +8,15 @@ pub const ResolvedExport = struct {
     forward_to: ?[]const u8,
 };
 
-pub fn write(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, idat_size: u32) ![]u8 {
-    return writePE(allocator, code, import_dir_rva, idat_size, &.{}, false);
+pub fn write(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, idat_size: u32, entry_point_rva: u32) ![]u8 {
+    return writePE(allocator, code, import_dir_rva, idat_size, &.{}, false, entry_point_rva);
 }
 
 pub fn writeDll(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, idat_size: u32, exports: []const ResolvedExport) ![]u8 {
-    return writePE(allocator, code, import_dir_rva, idat_size, exports, true);
+    return writePE(allocator, code, import_dir_rva, idat_size, exports, true, 0);
 }
 
-fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, idat_size: u32, exports: []const ResolvedExport, is_dll: bool) ![]u8 {
+fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, idat_size: u32, exports: []const ResolvedExport, is_dll: bool, entry_point_rva: u32) ![]u8 {
     const file_align: u32 = 0x200;
     const sect_align: u32 = 0x1000;
 
@@ -183,7 +183,7 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
     try pe.appendNTimes(0, 4);
     try pe.appendNTimes(0, 4);
     try pe.appendNTimes(0, 4);
-    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, section_rva + 0))));
+    try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, section_rva + entry_point_rva))));
     try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, section_rva))));
     try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x18000000))));
     try pe.appendSlice(&@as([4]u8, @bitCast(sect_align)));
@@ -200,11 +200,11 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
     try pe.appendNTimes(0, 4);
     const subsystem: u16 = if (is_dll) 2 else 3;
     try pe.appendSlice(&@as([2]u8, @bitCast(subsystem)));
-    try pe.appendNTimes(0, 2);
-    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x100000))));
-    try pe.appendNTimes(0, 8);
-    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x100000))));
-    try pe.appendNTimes(0, 8);
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x0160)))); // DllCharacteristics (HIGH_ENTROPY_VA | DYNAMIC_BASE | NX_COMPAT)
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x100000)))); // SizeOfStackReserve
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x10000))));  // SizeOfStackCommit
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x100000)))); // SizeOfHeapReserve
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x1000))));   // SizeOfHeapCommit
     try pe.appendNTimes(0, 4);
     try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 16))));
 

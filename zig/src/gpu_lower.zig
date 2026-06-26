@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const gpu_ast = @import("gpu_ast.zig");
 const gpu_ir = @import("gpu_ir.zig");
+const gpu_body_parser = @import("gpu_body_parser.zig");
 
 pub fn lowerModule(allocator: Allocator, module: *const gpu_ast.GpuModule) !gpu_ir.IrModule {
     var ir = gpu_ir.IrModule{
@@ -32,32 +33,36 @@ pub fn lowerModule(allocator: Allocator, module: *const gpu_ast.GpuModule) !gpu_
         }
 
         for (kernel.entries.items) |entry| {
-            var body = std.ArrayList([]const u8).init(allocator);
-            for (entry.body_lines.items) |line| {
-                try body.append(try allocator.dupe(u8, line));
-            }
-
             var globals_copy = std.ArrayList([]const u8).init(allocator);
             for (kernel.globals_lines.items) |line| {
                 try globals_copy.append(try allocator.dupe(u8, line));
             }
 
-            var blocks = std.ArrayList(gpu_ir.IrBasicBlock).init(allocator);
-            try blocks.append(gpu_ir.IrBasicBlock{
-                .label = "entry",
-                .instrs = std.ArrayList(gpu_ir.IrInst).init(allocator),
-                .next_value_id = 0,
-            });
+            var filtered_body = std.ArrayList([]const u8).init(allocator);
+            defer filtered_body.deinit();
+            for (entry.body_lines.items) |line| {
+                const trimmed = std.mem.trim(u8, line, " \t");
+                if (trimmed.len > 0 and !std.mem.startsWith(u8, trimmed, "numthreads")) {
+                    try filtered_body.append(trimmed);
+                }
+            }
 
+            const body_func = try gpu_body_parser.parseBody(
+                allocator,
+                filtered_body.items,
+                ir.resources.items,
+                ir.cbuffer_members.items,
+            );
             try ir.functions.append(.{
                 .name = try allocator.dupe(u8, entry.name),
-                .blocks = blocks,
-                .next_block_id = 1,
+                .blocks = body_func.blocks,
+                .next_block_id = body_func.next_block_id,
                 .numthreads = .{ .x = entry.numthreads.x, .y = entry.numthreads.y, .z = entry.numthreads.z },
                 .x_param = try allocator.dupe(u8, entry.x_param),
                 .y_param = try allocator.dupe(u8, entry.y_param),
-                .passthrough_body = body,
+                .passthrough_body = std.ArrayList([]const u8).init(allocator),
                 .globals_lines = globals_copy,
+                .locals = body_func.locals,
             });
         }
     }

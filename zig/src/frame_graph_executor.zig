@@ -10,6 +10,7 @@ const history_manager = @import("history_manager.zig");
 const frame_runtime = @import("frame_runtime.zig");
 const gpu_scheduler = @import("gpu_scheduler.zig");
 const compiled_graph = @import("compiled_graph.zig");
+const dxil_backend = @import("dxil_backend.zig");
 
 pub const FrameGraphGPUExecutor = struct {
     ctx: *dx12.ComputeContext,
@@ -69,9 +70,11 @@ pub const FrameGraphGPUExecutor = struct {
         const h = hashSource(shader_key.source);
         if (self.shader_cache.get(h)) |bytecode| return bytecode;
 
-        const bytecode = try dx12.compileShaderSource(shader_key.source);
-        try self.shader_cache.put(h, bytecode);
-        return bytecode;
+        // Compile via DXIL backend (DXC) — produces DXIL bytecode container
+        const result = try dxil_backend.compileHlsl(self.allocator, shader_key.source);
+        try self.shader_cache.put(h, result.bytecode);
+        // Don't call deinit — bytecode is now owned by shader_cache
+        return result.bytecode;
     }
 
     fn createPSO(self: *FrameGraphGPUExecutor, root_sig: ?*anyopaque, bytecode: []const u8) !?*anyopaque {
