@@ -835,10 +835,76 @@ zig/                    — компилятор (Zig, активная разр
                           выполняет полный пайплайн FSR2 на каждом кадре.
                           Написана полностью на B+ (x64 codegen), ~500 строк.
 
-  tss_easu.b+           — CPU-эталон EASU на B+ (программный апскейл)
-  tss_easu_faithful.b+  — Точная реализация EASU (12 tap, градиентное направление)
-  build.zig            — сборка через zig build
+   tss_easu.b+           — CPU-эталон EASU на B+ (программный апскейл)
+   tss_easu_faithful.b+  — Точная реализация EASU (12 tap, градиентное направление)
+
+   bitwriter.py          — LLVM 13 bitstream encoder для DXIL-бэкенда.
+                           Строит LLVM IR биткод, совместимый с Emscripten LLVM 13 fork
+                           (Microsoft.NET.Runtime.Emscripten).
+                           Поддерживает: типы, функции, константы (с sign-rotation),
+                           SSA value numbering, CFG (basic blocks, terminators),
+                           ret/br/add/alloca/load/store.
+                           Валидация: llvm-dis exit code 0.
+   build.zig            — сборка через zig build
 ```
+
+---
+
+## 8. DXIL Bitcode Backend (Phase 8)
+
+**Цель:** генерация DXIL (DirectX Intermediate Language) напрямую, без DXC.
+
+### Текущий статус
+
+| Компонент | Статус |
+|-----------|--------|
+| LLVM 13 bitstream encoder (`bitwriter.py`) | ✔ |
+| SSA value numbering (module + per-function) | ✔ |
+| Sign-rotated integer constants | ✔ |
+| CFG IR Model Layer (`Block`, `CFGFunction`) | ✔ |
+| Basic blocks + terminator-driven BB switching | ✔ |
+| `ret void` / `ret i32` | ✔ |
+| `add` / `sub` / binop | ✔ |
+| `br` (unconditional) | ✔ |
+| `alloca` / `load` / `store` | ✔ |
+| Conditional branch | 🚧 |
+| PHI node | 🚧 |
+| DXIL metadata + function attributes | ❌ |
+
+### Архитектура
+
+```text
+CFGFunction (CFG IR model)
+  ├── Block.body[]     → non-terminator instructions
+  ├── Block.term       → ('ret', val|None) | ('br', bb_idx) | ('unreachable',)
+  └── Block.successors → derived from terminator
+        │
+        ▼
+ModuleBuilder (emitter)
+  ├── _write_function(cfg) → enter FUNCTION_BLOCK
+  │     ├── DECLAREBLOCKS
+  │     ├── local CONSTANTS_BLOCK
+  │     ├── body insts (non-void → ValueList++)
+  │     └── terminator inst
+  └── write() → magic → ID block → MODULE_BLOCK → TYPE_BLOCK → CONSTANTS → globals → functions → bodies
+```
+
+### Валидация
+
+Все тесты прогоняются через `llvm-dis` из Emscripten LLVM 13 fork:
+```bash
+python bitwriter.py minimal   # define void @0() { ret void }
+python bitwriter.py ret_i32   # define i32 @0() { ret i32 42 }
+python bitwriter.py alloca    # alloca/store/load/ret
+```
+
+### Ключевые особенности (fork-specific)
+
+- Блок ID сдвинуты: MODULE=8, FUNCTION=12, TYPE=17, IDENTIFICATION=13 (вместо стандартных 3/7/13/11)
+- Модуль версии ≥ 2: strtab_offset/strtab_size в MODULE_CODE_FUNCTION
+- ID block: char6 без поля ширины (hasBitWidth=false для Char6 в fork)
+- Integer constants: sign-rotation (raw = v≥0 ? v<<1 : ((-v)<<1)|1)
+- UNABBREV records только — без BLOCKINFO/аббревиатур
 
 ---
 
