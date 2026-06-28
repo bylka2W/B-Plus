@@ -2,6 +2,9 @@ const std = @import("std");
 const frame_graph = @import("frame_graph.zig");
 const gpu_ir = @import("gpu_ir.zig");
 const resource_system = @import("resource_system.zig");
+const lifetime_graph = @import("lifetime_graph.zig");
+const barrier_optimizer = @import("barrier_optimizer.zig");
+const gpu_execution = @import("gpu_execution.zig");
 
 pub const ResourceAccess = enum(u8) {
     read,
@@ -18,31 +21,16 @@ pub const ResourceNode = struct {
     transient: bool = false,
 };
 
-pub const TransientAlloc = struct {
-    resource_id: gpu_ir.ResourceId,
-    desc: gpu_ir.ResourceDesc,
-    first_pass: u32,
-    last_pass: u32,
-};
-
-pub const LifetimeEntry = struct {
-    resource_id: gpu_ir.ResourceId,
-    first_pass: u32,
-    last_pass: u32,
-};
-
-pub const BarrierSlot = struct {
-    pass_index: u32,
-    barrier: gpu_ir.BarrierDesc,
-};
+pub const BarrierSlot = barrier_optimizer.BarrierSlot;
 
 pub const RenderPlan = struct {
     nodes: []frame_graph.ExecutionNode,
     edges: []frame_graph.DependencyEdge,
     budget_us: u32,
     gpu_passes: []const frame_graph.GPUPassDesc,
-    transients: []const TransientAlloc,
+    lifetimes: lifetime_graph.LifetimeGraph,
     auto_barriers: []const BarrierSlot,
+    execution_plan: gpu_execution.GpuExecutionPlan,
 };
 
 pub const RenderGraph = struct {
@@ -59,155 +47,124 @@ pub const RenderGraph = struct {
         gpu_passes: []const frame_graph.GPUPassDesc,
         budget_us: u32,
     ) !RenderPlan {
+        return self.compileWithMode(frames, gpu_passes, budget_us, .real);
+    }
+
+    pub fn compileWithMode(
+        self: *RenderGraph,
+        frames: []const frame_graph.Pass,
+        gpu_passes: []const frame_graph.GPUPassDesc,
+        budget_us: u32,
+        frame_mode: gpu_execution.FrameMode,
+    ) !RenderPlan {
         const fg = frame_graph.FrameGraph.init(frames);
         var plan = try fg.compile(self.allocator, budget_us);
         errdefer frame_graph.FrameGraph.deinitPlan(self.allocator, &plan);
 
-        const lifetimes = try self.computeLifetimes(gpu_passes);
-        defer self.allocator.free(lifetimes);
+        const lifetimes = try lifetime_graph.LifetimeGraph.build(self.allocator, gpu_passes, self.pool);
+        errdefer lifetimes.deinit(self.allocator);
 
-        const transients = try self.collectTransients(lifetimes);
-        errdefer self.allocator.free(transients);
+        var opt = barrier_optimizer.BarrierOptimizer.init(self.allocator);
+        const barrier_result = try opt.optimize(gpu_passes, &lifetimes);
+        errdefer self.allocator.free(barrier_result.barriers);
 
-        const barriers = try self.inferBarriers(gpu_passes, lifetimes);
-        errdefer self.allocator.free(barriers);
+        const exec_ctx = gpu_execution.ExecutionContext{
+            .frame_index = 0,
+            .budget_us = budget_us,
+            .motion_intensity = 0.0,
+            .history_valid = false,
+            .frame_mode = frame_mode,
+        };
+        const execution_plan = try gpu_execution.compileGpuExecutionPlan(
+            self.allocator,
+            gpu_passes,
+            &lifetimes,
+            barrier_result.barriers,
+            exec_ctx,
+        );
+        errdefer execution_plan.deinit();
 
         return RenderPlan{
             .nodes = plan.nodes,
             .edges = plan.edges,
             .budget_us = plan.budget_us,
             .gpu_passes = gpu_passes,
-            .transients = transients,
-            .auto_barriers = barriers,
+            .lifetimes = lifetimes,
+            .auto_barriers = barrier_result.barriers,
+            .execution_plan = execution_plan,
         };
     }
 
-    pub fn computeLifetimes(
-        self: *RenderGraph,
-        gpu_passes: []const frame_graph.GPUPassDesc,
-    ) ![]LifetimeEntry {
-        var map = std.AutoHashMap(gpu_ir.ResourceId, struct { first: u32, last: u32 }).init(self.allocator);
-        defer map.deinit();
-
-        for (gpu_passes, 0..) |gp, pi| {
-            const pass_idx = @as(u32, @intCast(pi));
-            for (gp.bindings.entries) |entry| {
-                const gop = try map.getOrPut(entry.resource_id);
-                if (!gop.found_existing) {
-                    gop.value_ptr.* = .{ .first = pass_idx, .last = pass_idx };
-                } else {
-                    if (pass_idx < gop.value_ptr.first) gop.value_ptr.first = pass_idx;
-                    if (pass_idx > gop.value_ptr.last) gop.value_ptr.last = pass_idx;
-                }
-            }
-        }
-
-        var result = try std.ArrayList(LifetimeEntry).initCapacity(self.allocator, map.count());
-        var it = map.iterator();
-        while (it.next()) |entry| {
-            result.appendAssumeCapacity(.{
-                .resource_id = entry.key_ptr.*,
-                .first_pass = entry.value_ptr.first,
-                .last_pass = entry.value_ptr.last,
-            });
-        }
-        return result.toOwnedSlice();
-    }
-
-    pub fn collectTransients(
-        self: *RenderGraph,
-        lifetimes: []const LifetimeEntry,
-    ) ![]TransientAlloc {
-        var list = std.ArrayList(TransientAlloc).init(self.allocator);
-        for (lifetimes) |lt| {
-            const handle = self.pool.getResource(lt.resource_id) orelse continue;
-            if (handle.desc == .texture2d or handle.desc == .buffer) {
-                try list.append(.{
-                    .resource_id = lt.resource_id,
-                    .desc = handle.desc,
-                    .first_pass = lt.first_pass,
-                    .last_pass = lt.last_pass,
-                });
-            }
-        }
-        return list.toOwnedSlice();
-    }
-
-    pub fn inferBarriers(
-        self: *RenderGraph,
-        gpu_passes: []const frame_graph.GPUPassDesc,
-        lifetimes: []const LifetimeEntry,
-    ) ![]BarrierSlot {
-        _ = lifetimes;
-        var state_map = std.AutoHashMap(gpu_ir.ResourceId, gpu_ir.ResourceState).init(self.allocator);
-        defer state_map.deinit();
-
-        var list = std.ArrayList(BarrierSlot).init(self.allocator);
-
-        for (gpu_passes, 0..) |gp, pi| {
-            const pass_idx = @as(u32, @intCast(pi));
-            const want_read = gpu_ir.ResourceState.non_pixel_shader_resource;
-            const want_write = gpu_ir.ResourceState.unordered_access;
-
-            for (gp.bindings.entries) |entry| {
-                const current_state = state_map.get(entry.resource_id) orelse gpu_ir.ResourceState.common;
-                const desired_state = switch (entry.key.kind) {
-                    .srv => want_read,
-                    .uav => want_write,
-                    .cbv => continue,
-                    .sampler => continue,
-                };
-                if (current_state != desired_state) {
-                    try list.append(.{
-                        .pass_index = pass_idx,
-                        .barrier = .{
-                            .resource_id = entry.resource_id,
-                            .barrier_type = .transition,
-                            .state_before = current_state,
-                            .state_after = desired_state,
-                        },
-                    });
-                    try state_map.put(entry.resource_id, desired_state);
-                }
-            }
-        }
-
-        return list.toOwnedSlice();
-    }
-
     pub fn allocateTransients(self: *RenderGraph, plan: *RenderPlan) !void {
-        for (plan.transients) |t| {
-            _ = self.pool.getResource(t.resource_id) orelse {
-                switch (t.desc) {
-                    .texture2d => |td| {
-                        _ = try self.pool.createTexture2D(td);
-                    },
-                    .buffer => |bd| {
-                        _ = try self.pool.createBuffer(bd);
-                    },
-                    .sampler => {},
-                }
-            };
+        for (plan.lifetimes.entries) |e| {
+            if (!e.transient) continue;
+            const handle = self.pool.getResource(e.resource_id) orelse continue;
+            if (handle.d3d_resource != null) continue;
+            switch (handle.desc) {
+                .texture2d => |td| {
+                    _ = try self.pool.createTexture2D(td);
+                },
+                .buffer => |bd| {
+                    _ = try self.pool.createBuffer(bd);
+                },
+                .sampler => {},
+            }
         }
     }
 
     pub fn releaseTransients(self: *RenderGraph, plan: *RenderPlan) void {
-        for (plan.transients) |t| {
-            if (self.pool.getResource(t.resource_id)) |handle| {
+        for (plan.lifetimes.entries) |e| {
+            if (!e.transient) continue;
+            if (self.pool.getResource(e.resource_id)) |handle| {
                 if (handle.d3d_resource != null) {
-                    _ = self.pool.resources.remove(t.resource_id);
+                    _ = self.pool.resources.remove(e.resource_id);
                 }
             }
         }
     }
 
-    pub fn deinitPlan(allocator: std.mem.Allocator, plan: *const RenderPlan) void {
+    pub fn deinitPlan(allocator: std.mem.Allocator, plan: *RenderPlan) void {
         frame_graph.FrameGraph.deinitPlan(allocator, &.{
             .nodes = plan.nodes,
             .edges = plan.edges,
             .budget_us = plan.budget_us,
         });
-        allocator.free(plan.transients);
+        var lifetimes = plan.lifetimes;
+        lifetimes.deinit(allocator);
         allocator.free(plan.auto_barriers);
+        plan.execution_plan.deinit();
+    }
+
+    /// Build FSR 3.1 resource barrier descriptions for a frame generation pipeline.
+    /// Returns barriers for optical flow, confidence, disocclusion, and output resources.
+    pub fn buildFSR3Barriers(
+        pool: *resource_system.ResourcePool,
+        optical_flow: gpu_ir.ResourceId,
+        confidence: gpu_ir.ResourceId,
+        disocclusion: gpu_ir.ResourceId,
+        output: gpu_ir.ResourceId,
+    ) ![4]gpu_ir.BarrierDesc {
+        var result: [4]gpu_ir.BarrierDesc = undefined;
+        var i: u32 = 0;
+
+        const entries = [_]struct { id: gpu_ir.ResourceId, target: gpu_ir.ResourceState }{
+            .{ .id = optical_flow, .target = .unordered_access },
+            .{ .id = confidence, .target = .unordered_access },
+            .{ .id = disocclusion, .target = .unordered_access },
+            .{ .id = output, .target = .unordered_access },
+        };
+
+        for (entries) |e| {
+            if (e.id != 0) {
+                const handle = pool.getResource(e.id) orelse continue;
+                result[i] = .{
+                    .resource_id = e.id,
+                    .state_before = @intFromEnum(handle.current_state),
+                    .state_after = @intFromEnum(e.target),
+                };
+                i += 1;
+            }
+        }
+        return result;
     }
 };

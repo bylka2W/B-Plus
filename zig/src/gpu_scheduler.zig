@@ -65,6 +65,7 @@ pub const GPUScheduler = struct {
             const pass_id = switch (node.kind) {
                 .gpu => |g| g.pass_id,
                 .render => |r| r.pass_id,
+                .fsr3_generation => |f| f.pass_id,
                 else => continue,
             };
             const pass_idx = pass_id_to_idx.get(pass_id) orelse continue;
