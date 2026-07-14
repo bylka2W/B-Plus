@@ -1,0 +1,9 @@
+entry main {
+    var x = 0;
+    var i = 0;
+    while (i < 5) {
+        defer { x = x + 1; };
+        i = i + 1;
+    };
+    ExitProcess(x);
+}

@@ -1,0 +1,8 @@
+enum Color { Red, Green, Blue }
+
+entry main {
+    var r = Color.Red;
+    var g = Color.Green;
+    var b = Color.Blue;
+    ExitProcess(r + g + b);
+}

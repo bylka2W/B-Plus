@@ -1,0 +1,4 @@
+entry main {
+    var x = if (1) { 42 } else { 0 };
+    ExitProcess(x);
+}

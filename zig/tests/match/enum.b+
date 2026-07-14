@@ -1,0 +1,12 @@
+enum Color { Red, Green, Blue }
+
+entry main {
+    var x = Color.Green;
+    var r = 0;
+    match (x) {
+        Color.Red   => { r = 10; },
+        Color.Green => { r = 20; },
+        Color.Blue  => { r = 30; },
+    };
+    ExitProcess(r);
+}

@@ -1,0 +1,8 @@
+fn returnA(a, b) {
+    return a;
+}
+
+entry main {
+    var x = returnA(10, 20);
+    ExitProcess(x);
+}

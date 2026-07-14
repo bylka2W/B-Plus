@@ -4661,7 +4661,7 @@ fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8)
     if (div_idx != null and div_idx.? > 0) {
         const lhs = std.mem.trim(u8, e[0..div_idx.?], " \t");
         const rhs = std.mem.trim(u8, e[div_idx.?+1..], " \t");
-        try emitExprAtomToRAX(p, lhs, current_state);
+        try emitExprToRAX(p, lhs, current_state);
         try x64.emit(&p.cbuf.bytes, .CQO, &.{});
         try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
         try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RDX) });
@@ -4678,18 +4678,18 @@ fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8)
     if (plus_idx != null and plus_idx.? > 0) {
         const lhs = std.mem.trim(u8, e[0..plus_idx.?], " \t");
         const rhs = std.mem.trim(u8, e[plus_idx.?+1..], " \t");
-        try emitExprAtomToRAX(p, lhs, current_state);
+        try emitExprToRAX(p, lhs, current_state);
         try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
-        try emitExprAtomToRAX(p, rhs, current_state);
+        try emitExprToRAX(p, rhs, current_state);
         try x64.emit(&p.cbuf.bytes, .ADD_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
         return;
     }
     if (minus_idx != null and minus_idx.? > 0) {
         const lhs = std.mem.trim(u8, e[0..minus_idx.?], " \t");
         const rhs = std.mem.trim(u8, e[minus_idx.?+1..], " \t");
-        try emitExprAtomToRAX(p, rhs, current_state);
+        try emitExprToRAX(p, rhs, current_state);
         try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
-        try emitExprAtomToRAX(p, lhs, current_state);
+        try emitExprToRAX(p, lhs, current_state);
         try x64.emit(&p.cbuf.bytes, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
         return;
     }

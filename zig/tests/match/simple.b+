@@ -1,0 +1,10 @@
+entry main {
+    var x = 2;
+    var r = 0;
+    match (x) {
+        1 => { r = 10; },
+        2 => { r = 20; },
+        3 => { r = 30; },
+    };
+    ExitProcess(r);
+}

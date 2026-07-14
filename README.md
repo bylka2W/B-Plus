@@ -1,4 +1,4 @@
-# B+ v4.5.6 — Compiled `.bp` Language (MIR + COFF pipeline)
+# B+ v4.5.7 — Compiled `.bp` Language (MIR + COFF pipeline)
 
 > [English version ↓](#b-v456--compiled-bp-language-mir--coff-pipeline)
 
@@ -1140,7 +1140,7 @@ SOFTWARE.
 
 ---
 
-# B+ v4.5.6 — Compiled `.bp` Language (MIR + COFF pipeline)
+# B+ v4.5.7 — Compiled `.bp` Language (MIR + COFF pipeline)
 
 > [Russian version ↑](#b-v456--compiled-bp-language-mir--coff-pipeline)
 

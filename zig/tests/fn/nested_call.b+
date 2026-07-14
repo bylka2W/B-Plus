@@ -1,0 +1,5 @@
+fn five() { return 5; }
+
+entry main {
+    ExitProcess(five());
+}

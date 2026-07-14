@@ -1,0 +1,5 @@
+entry main {
+    var s = 0;
+    for (i : 0..10) { s = s + i; };
+    ExitProcess(s);
+}
