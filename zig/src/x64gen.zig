@@ -194,7 +194,11 @@ const PendingOutput = struct {
     off_ctx_var_start: i32, off_state_data_base: i32,
     entry_vars: std.StringHashMap(i32),
     in_for_loop: bool,
-    off_for_loop_x: i32, off_for_loop_y: i32,
+    in_for_range: bool, for_range_var_name: []const u8,
+    off_for_loop_x: i32, off_for_loop_y: i32, off_for_range_counter: i32,
+    break_labels: std.ArrayList(u32),
+    continue_labels: std.ArrayList(u32),
+    defer_scopes: std.ArrayList(std.ArrayList([]const u8)),
     off_core_type: i32, off_numa_highest_node: i32, off_numa_node_mask: i32,
     off_l1_base: i32, off_l1_ptr: i32, off_l1_end: i32, off_l1_buf_start: i32,
     off_l2_base: i32, off_l2_ptr: i32, off_l2_end: i32, off_l2_buf_start: i32,
@@ -235,6 +239,11 @@ const PendingOutput = struct {
     xmm_used: [16]bool,
     symbols: sym.SymbolTable,
     struct_defs: std.StringHashMap(ast.StructDef),
+    enum_defs: std.StringHashMap(i64), // key = "EnumName.Variant", value = variant index
+    enum_keys: std.ArrayList([]const u8),
+    func_defs: std.StringHashMap(ast.EntryDecl),
+    in_function: bool,
+    fn_epilogue_lbl: u32,
     expr_arena: std.ArrayList(Expr),
     value_uses: std.ArrayList(u32), // use count per value (parallel to expr_arena)
     value_cache: std.AutoHashMap(usize, i16),
@@ -286,7 +295,11 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         .off_ht_free_next = 0,
         .off_ht_free_head = 0,
         .in_for_loop = false,
-        .off_for_loop_x = 0, .off_for_loop_y = 0,
+        .in_for_range = false, .for_range_var_name = "",
+        .off_for_loop_x = 0, .off_for_loop_y = 0, .off_for_range_counter = 0,
+        .break_labels = std.ArrayList(u32).init(allocator),
+        .continue_labels = std.ArrayList(u32).init(allocator),
+        .defer_scopes = std.ArrayList(std.ArrayList([]const u8)).init(allocator),
         .off_telem_l1_spill = 0, .off_telem_l2_spill = 0,
         .off_telem_l1_peak = 0, .off_telem_l2_peak = 0, .off_telem_l3_peak = 0,
         .off_telem_l1_allocs = 0, .off_telem_l2_allocs = 0, .off_telem_l3_allocs = 0,
@@ -309,6 +322,11 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         .pending_ret = null,
         .symbols = sym.SymbolTable.init(allocator),
         .struct_defs = program.struct_defs,
+        .enum_defs = std.StringHashMap(i64).init(allocator),
+        .enum_keys = std.ArrayList([]const u8).init(allocator),
+        .func_defs = std.StringHashMap(ast.EntryDecl).init(allocator),
+        .in_function = false,
+        .fn_epilogue_lbl = 0,
         .expr_arena = std.ArrayList(Expr).init(allocator),
         .value_uses = std.ArrayList(u32).init(allocator),
         .value_cache = std.AutoHashMap(usize, i16).init(allocator),
@@ -334,6 +352,16 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
     for (program.states.items) |s| p.total_transitions += @intCast(s.transitions.items.len);
     try computeStackLayout(&p, program);
     try computeStateLayout(&p, program);
+    for (program.enums.items) |ed| {
+        for (ed.members.items, 0..) |member, i| {
+            const key = try std.fmt.allocPrint(p.allocator, "{s}.{s}", .{ ed.name, member });
+            try p.enum_keys.append(key);
+            try p.enum_defs.put(key, @intCast(i));
+        }
+    }
+    for (program.func_defs.items) |*fd| {
+        try p.func_defs.put(fd.name, fd.*);
+    }
     try emitPrologueAndInit(&p, program);
     try emitRuntimeSection(&p);
     // Analyze traces and compute inline_enter before emitting enter funcs
@@ -374,6 +402,53 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
     try embedStringPool(&p);
     try embedStateGlobals(&p);
     const import_dir_rva = try emitImportTable(&p);
+    // Emit user-defined function bodies
+    {
+        var it = p.func_defs.iterator();
+        while (it.next()) |entry| {
+            const fd = entry.value_ptr.*;
+            const fn_lbl = try allocLabelId(&p, "fn_{s}", .{fd.name});
+            try setLabel(&p, fn_lbl);
+            // Prologue
+            try x64.emit(&p.cbuf.bytes, .PUSH_R64, &.{x64.Operand.r(Reg.RBP)});
+            try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBP), x64.Operand.r(Reg.RSP) });
+            try x64.emit(&p.cbuf.bytes, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(32) });
+            // Store parameters from Win64 registers to stack
+            const win64_param_regs = [_]i16{ 1, 2, 8, 9 };
+            const saved_entry_vars = p.entry_vars;
+            p.entry_vars = std.StringHashMap(i32).init(p.allocator);
+            defer {
+                p.entry_vars.deinit();
+                p.entry_vars = saved_entry_vars;
+            }
+            var param_off: i32 = -8;
+            for (fd.params.items, 0..) |param, i| {
+                if (i < 4) {
+                    try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, param_off), x64.Operand.r(win64_param_regs[i]) });
+                }
+                try p.entry_vars.put(param.name, param_off);
+                param_off -= 8;
+            }
+            // Save function state flags
+            const saved_in_fn = p.in_function;
+            const saved_epi_lbl = p.fn_epilogue_lbl;
+            const fn_epi_lbl = try allocLabelId(&p, "fn_epi_{s}", .{fd.name});
+            p.in_function = true;
+            p.fn_epilogue_lbl = fn_epi_lbl;
+            // Compile body
+            const body_text = try std.mem.join(p.allocator, ";", fd.body_lines.items);
+            defer p.allocator.free(body_text);
+            try emitAction(&p, body_text, "");
+            // Epilogue label
+            try setLabel(&p, fn_epi_lbl);
+            try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RSP), x64.Operand.r(Reg.RBP) });
+            try x64.emit(&p.cbuf.bytes, .POP_R64, &.{x64.Operand.r(Reg.RBP)});
+            try x64.emit(&p.cbuf.bytes, .RET, &.{});
+            // Restore state
+            p.in_function = saved_in_fn;
+            p.fn_epilogue_lbl = saved_epi_lbl;
+        }
+    }
     try applyFixups(&p);
     // Fill jump table entries (base-relative disp = dp_N - jmp_table)
     {
@@ -393,12 +468,10 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         }
     }
     const idat_size = computeImportTableSize();
-    // Exports are already collected in p.symbols during emitPrologueAndInit
-    // No additional work needed here - symbols persist independently of label maps
-    // Cleanup allocations
     p.allocator.free(p.dp_id);
     p.allocator.free(p.en_id);
     p.allocator.free(p.inline_enter);
+    p.func_defs.deinit();
     // Must extract cbuf.bytes before deinit cbuf, since toOwnedSlice takes ownership
     const code = try p.cbuf.bytes.toOwnedSlice();
     p.cbuf.deinit();
@@ -426,6 +499,12 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
     p.expr_arena.deinit();
     p.value_uses.deinit();
     p.value_cache.deinit();
+    for (p.enum_keys.items) |k| p.allocator.free(k);
+    p.enum_keys.deinit();
+    p.enum_defs.deinit();
+    p.break_labels.deinit();
+    p.continue_labels.deinit();
+    p.defer_scopes.deinit();
     return X64Output{
         .code = code,
         .import_dir_rva = @intCast(import_dir_rva),
@@ -649,6 +728,7 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     p.off_epoch = off; off -= 8;
     p.off_for_loop_x = off; off -= 4;
     p.off_for_loop_y = off; off -= 4;
+    p.off_for_range_counter = off; off -= 8;
     p.off_ht_states = off - 64; off -= 64;
     p.off_ht_tiers = off - 64; off -= 64;
     p.off_ht_heats = off - 256; off -= 256;
@@ -990,7 +1070,11 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                         if (expr.len > 0 and expr[expr.len-1] == ';') expr = expr[0..expr.len-1];
                         const vo = getVarOffset(p, "", name);
                         if (vo != std.math.minInt(i32)) {
-                            try emitExprToRAX(p, expr, "");
+                            if (std.mem.startsWith(u8, expr, "if ") or std.mem.startsWith(u8, expr, "if(")) {
+                                try emitIfAsExprToRAX(p, expr, "");
+                            } else {
+                                try emitExprToRAX(p, expr, "");
+                            }
                             try emitStoreVarFromReg(p, vo, Reg.RAX, 8, Reg.RBP);
                         }
                     }
@@ -1067,6 +1151,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                 var buf = std.ArrayList(u8).init(p.allocator);
                 for (entry.body_lines.items, 0..) |line, i| {
                     const t = std.mem.trim(u8, line, " \t");
+                    std.debug.print("  line[{d}]: t=\"{s}\"\n", .{i, t});
                     if (t.len == 0) continue;
                     if (std.mem.startsWith(u8, t, "var ")) {
                         const rest = std.mem.trimLeft(u8, t["var ".len..], " \t\r\n");
@@ -1074,12 +1159,17 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                         if (eq_idx) |ei| {
                             const name = std.mem.trim(u8, rest[0..ei], " \t\r\n");
                             var expr = std.mem.trim(u8, rest[ei+1..], " \t\r\n");
-                            if (expr.len > 0 and expr[expr.len-1] == ';') expr = expr[0..expr.len-1];
-                            const vo = getVarOffset(p, state_ctx, name);
-                            if (vo != std.math.minInt(i32)) {
+                        if (expr.len > 0 and expr[expr.len-1] == ';') expr = expr[0..expr.len-1];
+                        const vo = getVarOffset(p, state_ctx, name);
+                        std.debug.print("  var: name=\"{s}\" expr=\"{s}\" vo={d}\n", .{name, expr, vo});
+                        if (vo != std.math.minInt(i32)) {
+                            if (std.mem.startsWith(u8, expr, "if ") or std.mem.startsWith(u8, expr, "if(")) {
+                                try emitIfAsExprToRAX(p, expr, state_ctx);
+                            } else {
                                 try emitExprToRAX(p, expr, state_ctx);
-                                try emitStoreVarFromReg(p, vo, Reg.RAX, 8, Reg.RBP);
                             }
+                            try emitStoreVarFromReg(p, vo, Reg.RAX, 8, Reg.RBP);
+                        }
                         }
                         continue;
                     }
@@ -1089,7 +1179,9 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                 }
                 p.pending_ret = null;
                 if (buf.items.len > 0) {
+                    try pushDeferScope(p);
                     try emitAction(p, buf.items, state_ctx);
+                    try popDeferScope(p);
                 } else {
                     try emitXorReg(p, Reg.RAX);
                     try emitInc(p, Reg.RAX);
@@ -1483,7 +1575,28 @@ fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
             try setLabel(p, hv_ok);
         },
         .log_event => {
-            return error.NotImplemented;
+            const le_skip = try allocLabelId(p, "le_skip", .{});
+            const le_trace = try allocLabelId(p, "trace_buf_ptr", .{});
+            // LEA R10, [RIP + trace_buf_ptr] — address of the global slot
+            try emitRipRelativeLea(p, Reg.R10, le_trace);
+            // MOV R11, [R10] — load current write pointer
+            try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.R11), x64.Operand.mem(Reg.R10, 0) });
+            // TEST R11, R11 — null check
+            try x64.emit(&p.cbuf.bytes, .TEST_R64_R64, &.{ x64.Operand.r(Reg.R11), x64.Operand.r(Reg.R11) });
+            try emitCondLongJmp(p, .JE_REL32, le_skip);
+            // MOV byte [R11], CL — write kind
+            try x64.emit(&p.cbuf.bytes, .MOV_MEM_R8, &.{ x64.Operand.mem(Reg.R11, 0), x64.Operand.r(Reg.RCX) });
+            // MOV dword [R11+4], EDX — write slot
+            try x64.emit(&p.cbuf.bytes, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R11, 4), x64.Operand.r(Reg.RDX) });
+            // MOV dword [R11+8], R8D — write gen
+            try x64.emit(&p.cbuf.bytes, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R11, 8), x64.Operand.r(Reg.R8) });
+            // MOV dword [R11+12], R9D — write arg
+            try x64.emit(&p.cbuf.bytes, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.R11, 12), x64.Operand.r(Reg.R9) });
+            // ADD R11, 16 — advance pointer
+            try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.R11), x64.Operand.immU32(16) });
+            // MOV [R10], R11 — store back advanced pointer
+            try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.R10, 0), x64.Operand.r(Reg.R11) });
+            try setLabel(p, le_skip);
         },
         .handle_touch => {
             const ht_skip = try allocLabelId(p, "ht_skip", .{});
@@ -2524,29 +2637,18 @@ fn computeImportTableSize() u32 {
 }
 
 fn applyFixups(p: *PendingOutput) !void {
-    // Dump all labels
-    std.debug.print("LABELS:\n", .{});
-    for (p.cbuf.label_names.items, 0..) |name, i| {
-        const off = getLabel(p, @as(u32, @intCast(i)));
-        std.debug.print("  label[{}] = \"{s}\" offset={?}\n", .{i, name, off});
-    }
-    std.debug.print("FIXUPS:\n", .{});
     for (p.cbuf.fixups.items) |fx| {
-        const target = getLabel(p, fx.label_id) orelse {
-            std.debug.print("applyFixups: label_id={} TARGET NULL (skipped)\n", .{fx.label_id});
-            continue;
-        };
-        if (fx.offset >= p.cbuf.bytes.items.len) {
-            std.debug.print("applyFixups: label_id={} offset={} >= bytes.len={} (skipped)\n", .{fx.label_id, fx.offset, p.cbuf.bytes.items.len});
-            continue;
-        }
+        const target = getLabel(p, fx.label_id) orelse continue;
+        if (fx.offset >= p.cbuf.bytes.items.len) continue;
         const disp: i32 = @intCast(@as(i64, @intCast(target)) - @as(i64, @intCast(fx.offset + fx.disp_size)));
-        std.debug.print("applyFixups: label_id={} target={} offset={} disp_size={} disp={}\n", .{fx.label_id, target, fx.offset, fx.disp_size, disp});
         if (fx.disp_size == 1) {
             p.cbuf.bytes.items[fx.offset] = @as(u8, @bitCast(@as(i8, @truncate(disp))));
         } else if (fx.disp_size == 4) {
-            const db: [4]u8 = @bitCast(disp);
-            for (db, 0..) |b, j| { if (fx.offset + j < p.cbuf.bytes.items.len) p.cbuf.bytes.items[fx.offset + j] = b; }
+            const u = @as(u32, @bitCast(disp));
+            p.cbuf.bytes.items[fx.offset + 0] = @as(u8, @truncate(u));
+            p.cbuf.bytes.items[fx.offset + 1] = @as(u8, @truncate(u >> 8));
+            p.cbuf.bytes.items[fx.offset + 2] = @as(u8, @truncate(u >> 16));
+            p.cbuf.bytes.items[fx.offset + 3] = @as(u8, @truncate(u >> 24));
         }
     }
 }
@@ -2854,9 +2956,7 @@ fn emitDec(p: *PendingOutput, reg: i16) !void {
 }
 
 fn emitMovRegImm32(p: *PendingOutput, reg: i16, imm: u32) !void {
-    if (reg >= 8) try p.cbuf.bytes.append(0x41);
-    try p.cbuf.bytes.append(@as(u8, @intCast(0xB8 + (reg & 7))));
-    try p.cbuf.bytes.appendSlice(&@as([4]u8, @bitCast(imm)));
+    try x64.emit(&p.cbuf.bytes, .MOV_R64_IMM64, &.{ x64.Operand.r(reg), x64.Operand.imm(@as(i64, @intCast(imm))) });
 }
 
 fn emitLoadImm(p: *PendingOutput, reg: i16, val: i64) !void {
@@ -3163,6 +3263,34 @@ fn findMatching(src: []const u8, start: usize, open: u8, close: u8) usize {
     return i - 1;
 }
 
+fn pushDeferScope(p: *PendingOutput) !void {
+    try p.defer_scopes.append(std.ArrayList([]const u8).init(p.allocator));
+}
+
+fn popDeferScope(p: *PendingOutput) !void {
+    if (p.defer_scopes.items.len == 0) return;
+    var scope = p.defer_scopes.pop().?;
+    var i: usize = scope.items.len;
+    while (i > 0) {
+        i -= 1;
+        try emitAction(p, scope.items[i], "");
+    }
+    scope.deinit();
+}
+
+fn emitAllDeferScopes(p: *PendingOutput) !void {
+    var si: usize = 0;
+    while (si < p.defer_scopes.items.len) {
+        const scope = &p.defer_scopes.items[si];
+        var j: usize = scope.items.len;
+        while (j > 0) {
+            j -= 1;
+            try emitAction(p, scope.items[j], "");
+        }
+        si += 1;
+    }
+}
+
 fn emitIfElse(p: *PendingOutput, cond: []const u8, then_body: []const u8, else_body: []const u8, current_state: []const u8) !void {
     const else_lbl = try allocLabelId(p, "if_else_{d}", .{p.cbuf.label_names.items.len});
     const merge_lbl = try allocLabelId(p, "if_merge_{d}", .{p.cbuf.label_names.items.len});
@@ -3217,10 +3345,16 @@ fn emitIfElse(p: *PendingOutput, cond: []const u8, then_body: []const u8, else_b
         try x64.emit(&p.cbuf.bytes, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.imm(0) });
         try emitCondLongJmp(p, .JE_REL32, else_lbl);
     }
+    try pushDeferScope(p);
     try emitAction(p, then_body, current_state);
+    try popDeferScope(p);
     try emitLongJmp(p, merge_lbl);
     try setLabel(p, else_lbl);
-    if (else_body.len > 0) try emitAction(p, else_body, current_state);
+    if (else_body.len > 0) {
+        try pushDeferScope(p);
+        try emitAction(p, else_body, current_state);
+        try popDeferScope(p);
+    }
     try setLabel(p, merge_lbl);
 }
 
@@ -3246,12 +3380,20 @@ fn emitForLoop(p: *PendingOutput, w: u32, h: u32, body: []const u8, current_stat
     try x64.emit(&p.cbuf.bytes, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(h) });
     try emitCondLongJmp(p, .JGE_REL32, end_lbl);
 
+    try p.break_labels.append(end_lbl);
+    try p.continue_labels.append(header_lbl);
+    try pushDeferScope(p);
+
     {
         const saved = p.in_for_loop;
         p.in_for_loop = true;
         try emitAction(p, body, current_state);
         p.in_for_loop = saved;
     }
+
+    try popDeferScope(p);
+    _ = p.break_labels.pop();
+    _ = p.continue_labels.pop();
 
     try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_x, 4, Reg.RBP);
     try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(1) });
@@ -3264,6 +3406,200 @@ fn emitForLoop(p: *PendingOutput, w: u32, h: u32, body: []const u8, current_stat
     try emitLoadVarToReg(p, Reg.RAX, p.off_for_loop_y, 4, Reg.RBP);
     try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(1) });
     try emitStoreVarFromReg(p, p.off_for_loop_y, Reg.RAX, 4, Reg.RBP);
+    try emitLongJmp(p, header_lbl);
+    try setLabel(p, end_lbl);
+}
+
+fn emitMatch(p: *PendingOutput, expr: []const u8, body: []const u8, current_state: []const u8) !void {
+    const merge_lbl = try allocLabelId(p, "match_merge_{d}", .{p.cbuf.label_names.items.len});
+
+    try emitExprToRAX(p, expr, current_state);
+    try x64.emit(&p.cbuf.bytes, .PUSH_R64, &.{ x64.Operand.r(Reg.RAX) });
+
+    var arm_labels = std.ArrayList(u32).init(p.allocator);
+    defer arm_labels.deinit();
+
+    var arms = std.ArrayList(MatchArm).init(p.allocator);
+    defer arms.deinit();
+    try parseMatchArms(body, &arms);
+
+    for (arms.items, 0..) |arm, idx| {
+        if (idx > 0) try setLabel(p, arm_labels.items[idx - 1]);
+        if (arm.pattern.len == 1 and arm.pattern[0] == '_') {
+            // wildcard arm: no comparison needed
+        } else {
+            try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RSP, 0) });
+            const pval = resolveMatchPattern(p, arm.pattern);
+            try x64.emit(&p.cbuf.bytes, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(@intCast(pval)) });
+            if (idx < arms.items.len - 1) {
+                const next_arm_lbl = try allocLabelId(p, "match_arm_{d}", .{p.cbuf.label_names.items.len});
+                try arm_labels.append(next_arm_lbl);
+                try emitCondLongJmp(p, .JNE_REL32, next_arm_lbl);
+            } else {
+                try emitCondLongJmp(p, .JNE_REL32, merge_lbl);
+            }
+        }
+        try pushDeferScope(p);
+        try emitAction(p, arm.body, current_state);
+        try popDeferScope(p);
+        try emitLongJmp(p, merge_lbl);
+    }
+
+    try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(8) });
+    try setLabel(p, merge_lbl);
+}
+
+fn resolveMatchPattern(p: *PendingOutput, pattern: []const u8) i64 {
+    if (std.mem.indexOfScalar(u8, pattern, '.')) |_| {
+        const trimmed = std.mem.trim(u8, pattern, " \t");
+        if (p.enum_defs.get(trimmed)) |val| return val;
+    }
+    return parseNumber(pattern);
+}
+
+const MatchArm = struct {
+    pattern: []const u8,
+    body: []const u8,
+};
+
+fn parseMatchArms(body: []const u8, arms: *std.ArrayList(MatchArm)) !void {
+    var start: usize = 0;
+    var i: usize = 0;
+    var depth: u32 = 0;
+    while (i < body.len) : (i += 1) {
+        switch (body[i]) {
+            '{' => depth += 1,
+            '}' => { if (depth > 0) depth -= 1; },
+            ';' => {
+                if (depth == 0) {
+                    const arm_text = std.mem.trim(u8, body[start..i], " \t\r\n");
+                    if (arm_text.len > 0) try addMatchArm(arm_text, arms);
+                    start = i + 1;
+                }
+            },
+            else => {},
+        }
+    }
+    const last = std.mem.trim(u8, body[start..], " \t\r\n");
+    if (last.len > 0) try addMatchArm(last, arms);
+}
+
+fn addMatchArm(arm_text: []const u8, arms: *std.ArrayList(MatchArm)) !void {
+    const arrow = std.mem.indexOf(u8, arm_text, "=>") orelse return;
+    const pattern = std.mem.trim(u8, arm_text[0..arrow], " \t\r\n");
+    const after_arrow = std.mem.trimLeft(u8, arm_text[arrow + 2 ..], " \t\r\n");
+    var body: []const u8 = undefined;
+    if (after_arrow.len > 0 and after_arrow[0] == '{') {
+        const body_end = findMatching(after_arrow, 0, '{', '}');
+        body = after_arrow[1..body_end];
+    } else {
+        body = after_arrow;
+    }
+    try arms.append(.{ .pattern = pattern, .body = body });
+}
+
+fn emitForRangeLoop(p: *PendingOutput, var_name: []const u8, start_str: []const u8, end_str: []const u8, body: []const u8, current_state: []const u8) !void {
+    const header_lbl = try allocLabelId(p, "for_hdr_{d}", .{p.cbuf.label_names.items.len});
+    const end_lbl = try allocLabelId(p, "for_end_{d}", .{p.cbuf.label_names.items.len});
+
+    try emitExprToRAX(p, start_str, current_state);
+    try emitStoreVarFromReg(p, p.off_for_range_counter, Reg.RAX, 8, Reg.RBP);
+
+    try setLabel(p, header_lbl);
+    try emitLoadVarToReg(p, Reg.RAX, p.off_for_range_counter, 8, Reg.RBP);
+    try emitCmpR64ImmOrVar(p, end_str, current_state);
+    try emitCondLongJmp(p, .JGE_REL32, end_lbl);
+
+    try p.break_labels.append(end_lbl);
+    try p.continue_labels.append(header_lbl);
+    try pushDeferScope(p);
+
+    {
+        const saved_name = p.for_range_var_name;
+        const saved_flag = p.in_for_range;
+        p.for_range_var_name = var_name;
+        p.in_for_range = true;
+        try emitAction(p, body, current_state);
+        p.for_range_var_name = saved_name;
+        p.in_for_range = saved_flag;
+    }
+
+    try popDeferScope(p);
+    _ = p.break_labels.pop();
+    _ = p.continue_labels.pop();
+
+    try emitLoadVarToReg(p, Reg.RAX, p.off_for_range_counter, 8, Reg.RBP);
+    try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.immU32(1) });
+    try emitStoreVarFromReg(p, p.off_for_range_counter, Reg.RAX, 8, Reg.RBP);
+    try emitLongJmp(p, header_lbl);
+
+    try setLabel(p, end_lbl);
+}
+
+fn emitWhileLoop(p: *PendingOutput, cond: []const u8, body: []const u8, current_state: []const u8) !void {
+    const header_lbl = try allocLabelId(p, "while_hdr_{d}", .{p.cbuf.label_names.items.len});
+    const end_lbl = try allocLabelId(p, "while_end_{d}", .{p.cbuf.label_names.items.len});
+
+    try setLabel(p, header_lbl);
+
+    try p.break_labels.append(end_lbl);
+    try p.continue_labels.append(header_lbl);
+    try pushDeferScope(p);
+
+    const eq_idx = std.mem.indexOf(u8, cond, "==");
+    const ne_idx = std.mem.indexOf(u8, cond, "!=");
+    const ge_idx = std.mem.indexOf(u8, cond, ">=");
+    const le_idx = std.mem.indexOf(u8, cond, "<=");
+    const gt_idx = if (ge_idx == null) std.mem.indexOf(u8, cond, ">") else null;
+    const lt_idx = if (le_idx == null) std.mem.indexOf(u8, cond, "<") else null;
+
+    if (eq_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JNE_REL32, end_lbl);
+    } else if (ne_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JE_REL32, end_lbl);
+    } else if (ge_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JL_REL32, end_lbl);
+    } else if (le_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JG_REL32, end_lbl);
+    } else if (gt_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+1..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JLE_REL32, end_lbl);
+    } else if (lt_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+1..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JGE_REL32, end_lbl);
+    } else {
+        try emitExprToRAX(p, cond, current_state);
+        try x64.emit(&p.cbuf.bytes, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.imm(0) });
+        try emitCondLongJmp(p, .JE_REL32, end_lbl);
+    }
+
+    try emitAction(p, body, current_state);
+    try popDeferScope(p);
+    _ = p.break_labels.pop();
+    _ = p.continue_labels.pop();
+
     try emitLongJmp(p, header_lbl);
     try setLabel(p, end_lbl);
 }
@@ -3315,6 +3651,33 @@ fn emitAction(p: *PendingOutput, body: []const u8, current_state: []const u8) an
 fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const u8) anyerror!void {
     if (body.len == 0) return;
     const trimmed_body = std.mem.trimLeft(u8, body, " \t\r\n");
+
+    // break
+    if (std.mem.eql(u8, trimmed_body, "break")) {
+        if (p.break_labels.items.len == 0) return error.BreakOutsideLoop;
+        try emitLongJmp(p, p.break_labels.getLast());
+        return;
+    }
+    // continue
+    if (std.mem.eql(u8, trimmed_body, "continue")) {
+        if (p.continue_labels.items.len == 0) return error.ContinueOutsideLoop;
+        try emitLongJmp(p, p.continue_labels.getLast());
+        return;
+    }
+
+    // defer { body }
+    if (std.mem.startsWith(u8, trimmed_body, "defer") and (trimmed_body.len == 5 or trimmed_body[5] == ' ' or trimmed_body[5] == '{')) {
+        const after_defer = std.mem.trimLeft(u8, trimmed_body[5..], " \t\r\n");
+        if (after_defer.len > 0 and after_defer[0] == '{') {
+            const body_end = findMatching(after_defer, 0, '{', '}');
+            const defer_body = after_defer[1..body_end];
+            if (p.defer_scopes.items.len > 0) {
+                try p.defer_scopes.items[p.defer_scopes.items.len - 1].append(defer_body);
+            }
+        }
+        return;
+    }
+
     if (trimmed_body.len >= 2 and std.mem.eql(u8, trimmed_body[0..2], "if")) {
         const after_if = std.mem.trimLeft(u8, trimmed_body[2..], " \t\r\n");
         if (after_if.len > 0 and after_if[0] == '(') {
@@ -3324,9 +3687,9 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
             if (after_paren.len > 0 and after_paren[0] == '{') {
                 const then_end = findMatching(after_paren, 0, '{', '}');
                 const then_body = after_paren[1..then_end];
-                var else_body: []const u8 = "";
-                const after_then = std.mem.trimLeft(u8, after_paren[then_end + 1 ..], " \t\r\n");
-                if (std.mem.startsWith(u8, after_then, "else{")) {
+    var else_body: []const u8 = "";
+    const after_then = std.mem.trimLeft(u8, after_paren[then_end + 1 ..], " \t\r\n");
+    if (std.mem.startsWith(u8, after_then, "else{")) {
                     const else_end = findMatching(after_then, 4, '{', '}');
                     else_body = after_then[5..else_end];
                 } else if (std.mem.startsWith(u8, after_then, "else {")) {
@@ -3334,6 +3697,23 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
                     else_body = after_then[6..else_end];
                 }
                 try emitIfElse(p, cond, then_body, else_body, current_state);
+            } else if (after_paren.len > 0) {
+                const then_body = after_paren;
+                try emitIfElse(p, cond, then_body, "", current_state);
+            }
+            return;
+        }
+    }
+    if (trimmed_body.len >= 5 and std.mem.eql(u8, trimmed_body[0..5], "match")) {
+        const after_match = std.mem.trimLeft(u8, trimmed_body[5..], " \t\r\n");
+        if (after_match.len > 0 and after_match[0] == '(') {
+            const paren_close = findMatching(after_match, 0, '(', ')');
+            const match_expr = std.mem.trim(u8, after_match[1..paren_close], " \t\r\n");
+            const after_paren = std.mem.trimLeft(u8, after_match[paren_close + 1 ..], " \t\r\n");
+            if (after_paren.len > 0 and after_paren[0] == '{') {
+                const body_end = findMatching(after_paren, 0, '{', '}');
+                const match_body = after_paren[1..body_end];
+                try emitMatch(p, match_expr, match_body, current_state);
             }
             return;
         }
@@ -3344,22 +3724,52 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
             const close_paren = findMatching(after_for, 0, '(', ')');
             const args_str = std.mem.trim(u8, after_for[1..close_paren], " \t\r\n");
             const after_paren = std.mem.trimLeft(u8, after_for[close_paren + 1 ..], " \t\r\n");
-            var it = std.mem.splitScalar(u8, args_str, ',');
-            _ = std.mem.trim(u8, it.next() orelse "x", " \t\r\n");
-            _ = std.mem.trim(u8, it.next() orelse "y", " \t\r\n");
-            var w: u32 = 1;
-            var h: u32 = 1;
-            const rest = std.mem.trimLeft(u8, it.rest(), " \t\r\n");
-            if (std.mem.startsWith(u8, rest, "in ")) {
-            } else if (rest.len > 0) {
-                var it2 = std.mem.splitScalar(u8, rest, ',');
-                w = std.fmt.parseInt(u32, std.mem.trim(u8, it2.next() orelse "1", " \t\r\n"), 10) catch 1;
-                h = std.fmt.parseInt(u32, std.mem.trim(u8, it2.next() orelse "1", " \t\r\n"), 10) catch 1;
+            // Detect for-range: for(var : start..end)
+            const colon_idx = std.mem.indexOfScalar(u8, args_str, ':');
+            if (colon_idx != null) {
+                const var_name = std.mem.trim(u8, args_str[0..colon_idx.?], " \t\r\n");
+                const range_str = std.mem.trim(u8, args_str[colon_idx.? + 1 ..], " \t\r\n");
+                const dotdot_idx = std.mem.indexOf(u8, range_str, "..");
+                if (dotdot_idx == null) return;
+                const start_str = std.mem.trim(u8, range_str[0..dotdot_idx.?], " \t\r\n");
+                const end_str = std.mem.trim(u8, range_str[dotdot_idx.? + 2 ..], " \t\r\n");
+                if (after_paren.len > 0 and after_paren[0] == '{') {
+                    const body_end = findMatching(after_paren, 0, '{', '}');
+                    const for_body = after_paren[1..body_end];
+                    try emitForRangeLoop(p, var_name, start_str, end_str, for_body, current_state);
+                }
+            } else {
+                // 2D pixel loop: for(x, y, w, h)
+                var it = std.mem.splitScalar(u8, args_str, ',');
+                _ = std.mem.trim(u8, it.next() orelse "x", " \t\r\n");
+                _ = std.mem.trim(u8, it.next() orelse "y", " \t\r\n");
+                var w: u32 = 1;
+                var h: u32 = 1;
+                const rest = std.mem.trimLeft(u8, it.rest(), " \t\r\n");
+                if (rest.len > 0) {
+                    var it2 = std.mem.splitScalar(u8, rest, ',');
+                    w = std.fmt.parseInt(u32, std.mem.trim(u8, it2.next() orelse "1", " \t\r\n"), 10) catch 1;
+                    h = std.fmt.parseInt(u32, std.mem.trim(u8, it2.next() orelse "1", " \t\r\n"), 10) catch 1;
+                }
+                if (after_paren.len > 0 and after_paren[0] == '{') {
+                    const body_end = findMatching(after_paren, 0, '{', '}');
+                    const for_body = after_paren[1..body_end];
+                    try emitForLoop(p, w, h, for_body, current_state);
+                }
             }
+            return;
+        }
+    }
+    if (trimmed_body.len >= 5 and std.mem.eql(u8, trimmed_body[0..5], "while")) {
+        const after_while = std.mem.trimLeft(u8, trimmed_body[5..], " \t\r\n");
+        if (after_while.len > 0 and after_while[0] == '(') {
+            const cond_close = findMatching(after_while, 0, '(', ')');
+            const cond = std.mem.trim(u8, after_while[1..cond_close], " \t\r\n");
+            const after_paren = std.mem.trimLeft(u8, after_while[cond_close + 1 ..], " \t\r\n");
             if (after_paren.len > 0 and after_paren[0] == '{') {
                 const body_end = findMatching(after_paren, 0, '{', '}');
-                const for_body = after_paren[1..body_end];
-                try emitForLoop(p, w, h, for_body, current_state);
+                const while_body = after_paren[1..body_end];
+                try emitWhileLoop(p, cond, while_body, current_state);
             }
             return;
         }
@@ -3539,6 +3949,15 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
         }
     }
     if (try tryEmitWin32Call(p, body, current_state)) return;
+    // return expr (inside function body)
+    if (std.mem.startsWith(u8, trimmed_body, "return ")) {
+        const expr = std.mem.trimLeft(u8, trimmed_body["return ".len..], " \t\r\n;");
+        if (expr.len > 0) {
+            try emitExprToRAX(p, expr, current_state);
+        }
+        try emitLongJmp(p, p.fn_epilogue_lbl);
+        return;
+    }
     // return -> expr
     if (std.mem.startsWith(u8, trimmed_body, "return ")) {
         const after_return = std.mem.trimLeft(u8, trimmed_body["return ".len..], " \t\r\n");
@@ -3579,8 +3998,22 @@ fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const 
     }
     const eq = std.mem.indexOf(u8, body, "=");
     if (eq != null and eq.? > 0) {
-        const var_name = std.mem.trim(u8, body[0..eq.?], " \t");
+        var var_name = std.mem.trim(u8, body[0..eq.?], " \t");
+        if (std.mem.startsWith(u8, var_name, "var ")) {
+            var_name = std.mem.trimLeft(u8, var_name["var ".len..], " \t\r\n");
+        }
         const expr = std.mem.trim(u8, body[eq.?+1..], " \t");
+
+        if (std.mem.startsWith(u8, expr, "if ") or std.mem.startsWith(u8, expr, "if(")) {
+            try emitIfAsExprToRAX(p, expr, current_state);
+            const vo = getVarOffset(p, current_state, var_name);
+            if (vo != std.math.minInt(i32)) {
+                try emitStoreVarFromReg(p, vo, Reg.RAX, 8, getVarBaseReg(p, current_state, var_name));
+                p.pending_ret = RetValue{ .int = Reg.RAX };
+            }
+            return;
+        }
+
         const brk = std.mem.indexOf(u8, var_name, "[");
         if (brk != null and std.mem.indexOf(u8, var_name, ",") != null and std.mem.indexOf(u8, var_name, "]") != null) {
             const rest = var_name[brk.?+1..];
@@ -3806,6 +4239,22 @@ fn emitMathCall(p: *PendingOutput, name: []const u8, args_str: []const u8, impor
     try x64.emit(&p.cbuf.bytes, .SSE_MOVD_ST, &.{ x64.Operand.r(Reg.RAX), x64.Operand.xmm(0) });
 }
 
+fn splitArgsDepthAware(input: []const u8, allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
+    var result = std.ArrayList([]const u8).init(allocator);
+    var start: usize = 0;
+    var depth: i32 = 0;
+    for (input, 0..) |c, i| {
+        if (c == '(') depth += 1;
+        if (c == ')') depth -= 1;
+        if (c == ',' and depth == 0) {
+            try result.append(input[start..i]);
+            start = i + 1;
+        }
+    }
+    if (start < input.len) try result.append(input[start..]);
+    return result;
+}
+
 fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const u8) !bool {
     const paren_open = std.mem.indexOfScalar(u8, body, '(');
     if (paren_open) |po| {
@@ -3829,8 +4278,9 @@ fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const 
                         var typ_buf: [12]u8 = undefined; // 0=imm, 1=str, 2=var
                         var num_total: usize = 0;
                         if (args_str.len > 0) {
-                            var it = std.mem.splitScalar(u8, args_str, ',');
-                            while (it.next()) |raw_arg| {
+                            var arg_list = try splitArgsDepthAware(args_str, p.allocator);
+                            defer arg_list.deinit();
+                            for (arg_list.items) |raw_arg| {
                                 if (num_total >= 12) break;
                                 const arg = std.mem.trim(u8, raw_arg, " \t");
                                 if (arg.len == 0) continue;
@@ -3861,7 +4311,12 @@ fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const 
                                     std.debug.print("  emitStrArg i={d} is_wide={} str_idx={d}\n", .{i, is_wide, str_buf[i]});
                                     if (is_wide) try emitRipLeaWide(p, target_regs[i], str_buf[i]) else try emitRipLea(p, target_regs[i], str_buf[i]);
                                 },
-                                2 => _ = try tryLoadVarToReg(p, target_regs[i], var_buf[i], current_state),
+                                2 => {
+                                    if (!try tryLoadVarToReg(p, target_regs[i], var_buf[i], current_state)) {
+                                        try emitExprToRAX(p, var_buf[i], current_state);
+                                        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(target_regs[i]), x64.Operand.r(Reg.RAX) });
+                                    }
+                                },
                                 else => {},
                             }
                         }
@@ -3883,7 +4338,7 @@ fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const 
                                         if (try tryLoadVarToReg(p, Reg.RAX, var_buf[i], current_state)) {
                                             try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, stack_off), x64.Operand.r(Reg.RAX) });
                                         } else {
-                                            try emitXorReg(p, Reg.RAX);
+                                            try emitExprToRAX(p, var_buf[i], current_state);
                                             try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RSP, stack_off), x64.Operand.r(Reg.RAX) });
                                         }
                                     },
@@ -3903,6 +4358,9 @@ fn tryEmitWin32Call(p: *PendingOutput, body: []const u8, current_state: []const 
 }
 
 fn getVarOffset(p: *PendingOutput, state_name: []const u8, var_name: []const u8) i32 {
+    if (p.in_for_range) {
+        if (std.mem.eql(u8, var_name, p.for_range_var_name)) return p.off_for_range_counter;
+    }
     if (p.in_for_loop) {
         if (std.mem.eql(u8, var_name, "x")) return p.off_for_loop_x;
         if (std.mem.eql(u8, var_name, "y")) return p.off_for_loop_y;
@@ -3914,6 +4372,9 @@ fn getVarOffset(p: *PendingOutput, state_name: []const u8, var_name: []const u8)
 }
 
 fn isStateVar(p: *PendingOutput, state_name: []const u8, var_name: []const u8) bool {
+    if (p.in_for_range) {
+        if (std.mem.eql(u8, var_name, p.for_range_var_name)) return false;
+    }
     if (p.in_for_loop) {
         if (std.mem.eql(u8, var_name, "x") or std.mem.eql(u8, var_name, "y")) return false;
     }
@@ -3929,6 +4390,9 @@ fn getVarBaseReg(p: *PendingOutput, state_name: []const u8, var_name: []const u8
 }
 
 fn getVarSize(p: *PendingOutput, state_name: []const u8, var_name: []const u8) u32 {
+    if (p.in_for_range) {
+        if (std.mem.eql(u8, var_name, p.for_range_var_name)) return 8;
+    }
     if (p.in_for_loop) {
         if (std.mem.eql(u8, var_name, "x")) return 4;
         if (std.mem.eql(u8, var_name, "y")) return 4;
@@ -4097,9 +4561,97 @@ fn emitBpcGetTraceBufSlot(p: *PendingOutput) !void {
     try abi.emitFullEpilogue(&p.cbuf.bytes);
 }
 
+fn emitIfAsExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8) !void {
+    const e = std.mem.trimLeft(u8, expr, " \t\r\n");
+    const after_if = std.mem.trimLeft(u8, e[2..], " \t\r\n");
+    if (after_if.len == 0 or after_if[0] != '(') {
+        try emitXorReg(p, Reg.RAX);
+        return;
+    }
+    const cond_close = findMatching(after_if, 0, '(', ')');
+    const cond = std.mem.trim(u8, after_if[1..cond_close], " \t\r\n");
+    const after_paren = std.mem.trimLeft(u8, after_if[cond_close + 1 ..], " \t\r\n");
+    if (after_paren.len == 0 or after_paren[0] != '{') {
+        try emitXorReg(p, Reg.RAX);
+        return;
+    }
+    const then_end = findMatching(after_paren, 0, '{', '}');
+    const then_body = after_paren[1..then_end];
+    var else_body: []const u8 = "";
+    const after_then = std.mem.trimLeft(u8, after_paren[then_end + 1 ..], " \t\r\n");
+    if (std.mem.startsWith(u8, after_then, "else{")) {
+        const else_end = findMatching(after_then, 4, '{', '}');
+        else_body = after_then[5..else_end];
+    } else if (std.mem.startsWith(u8, after_then, "else {")) {
+        const else_end = findMatching(after_then, 5, '{', '}');
+        else_body = after_then[6..else_end];
+    }
+
+    const else_lbl = try allocLabelId(p, "if_expr_else_{d}", .{p.cbuf.label_names.items.len});
+    const merge_lbl = try allocLabelId(p, "if_expr_merge_{d}", .{p.cbuf.label_names.items.len});
+
+    const eq_idx = std.mem.indexOf(u8, cond, "==");
+    const ne_idx = std.mem.indexOf(u8, cond, "!=");
+    const ge_idx = std.mem.indexOf(u8, cond, ">=");
+    const le_idx = std.mem.indexOf(u8, cond, "<=");
+    const gt_idx = if (ge_idx == null) std.mem.indexOf(u8, cond, ">") else null;
+    const lt_idx = if (le_idx == null) std.mem.indexOf(u8, cond, "<") else null;
+
+    if (eq_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JNE_REL32, else_lbl);
+    } else if (ne_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JE_REL32, else_lbl);
+    } else if (ge_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JL_REL32, else_lbl);
+    } else if (le_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+2..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JG_REL32, else_lbl);
+    } else if (gt_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+1..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JLE_REL32, else_lbl);
+    } else if (lt_idx) |idx| {
+        const lhs = std.mem.trim(u8, cond[0..idx], " \t");
+        const rhs = std.mem.trim(u8, cond[idx+1..], " \t");
+        try emitExprToRAX(p, lhs, current_state);
+        try emitCmpR64ImmOrVar(p, rhs, current_state);
+        try emitCondLongJmp(p, .JGE_REL32, else_lbl);
+    } else {
+        try emitExprToRAX(p, cond, current_state);
+        try x64.emit(&p.cbuf.bytes, .CMP_R64_IMM32, &.{ x64.Operand.r(Reg.RAX), x64.Operand.imm(0) });
+        try emitCondLongJmp(p, .JE_REL32, else_lbl);
+    }
+
+    try emitExprToRAX(p, then_body, current_state);
+    try emitLongJmp(p, merge_lbl);
+    try setLabel(p, else_lbl);
+    if (else_body.len > 0) {
+        try emitExprToRAX(p, else_body, current_state);
+    } else {
+        try emitXorReg(p, Reg.RAX);
+    }
+    try setLabel(p, merge_lbl);
+}
+
 fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8) anyerror!void {
     const e = std.mem.trim(u8, expr, " \t");
-    if (std.mem.indexOf(u8, e, "@entry")) |_| std.debug.print("emitExprToRAX: e=\"{s}\"\n", .{e});
     if (e.len == 0) { try emitXorReg(p, Reg.RAX); return; }
     if (std.mem.eql(u8, e, "true")) { try emitLoadImm(p, Reg.RAX, 1); return; }
     if (std.mem.eql(u8, e, "false")) { try emitXorReg(p, Reg.RAX); return; }
@@ -4135,13 +4687,40 @@ fn emitExprToRAX(p: *PendingOutput, expr: []const u8, current_state: []const u8)
     if (minus_idx != null and minus_idx.? > 0) {
         const lhs = std.mem.trim(u8, e[0..minus_idx.?], " \t");
         const rhs = std.mem.trim(u8, e[minus_idx.?+1..], " \t");
-        try emitExprAtomToRAX(p, lhs, current_state);
-        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
         try emitExprAtomToRAX(p, rhs, current_state);
-        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RCX), x64.Operand.r(Reg.RAX) });
-        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
-        try x64.emit(&p.cbuf.bytes, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RCX) });
+        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(Reg.RBX), x64.Operand.r(Reg.RAX) });
+        try emitExprAtomToRAX(p, lhs, current_state);
+        try x64.emit(&p.cbuf.bytes, .SUB_R64_R64, &.{ x64.Operand.r(Reg.RAX), x64.Operand.r(Reg.RBX) });
         return;
+    }
+    // User-defined function call: name(args)
+    if (std.mem.indexOfScalar(u8, e, '(')) |paren| {
+        if (paren > 0) {
+            const fn_name = std.mem.trim(u8, e[0..paren], " \t");
+            const found = p.func_defs.get(fn_name);
+            if (found) |_| {
+                const close_paren = std.mem.lastIndexOfScalar(u8, e, ')') orelse return;
+                const args_str = std.mem.trim(u8, e[paren+1..close_paren], " \t");
+                const win64_args = [_]i16{ 1, 2, 8, 9 };
+                var num_args: usize = 0;
+                if (args_str.len > 0) {
+                    var arg_list = try splitArgsDepthAware(args_str, p.allocator);
+                    defer arg_list.deinit();
+                    for (arg_list.items) |raw_arg| {
+                        if (num_args >= 4) break;
+                        const arg = std.mem.trim(u8, raw_arg, " \t");
+                        if (arg.len == 0) continue;
+                        try emitExprToRAX(p, arg, current_state);
+                        try x64.emit(&p.cbuf.bytes, .MOV_R64_R64, &.{ x64.Operand.r(win64_args[num_args]), x64.Operand.r(Reg.RAX) });
+                        num_args += 1;
+                    }
+                }
+                try x64.emit(&p.cbuf.bytes, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(32) });
+                try emitCallToLabel(p, try allocLabelId(p, "fn_{s}", .{fn_name}));
+                try x64.emit(&p.cbuf.bytes, .ADD_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(32) });
+                return;
+            }
+        }
     }
     try emitExprAtomToRAX(p, e, current_state);
 }
@@ -4272,6 +4851,13 @@ fn emitExprAtomToRAX(p: *PendingOutput, atom: []const u8, current_state: []const
             try x64.emit(&p.cbuf.bytes, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.memIdx(Reg.RBX, Reg.RAX, 3, 0) });
             // Load from computed address
             try x64.emit(&p.cbuf.bytes, .MOV_R64_MEM, &.{ x64.Operand.r(Reg.RAX), x64.Operand.mem(Reg.RAX, 0) });
+            return;
+        }
+    }
+    // Enum variant access: EnumName.Variant
+    if (std.mem.indexOfScalar(u8, a, '.')) |_| {
+        if (p.enum_defs.get(a)) |val| {
+            try emitLoadImm(p, Reg.RAX, val);
             return;
         }
     }

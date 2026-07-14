@@ -3,6 +3,16 @@
 > [English version ↓](#b-v456--compiled-bp-language-mir--coff-pipeline)
 
 
+**v4.5.7 (пользовательские функции `fn` в `bpc`):**
+- **Парсер `fn`**: новый `keyword_fn` хендлер + `tryParseFunction()` — парсит `fn name(args) { body }` в `ast.EntryDecl`, сохраняет в `program.func_defs`.
+- **Генерация кода функций**: пролог (PUSH RBP, MOV RBP,RSP, SUB RSP,32), сохранение параметров из RCX/RDX/R8/R9 на стек, компиляция тела через `emitAction`, эпилог (MOV RSP,RBP, POP RBP, RET).
+- **Вызов функций**: определение в `emitExprToRAX` — поиск по `p.func_defs`, загрузка аргументов в регистры Win64, `CALL rel32` через `emitCallToLabel`.
+- **`return expr` в теле функции**: вычисление выражения в RAX, `JMP` к эпилогу.
+- **Фикс порядка фиксапов**: блок эмиссии тел функций перемещён до `applyFixups`, чтобы `fn_{name}` лейблы были выставлены до резолва CALL/JMP-rel32. Исправляет вызовы функций (раньше CALL был no-op).
+- **Depth-aware split аргументов**: новый `splitArgsDepthAware()` — разбивает строку аргументов по запятым только на глубине 0 (учитывает вложенные скобки). Исправляет `ExitProcess(add(10,20))` и другие вложенные вызовы.
+- Удалены отладочные `std.debug.print`.
+- Все 5 тестов `test_fn*.b+` проходят: `five() → 5`, `add(10,20) → 30`, `returnA(10,20) → 10`, `ExitProcess(add(10,20)) → 30`, `ExitProcess(five()) → 5`.
+
 **v4.5.6 (нормальные ошибки + фикс line tracking):**
 - **Исправлен `body_line_indices`**: пустые строки и комментарии больше не отфильтровываются при загрузке, поэтому `body_line_indices` правильно указывает на `ctx.source_lines`. Ошибки показывают правильную строку исходника.
 - **Column tracking**: `ctx.err_col` добавлен в `CompilerContext`, `reportErr` показывает каретку `^`.
@@ -1133,6 +1143,16 @@ SOFTWARE.
 # B+ v4.5.6 — Compiled `.bp` Language (MIR + COFF pipeline)
 
 > [Russian version ↑](#b-v456--compiled-bp-language-mir--coff-pipeline)
+
+**v4.5.7 (user-defined `fn` functions in `bpc`):**
+- **`fn` parser**: new `keyword_fn` handler + `tryParseFunction()` — parses `fn name(args) { body }` into `ast.EntryDecl`, stored in `program.func_defs`.
+- **Function codegen**: prologue (PUSH RBP, MOV RBP,RSP, SUB RSP,32), store params from RCX/RDX/R8/R9 to stack, body via `emitAction`, epilogue (MOV RSP,RBP, POP RBP, RET).
+- **Function calls**: detection in `emitExprToRAX` — lookup in `p.func_defs`, load args into Win64 registers, `CALL rel32` via `emitCallToLabel`.
+- **`return expr` in function body**: evaluate into RAX, `JMP` to epilogue label.
+- **Fixup order fix**: function body emission block moved before `applyFixups` so `fn_{name}` labels exist when CALL/JMP-rel32 fixups resolve. Fixes all function calls (previously CALL was no-op).
+- **Depth-aware arg split**: new `splitArgsDepthAware()` — splits argument strings by commas only at depth 0 (respects nested parentheses). Fixes `ExitProcess(add(10,20))` and other nested calls.
+- Removed debug `std.debug.print` statements.
+- All 5 `test_fn*.b+` tests pass: `five() → 5`, `add(10,20) → 30`, `returnA(10,20) → 10`, `ExitProcess(add(10,20)) → 30`, `ExitProcess(five()) → 5`.
 
 **v4.5.6 (proper error reporting + line tracking fix):**
 - **`body_line_indices` fixed**: empty lines and comments are no longer filtered during loading, so `body_line_indices` correctly indexes into `ctx.source_lines`. Errors now show the correct source line.

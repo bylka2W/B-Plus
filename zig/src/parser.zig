@@ -28,6 +28,7 @@ const Token = struct {
         keyword_if,
         keyword_else,
         keyword_return,
+        keyword_while,
         keyword_run,
         keyword_print,
         keyword_free,
@@ -248,6 +249,7 @@ const Lexer = struct {
         .{ "if", .keyword_if },
         .{ "else", .keyword_else },
         .{ "return", .keyword_return },
+        .{ "while", .keyword_while },
         .{ "run", .keyword_run },
         .{ "print", .keyword_print },
         .{ "free", .keyword_free },
@@ -376,6 +378,7 @@ pub const Parser = struct {
             .context = null,
             .extern_cpp_fns = std.ArrayList(ast.ExternCppFn).init(p.allocator),
             .struct_defs = std.StringHashMap(ast.StructDef).init(p.allocator),
+            .func_defs = std.ArrayList(ast.EntryDecl).init(p.allocator),
         };
         errdefer program.deinit();
 
@@ -462,6 +465,14 @@ pub const Parser = struct {
                 var ret: ?[]const u8 = null;
                 if (p.peek(.arrow)) { p.advance(); ret = p.identText(); p.advance(); }
                 try program.extern_cpp_fns.append(.{ .name = fn_name, .parameters = params, .return_type = ret });
+                try p.expect(.semicolon);
+            } else if (p.peek(.keyword_fn)) {
+                p.advance(); // consume 'fn'
+                if (try p.tryParseFunction()) |fn_decl| {
+                    try program.func_defs.append(fn_decl);
+                } else {
+                    std.debug.print("warning: fn keyword without valid function definition\n", .{});
+                }
             } else if (p.peek(.ident)) {
                 // Try to parse as function definition: name(params): rettype { body }
                 if (try p.tryParseFunction()) |fn_decl| {

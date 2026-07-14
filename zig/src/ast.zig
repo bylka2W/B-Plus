@@ -109,6 +109,7 @@ pub const ProgramNode = struct {
     context: ?ContextDecl,
     extern_cpp_fns: std.ArrayList(ExternCppFn),
     struct_defs: std.StringHashMap(StructDef),
+    func_defs: std.ArrayList(EntryDecl),
 
     pub fn deinit(self: *ProgramNode) void {
         for (self.states.items) |*s| {
@@ -138,6 +139,13 @@ pub const ProgramNode = struct {
         if (self.context) |*ctx| ctx.variables.deinit();
         self.directives.deinit();
         self.extern_cpp_fns.deinit();
+        for (self.func_defs.items) |*f| {
+            self.allocator.free(f.name);
+            for (f.body_lines.items) |line| self.allocator.free(line);
+            f.body_lines.deinit();
+            f.params.deinit();
+        }
+        self.func_defs.deinit();
         {
             var it = self.struct_defs.iterator();
             while (it.next()) |entry| {
