@@ -4,6 +4,25 @@ const gpu_ast = @import("gpu_ast.zig");
 const gpu_ir = @import("gpu_ir.zig");
 const gpu_body_parser = @import("gpu_body_parser.zig");
 
+fn extractFuncTypes(allocator: Allocator, globals_lines: []const []const u8) std.StringHashMap(gpu_ir.TypeRef) {
+    var map = std.StringHashMap(gpu_ir.TypeRef).init(allocator);
+    for (globals_lines) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        if (trimmed.len == 0) continue;
+        const lparen = std.mem.indexOfScalar(u8, trimmed, '(') orelse continue;
+        const before_paren = trimmed[0..lparen];
+        const rp = std.mem.lastIndexOfScalar(u8, before_paren, ' ');
+        const rn = std.mem.lastIndexOfScalar(u8, before_paren, '\t');
+        const space = @max(rp orelse 0, rn orelse 0);
+        if (space == 0 or space + 1 >= before_paren.len) continue;
+        const name = before_paren[space + 1 ..];
+        const type_str = std.mem.trim(u8, before_paren[0..space], " \t");
+        const type_ref = gpu_ir.parseTypeRef(type_str) orelse continue;
+        map.put(name, type_ref) catch {};
+    }
+    return map;
+}
+
 pub fn lowerModule(allocator: Allocator, module: *const gpu_ast.GpuModule) !gpu_ir.IrModule {
     var ir = gpu_ir.IrModule{
         .allocator = allocator,
@@ -47,14 +66,19 @@ pub fn lowerModule(allocator: Allocator, module: *const gpu_ast.GpuModule) !gpu_
                 }
             }
 
+            var func_types = extractFuncTypes(allocator, kernel.globals_lines.items);
+            defer func_types.deinit();
+
             const body_func = try gpu_body_parser.parseBody(
                 allocator,
                 filtered_body.items,
                 ir.resources.items,
                 ir.cbuffer_members.items,
+                func_types,
             );
             try ir.functions.append(.{
                 .name = try allocator.dupe(u8, entry.name),
+                .kernel_name = try allocator.dupe(u8, kernel.name),
                 .blocks = body_func.blocks,
                 .next_block_id = body_func.next_block_id,
                 .numthreads = .{ .x = entry.numthreads.x, .y = entry.numthreads.y, .z = entry.numthreads.z },

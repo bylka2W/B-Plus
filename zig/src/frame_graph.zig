@@ -1,6 +1,6 @@
 const std = @import("std");
 const gpu_job = @import("gpu_job.zig");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 
 /// Per-resource history validity.
 pub const HistoryUsage = packed struct {
@@ -473,10 +473,10 @@ pub const FrameGraph = struct {
 /// GPU pass descriptor — ties a FrameGraph pass to GPU IR data.
 pub const GPUPassDesc = struct {
     pass_id: u32,
-    queue: gpu_ir.QueueType = .compute,
-    pipeline: gpu_ir.PipelineKey,
-    grid: gpu_ir.DispatchGrid,
-    bindings: gpu_ir.BindGroup,
-    barriers_before: []const gpu_ir.BarrierDesc = &.{},
-    barriers_after: []const gpu_ir.BarrierDesc = &.{},
+    queue: gpu_types.QueueType = .compute,
+    pipeline: gpu_types.PipelineKey,
+    grid: gpu_types.DispatchGrid,
+    bindings: gpu_types.BindGroup,
+    barriers_before: []const gpu_types.BarrierDesc = &.{},
+    barriers_after: []const gpu_types.BarrierDesc = &.{},
 };

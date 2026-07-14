@@ -1,6 +1,6 @@
 const std = @import("std");
 const frame_graph = @import("frame_graph.zig");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const resource_system = @import("resource_system.zig");
 const frame_graph_executor = @import("frame_graph_executor.zig");
 const dx12 = @import("dx12_compute.zig");

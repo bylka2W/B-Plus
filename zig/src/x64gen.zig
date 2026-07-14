@@ -1483,7 +1483,7 @@ fn emitOneIntrinsic(p: *PendingOutput, intrinsic: rt.Intrinsic) !void {
             try setLabel(p, hv_ok);
         },
         .log_event => {
-            // stub — no-op (to be implemented)
+            return error.NotImplemented;
         },
         .handle_touch => {
             const ht_skip = try allocLabelId(p, "ht_skip", .{});

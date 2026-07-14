@@ -1,5 +1,5 @@
 const std = @import("std");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const frame_graph = @import("frame_graph.zig");
 const lifetime_graph = @import("lifetime_graph.zig");
 const barrier_optimizer = @import("barrier_optimizer.zig");
@@ -49,7 +49,7 @@ pub const ResourceSlotType = enum(u32) {
 /// Captures slot assignment + access mode for future DXIL lowering.
 pub const BindingDesc = struct {
     pass_id: u32,
-    resource_id: gpu_ir.ResourceId,
+    resource_id: gpu_types.ResourceId,
     slot: u32,
     slot_type: ResourceSlotType,
     stage_flags: u32,

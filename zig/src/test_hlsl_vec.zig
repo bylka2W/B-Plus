@@ -24,7 +24,8 @@ pub fn main() !void {
         .{ .name = "g_DepthOutput", .type_ref = .rw_texture2d, .binding_prefix = 'u', .binding_reg = 1, .format = .vec4f },
     };
     const cbuffer = [_]gpu_ir.IrCbufferMember{};
-    const result = try gpu_body_parser.parseBody(alloc, &body, &resources, &cbuffer);
+    const empty_func_types = std.StringHashMap(gpu_ir.TypeRef).init(alloc);
+    const result = try gpu_body_parser.parseBody(alloc, &body, &resources, &cbuffer, empty_func_types);
 
     var mod = gpu_ir.IrModule{
         .allocator = alloc,

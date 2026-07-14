@@ -25,8 +25,11 @@ pub const OpCode = enum(u16) {
     SUB_R32_IMM32,
     SUB_R64_R64,
     SUB_R32_R32,
+    ADD_R64_MEM,
+    SUB_R64_MEM,
     CMP_R64_R64,
     CMP_R32_R32,
+    CMP_R64_MEM,
     CMP_R64_IMM32,
     CMP_R32_IMM32,
     TEST_R64_R64,
@@ -34,9 +37,11 @@ pub const OpCode = enum(u16) {
     XOR_R64_R64,
     XOR_R32_R32,
     IMUL_R64_R64,
+    IMUL_R64_IMM32,
     IMUL_R32_R32,
     IDIV_R64,
     AND_R64_R64,
+    AND_R64_IMM32,
     AND_R32_R32,
     OR_R64_R64,
     OR_R32_R32,
@@ -70,6 +75,10 @@ pub const OpCode = enum(u16) {
     JAE_REL32,
     CALL_REL32,
     CALL_R64,
+    PUSH_R64,
+    POP_R64,
+    PUSHFQ,
+    POPFQ,
     CQO,
     RET,
     NOP,
@@ -101,6 +110,7 @@ pub const OpCode = enum(u16) {
     SSE_MAXSS,     // F3 0F 5F: xmm1 = max(xmm1, xmm2/m32)
     SSE_CVTSI2SS,  // F3 0F 2A: xmm1 <- int2float(r32/m32)
     SSE_CVTTSS2SI, // F3 0F 2C: r32 <- float2int_trunc(xmm2/m32)
+    SETCC_R8,      // 0F 9x: reg8 <- condition (operand[1].imm64 = cc byte)
     SSE_UCOMISS,   // 0F 2E: compare scalar single, set flags (no NaN exception)
     SSE_SQRTSS,    // F3 0F 51: xmm1 = sqrt(xmm2/m32) (scalar)
     SSE_RSQRTSS,   // F3 0F 52: xmm1 = 1/sqrt(xmm2/m32) (scalar, approximate)
@@ -239,6 +249,12 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0, 0x01, operands[1].reg, operands[0], 0);
         },
+        .ADD_R64_MEM => {
+            if (operands.len < 2) return error.MissingOperands;
+            const reg = operands[0].reg;
+            const m = operands[1];
+            try emitModrmSibDisp(code, 0x48, 0x03, reg, m, 0);
+        },
         .ADD_R64_IMM32 => {
             if (operands.len < 2) return error.MissingOperands;
             const dst = operands[0].reg;
@@ -295,9 +311,21 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0, 0x29, operands[1].reg, operands[0], 0);
         },
+        .SUB_R64_MEM => {
+            if (operands.len < 2) return error.MissingOperands;
+            const reg = operands[0].reg;
+            const m = operands[1];
+            try emitModrmSibDisp(code, 0x48, 0x2B, reg, m, 0);
+        },
         .CMP_R64_R64 => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0x39, operands[1].reg, operands[0], 0);
+        },
+        .CMP_R64_MEM => {
+            if (operands.len < 2) return error.MissingOperands;
+            const reg = operands[0].reg;
+            const m = operands[1];
+            try emitModrmSibDisp(code, 0x48, 0x3B, reg, m, 0);
         },
         .CMP_R32_R32 => {
             if (operands.len < 2) return error.MissingOperands;
@@ -345,6 +373,22 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0xAF, operands[0].reg, operands[1], 0x0F);
         },
+        .IMUL_R64_IMM32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            const dst = operands[0].reg;
+            const src = operands[1].reg;
+            const v = operands[1].imm64;
+            if (dst < 0 or dst > 15 or src < 0 or src > 15) return error.InvalidRegister;
+            var rex: u8 = 0x48;
+            if (dst >= 8) rex |= 0x04;
+            if (src >= 8) rex |= 0x01;
+            try code.append(rex);
+            try code.append(0x69);
+            const modrm: u8 = 0xC0 | (@as(u8, @intCast(dst & 7)) << 3) | @as(u8, @intCast(src & 7));
+            try code.append(modrm);
+            const imm_bytes: [4]u8 = @bitCast(@as(i32, @bitCast(@as(u32, @truncate(v)))));
+            try code.appendSlice(&imm_bytes);
+        },
         .IDIV_R64 => {
             if (operands.len < 1) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0xF7, 7, operands[0], 0);
@@ -356,6 +400,18 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
         .AND_R64_R64 => {
             if (operands.len < 2) return error.MissingOperands;
             try emitModrmSibDisp(code, 0x48, 0x21, operands[1].reg, operands[0], 0);
+        },
+        .AND_R64_IMM32 => {
+            if (operands.len < 2) return error.MissingOperands;
+            const r = operands[0].reg;
+            const imm: i32 = @bitCast(@as(u32, @truncate(operands[1].imm64)));
+            var rex: u8 = 0x48;
+            if (r >= 8) rex |= 0x01;
+            try code.append(rex);
+            try code.append(0x81);
+            const modrm: u8 = 0xE0 | @as(u8, @intCast(r & 7));
+            try code.append(modrm);
+            try code.appendSlice(@as(*const [4]u8, @ptrCast(&imm))[0..4]);
         },
         .AND_R32_R32 => {
             if (operands.len < 2) return error.MissingOperands;
@@ -467,6 +523,24 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
         .PREFETCHT2_RIPREL => {
             try prefetchRipRel(code, 3);
         },
+        .PUSH_R64 => {
+            if (operands.len < 1) return error.MissingOperands;
+            const reg = operands[0].reg;
+            if (reg >= 8) try code.append(0x41);
+            try code.append(0x50 | @as(u8, @intCast(reg & 7)));
+        },
+        .POP_R64 => {
+            if (operands.len < 1) return error.MissingOperands;
+            const reg = operands[0].reg;
+            if (reg >= 8) try code.append(0x41);
+            try code.append(0x58 | @as(u8, @intCast(reg & 7)));
+        },
+        .PUSHFQ => {
+            try code.append(0x9C);
+        },
+        .POPFQ => {
+            try code.append(0x9D);
+        },
         .CQO => {
             try code.append(0x48);
             try code.append(0x99);
@@ -501,6 +575,17 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
         .SSE_DIVSS     => try emitSseOp(code, 0xF3, 0x5E, operands[0].reg, operands[1]),
         .SSE_MINSS     => try emitSseOp(code, 0xF3, 0x5D, operands[0].reg, operands[1]),
         .SSE_MAXSS     => try emitSseOp(code, 0xF3, 0x5F, operands[0].reg, operands[1]),
+        .SETCC_R8 => {
+            if (operands.len < 2) return error.MissingOperands;
+            const reg = operands[0].reg;
+            const cc = @as(u8, @intCast(operands[1].imm64 & 0xF));
+            if (reg >= 4) {
+                try code.append(0x40 | @as(u8, @intCast((@as(u8, @intCast(reg)) >> 3) & 1)));
+            }
+            try code.append(0x0F);
+            try code.append(0x90 | cc);
+            try code.append(0xC0 | @as(u8, @intCast(reg & 7)));
+        },
         .SSE_CVTSI2SS  => try emitSseOp(code, 0xF3, 0x2A, operands[0].reg, operands[1]),
         .SSE_CVTTSS2SI => try emitSseOp(code, 0xF3, 0x2C, operands[0].reg, operands[1]),
         .SSE_UCOMISS   => try emitSseOp(code, 0, 0x2E, operands[0].reg, operands[1]),
@@ -638,7 +723,200 @@ fn emitModrmSibDisp(code: *std.ArrayList(u8), rex_base: u8, op: u8, reg: i16, m:
     }
 }
 
+const RegNames = [_][:0]const u8{
+    "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+    "r8",  "r9",  "r10", "r11", "r12", "r13", "r14", "r15",
+};
+
+fn regName(reg: u8, rex_b: bool) [:0]const u8 {
+    const r = if (rex_b) reg | 8 else reg & 7;
+    return RegNames[r & 15];
+}
+
+fn modRMDecode(byte: u8) struct { mod: u8, reg: u8, rm: u8 } {
+    return .{ .mod = byte >> 6, .reg = (byte >> 3) & 7, .rm = byte & 7 };
+}
+
+const DecodedInst = struct {
+    mnemonic: []const u8,
+    ops: []const u8,
+    len: usize,
+};
+
+fn decodeOne(bytes: []const u8) !DecodedInst {
+    if (bytes.len == 0) return error.EndOfStream;
+    var pos: usize = 0;
+
+    const rex: u8 = if (pos < bytes.len and bytes[pos] >= 0x40 and bytes[pos] <= 0x4F) blk: {
+        const r = bytes[pos];
+        pos += 1;
+        break :blk r;
+    } else 0;
+    const rex_w: bool = (rex & 8) != 0;
+
+    const two_byte: bool = if (pos < bytes.len and bytes[pos] == 0x0F) blk: {
+        pos += 1;
+        break :blk true;
+    } else false;
+
+    if (pos >= bytes.len) return error.EndOfStream;
+    const op = bytes[pos];
+    pos += 1;
+
+    var imm_size: usize = 0;
+    var needs_modrm = false;
+
+    const mnemonic: []const u8 = if (two_byte) blk: {
+        switch (op) {
+            0x10 => { needs_modrm = true; break :blk "movss"; },
+            0x11 => { needs_modrm = true; break :blk "movss"; },
+            0x28 => { needs_modrm = true; break :blk "movaps"; },
+            0x29 => { needs_modrm = true; break :blk "movaps"; },
+            0x2A => { needs_modrm = true; break :blk "cvtsi2ss"; },
+            0x2C => { needs_modrm = true; break :blk "cvttss2si"; },
+            0x2E => { needs_modrm = true; break :blk "ucomiss"; },
+            0x51 => { needs_modrm = true; break :blk "sqrtps"; },
+            0x52 => { needs_modrm = true; break :blk "rsqrtss"; },
+            0x57 => { needs_modrm = true; break :blk "xorps"; },
+            0x58 => { needs_modrm = true; break :blk "addps"; },
+            0x59 => { needs_modrm = true; break :blk "mulps"; },
+            0x5C => { needs_modrm = true; break :blk "subps"; },
+            0x5D => { needs_modrm = true; break :blk "minps"; },
+            0x5E => { needs_modrm = true; break :blk "divps"; },
+            0x5F => { needs_modrm = true; break :blk "maxps"; },
+            0x6E => { needs_modrm = true; break :blk "movd"; },
+            0x7E => { needs_modrm = true; break :blk "movd"; },
+            0x7C => { needs_modrm = true; break :blk "haddps"; },
+            0x90 => { needs_modrm = true; break :blk "seto"; },
+            0x91 => { needs_modrm = true; break :blk "setno"; },
+            0x92 => { needs_modrm = true; break :blk "setb"; },
+            0x93 => { needs_modrm = true; break :blk "setae"; },
+            0x94 => { needs_modrm = true; break :blk "sete"; },
+            0x95 => { needs_modrm = true; break :blk "setne"; },
+            0x96 => { needs_modrm = true; break :blk "setbe"; },
+            0x97 => { needs_modrm = true; break :blk "seta"; },
+            0x98 => { needs_modrm = true; break :blk "sets"; },
+            0x99 => { needs_modrm = true; break :blk "setns"; },
+            0x9A => { needs_modrm = true; break :blk "setp"; },
+            0x9B => { needs_modrm = true; break :blk "setnp"; },
+            0x9C => { needs_modrm = true; break :blk "setl"; },
+            0x9D => { needs_modrm = true; break :blk "setge"; },
+            0x9E => { needs_modrm = true; break :blk "setle"; },
+            0x9F => { needs_modrm = true; break :blk "setg"; },
+            0xD6 => { needs_modrm = true; break :blk "movq"; },
+            0x3A => {
+                if (pos >= bytes.len) return error.EndOfStream;
+                const op3 = bytes[pos]; pos += 1;
+                needs_modrm = true;
+                imm_size = 1;
+                if (op3 == 0x0A) break :blk "roundss";
+                if (op3 == 0x40) break :blk "dpps";
+                return error.UnknownInstruction;
+            },
+            else => return error.UnknownInstruction,
+        }
+    } else blk: {
+        if (op >= 0x88 and op <= 0x8B) { needs_modrm = true;
+            break :blk if (op == 0x89 or op == 0x8B) "mov" else "mov"; }
+        switch (op) {
+            0x00...0x03 => { needs_modrm = true; break :blk "add"; },
+            0x04 => { imm_size = 1; break :blk "add"; },
+            0x08...0x0B => { needs_modrm = true; break :blk "or"; },
+            0x20...0x23 => { needs_modrm = true; break :blk "and"; },
+            0x28...0x2B => { needs_modrm = true; break :blk "sub"; },
+            0x38...0x3B => { needs_modrm = true; break :blk "cmp"; },
+            0x3C => { imm_size = 1; break :blk "cmp"; },
+            0x50...0x5F => {
+                const r = op & 7;
+                _ = r;
+                if (op >= 0x58) break :blk "pop";
+                break :blk "push";
+            },
+            0x68 => { imm_size = 4; break :blk "push"; },
+            0x6A => { imm_size = 1; break :blk "push"; },
+            0x70 => { imm_size = 1; break :blk "jo"; },
+            0x71 => { imm_size = 1; break :blk "jno"; },
+            0x72 => { imm_size = 1; break :blk "jb"; },
+            0x73 => { imm_size = 1; break :blk "jae"; },
+            0x74 => { imm_size = 1; break :blk "je"; },
+            0x75 => { imm_size = 1; break :blk "jne"; },
+            0x76 => { imm_size = 1; break :blk "jbe"; },
+            0x77 => { imm_size = 1; break :blk "ja"; },
+            0x78 => { imm_size = 1; break :blk "js"; },
+            0x79 => { imm_size = 1; break :blk "jns"; },
+            0x7A => { imm_size = 1; break :blk "jp"; },
+            0x7B => { imm_size = 1; break :blk "jnp"; },
+            0x7C => { imm_size = 1; break :blk "jl"; },
+            0x7D => { imm_size = 1; break :blk "jge"; },
+            0x7E => { imm_size = 1; break :blk "jle"; },
+            0x7F => { imm_size = 1; break :blk "jg"; },
+            0x85 => { needs_modrm = true; break :blk "test"; },
+            0x8D => { needs_modrm = true; break :blk "lea"; },
+            0xB0...0xB7 => { imm_size = 1; break :blk "mov"; },
+            0xB8...0xBF => {
+                if (rex_w) imm_size = 8 else imm_size = 4;
+                break :blk "mov";
+            },
+            0xC3 => break :blk "ret",
+            0xC6 => { needs_modrm = true; imm_size = 1; break :blk "mov"; },
+            0xC7 => { needs_modrm = true; imm_size = 4; break :blk "mov"; },
+            0xE9 => { imm_size = 4; break :blk "jmp"; },
+            0xEB => { imm_size = 1; break :blk "jmp"; },
+            0xF6...0xF7 => { needs_modrm = true; break :blk "imul"; },
+            0x31 => { needs_modrm = true; break :blk "xor"; },
+            0x33 => { needs_modrm = true; break :blk "xor"; },
+            0x01 => { needs_modrm = true; break :blk "add"; },
+            0x29 => { needs_modrm = true; break :blk "sub"; },
+            0x09 => { needs_modrm = true; break :blk "or"; },
+            0x21 => { needs_modrm = true; break :blk "and"; },
+            0x39 => { needs_modrm = true; break :blk "cmp"; },
+            0x0F => { break :blk "nop"; },
+            0xCC => { break :blk "int3"; },
+            else => return error.UnknownInstruction,
+        }
+    };
+
+    if (pos >= bytes.len) return error.EndOfStream;
+
+    var mr: struct { mod: u8, reg: u8, rm: u8 } = undefined;
+    if (needs_modrm) {
+        mr = modRMDecode(bytes[pos]); pos += 1;
+    }
+
+    if (needs_modrm and mr.mod != 3) {
+        if (mr.rm == 4) {
+            if (pos >= bytes.len) return error.EndOfStream;
+            pos += 1; // skip SIB
+        }
+        if (mr.mod == 1) { if (pos >= bytes.len) return error.EndOfStream; pos += 1; }
+        else if (mr.mod == 2 or (mr.mod == 0 and mr.rm == 5)) { if (pos + 4 > bytes.len) return error.EndOfStream; pos += 4; }
+    }
+
+    if (imm_size > 0) {
+        if (pos + imm_size > bytes.len) return error.EndOfStream;
+        pos += imm_size;
+    }
+
+    return .{ .mnemonic = mnemonic, .ops = "", .len = pos };
+}
+
 pub fn disassemble(bytes: []const u8) ![]u8 {
-    _ = bytes;
-    return std.fmt.allocPrint(std.heap.page_allocator, "[disassembly not implemented]", .{});
+    var result = std.ArrayList(u8).init(std.heap.page_allocator);
+    errdefer result.deinit();
+    var pos: usize = 0;
+    var writer = result.writer();
+    while (pos < bytes.len) {
+        const saved = pos;
+        const decoded = decodeOne(bytes[pos..]) catch {
+            try writer.print("  {x:0>4}: ??\n", .{saved});
+            pos += 1;
+            continue;
+        };
+        try writer.print("  {x:0>4}: ", .{saved});
+        for (bytes[saved..saved + decoded.len]) |b| try writer.print("{x:0>2} ", .{b});
+        try writer.print("  {s}", .{decoded.mnemonic});
+        try writer.writeAll("\n");
+        pos += decoded.len;
+    }
+    return result.toOwnedSlice();
 }

@@ -1,6 +1,6 @@
 const std = @import("std");
 const frame_graph = @import("frame_graph.zig");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const resource_system = @import("resource_system.zig");
 const dx12 = @import("dx12_compute.zig");
 const d3d = @import("d3d12_bindings.zig");
@@ -66,7 +66,7 @@ pub const FrameGraphGPUExecutor = struct {
         return h.final();
     }
 
-    fn getOrCompileShader(self: *FrameGraphGPUExecutor, shader_key: gpu_ir.ShaderKey) ![]const u8 {
+    fn getOrCompileShader(self: *FrameGraphGPUExecutor, shader_key: gpu_types.ShaderKey) ![]const u8 {
         const h = hashSource(shader_key.source);
         if (self.shader_cache.get(h)) |bytecode| return bytecode;
 
@@ -501,7 +501,7 @@ pub const FrameGraphGPUExecutor = struct {
                     desc_offset.* += num_slots;
 
                     // Pre-filter barriers for this pass only (zero conditionals in execute)
-                    var pass_barriers = std.ArrayList(gpu_ir.BarrierDesc).init(alloc);
+                    var pass_barriers = std.ArrayList(gpu_types.BarrierDesc).init(alloc);
                     for (batch.barriers) |ab| {
                         if (ab.pass_index == pass_idx) {
                             try pass_barriers.append(ab.barrier);

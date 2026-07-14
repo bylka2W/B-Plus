@@ -1,5 +1,5 @@
 const std = @import("std");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const gpu_execution = @import("gpu_execution.zig");
 const frame_graph = @import("frame_graph.zig");
 const resource_system = @import("resource_system.zig");
@@ -58,7 +58,7 @@ pub const GpuExecutor = struct {
         return h.final();
     }
 
-    fn getOrCompileShader(self: *GpuExecutor, shader_key: gpu_ir.ShaderKey) ![]const u8 {
+    fn getOrCompileShader(self: *GpuExecutor, shader_key: gpu_types.ShaderKey) ![]const u8 {
         const h = hashSource(shader_key.source);
         if (self.shader_cache.get(h)) |bytecode| return bytecode;
         const result = try dxil_backend.compileHlsl(self.allocator, shader_key.source);

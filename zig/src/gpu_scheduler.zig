@@ -1,5 +1,5 @@
 const std = @import("std");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const render_graph = @import("render_graph.zig");
 
 pub const ResolvedPass = struct {
@@ -14,7 +14,7 @@ pub const ResolvedPass = struct {
 pub const GPUBatch = struct {
     pass_indices: []const u32,
     resolved_passes: []ResolvedPass = &.{},
-    queue: gpu_ir.QueueType,
+    queue: gpu_types.QueueType,
     barriers: []const render_graph.BarrierSlot,
 };
 
@@ -59,7 +59,7 @@ pub const GPUScheduler = struct {
         var graphics_runs = std.ArrayList(std.ArrayList(u32)).init(self.allocator);
 
         var cur_passes = std.ArrayList(u32).init(self.allocator);
-        var cur_queue: ?gpu_ir.QueueType = null;
+        var cur_queue: ?gpu_types.QueueType = null;
 
         for (plan.nodes) |node| {
             const pass_id = switch (node.kind) {
@@ -100,7 +100,7 @@ pub const GPUScheduler = struct {
                 allocator: std.mem.Allocator,
                 rp: *const render_graph.RenderPlan,
                 run_passes: *std.ArrayList(u32),
-                batch_queue: gpu_ir.QueueType,
+                batch_queue: gpu_types.QueueType,
                 out: *std.ArrayList(GPUBatch),
                 p_barriers_in: *u32,
                 p_barriers_out: *u32,
@@ -109,7 +109,7 @@ pub const GPUScheduler = struct {
                 // track resource state, skip UAV→UAV / SRV→SRV.
                 var compressed = std.ArrayList(render_graph.BarrierSlot).init(allocator);
                 defer compressed.deinit();
-                var state_map = std.AutoHashMap(gpu_ir.ResourceId, gpu_ir.ResourceState).init(allocator);
+                var state_map = std.AutoHashMap(gpu_types.ResourceId, gpu_types.ResourceState).init(allocator);
                 defer state_map.deinit();
 
                 for (run_passes.items) |pass_idx| {

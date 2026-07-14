@@ -1,11 +1,11 @@
 const std = @import("std");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const d3d = @import("d3d12_bindings.zig");
 const dx12 = @import("dx12_compute.zig");
 
 /// A single range in the compiled root signature.
 pub const RSRange = struct {
-    kind: gpu_ir.BindType,
+    kind: gpu_types.BindType,
     base_register: u32,
     space: u32,
     count: u32,
@@ -53,7 +53,7 @@ pub const RSRootSignatureBuilder = struct {
         self.cache.deinit();
     }
 
-    fn hashLayout(layout: gpu_ir.BindLayout) u64 {
+    fn hashLayout(layout: gpu_types.BindLayout) u64 {
         var h = std.hash.Wyhash.init(0);
         for (layout.slots) |slot| {
             h.update(std.mem.asBytes(&slot.register));
@@ -65,7 +65,7 @@ pub const RSRootSignatureBuilder = struct {
     }
 
     /// Build per-pass root signature from BindLayout.
-    pub fn getOrBuild(self: *RSRootSignatureBuilder, layout: gpu_ir.BindLayout) !*const CompiledRS {
+    pub fn getOrBuild(self: *RSRootSignatureBuilder, layout: gpu_types.BindLayout) !*const CompiledRS {
         const hash = hashLayout(layout);
         if (self.cache.getPtr(hash)) |entry| return &entry.compiled;
 
@@ -246,7 +246,7 @@ pub const RSRootSignatureBuilder = struct {
     }
 
     /// Validate that a BindingKey is covered by the compiled RSRanges.
-    pub fn validateBinding(compiled: *const CompiledRS, key: gpu_ir.BindingKey) bool {
+    pub fn validateBinding(compiled: *const CompiledRS, key: gpu_types.BindingKey) bool {
         for (compiled.ranges) |r| {
             if (r.kind == key.kind and r.space == key.space) {
                 if (key.reg < r.count) return true;
@@ -256,7 +256,7 @@ pub const RSRootSignatureBuilder = struct {
     }
 
     /// Get the descriptor heap offset for a BindingKey within this RS.
-    pub fn getHeapOffset(compiled: *const CompiledRS, key: gpu_ir.BindingKey) ?u32 {
+    pub fn getHeapOffset(compiled: *const CompiledRS, key: gpu_types.BindingKey) ?u32 {
         for (compiled.ranges) |r| {
             if (r.kind == key.kind and r.space == key.space) {
                 if (key.reg < r.count) {

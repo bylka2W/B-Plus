@@ -1,22 +1,64 @@
-# B+ v4.3.1 — детерминированная машина переходов (x64)
+# B+ v4.5.6 — Compiled `.bp` Language (MIR + COFF pipeline)
 
-> [English version ↓](#b-v420--deterministic-transition-machine-x64)
+> [English version ↓](#b-v456--compiled-bp-language-mir--coff-pipeline)
+
+
+**v4.5.6 (нормальные ошибки + фикс line tracking):**
+- **Исправлен `body_line_indices`**: пустые строки и комментарии больше не отфильтровываются при загрузке, поэтому `body_line_indices` правильно указывает на `ctx.source_lines`. Ошибки показывают правильную строку исходника.
+- **Column tracking**: `ctx.err_col` добавлен в `CompilerContext`, `reportErr` показывает каретку `^`.
+- Все 8 `.bp` тестов проходят (включая `test_error.bp`, `test_implicit2.bp`).
+
+**v4.5.5 (CompilerContext refactor + structs complete):**
+- **Structs fully implemented**: `StructDef`/`Field` types, two-pass parser (register names → resolve types/offsets/sizes), field offset layout, `p.x` read/write in expressions and assignments, `&p.x` address-of-field
+- **CompilerContext refactor**: global `var struct_table: StructTable = undefined;` eliminated — replaced with `CompilerContext` struct containing `allocator: std.mem.Allocator` and `structs: StructTable`
+- **`*CompilerContext` idiom**: all compile/parse functions take `*CompilerContext` instead of separate `allocator` parameter; `Type.fromString`/`Type.size` take `*const StructTable` for struct table access
+- Все 8 `.bp` тестов проходят (включая `test_struct.bp`)
+
+**v4.5.4 (Полноценный expression parser + if/while/var + idiv):**
+- **Recursive descent expression parser**: 6 уровней приоритета — `||`, `&&`, сравнения (`>= <= == != > <`), `+`/`-`, `*`/`/`. Поддерживает скобки, вложенные вызовы функций с аргументами, целые литералы, переменные.
+- **`var` declarations**: `var x: i64 = 42;` — аллокация vreg, инициализация, хранение в var_map.
+- **`if`/`else`**: полная поддержка `if (cond) { ... } else { ... }`, включая `} else {` на той же строке.
+- **`while` loops**: header-cond-body-exit схема, корректная работа с `if` внутри тела.
+- **`break`/`continue`**: `break` → `jmp(exit)`, `continue` → `jmp(header)`.
+- **`IDivInst`** в MIR: `idiv` теперь полноценный MIR-инструкция со всеми проходами (dce, peephole, verify, regalloc, x64 codegen).
+- **Typed function returns**: парсер разбирает `fn add(a:i64,b:i64) -> i64`, возвращаемый тип учитывается при генерации `ret` (void → `is_void=true`).
+- Все `.bp` тесты проходят.
+
+**v4.5.3 (CLI + `.bp` → `.exe` end-to-end):**
+- **CLI tool `bplus.zig`**: команды `bplus build <input.bp> [-o <output.exe>]` и `bplus run <input.bp>`. Парсер .bp строит MIR напрямую (fn, extern fn, return, вызовы, целые литералы, `+` выражения, параметры-переменные). Линковка через `zig build-exe` с `bplusrt.obj` и `-lkernel32`.
+- **End-to-end `.bp` → `.exe`**: `hello.bp` с `extern fn print_i64(x: i64); fn main() { print_i64(42); }` → stdout `42`, exit code **0**. Утечки устранены (arena allocator). Автоматический `ret 0` при отсутствии явного `return`.
+- **Прямой MIR builder**: MIR строится из распарсенных строк `.bp` без промежуточного BIR — vreg аллокация, param→vreg prologue, expression compiler.
+
+**v4.5.2 (BIR→MIR→x64→COFF→.exe pipeline):**
+- **COFF object writer** (`coff.zig`): полноценный COFF-формат — IMAGE_FILE_HEADER, .text section, IMAGE_REL_AMD64_REL32 relocations, symbol table (IMAGE_SYM_CLASS_EXTERNAL), string table.
+- **Runtime library** (`bplusrt.zig`): `print_i64` через kernel32!GetStdHandle + WriteFile, компилируется в `bplusrt.obj`.
+- **Extern calls**: нерезолвленные имена в COFF становятся undefined external symbols, резолвятся линкером.
+
+**v4.5.1 (CPU backend stabilisation):**
+- **100 000 / 100 000 MIR fuzz tests passed** — нулевой miscompile на случайных программах.
+- **CMP_R64_MEM**, **ADD_R64_MEM**, **SUB_R64_MEM** — новые opcode в `x64enc.zig`.
+- **`regalloc.spilledMemOp()`** — хелпер для чтения второго операнда из памяти без перезаписи scratch.
+
+**v4.5.0 (Linear Scan Register Allocator):**
+- **Linear Scan Register Allocator** (`regalloc.zig`): live intervals, linear scan с expire/spill, 9 GP-регистров, r11 зарезервирован под spill scratch.
+- `mir_x64.zig` полностью переписан: emit-функции для каждой MIR-инструкции, единый `ra: *const RegAllocResult`.
+
+**v4.4.0:**
+- Удалён `emitMfunction`. Все CPU-тесты через единый linker `emitModule`.
+- `mir_verify.zig` — верификатор MIR перед эмитом.
+- `x64enc.disassemble` — дизассемблер (30+ инструкций).
 
 **v4.3.2:**
-- Все примеры в README переведены на русский (имена состояний, событий, переменных — `Зелёный`, `таймер`, `ключ`, `всего`). Компиляция проверена (`zig/`).
-- Body parser (gpu_body_parser.zig): полный трекинг типов SSA-значений. `int2 * int` → `int2` (было `float`), `.x`/`.y` на векторе даёт скалярный тип. HLSL-генерация из IR теперь выдаёт корректные типы.
+- Все примеры в README переведены на русский.
 - GPU IR: BackendApi, ShaderKey, PipelineKey, CompileOptions/Result.
 - DXIL backend (черновик): GPU IR → HLSL → DXC subprocess → DXBC.
 
 **v4.3.1:**
-- Исправлено выравнивание стека в прологе entry point (x64gen.zig). `stack_frame_size` теперь всегда 8 mod 16, что даёт RSP = 0 mod 16 после сохранения 6 регистров. Устранён `ACCESS_VIOLATION` в `MOVAPS [RSP+0x30]` при вызове `MessageBoxW` через ucrtbase.dll.
-- Добавлены русские псевдонимы ключевых слов: `состояние`, `если`, `иначе`, `печать`, `всегда`, `пер`, `вход`, `запуск` и др. Работают наравне с английскими, можно мешать в одном файле. Без потери производительности — `StaticStringMap` (perfect hash, O(1)).
+- Исправлено выравнивание стека в прологе entry point (x64gen.zig).
+- Добавлены русские псевдонимы ключевых слов.
 
-**B+** транслирует `.b+` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
+**B+** транслирует `.b+` / `.bp` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор написан с нуля на Zig.
-Поддерживает сборку DLL с таблицей экспорта (Export Directory Table, EAT, ENPT, EOT).
-
-Встроенный runtime-уровень (Stage 2) — детерминированная машина состояний с формальной моделью переходов, трёхуровневой иерархией памяти (L1/L2/L3), поколенческими handle и единственной точкой исполнения миграций (`applyMigration`).
 
 ---
 
@@ -24,30 +66,46 @@
 
 1. [Быстрый старт](#1-быстрый-старт)
 2. [Команды компилятора](#2-команды-компилятора)
-3. [Синтаксис языка](#3-синтаксис-языка)
-   - [Состояния](#31-состояния)
-   - [Переходы (on)](#32-переходы-on)
-   - [Безусловные переходы (always)](#33-безусловные-переходы-always)
-   - [Вход и выход (entry / exit)](#34-вход-и-выход-entry--exit)
-   - [Переменные](#35-переменные)
-   - [Присваивания](#36-присваивания)
-   - [Печать (print)](#37-печать-print)
-   - [Сторожевые условия (guard)](#38-сторожевые-условия-guard)
-   - [Экспортируемый entry (export entry)](#39-экспортируемый-entry-export-entry)
-   - [global entry](#310-global-entry)
-   - [Контекст (context)](#311-контекст-context)
-   - [Аннотации](#312-аннотации)
-   - [Перечисления (enum)](#313-перечисления-enum)
-   - [Параллельные блоки (parallel)](#314-параллельные-блоки-parallel)
-   - [Kernel-функции](#315-kernel-функции)
-   - [Внешние функции (extern)](#316-внешние-функции-extern)
-    - [Комментарии](#317-комментарии)
-    - [Русские ключевые слова](#318-русские-ключевые-слова)
-5. [Примеры](#5-примеры)
-6. [Сборка из исходников](#6-сборка-из-исходников)
-7. [Структура проекта](#7-структура-проекта)
-8. [Лицензия](#8-лицензия)
-9. [Контакты](#9-контакты)
+3. [Синтаксис языка (.b+)](#3-синтаксис-языка-b)
+   - [3.1 Состояния](#31-состояния)
+   - [3.2 Переходы (on)](#32-переходы-on)
+   - [3.3 Безусловные переходы (always)](#33-безусловные-переходы-always)
+   - [3.4 Вход и выход (entry / exit)](#34-вход-и-выход-entry--exit)
+   - [3.5 Переменные](#35-переменные)
+   - [3.6 Присваивания](#36-присваивания)
+   - [3.7 Печать (print)](#37-печать-print)
+   - [3.8 Сторожевые условия (guard)](#38-сторожевые-условия-guard)
+   - [3.9 Экспортируемый entry (export entry)](#39-экспортируемый-entry-export-entry)
+   - [3.10 global entry](#310-global-entry)
+   - [3.11 Контекст (context)](#311-контекст-context)
+   - [3.12 Аннотации](#312-аннотации)
+   - [3.13 Перечисления (enum)](#313-перечисления-enum)
+   - [3.14 Параллельные блоки (parallel)](#314-параллельные-блоки-parallel)
+   - [3.15 Kernel-функции (GPU)](#315-kernel-функции-gpu)
+   - [3.16 Внешние функции (extern)](#316-внешние-функции-extern)
+   - [3.17 Комментарии](#317-комментарии)
+   - [3.18 Русские ключевые слова](#318-русские-ключевые-слова)
+4. [Синтаксис .bp (новый CPU backend)](#4-синтаксис-bp-новый-cpu-backend)
+   - [4.1 Типы](#41-типы)
+   - [4.2 Функции](#42-функции)
+   - [4.3 Внешние функции](#43-внешние-функции)
+   - [4.4 Переменные](#44-переменные)
+   - [4.5 Структуры](#45-структуры)
+   - [4.6 Указатели](#46-указатели)
+   - [4.7 If/else](#47-ifelse)
+   - [4.8 While](#48-while)
+   - [4.9 For](#49-for)
+   - [4.10 Составные присваивания](#410-составные-присваивания)
+   - [4.11 Операторы](#411-операторы)
+   - [4.12 Комментарии](#412-комментарии)
+   - [4.13 Сообщения об ошибках](#413-сообщения-об-ошибках)
+   - [4.14 CLI](#414-cli)
+5. [Типы данных](#5-типы-данных)
+6. [Примеры](#6-примеры)
+7. [Сборка из исходников](#7-сборка-из-исходников)
+8. [Структура проекта](#8-структура-проекта)
+9. [Лицензия](#9-лицензия)
+10. [Контакты](#10-контакты)
 
 ---
 
@@ -594,7 +652,189 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ---
 
-## 4. Типы данных
+## 4. Синтаксис `.bp` (новый CPU backend)
+
+Новый `.bp` синтаксис работает через прямой MIR pipeline (без BIR, без state-машины).
+Поддерживает функции, переменные, структуры, указатели, `if`/`while`/`for`, составные присваивания.
+
+### 4.1 Типы
+
+| Тип | Размер (байт) |
+|-----|--------------|
+| `i8` / `u8` / `bool` | 1 |
+| `i16` / `u16` | 2 |
+| `i32` / `u32` | 4 |
+| `i64` / `u64` | 8 |
+| `int` | алиас `i64` |
+| `uint` | алиас `u64` |
+| `*T` | 8 (указатель) |
+| `void` | 0 |
+
+### 4.2 Функции
+
+```rust
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn main() {
+    print_i64(add(3, 4));
+}
+```
+
+Последнее выражение — неявный `return`. Можно явно:
+
+```rust
+fn max(a: i64, b: i64) -> i64 {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+```
+
+### 4.3 Внешние функции
+
+```rust
+extern fn print_i64(x: i64);
+extern fn read_i64() i64;
+extern fn bplus_malloc(size: i64) i64;
+extern fn bplus_free(ptr: i64);
+extern fn bplus_exit(code: i64);
+```
+
+### 4.4 Переменные
+
+```rust
+var x: i64 = 42;
+var y;
+var z = 10;
+x = 10;
+```
+
+### 4.5 Структуры
+
+```rust
+struct Point {
+    x: i64,
+    y: i64,
+}
+```
+
+Можно в строку: `struct Point { x: i64, y: i64 }`
+
+```rust
+var p: Point;
+p.x = 10;
+p.y = 20;
+print_i64(p.x);
+```
+
+Литералы:
+
+```rust
+var p = Point { x: 10, y: 20 };
+var q = Point {
+    x: 30,
+    y: 40,
+};
+```
+
+### 4.6 Указатели
+
+```rust
+var x: i64 = 42;
+var p: *i64 = &x;
+var y: i64 = *p;
+*p = 10;
+var addr: *i64 = &p.x;
+```
+
+### 4.7 If/else
+
+```rust
+if x > 5 {
+    print_i64(1);
+} else {
+    print_i64(0);
+}
+if (x > 5) {
+    print_i64(1);
+}
+```
+
+### 4.8 While
+
+```rust
+while i < 3 {
+    print_i64(i);
+    i += 1;
+}
+```
+
+`break` / `continue`:
+
+```rust
+while i < 10 {
+    if i == 5 { break; }
+    if i == 2 { i += 1; continue; }
+    print_i64(i);
+    i += 1;
+}
+```
+
+### 4.9 For
+
+```rust
+for i in 0..10 {
+    print_i64(i);
+}
+```
+
+### 4.10 Составные присваивания
+
+```rust
+x += 1;
+y -= 5;
+z *= 2;
+```
+
+### 4.11 Операторы
+
+| Оператор | Описание |
+|----------|----------|
+| `*` / `/` | умножение, деление |
+| `+` / `-` | сложение, вычитание |
+| `==` / `!=` / `>` / `<` / `>=` / `<=` | сравнения |
+| `&&` | логическое И |
+| `\|\|` | логическое ИЛИ |
+
+### 4.12 Комментарии
+
+```rust
+// однострочный комментарий
+```
+
+### 4.13 Сообщения об ошибках
+
+```
+error[UnknownVariable]: test_error.bp:4:1
+   4 |     print_i64(y);
+       | ^
+```
+
+### 4.14 CLI
+
+```text
+bplus build <input.bp> [-o <output.exe>]
+bplus run   <input.bp>
+```
+
+Pipeline: `.bp → парсер → MIR → DCE → peephole → reg alloc → x64 → COFF .obj → zig build-exe → .exe`
+
+---
+
+## 5. Типы данных
 
 | Тип | Размер (байт) |
 |-----|--------------|
@@ -605,7 +845,7 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ---
 
-## 5. Примеры
+## 6. Примеры
 
 Все ключевые слова можно писать как по-английски, так и по-русски (см. раздел 3.18).
 
@@ -731,7 +971,7 @@ context {
 
 ---
 
-## 6. Сборка из исходников
+## 7. Сборка из исходников
 
 Требуется [Zig](https://ziglang.org/) (master, >= 0.14).
 
@@ -755,30 +995,30 @@ bpc.exe run example.b+
 
 ---
 
-## 7. Структура проекта
+## 8. Структура проекта
 
 ```text
 zig/                    — компилятор (Zig, активная разработка)
   src/
     main.zig            — точка входа, CLI, оркестрация
-    runtime.zig          — Stage 2 runtime kernel (handle table, arena, FSM, migration, Snapshot)
+    runtime.zig          — runtime kernel (handle table, arena, FSM, migration, Snapshot)
     runtime_test.zig     — 40 unit tests: alloc, release, tick, migration, decay, budget, memory layer
     stress_test.zig      — stress test: 100k ops with snapshot-based formal invariant verification
-    cpu.zig              — Stage 7.0a CPU topology detection (Windows kernel32 extern)
-    latency.zig          — Stage 7.3 LatencyProfile, CoreStats, LoadState (adaptive thresholds)
-    scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
+    cpu.zig              — CPU topology detection (Windows kernel32 extern)
+    latency.zig          — LatencyProfile, CoreStats, LoadState (adaptive thresholds)
+    scheduler.zig        — NUMA-aware worker-pool scheduler
     scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
-    bench.zig            — Stage 7+ A/B benchmark: baseline vs smart scheduler (4 patterns) + Stage 9+ smoke tests
+    bench.zig            — A/B benchmark: baseline vs smart scheduler (4 patterns) + smoke tests
     gpu_ir.zig           — GPU IR: BindingKey{reg,space,kind}, BindGroup, PipelineKey, DispatchDesc, ResourceId
-    frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan, GPUPassDesc (unified compute DAG IR)
-    frame_graph_executor.zig — Stage 9+ compileGraph() → immutable CompiledGraph; per-frame writeFrameDescriptors+executeCompiledGraph
-    compiled_graph.zig   — Stage 9+ CompiledGraph: CompiledPass, FrameInputs, BindSlot, DescriptorArena. Pre-baked PSOs/barriers/slots
-    resource_system.zig  — Stage 9+ ResourcePool: GPU resource lifecycle, RS-driven descriptor allocation, state tracking
-    root_signature_builder.zig — Stage 9+ Per-pass root signature compiler: BindLayout → CompiledRS, cached by hash
-    gpu_job.zig          — Stage 9 GPUJob dispatch descriptor
-    gpu_scheduler.zig    — Stage 9+ Pure GPU dispatch sink (no graph awareness)
-    scheduler_config.zig — Stage 8 SchedulerConfig (max_sticky_ns, max_queue_len, imbalance thresholds)
-    scheduler_state.zig  — Stage 8 GlobalSchedulerState (SystemLoad, adjustDecision)
+    frame_graph.zig      — FrameGraph: Pass, ExecutionNode, ExecutionPlan, GPUPassDesc (unified compute DAG IR)
+    frame_graph_executor.zig — compileGraph() → immutable CompiledGraph; per-frame writeFrameDescriptors+executeCompiledGraph
+    compiled_graph.zig   — CompiledGraph: CompiledPass, FrameInputs, BindSlot, DescriptorArena. Pre-baked PSOs/barriers/slots
+    resource_system.zig  — ResourcePool: GPU resource lifecycle, RS-driven descriptor allocation, state tracking
+    root_signature_builder.zig — Per-pass root signature compiler: BindLayout → CompiledRS, cached by hash
+    gpu_job.zig          — GPUJob dispatch descriptor
+    gpu_scheduler.zig    — Pure GPU dispatch sink (no graph awareness)
+    scheduler_config.zig — SchedulerConfig (max_sticky_ns, max_queue_len, imbalance thresholds)
+    scheduler_state.zig  — GlobalSchedulerState (SystemLoad, adjustDecision)
     parser.zig          — лексер + парсер .b+
     ast.zig             — типы AST (состояния, переходы и т.д.)
      x64gen.zig          — генератор машинного кода x64 (+ Intrinsic binding к runtime).
@@ -850,65 +1090,7 @@ zig/                    — компилятор (Zig, активная разр
 
 ---
 
-## 8. DXIL Bitcode Backend (Phase 8)
-
-**Цель:** генерация DXIL (DirectX Intermediate Language) напрямую, без DXC.
-
-### Текущий статус
-
-| Компонент | Статус |
-|-----------|--------|
-| LLVM 13 bitstream encoder (`bitwriter.py`) | ✔ |
-| SSA value numbering (module + per-function) | ✔ |
-| Sign-rotated integer constants | ✔ |
-| CFG IR Model Layer (`Block`, `CFGFunction`) | ✔ |
-| Basic blocks + terminator-driven BB switching | ✔ |
-| `ret void` / `ret i32` | ✔ |
-| `add` / `sub` / binop | ✔ |
-| `br` (unconditional) | ✔ |
-| `alloca` / `load` / `store` | ✔ |
-| Conditional branch | 🚧 |
-| PHI node | 🚧 |
-| DXIL metadata + function attributes | ❌ |
-
-### Архитектура
-
-```text
-CFGFunction (CFG IR model)
-  ├── Block.body[]     → non-terminator instructions
-  ├── Block.term       → ('ret', val|None) | ('br', bb_idx) | ('unreachable',)
-  └── Block.successors → derived from terminator
-        │
-        ▼
-ModuleBuilder (emitter)
-  ├── _write_function(cfg) → enter FUNCTION_BLOCK
-  │     ├── DECLAREBLOCKS
-  │     ├── local CONSTANTS_BLOCK
-  │     ├── body insts (non-void → ValueList++)
-  │     └── terminator inst
-  └── write() → magic → ID block → MODULE_BLOCK → TYPE_BLOCK → CONSTANTS → globals → functions → bodies
-```
-
-### Валидация
-
-Все тесты прогоняются через `llvm-dis` из Emscripten LLVM 13 fork:
-```bash
-python bitwriter.py minimal   # define void @0() { ret void }
-python bitwriter.py ret_i32   # define i32 @0() { ret i32 42 }
-python bitwriter.py alloca    # alloca/store/load/ret
-```
-
-### Ключевые особенности (fork-specific)
-
-- Блок ID сдвинуты: MODULE=8, FUNCTION=12, TYPE=17, IDENTIFICATION=13 (вместо стандартных 3/7/13/11)
-- Модуль версии ≥ 2: strtab_offset/strtab_size в MODULE_CODE_FUNCTION
-- ID block: char6 без поля ширины (hasBitWidth=false для Char6 в fork)
-- Integer constants: sign-rotation (raw = v≥0 ? v<<1 : ((-v)<<1)|1)
-- UNABBREV records только — без BLOCKINFO/аббревиатур
-
----
-
-## 8. Лицензия
+## 9. Лицензия
 
 MIT License
 
@@ -938,7 +1120,7 @@ SOFTWARE.
 
 ---
 
-## 9. Контакты
+## 10. Контакты
 
 - **GitHub**: [github.com/bylka2W](https://github.com/bylka2W)
 - **Репозиторий**: [github.com/bylka2W/B-Plus](https://github.com/bylka2W/B-Plus)
@@ -946,286 +1128,68 @@ SOFTWARE.
 
 ---
 
-## Stage 2 — Runtime kernel (chunk-based memory physics)
-
-`src/runtime.zig` — детерминированная машина памяти на chunk-модели (64KB регионы).
-
-```text
-Handle → MetaStore → chunk_id → Chunk.tier (O(1), без эвристик)
-                                ↓
-moveHotter/moveColder → Chunk.tier.moveHotter/?Tier (pure FSM)
-                                ↓
-cooldown gate → last_migration_tick + 3 тика (Stage 3)
-                                ↓
-migrateChunk → tier switch + memcpy used bytes (физическое копирование)
-    └─ dst_arena.alloc(CHUNK_SIZE)
-    └─ @memcpy (src → dst, только chunk.used байт)
-    └─ update chunk.arena_base / chunk.arena_offset
-    └─ chunk.last_migration_tick = current_tick
-    └─ log .MIGRATE
-```
-
-### Stage 2: chunk layer
-
-- **Chunk** = 64KB регион, атомарная единица миграции.
-- **`ChunkStore`**: управление массивами chunk'ов, поиск по tier + свободному месту.
-- **`MetaStore.chunk_ids`** / **`MetaStore.offsets`** заменили `ptrs` — tier = `chunks[chunk_id].tier`, не pointer.
-- **`arena_base`** в Chunk: data всегда читается из физической арены, независимо от `chunk.tier`.
-- **Физическое копирование**: при миграции — `dst_arena.alloc(CHUNK_SIZE)`, `@memcpy(chunk.used bytes)`, обновление адреса.
-- **Heat per-chunk**: аккумулируется на `access()`, тик оперирует chunk'ами (не handle'ами).
-- **`Snapshot`**: слепок per-slot (tiers из chunk.tier) + per-chunk (tiers, heats).
-- **`MigrationResult`**: `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary` / `.cooldown`.
-- **slot_count**: декремент при release — пустые chunk'и не участвуют в миграциях.
-
-### Stage 3: cooldown tracking
-
-- **`Chunk.last_migration_tick`**: тик последней миграции (0 = never migrated).
-- **`COOLDOWN_TICKS = 3`**: минимальное число тиков между миграциями одного чанка.
-- **Гейт в `migrateChunk`**: `current_tick - last_migration_tick < COOLDOWN_TICKS` → `.cooldown`.
-- **Гейт в `tick()`**: чанки в cooldown не тратят бюджет на сбор кандидатов.
-- **Cooldown не заменяет heat-логику**: heat решает *нужна ли* миграция, cooldown решает *можно ли сейчас*.
-- **30 unit tests**: cooldown fresh chunk, immediate block, window (1–3–4 тика), tick integration.
-
-### Stage 4: priority scheduling (top-K selection)
-
-- **Partial top-K**: O(n) scan, без глобального буфера — поддерживается топ MIGRATION_BUDGET=4 кандидатов через замену слабейшего при проходе.
-- **Сортировка**: promote — `heat desc` (самые горячие первыми), demote — `heat asc` (самые холодные первыми).
-- **Tie-break**: `chunk_id asc` — строгий детерминизм при равном heat.
-- **Top-K**: `MIGRATION_BUDGET=4` применяется *после* ранжирования, а не во время сбора.
-- **Cooldown фильтрует до сортировки**: chunk в cooldown не участвует в очереди.
-- **Две очереди**: promote (L2→L1, L3→L2) и demote (L1→L2, L2→L3) обрабатываются независимо.
-- **32 unit tests**: top-K priority, tie-breaking, budget limit.
-- **Fingerprint стабилен** — детерминированная сортировка не меняет конечное состояние при одинаковых входных данных.
-
-### Stage 5: cost-aware scheduling
-
-- **`migrationCost(src, dst)`**: L1↔L2 = 2, L2↔L3 = 1. Симметрично.
-- **Promote score**: `heat - cost`. Только если score > 0.
-- **Demote score**: `(DEMOTE_THRESH - heat) - cost`. Только если score > 0.
-- **Score фильтрует до top-K**: chunk с score ≤ 0 не тратит бюджет.
-- **ENABLE_COST_MODEL**: compile-time флаг отката.
-- **Эффект**: chunk в L1 с heat 29 не демотится (score = -1), chunk в L2 с heat 5 демотится (score = 24).
-- **35 unit tests**: +3 cost-specific (дорогой блок, дешёвый проходит, promote работает).
-- **Stress fingerprint стабилен** — cost не меняет top-K порядок для горячих чанков.
-
-### Stage 6: Memory Layer (foundation release)
-
-- **6.1 Free-list**: `ChunkStore.free_list[]` + `free_count`. При `slot_count == 0` chunk_id попадает в free-list. `allocChunk` сначала проверяет free-list, потом линейный аллок.
-- **6.2 Compaction**: `runCompaction()` раз в `COMPACT_INTERVAL=1000` тиков. Собирает живые chunk'и, сохраняет данные, сбрасывает арену, переаллоцирует последовательно.
-- **6.3 Indirection**: `Handle → chunk_id → chunk.arena_base + arena_offset + slot_offset`. Компакшен обновляет только `chunk.arena_base`/`arena_offset` — handle'ы не трогаются.
-- **39 unit tests**: +4 Stage 6 (free-list reuse, multiple freed IDs, compaction single-tier, compaction multi-tier).
-- **API**: `setAllocator(allocator)` включает компакшен. Без него — только free-list.
-- **Stress stable** — fingerprint обновлён из-за переиспользования chunk_id.
-
-### Stage 7: Architecture-Aware Runtime Scheduler
-
-`src/scheduler.zig` — упреждающий планировщик с NUMA-локали, латентностной защитой и per-core адаптивными порогами.
-
-```text
-Job → WorkerPool → worker[N] (per-core LIFO queue)
-         ↓
-    steal(neighbor) ← cost-benefit → migrate(job)
-         ↓
-    load_state (NORMAL ↔ MEDIUM ↔ OVERLOAD)
-```
-
-#### 7.0a CPU topology detection (`src/cpu.zig`)
-
-- **`CpuTopology`**: logical/physical cores, HT siblings, кеш-иерархия (дедупликация), NUMA nodes, CPU-класс (tiny/pc/workstation/manycore).
-- **Windows kernel32 extern**: `GetLogicalProcessorInformationEx` (primary) + `GetLogicalProcessorInformation` (fallback).
-- **Cache dedup**: одна запись на уникальный уровень/размер кеша, не per-core.
-
-#### 7.3 Latency Protection layer
-
-**Core model**:
-- **`LatencyProfile`**: матрица стоимости миграции, NUMA-пенальти, кеш-дистанция, per-core NUMA.
-- **Score**: `load × LOAD_PENALTY + migrationCost + cacheDistance × SCALE + numaPenalty`.
-- **Cost heuristics**: HT-sibling=50ns, same-NUMA=200ns, cross-NUMA=1000ns.
-
-**Per-core adaptive steal threshold**:
-- Каждое ядро ведёт `CoreStats` (attempts, successes, EMA cost/benefit).
-- Порог = `avg_cost + avg_cost × fail_ratio / 2` — ядро само учится, какие steal выгодны.
-- `fail_ratio = (attempts − succ) / attempts` (fixed-point, α=1/16).
-- Холодный старт: `cost × 2` при attempts < 4.
-
-**Sticky core + hysteresis**:
-- `Job.sticky_core` / `stickiness` — задача остаётся на своём ядре при steal-попытке.
-- `migration_cooldown_ns=50ms` — запрет ping-pong миграций.
-
-**Load state machine (трёхуровневая с гистерезисом)**:
-```
-                   smoothed ≥ 4 (MEDIUM_ENTER)
-     NORMAL ─────────────────────────────► MEDIUM
-         ◄───────────────────────────────
-         smoothed ≤ 2 (MEDIUM_EXIT)
-
-                   smoothed ≥ 8 (OVERLOAD_ENTER)
-     MEDIUM ─────────────────────────────► OVERLOAD
-         ◄───────────────────────────────
-         smoothed ≤ 5 (OVERLOAD_EXIT)
-```
-- **`smoothed_load`**: EMA очереди ядра (α=1/8) — защита от burst noise.
-- **NORMAL**: строгий cost-benefit + adaptive threshold + sticky honored + cooldown.
-- **MEDIUM**: relaxed (cost-benefit пропущен) + sticky honored + cooldown.
-- **OVERLOAD**: bypass всего — steal без условий, sticky отключён, cooldown отключён.
-
-**Overload escape**: при OVERLOAD-состоянии жертвы — все ограничения locality снимаются, предотвращая biased locality trap.
-
-#### Тестирование
-
-```bash
-zig test src\scheduler_test.zig   # 16 tests (sync/threaded/priority/steal/latency/state-machine)
-zig test src\latency_test.zig     # 5 tests (matrix build, NUMA, migration log, score)
-zig test src\cpu_test.zig         # 1 test (topology detection)
-zig test src\bench.zig            # 7 tests + A/B benchmark output
-```
-
-
-| Компонент | Описание |
-|-----------|----------|
-| `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
-| `Chunk` | 64KB регион: tier, arena_base, heat, used, arena_offset, slot_count, last_migration_tick |
-| `ChunkStore` | Массив chunk'ов + free-list, alloc/find/release-by-tier |
-| `Handle` | Поколенческий идентификатор: slot + generation |
-| `HandleTable` | Состояния слотов (Used/Free), free-лист O(1), инвалидация через generation |
-| `MetaStore` | SoA: chunk_ids, offsets, sizes, generations, heats, total_heats, states |
-| `Arena` | Трёхуровневый bump-аллокатор (L1/L2/L3), fail-fast при OOM |
-| `Snapshot` | Слепок: per-slot tiers/heats/states/gens + per-chunk tiers/heats |
-| `assertInvariant` | Приватная — только внутри validateHandle/validateChunkOps |
-
-### Тестирование
-
-```bash
-zig test src\runtime_test.zig   # 40 unit tests (chunk-модель + cooldown + top-K + cost + memory layer)
-zig test src\stress_test.zig    # 100k ops: 3817 миграций, фингерпринт детерминирован
-zig test src\scheduler_test.zig # 16 tests: sync/threaded/priority/steal/latency/state-machine
-```
-
-### Intrinsic binding
-
-`x64gen.zig` использует `inline for (comptime std.meta.tags(rt.Intrinsic))` для
-исчерпывающей генерации всех runtime-функций. Любое добавление варианта `Intrinsic`
-вызывает compile error до тех пор, пока `emitOneIntrinsic` не обработает его.
-
-### Scheduler budget guard
-
-Чтобы предотвратить livelock на always-переходах, каждый тик получает бюджет (4 перехода).
-- **Scheduler** (`always_entry`): read-only guard — проверяет бюджет > 0
-- **FSM** (`changeToState`): consumption — декремент при реальном always-переходе
-- Бюджет сбрасывается на 4 при каждом `ReadFile` (начало тика)
-
-### Spill chain
-
-Аренный аллокатор (bump-pointer) каскадирует выделение:
-- `arena_l1_alloc` → try L1 → spill L2 → spill L3 → oom
-- `arena_l2_alloc` → try L2 → spill L3 → oom
-- `arena_l1_reset` сбрасывает все три арены (L1+L2+L3)
-
-Размер арен вычисляется динамически: `max_data_size × (8 + MIGRATION_BUDGET)`,
-минимум 256 байт.
-
 ---
 
----
+# B+ v4.5.6 — Compiled `.bp` Language (MIR + COFF pipeline)
 
-## Порт FSR2 — Полный Temporal Upscaler на B+
+> [Russian version ↑](#b-v456--compiled-bp-language-mir--coff-pipeline)
 
-B+ используется для портирования AMD FidelityFX Super Resolution 2 (FSR2) —
-полноценного temporal upscaler с 11+ шейдерными проходами, целиком на B+.
+**v4.5.6 (proper error reporting + line tracking fix):**
+- **`body_line_indices` fixed**: empty lines and comments are no longer filtered during loading, so `body_line_indices` correctly indexes into `ctx.source_lines`. Errors now show the correct source line.
+- **Column tracking**: `ctx.err_col` added to `CompilerContext`, `reportErr` shows caret `^`.
+- All 8 `.bp` tests pass (including `test_error.bp`, `test_implicit2.bp`).
 
-### Трек 1: DXGI Proxy DLL (`fsr2_proxy.b+`)
+**v4.5.5 (CompilerContext refactor + structs complete):**
+- **Structs fully implemented**: `StructDef`/`Field` types, two-pass parser (register names → resolve types/offsets/sizes), field offset layout, `p.x` read/write in expressions and assignments, `&p.x` address-of-field
+- **CompilerContext refactor**: global `var struct_table: StructTable = undefined;` eliminated — replaced with `CompilerContext` struct containing `allocator: std.mem.Allocator` and `structs: StructTable`
+- **`*CompilerContext` idiom**: all compile/parse functions take `*CompilerContext` instead of separate `allocator` parameter; `Type.fromString`/`Type.size` take `*const StructTable` for struct table access
+- All 8 `.bp` tests pass (including `test_struct.bp`)
 
-D3D11 proxy DLL, перехватывающая `CreateDXGIFactory`/`Present` и выполняющая
-FSR2 на каждом кадре:
+**v4.5.4 (Full expression parser + if/while/var + idiv):**
+- **Recursive descent expression parser**: 6 precedence levels — `||`, `&&`, comparisons (`>= <= == != > <`), `+`/`-`, `*`/`/`. Supports parentheses, nested function calls with arguments, integer literals, variables.
+- **`var` declarations**: `var x: i64 = 42;` — vreg allocation, initialization, storage in var_map.
+- **`if`/`else`**: full support for `if (cond) { ... } else { ... }`, including `} else {` on the same line.
+- **`while` loops**: header-cond-body-exit scheme, correct interaction with `if` inside body.
+- **`break`/`continue`**: `break` → `jmp(exit)`, `continue` → `jmp(header)`.
+- **`IDivInst`** in MIR: `idiv` is now a full MIR instruction with all passes (dce, peephole, verify, regalloc, x64 codegen).
+- **Typed function returns**: parser handles `fn add(a:i64,b:i64) -> i64`, return type is considered when generating `ret` (void → `is_void=true`).
+- All `.bp` tests pass.
 
-```
-Present → Luminance Pyramid → Reconstruct Depth → Dilate Motion Vectors →
-Depth Clip → Lock → Temporal Accumulate → RCAS Sharpen → Copy to Backbuffer
-```
+**v4.5.3 (CLI + `.bp` → `.exe` end-to-end):**
+- **CLI tool `bplus.zig`**: commands `bplus build <input.bp> [-o <output.exe>]` and `bplus run <input.bp>`. .bp parser builds MIR directly (fn, extern fn, return, calls, integer literals, `+` expressions, parameter-variables). Linking via `zig build-exe` with `bplusrt.obj` and `-lkernel32`.
+- **End-to-end `.bp` → `.exe`**: `hello.bp` with `extern fn print_i64(x: i64); fn main() { print_i64(42); }` → stdout `42`, exit code **0**. Leaks fixed (arena allocator). Automatic `ret 0` when no explicit `return`.
+- **Direct MIR builder**: MIR is built from parsed `.bp` lines without intermediate BIR — vreg allocation, param→vreg prologue, expression compiler.
 
-Все вызовы D3D11 API (CreateTexture2D, CreateShaderResourceView, Dispatch,
-CopyResource) — через COM vtable dispatch, написана целиком на B+ (x64 asm).
+**v4.5.2 (BIR→MIR→x64→COFF→.exe pipeline):**
+- **COFF object writer** (`coff.zig`): full COFF format — IMAGE_FILE_HEADER, .text section, IMAGE_REL_AMD64_REL32 relocations, symbol table (IMAGE_SYM_CLASS_EXTERNAL), string table.
+- **Runtime library** (`bplusrt.zig`): `print_i64` via kernel32!GetStdHandle + WriteFile, compiled to `bplusrt.obj`.
+- **Extern calls**: unresolved names in COFF become undefined external symbols, resolved by linker.
 
-8 предварительно скомпилированных CSO-шейдеров из `shaders/cso/`:
-- `fsr2_easu.cso` — EASU (Edge Adaptive Spatial Upsampling)
-- `fsr2_rcas.cso` — RCAS (Robust Contrast Adaptive Sharpening)
-- `fsr2_accumulate.cso` — Temporal Accumulation (ядро TAAU)
-- `fsr2_depthclip.cso` — Depth Clip (анти-гостинг)
-- `fsr2_lock.cso` — Lock Status
-- `fsr2_luminance_pyramid.cso` — Luminance Pyramid
-- `fsr2_reconstruct_depth.cso` — Depth Reconstruction
-- `fsr2_dilate_velocity.cso` — Dilate Motion Vectors
+**v4.5.1 (CPU backend stabilisation):**
+- **100,000 / 100,000 MIR fuzz tests passed** — zero miscompiles on random programs.
+- **CMP_R64_MEM**, **ADD_R64_MEM**, **SUB_R64_MEM** — new opcodes in `x64enc.zig`.
+- **`regalloc.spilledMemOp()`** — helper for reading second operand from memory without overwriting scratch.
 
-### Трек 2: B+ GPU Pipeline (`bpc gpu`)
+**v4.5.0 (Linear Scan Register Allocator):**
+- **Linear Scan Register Allocator** (`regalloc.zig`): live intervals, linear scan with expire/spill, 9 GP registers, r11 reserved as spill scratch.
+- `mir_x64.zig` fully rewritten: emit-functions for each MIR instruction, unified `ra: *const RegAllocResult`.
 
-Полный pipeline: B+ новый kernel-синтаксис → GPU AST → семантический анализ → GPU IR → HLSL → DXC.
+**v4.4.0:**
+- Removed `emitMfunction`. All CPU tests through unified linker `emitModule`.
+- `mir_verify.zig` — MIR verifier before emit.
+- `x64enc.disassemble` — disassembler (30+ instructions).
 
-Все 8 шейдеров FSR2 портированы и компилируются через DXC (`dxc -T cs_6_0 -E main`).
-
-**Пример порта (RCAS):** `shaders/fsr2/fsr2_rcas_new.b+`
-```rust
-kernel RCAS {
-    g_InputColor  : Texture2D<float4> @binding(t0)
-    g_OutputColor : RWTexture2D<float4> @binding(u0)
-    linearClamp   : SamplerState @binding(s0)
-    sharpness     : float @cbuffer(0)
-    globals {
-        float4 RCASPass(float4 col[4][4], float sharp) { ... }
-    }
-    @numthreads(8,8,1)
-    entry main(x:u32,y:u32) {
-        g_OutputColor[ipos] = RCASPass(col, sharpness);
-    }
-}
-```
-
-```bash
-bpc gpu shaders/fsr2/fsr2_rcas_new.b+ -o fsr2_rcas.hlsl
-dxc -T cs_6_0 -E main -Fo fsr2_rcas.cso fsr2_rcas.hlsl
-```
-
-**Портированные шейдеры:**
-- `fsr2_easu_new.b+` — EASU (Edge Adaptive Spatial Upsampling)
-- `fsr2_accumulate_new.b+` — Temporal Accumulation (TAAU)
-- `fsr2_depthclip_new.b+` — Depth Clip (анти-гостинг)
-- `fsr2_lock_new.b+` — Lock Status
-- `fsr2_luminance_pyramid_new.b+` — Luminance Pyramid
-- `fsr2_reconstruct_depth_new.b+` — Depth Reconstruction
-- `fsr2_dilate_velocity_new.b+` — Dilate Motion Vectors
-- `fsr2_rcas_new.b+` — RCAS (Robust Contrast Adaptive Sharpening)
-
-### Что дальше
-
-1. ✅ EASU/RCAS шейдеры на B+ → HLSL через `bpc gpu` + DXC
-2. ✅ Портированы все 8 проходов FSR2
-3. SPIR-V backend (Phase 6)
-4. MSL backend (Phase 7)
-5. DXIL backend (Phase 8)
-
----
-
-**Ограничения:**
-- Только Windows x64.
-- Минимальные сообщения об ошибках.
-- Чтение ввода через stdin (одна строка = одно событие).
-- Нет поддержки LLVM, WASM, LSP, DISK tier.
-
----
-
----
-
-# B+ v4.3.1 — deterministic transition machine (x64)
-
-> [Russian version ↑](#b-v420--детерминированная-машина-переходов-x64)
+**v4.3.2:**
+- All examples in README translated to Russian.
+- GPU IR: BackendApi, ShaderKey, PipelineKey, CompileOptions/Result.
+- DXIL backend (draft): GPU IR → HLSL → DXC subprocess → DXBC.
 
 **v4.3.1:**
 - Fixed stack alignment in entry point prologue (x64gen.zig). `stack_frame_size` is now always 8 mod 16, ensuring RSP = 0 mod 16 after saving 6 registers. Resolved `ACCESS_VIOLATION` in `MOVAPS [RSP+0x30]` when calling `MessageBoxW` via ucrtbase.dll.
 - Added Russian keyword aliases: `состояние`, `если`, `иначе`, `печать`, `всегда`, `пер`, `вход`, `запуск` etc. Usable alongside English keywords in the same file. Zero performance overhead — `StaticStringMap` (compile-time perfect hash, O(1)).
 
-**B+** compiles `.b+` files directly to x64 machine code and packages them into Windows PE executables (.exe).
+**B+** compiles `.b+` / `.bp` files directly to x64 machine code and packages them into Windows PE executables (.exe).
 No assemblers, linkers, or LLVM — the entire code generator is written from scratch in Zig.
-
-Built-in runtime layer (Stage 2) — a deterministic state machine with a formal transition model, three-level memory hierarchy (L1/L2/L3), generational handles, and a single migration execution point (`applyMigration`).
 
 ---
 
@@ -1234,28 +1198,43 @@ Built-in runtime layer (Stage 2) — a deterministic state machine with a formal
 1. [Quick Start](#1-quick-start)
 2. [Compiler Commands](#2-compiler-commands)
 3. [Language Syntax](#3-language-syntax)
-   - [States](#31-states)
-   - [Transitions (on)](#32-transitions-on)
-   - [Unconditional Transitions (always)](#33-unconditional-transitions-always)
-   - [Entry and Exit (entry / exit)](#34-entry-and-exit-entry--exit)
-   - [Variables](#35-variables)
-   - [Assignments](#36-assignments)
-   - [Print (print)](#37-print-print)
-   - [Guard Conditions (guard)](#38-guard-conditions-guard)
-   - [global entry](#39-global-entry)
-   - [Context (context)](#310-context-context)
-   - [Annotations](#311-annotations)
-   - [Enums (enum)](#312-enums-enum)
-   - [Parallel Blocks (parallel)](#313-parallel-blocks-parallel)
-   - [Kernel Functions](#314-kernel-functions)
-   - [External Functions (extern)](#315-external-functions-extern)
-   - [Comments](#316-comments)
-4. [Data Types](#4-data-types)
-5. [Examples](#5-examples)
-6. [Building from Source](#6-building-from-source)
-7. [Project Structure](#7-project-structure)
-8. [License](#8-license)
-9. [Contact](#9-contact)
+   - [3.1 States](#31-states)
+   - [3.2 Transitions (on)](#32-transitions-on)
+   - [3.3 Unconditional Transitions (always)](#33-unconditional-transitions-always)
+   - [3.4 Entry and Exit (entry / exit)](#34-entry-and-exit-entry--exit)
+   - [3.5 Variables](#35-variables)
+   - [3.6 Assignments](#36-assignments)
+   - [3.7 Print (print)](#37-print-print)
+   - [3.8 Guard Conditions (guard)](#38-guard-conditions-guard)
+   - [3.9 global entry](#39-global-entry)
+   - [3.10 Context (context)](#310-context-context)
+   - [3.11 Annotations](#311-annotations)
+   - [3.12 Enums (enum)](#312-enums-enum)
+   - [3.13 Parallel Blocks (parallel)](#313-parallel-blocks-parallel)
+   - [3.14 Kernel Functions](#314-kernel-functions)
+   - [3.15 External Functions (extern)](#315-external-functions-extern)
+   - [3.16 Comments](#316-comments)
+4. [`.bp` Syntax (New CPU Backend)](#4-bp-syntax-new-cpu-backend)
+   - [4.1 Types](#41-types)
+   - [4.2 Functions](#42-functions)
+   - [4.3 Extern Functions](#43-extern-functions)
+   - [4.4 Variables](#44-variables)
+   - [4.5 Structs](#45-structs)
+   - [4.6 Pointers](#46-pointers)
+   - [4.7 If/else](#47-ifelse)
+   - [4.8 While](#48-while)
+   - [4.9 For](#49-for)
+   - [4.10 Compound Assignment](#410-compound-assignment)
+   - [4.11 Operators](#411-operators)
+   - [4.12 Comments](#412-comments)
+   - [4.13 Error Messages](#413-error-messages)
+   - [4.14 CLI](#414-cli)
+5. [Data Types](#5-data-types)
+6. [Examples](#6-examples)
+7. [Building from Source](#7-building-from-source)
+8. [Project Structure](#8-project-structure)
+9. [License](#9-license)
+10. [Contact](#10-contact)
 
 ---
 
@@ -1671,7 +1650,189 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ---
 
-## 4. Data Types
+## 4. `.bp` Syntax (New CPU Backend)
+
+The new `.bp` syntax uses a direct MIR pipeline (no BIR, no state machine).
+Supports functions, variables, structs, pointers, `if`/`while`/`for`, compound assignment.
+
+### 4.1 Types
+
+| Type | Size (bytes) |
+|------|-------------|
+| `i8` / `u8` / `bool` | 1 |
+| `i16` / `u16` | 2 |
+| `i32` / `u32` | 4 |
+| `i64` / `u64` | 8 |
+| `int` | alias for `i64` |
+| `uint` | alias for `u64` |
+| `*T` | 8 (pointer) |
+| `void` | 0 |
+
+### 4.2 Functions
+
+```rust
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn main() {
+    print_i64(add(3, 4));
+}
+```
+
+Last expression is implicit `return`. Explicit `return` also works:
+
+```rust
+fn max(a: i64, b: i64) -> i64 {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+```
+
+### 4.3 Extern Functions
+
+```rust
+extern fn print_i64(x: i64);
+extern fn read_i64() i64;
+extern fn bplus_malloc(size: i64) i64;
+extern fn bplus_free(ptr: i64);
+extern fn bplus_exit(code: i64);
+```
+
+### 4.4 Variables
+
+```rust
+var x: i64 = 42;
+var y;
+var z = 10;
+x = 10;
+```
+
+### 4.5 Structs
+
+```rust
+struct Point {
+    x: i64,
+    y: i64,
+}
+```
+
+Single-line: `struct Point { x: i64, y: i64 }`
+
+```rust
+var p: Point;
+p.x = 10;
+p.y = 20;
+print_i64(p.x);
+```
+
+Literals:
+
+```rust
+var p = Point { x: 10, y: 20 };
+var q = Point {
+    x: 30,
+    y: 40,
+};
+```
+
+### 4.6 Pointers
+
+```rust
+var x: i64 = 42;
+var p: *i64 = &x;
+var y: i64 = *p;
+*p = 10;
+var addr: *i64 = &p.x;
+```
+
+### 4.7 If/else
+
+```rust
+if x > 5 {
+    print_i64(1);
+} else {
+    print_i64(0);
+}
+if (x > 5) {
+    print_i64(1);
+}
+```
+
+### 4.8 While
+
+```rust
+while i < 3 {
+    print_i64(i);
+    i += 1;
+}
+```
+
+`break` / `continue`:
+
+```rust
+while i < 10 {
+    if i == 5 { break; }
+    if i == 2 { i += 1; continue; }
+    print_i64(i);
+    i += 1;
+}
+```
+
+### 4.9 For
+
+```rust
+for i in 0..10 {
+    print_i64(i);
+}
+```
+
+### 4.10 Compound Assignment
+
+```rust
+x += 1;
+y -= 5;
+z *= 2;
+```
+
+### 4.11 Operators
+
+| Operator | Description |
+|----------|-------------|
+| `*` / `/` | multiply, divide |
+| `+` / `-` | add, subtract |
+| `==` / `!=` / `>` / `<` / `>=` / `<=` | comparisons |
+| `&&` | logical AND |
+| `\|\|` | logical OR |
+
+### 4.12 Comments
+
+```rust
+// single-line comment
+```
+
+### 4.13 Error Messages
+
+```
+error[UnknownVariable]: test_error.bp:4:1
+   4 |     print_i64(y);
+       | ^
+```
+
+### 4.14 CLI
+
+```text
+bplus build <input.bp> [-o <output.exe>]
+bplus run   <input.bp>
+```
+
+Pipeline: `.bp → parser → MIR → DCE → peephole → reg alloc → x64 → COFF .obj → zig build-exe → .exe`
+
+---
+
+## 5. Data Types
 
 | Type | Size (bytes) |
 |------|-------------|
@@ -1682,7 +1843,7 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ---
 
-## 5. Examples
+## 6. Examples
 
 ### Traffic Light
 
@@ -1744,7 +1905,7 @@ context {
 
 ---
 
-## 6. Building from Source
+## 7. Building from Source
 
 Requires [Zig](https://ziglang.org/) (master, >= 0.14).
 
@@ -1768,30 +1929,30 @@ bpc.exe run example.b+
 
 ---
 
-## 7. Project Structure
+## 8. Project Structure
 
 ```text
 zig/                    — compiler (Zig, active development)
   src/
     main.zig            — entry point, CLI, orchestration
-    runtime.zig          — Stage 2 runtime kernel (handle table, arena, FSM, migration, Snapshot)
+    runtime.zig          — runtime kernel (handle table, arena, FSM, migration, Snapshot)
     runtime_test.zig     — 40 unit tests: alloc, release, tick, migration, decay, budget, memory layer
     stress_test.zig      — stress test: 100k ops with snapshot-based formal invariant verification
-    cpu.zig              — Stage 7.0a CPU topology detection (Windows kernel32 extern)
-    latency.zig          — Stage 7.3 LatencyProfile, CoreStats, LoadState (adaptive thresholds)
-    scheduler.zig        — Stage 7 NUMA-aware worker-pool scheduler
+    cpu.zig              — CPU topology detection (Windows kernel32 extern)
+    latency.zig          — LatencyProfile, CoreStats, LoadState (adaptive thresholds)
+    scheduler.zig        — NUMA-aware worker-pool scheduler
     scheduler_test.zig   — 16 tests: sync/threaded/priority/steal/latency/state-machine
-    bench.zig            — Stage 7+ A/B benchmark: baseline vs smart scheduler (4 patterns) + Stage 9+ smoke tests
-    scheduler_config.zig — Stage 8 SchedulerConfig (max_sticky_ns, max_queue_len, imbalance thresholds)
-    scheduler_state.zig  — Stage 8 GlobalSchedulerState (SystemLoad, adjustDecision)
+    bench.zig            — A/B benchmark: baseline vs smart scheduler (4 patterns) + smoke tests
+    scheduler_config.zig — SchedulerConfig (max_sticky_ns, max_queue_len, imbalance thresholds)
+    scheduler_state.zig  — GlobalSchedulerState (SystemLoad, adjustDecision)
     gpu_ir.zig           — GPU IR: BindingKey{reg,space,kind}, BindGroup, PipelineKey, DispatchDesc, ResourceId
-    frame_graph.zig      — Stage 9+ FrameGraph: Pass, ExecutionNode, ExecutionPlan, GPUPassDesc (unified compute DAG IR)
-    frame_graph_executor.zig — Stage 9+ compileGraph() → immutable CompiledGraph; per-frame writeFrameDescriptors+executeCompiledGraph
-    compiled_graph.zig   — Stage 9+ CompiledGraph: CompiledPass, FrameInputs, BindSlot, DescriptorArena. Pre-baked PSOs/barriers/slots
-    resource_system.zig  — Stage 9+ ResourcePool: GPU resource lifecycle, RS-driven descriptor allocation, state tracking
-    root_signature_builder.zig — Stage 9+ Per-pass root signature compiler: BindLayout → CompiledRS, cached by hash
-    gpu_job.zig          — Stage 9 GPUJob dispatch descriptor
-    gpu_scheduler.zig    — Stage 9+ Pure GPU dispatch sink (no graph awareness)
+    frame_graph.zig      — FrameGraph: Pass, ExecutionNode, ExecutionPlan, GPUPassDesc (unified compute DAG IR)
+    frame_graph_executor.zig — compileGraph() → immutable CompiledGraph; per-frame writeFrameDescriptors+executeCompiledGraph
+    compiled_graph.zig   — CompiledGraph: CompiledPass, FrameInputs, BindSlot, DescriptorArena. Pre-baked PSOs/barriers/slots
+    resource_system.zig  — ResourcePool: GPU resource lifecycle, RS-driven descriptor allocation, state tracking
+    root_signature_builder.zig — Per-pass root signature compiler: BindLayout → CompiledRS, cached by hash
+    gpu_job.zig          — GPUJob dispatch descriptor
+    gpu_scheduler.zig    — Pure GPU dispatch sink (no graph awareness)
     parser.zig          — lexer + parser for .b+
     ast.zig             — AST types (states, transitions, etc.)
      x64gen.zig          — x64 machine code generator (+ Intrinsic binding to runtime).
@@ -1841,7 +2002,7 @@ zig/                    — compiler (Zig, active development)
 
 ---
 
-## 8. License
+## 9. License
 
 MIT License
 
@@ -1871,403 +2032,8 @@ SOFTWARE.
 
 ---
 
-## 9. Contact
+## 10. Contact
 
 - **GitHub**: [github.com/bylka2W](https://github.com/bylka2W)
 - **Repository**: [github.com/bylka2W/B-Plus](https://github.com/bylka2W/B-Plus)
 - **Author**: bylka2W
-
----
-
-## Stage 2 — Runtime kernel (chunk-based memory physics)
-
-`src/runtime.zig` — deterministic memory machine using chunk-based physics (64KB regions).
-
-```text
-Handle → MetaStore → chunk_id → Chunk.tier (O(1), no heuristics)
-                                ↓
-moveHotter/moveColder → Chunk.tier.moveHotter/?Tier (pure FSM)
-                                ↓
-cooldown gate → last_migration_tick + 3 ticks (Stage 3)
-                                ↓
-migrateChunk → tier switch + memcpy used bytes (physical copy)
-    └─ dst_arena.alloc(CHUNK_SIZE)
-    └─ @memcpy (src → dst, only chunk.used bytes)
-    └─ update chunk.arena_base / chunk.arena_offset
-    └─ chunk.last_migration_tick = current_tick
-    └─ log .MIGRATE
-```
-
-### Stage 2: chunk layer
-
-- **Chunk** = 64KB region, atomic migration unit.
-- **`ChunkStore`**: chunk array management, find-by-tier + find-with-space.
-- **`MetaStore.chunk_ids`** / **`MetaStore.offsets`** replaced `ptrs` — tier = `chunks[chunk_id].tier`, not pointer-based.
-- **`arena_base`** in Chunk: data always read from the physical arena regardless of `chunk.tier`.
-- **Physical byte copy**: on migration — `dst_arena.alloc(CHUNK_SIZE)`, `@memcpy(chunk.used bytes)`, pointer update.
-- **Heat per-chunk**: accumulated on `access()`, tick operates on chunks (not handles).
-- **`Snapshot`**: per-slot tiers (from chunk.tier) + per-chunk arrays (tiers, heats).
-- **`MigrationResult`**: `.success` / `.dst_full` / `.invalid_handle` / `.at_boundary` / `.cooldown`.
-- **slot_count**: decremented on release — empty chunks excluded from migration decisions.
-
-### Stage 3: cooldown tracking
-
-- **`Chunk.last_migration_tick`**: tick of last migration (0 = never migrated).
-- **`COOLDOWN_TICKS = 3`**: minimum ticks between migrations for the same chunk.
-- **Gate in `migrateChunk`**: `current_tick - last_migration_tick < COOLDOWN_TICKS` → `.cooldown`.
-- **Gate in `tick()`**: chunks in cooldown don't consume budget during candidate collection.
-- **Cooldown does not replace heat logic**: heat decides *if* migration is needed, cooldown decides *if it's allowed now*.
-- **30 unit tests**: fresh chunk bypass, immediate block, window (1–3–4 ticks), tick integration.
-
-### Stage 4: priority scheduling (top-K selection)
-
-- **Partial top-K**: O(n) scan, no global buffer — maintains top MIGRATION_BUDGET=4 candidates via weakest-replacement during pass.
-- **Sorting**: promote — `heat desc` (hottest first), demote — `heat asc` (coldest first).
-- **Tie-break**: `chunk_id asc` — strict determinism for equal heat.
-- **Top-K**: `MIGRATION_BUDGET=4` applied *after* ranking, not during collection.
-- **Cooldown filters before sorting**: chunks in cooldown are excluded from queues.
-- **Two queues**: promote (L2→L1, L3→L2) and demote (L1→L2, L2→L3) processed independently.
-- **32 unit tests**: top-K priority, tie-breaking, budget limit.
-- **Stable fingerprint** — deterministic sort preserves final state for identical inputs.
-
-### Stage 5: cost-aware scheduling
-
-- **`migrationCost(src, dst)`**: L1↔L2 = 2, L2↔L3 = 1. Symmetric.
-- **Promote score**: `heat - cost`. Only if score > 0.
-- **Demote score**: `(DEMOTE_THRESH - heat) - cost`. Only if score > 0.
-- **Score filters before top-K**: chunk with score ≤ 0 doesn't consume budget.
-- **ENABLE_COST_MODEL**: compile-time rollback flag.
-- **Effect**: L1 chunk at heat 29 stays L1 (score = -1), L2 chunk at heat 5 demotes (score = 24).
-- **35 unit tests**: +3 cost-specific (expensive blocked, cheap passes, promote works).
-- **Stress fingerprint stable** — cost doesn't affect top-K order for hot chunks.
-
-### Stage 6: Memory Layer (foundation release)
-
-- **6.1 Free-list**: `ChunkStore.free_list[]` + `free_count`. When `slot_count == 0` the chunk_id is pushed to the free list. `allocChunk` checks free list first, then linear alloc.
-- **6.2 Compaction**: `runCompaction()` every `COMPACT_INTERVAL=1000` ticks. Collects live chunks, saves data, resets arena, re-allocates sequentially.
-- **6.3 Indirection**: `Handle → chunk_id → chunk.arena_base + arena_offset + slot_offset`. Compaction updates only `chunk.arena_base`/`arena_offset` — handles are untouched.
-- **39 unit tests**: +4 Stage 6 (free-list reuse, multiple freed IDs, compaction single-tier, compaction multi-tier).
-- **API**: `setAllocator(allocator)` enables compaction. Without it — free-list only.
-- **Stress stable** — fingerprint updated due to chunk_id reuse.
-
-### Stage 7: Architecture-Aware Runtime Scheduler
-
-`src/scheduler.zig` — preemptive scheduler with NUMA locality, latency protection, and per-core adaptive thresholds.
-
-```text
-Job → WorkerPool → worker[N] (per-core LIFO queue)
-         ↓
-    steal(neighbor) ← cost-benefit → migrate(job)
-         ↓
-    load_state (NORMAL ↔ MEDIUM ↔ OVERLOAD)
-```
-
-#### 7.0a CPU topology detection (`src/cpu.zig`)
-
-- **`CpuTopology`**: logical/physical cores, HT siblings, cache hierarchy (deduplicated), NUMA nodes, CPU class (tiny/pc/workstation/manycore).
-- **Windows kernel32 extern**: `GetLogicalProcessorInformationEx` (primary) + `GetLogicalProcessorInformation` (fallback).
-- **Cache dedup**: one entry per unique cache level/size, not per-core duplicates.
-
-#### 7.3 Latency Protection layer
-
-**Core model**:
-- **`LatencyProfile`**: migration cost matrix, NUMA penalty, cache distance, per-core NUMA.
-- **Score**: `load × LOAD_PENALTY + migrationCost + cacheDistance × SCALE + numaPenalty`.
-- **Cost heuristics**: HT-sibling=50ns, same-NUMA=200ns, cross-NUMA=1000ns.
-
-**Per-core adaptive steal threshold**:
-- Each core maintains `CoreStats` (attempts, successes, EMA cost/benefit).
-- Threshold = `avg_cost + avg_cost × fail_ratio / 2` — core learns which steals are profitable.
-- `fail_ratio = (attempts − succ) / attempts` (fixed-point, α=1/16).
-- Cold start: `cost × 2` when attempts < 4.
-
-**Sticky core + hysteresis**:
-- `Job.sticky_core` / `stickiness` — job stays on its core when steal is attempted.
-- `migration_cooldown_ns=50ms` — prevents ping-pong migrations.
-
-**Load state machine (three-state hysteresis)**:
-```
-                   smoothed ≥ 4 (MEDIUM_ENTER)
-     NORMAL ─────────────────────────────► MEDIUM
-         ◄───────────────────────────────
-         smoothed ≤ 2 (MEDIUM_EXIT)
-
-                   smoothed ≥ 8 (OVERLOAD_ENTER)
-     MEDIUM ─────────────────────────────► OVERLOAD
-         ◄───────────────────────────────
-         smoothed ≤ 5 (OVERLOAD_EXIT)
-```
-- **`smoothed_load`**: EMA of queue length (α=1/8) — shields against burst noise.
-- **NORMAL**: strict cost-benefit + adaptive threshold + sticky honored + cooldown.
-- **MEDIUM**: relaxed (cost-benefit skipped) + sticky honored + cooldown.
-- **OVERLOAD**: unconditional steal — sticky bypassed, cooldown bypassed.
-
-**Overload escape**: at OVERLOAD victim state — all locality constraints are removed, preventing biased locality trap.
-
-### Stage 8: Starvation escape + global imbalance correction
-
-- **`SchedulerConfig`** (`scheduler_config.zig`): `max_sticky_ns=50ms`, `max_queue_len=64`, `imbalance_soft=2.0`, `imbalance_hard=3.0`.
-- **`GlobalSchedulerState`** (`scheduler_state.zig`): `last_system_load` + `adjustDecision()` — force_steal at ratio > 3.0, override prefer_affinity at ratio > 2.0.
-- **3-layer pipeline**: `localPolicy()` → `safetyOverride()` → `applyGlobal()`.
-- **Starvation escape**: steal loop checks `wait_ns > max_sticky_ns` for sticky jobs → force-migrate (`force_migrate_escape` counter).
-- **`SystemLoad`** (`latency.zig`): `avg_queue`, `max_queue`, `min_queue`, `imbalance_ratio`; `computeSystemLoad()`, `isSystemUnderPressure()`.
-
-### Stage 9–14: Temporal Compute DAG Runtime (Graph VM)
-
-`src/frame_graph.zig` — frame compiler producing a temporal compute DAG IR (`ExecutionPlan`).
-
-```text
-Pass[] → FrameGraph.compile()
-                  ↓
-    ExecutionPlan { nodes + edges }                         ← temporal DAG IR
-                  ↓
-    WorkerPool.submitFrame(plan, &ctx)                      ← single Kahn O(n+e)
-        ├─ intra_frame edges → in_degree counting
-        ├─ inter_frame edges → history gating (ctx.history.frame_index)
-        ├─ CPU node → WorkerPool.submit() (CPU wave)
-        ├─ barrier: waitAll()
-        └─ GPU / Render node → GPUScheduler.submit() (GPU wave)
-```
-
-**ExecutionNode** (`frame_graph.zig`): `id + name + kind (cpu | gpu | render | barrier)` — unified IR node with temporal awareness.
-
-**NodeKind.render**: temporal GPU stage with `reads_history`, `writes_history`, `temporal_weight`. Used for reprojection, temporal accumulation, upscaling passes.
-
-**NodeKind.barrier**: frame-boundary synchronization — `wait_for_frame`, `buffer_mask`.
-
-**ExecutionPlan** (`frame_graph.zig`): `nodes[] + edges[] + budget_us` — partially-ordered DAG with intra-frame and inter-frame edges.
-
-**DependencyEdge** (`frame_graph.zig`): `{ from, to, kind (intra_frame | inter_frame), temporal_offset }` — edges carry temporal semantics. Inter-frame edges bypass Kahn in_degree; history availability is checked at dispatch time.
-
-**EdgeKind**: `intra_frame` (same-frame dependency) or `inter_frame` (cross-frame history dependency). The scheduler only counts intra_frame edges for topological ordering; inter_frame edges gate node dispatch on `FrameContext.history.frame_index`.
-
-**FrameContext** (`frame_graph.zig`): per-frame temporal state — `frame_index`, `delta_time_ns`, `HistoryBuffers` (color/depth/motion ids + frame_index), `temporal_mask`. Passed through the pipeline to gate temporal node execution.
-
-**GPUJob** (`gpu_job.zig`): dispatch descriptor with pipeline_id, dispatch grid, semaphore chain, deadline, priority, dropable.
-
-**GPUScheduler** (`gpu_scheduler.zig`): pure GPU dispatch sink — no graph awareness, no Kahn. `submit(job)` + `tick()` only.
-
-#### Key architectural decisions (Stage 9–14)
-
-| Stage | Change |
-|-------|--------|
-| 9 | FrameGraph + GPUExec materialization + budget pruning |
-| 10 | Compiler separation: FrameGraph.compile() → ExecutionPlan, scheduler as pure executor |
-| 11 | DependencyEdge + Kahn in GPU scheduler for runtime reorder within DAG |
-| 12 | Unified ExecutionNode (cpu|gpu) replaces separate cpu/gpu fields — single DAG IR |
-| 13 | Queue-driven Kahn O(n+e), GPUScheduler as pure sink, CPU/GPU wave barrier |
-| 14 | Temporal Frame Graph: EdgeKind, render/barrier nodes, FrameContext, history gating |
-
-#### Pipeline
-
-```
-FrameGraph.compile()    →  compiler (topo sort + budget + temporal materialization)
-ExecutionPlan           →  temporal DAG IR (nodes + edges with intra/inter frame kinds)
-WorkerPool              →  temporal Kahn engine (CPU→pool, GPU→sink, history gated)
-GPUScheduler            →  pure GPU dispatch sink
-FrameContext            →  per-frame temporal state (history buffers, frame index)
-```
-
-No pass metadata at runtime. Single temporal Kahn engine. History-aware dispatch.
-
-#### Testing
-
-```bash
-chcp 65001 >nul & zig test src\test_affinity.zig  # affinity-conflict only: p99, queue_wait, wait_seq, exec_time
-zig test src\bench.zig            # 8 tests: 4 CPU patterns + frame-graph + gpu-scheduler + temporal-frame + metric
-```
-
-
-| Component | Description |
-|-----------|-------------|
-| `Tier` | Enum L1/L2/L3/DISK. FSM: `moveHotter`/`moveColder` → `?Tier` |
-| `Chunk` | 64KB region: tier, arena_base, heat, used, arena_offset, slot_count, last_migration_tick |
-| `ChunkStore` | Chunk array + free-list, alloc/find/release-by-tier |
-| `Handle` | Generational slot identifier: slot + generation |
-| `HandleTable` | Slot states (Used/Free), O(1) free-list, invalidation via generation |
-| `MetaStore` | SoA: chunk_ids, offsets, sizes, generations, heats, total_heats, states |
-| `Arena` | Three-tier bump allocator (L1/L2/L3), fail-fast on OOM |
-| `Snapshot` | Snapshot: per-slot tiers/heats/states/gens + per-chunk tiers/heats |
-| `assertInvariant` | Private — only inside validateHandle/validateChunkOps |
-
-### Testing
-
-```bash
-zig test src\runtime_test.zig   # 40 unit tests (chunk model + cooldown + top-K + cost + memory layer)
-zig test src\stress_test.zig    # 100k ops: 3817 migrations, deterministic fingerprint
-zig test src\scheduler_test.zig # 16 tests: sync/threaded/priority/steal/latency/state-machine
-```
-
-### Intrinsic binding
-
-`x64gen.zig` uses `inline for (comptime std.meta.tags(rt.Intrinsic))` for
-exhaustive generation of all runtime functions. Adding an `Intrinsic` variant
-causes a compile error until `emitOneIntrinsic` handles it.
-
-### Scheduler budget guard
-
-To prevent always-transition livelock, each tick has a budget (4 transitions).
-- **Scheduler** (`always_entry`): read-only guard — checks budget > 0
-- **FSM** (`changeToState`): consumption — decrement on real always transition
-- Budget resets to 4 on each `ReadFile` (tick start)
-
-### Spill chain
-
-The arena allocator (bump-pointer) cascades allocation:
-- `arena_l1_alloc` → try L1 → spill L2 → spill L3 → oom
-- `arena_l2_alloc` → try L2 → spill L3 → oom
-- `arena_l1_reset` resets all three arenas (L1+L2+L3)
-
-Arena sizes are computed dynamically: `max_data_size × (8 + MIGRATION_BUDGET)`,
-minimum 256 bytes.
-
----
-
-## Code Generation Optimizations
-
-### Jump-table dispatch
-
-State dispatch uses an O(1) jump table instead of a linear CMP/JE chain:
-
-```asm
-MOV R12, [RBP + off_cur_state]
-CMP R12, N; JAE re_dispatch
-LEA R11, [RIP + jmp_table]
-MOV EAX, [R11 + R12*4]
-ADD RAX, R11
-JMP RAX
-```
-
-The table stores 32-bit relative offsets filled at link time via `applyFixups`.
-Scale = 4 (4-byte entries). Eliminates O(n) dispatch entirely — no structural
-degradation regardless of state count.
-
-### Superblock fusion (always-chain fusion)
-
-Greedy linear expansion: states where `transitions.len == 1 && is_always &&
-target_idx == si + chain_len` are fused into fallthrough chains. Fused states
-skip L1 reset, budget decrement, and JMP back to the scheduler. Only the last
-state in a chain does a normal exit.
-
-This transforms:
-
-```text
-A → scheduler → dispatch → B → scheduler → dispatch → C
-```
-
-into:
-
-```text
-A fallthrough B fallthrough C
-```
-
-### Compiled event matching
-
-Instead of a byte-by-byte comparison loop at runtime, event names ≤4 bytes are
-matched with direct inline `CMP` using immediate values:
-
-```asm
-; event "go" (2 bytes)
-MOVZX RAX, WORD [RDI]     ; load 2 bytes from input
-CMP   RAX, 0x6F67         ; compare with "go"
-JNE   next_event           ; not this event
-MOVZX RAX, BYTE [RDI+2]   ; check delimiter
-CMP   RAX, 0x0A; JE match ; newline?
-```
-
-This eliminates:
-- Loop pointer increments (INC RDI, INC RSI)
-- Null-term check per iteration
-- Loop back-edge branch (JMP loop)
-- Taken/not-taken branch mispredictions from the comparison loop
-
-Longer event names fall back to the byte loop.
-
-### Label interning
-
-All labels are assigned a single `u32` ID at compile time via `allocLabelId`.
-String formatting only occurs once per unique label (memoized via
-`label_name_map`). Hot emit loops use pre-computed `dp_id[i]` / `en_id[i]`
-arrays — zero formatting, zero allocation in per-state code generation.
-
-`Fixup` stores `label_id: u32` instead of `label: []const u8`. No per-fixup
-string duplication.
-
-### O(1) state lookup
-
-`state_index_map` (`StringHashMap(usize)`) replaces all O(n) `findStateIndex`
-linear scans. Built once at initialization after parsing.
-
----
-
-## FSR2 Port — Full Temporal Upscaler in B+
-
-B+ is being used to port AMD FidelityFX Super Resolution 2 (FSR2) — a full temporal
-upscaler with 11+ shader passes — entirely in B+ language. The project has two tracks:
-
-### Track 1: DXGI Proxy DLL (`fsr2_proxy.b+`)
-
-A D3D11 proxy DLL that hooks `CreateDXGIFactory`/`Present` and runs FSR2 per-frame:
-
-```
-Present → Luminance Pyramid → Reconstruct Depth → Dilate Motion Vectors →
-Depth Clip → Lock → Temporal Accumulate → RCAS Sharpen → Copy to Backbuffer
-```
-
-All D3D11 API calls (CreateTexture2D, CreateShaderResourceView, CSSetShader,
-Dispatch, CopyResource) are made via COM vtable dispatch — written entirely in
-B+ x64 assembly (no C++ runtime, no FidelityFX SDK).
-
-8 pre-compiled CSO shaders are loaded from `shaders/cso/`:
-- `fsr2_easu.cso` — Edge Adaptive Spatial Upsampling
-- `fsr2_rcas.cso` — Robust Contrast Adaptive Sharpening
-- `fsr2_accumulate.cso` — Temporal Accumulation (TAAU core)
-- `fsr2_depthclip.cso` — Depth-based disocclusion detection
-- `fsr2_lock.cso` — Temporal lock status
-- `fsr2_luminance_pyramid.cso` — Luminance downsampling
-- `fsr2_reconstruct_depth.cso` — Depth mip chain
-- `fsr2_dilate_velocity.cso` — Motion vector dilation
-
-### Track 2: B+ HLSL Codegen (`bpc hlsl`)
-
-FSR2 shaders are being rewritten in B+ syntax using annotations, so `bpc hlsl`
-generates the HLSL, replacing hand-written shaders:
-
-```rust
-g_InputColor: @bind(t, 0, float4)
-g_OutputColor: @bind(u, 0, float4)
-linearClamp: @bind(s, 0)
-inputSize: @cbuffer(EASUConstants, 0, float2)
-
-@numthreads(8,8,1)
-entry main {
-    for(x, y, w, h) {
-        float2 pp = float2(x, y) + 0.5
-        float2 uv = pp * outputSize * inputRcpSize
-        // ... EASU math ...
-        g_OutputColor[uint2(x, y)] = result
-    }
-}
-```
-
-The HLSL codegen supports:
-- FSR2 type aliases (`FfxFloat32` → `float`, etc.)
-- `@bind(u,N,type,globallycoherent)` → `globallycoherent RWTexture2D`
-- 50+ HLSL intrinsic passthrough (wave ops, atomics, math, casts)
-- `@cbuffer`, `@groupshared`, `@numthreads`, `@unroll`, `@branch`
-
-### Next Steps
-
-1. Write EASU/RCAS shaders in B+ → HLSL via `bpc hlsl` + DXC compilation
-2. Port remaining 6 passes from HLSL to B+ syntax
-3. Implement temporal accumulation with motion vector reprojection
-4. Depth-based disocclusion rejection + lock mechanism
-5. Wire D3D12 host code in B+ x64 (CreateComputePipelineState, Dispatch)
-
----
-
-**Limitations:**
-- Windows x64 only.
-- Minimal error messages.
-- Reads input from stdin (one line = one event).
-- No LLVM, WASM, LSP, DISK tier support.

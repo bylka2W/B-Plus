@@ -1,5 +1,5 @@
 const std = @import("std");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const resource_system = @import("resource_system.zig");
 
 /// Ring-buffer depth for frame generation.
@@ -8,9 +8,9 @@ pub const HISTORY_DEPTH = 4;
 
 /// A single history slot — wraps a texture resource.
 pub const HistorySlot = struct {
-    resource_id: gpu_ir.ResourceId = 0,
+    resource_id: gpu_types.ResourceId = 0,
 
-    pub fn bind(self: *const HistorySlot, reg: u32, space: u32, kind: gpu_ir.BindingKind) gpu_ir.BindEntry {
+    pub fn bind(self: *const HistorySlot, reg: u32, space: u32, kind: gpu_types.BindingKind) gpu_types.BindEntry {
         return .{
             .key = .{ .reg = reg, .space = space, .kind = kind },
             .resource_id = self.resource_id,
@@ -20,7 +20,7 @@ pub const HistorySlot = struct {
 
 /// Ring buffer of history textures with generation tracking.
 pub const HistoryRing = struct {
-    slots: [HISTORY_DEPTH]gpu_ir.ResourceId = [_]gpu_ir.ResourceId{0} ** HISTORY_DEPTH,
+    slots: [HISTORY_DEPTH]gpu_types.ResourceId = [_]gpu_types.ResourceId{0} ** HISTORY_DEPTH,
     write_idx: u32 = 0,
     count: u32 = 0,
 
@@ -43,7 +43,7 @@ pub const HistoryRing = struct {
         return result;
     }
 
-    pub fn push(self: *HistoryRing, resource_id: gpu_ir.ResourceId) void {
+    pub fn push(self: *HistoryRing, resource_id: gpu_types.ResourceId) void {
         self.write_idx = (self.write_idx + 1) % HISTORY_DEPTH;
         self.slots[self.write_idx] = resource_id;
         if (self.count < HISTORY_DEPTH) self.count += 1;
@@ -93,9 +93,9 @@ pub const HistoryManager = struct {
         pool: *resource_system.ResourcePool,
         width: u32,
         height: u32,
-        format: gpu_ir.ResourceFormat,
+        format: gpu_types.ResourceFormat,
     ) !void {
-        const desc = gpu_ir.TextureDesc{ .width = width, .height = height, .format = format };
+        const desc = gpu_types.TextureDesc{ .width = width, .height = height, .format = format };
         for (&ring.slots) |*id| {
             id.* = try pool.createTexture2D(desc);
         }
@@ -108,7 +108,7 @@ pub const HistoryManager = struct {
         pool: *resource_system.ResourcePool,
         width: u32,
         height: u32,
-        format: gpu_ir.ResourceFormat,
+        format: gpu_types.ResourceFormat,
     ) !void {
         try initRing(&self.color, pool, width, height, format);
     }
@@ -118,7 +118,7 @@ pub const HistoryManager = struct {
         pool: *resource_system.ResourcePool,
         width: u32,
         height: u32,
-        format: gpu_ir.ResourceFormat,
+        format: gpu_types.ResourceFormat,
     ) !void {
         try initRing(&self.depth, pool, width, height, format);
     }
@@ -128,7 +128,7 @@ pub const HistoryManager = struct {
         pool: *resource_system.ResourcePool,
         width: u32,
         height: u32,
-        format: gpu_ir.ResourceFormat,
+        format: gpu_types.ResourceFormat,
     ) !void {
         try initRing(&self.motion, pool, width, height, format);
     }
@@ -138,7 +138,7 @@ pub const HistoryManager = struct {
         pool: *resource_system.ResourcePool,
         width: u32,
         height: u32,
-        format: gpu_ir.ResourceFormat,
+        format: gpu_types.ResourceFormat,
     ) !void {
         try initRing(&self.exposure, pool, width, height, format);
     }
@@ -148,7 +148,7 @@ pub const HistoryManager = struct {
         pool: *resource_system.ResourcePool,
         width: u32,
         height: u32,
-        format: gpu_ir.ResourceFormat,
+        format: gpu_types.ResourceFormat,
     ) !void {
         try initRing(&self.reactive, pool, width, height, format);
     }
@@ -158,7 +158,7 @@ pub const HistoryManager = struct {
         pool: *resource_system.ResourcePool,
         width: u32,
         height: u32,
-        format: gpu_ir.ResourceFormat,
+        format: gpu_types.ResourceFormat,
     ) !void {
         try initRing(&self.compositing, pool, width, height, format);
     }
@@ -179,9 +179,9 @@ pub const HistoryManager = struct {
 
     pub fn pushFrame(
         self: *HistoryManager,
-        color_id: gpu_ir.ResourceId,
-        depth_id: gpu_ir.ResourceId,
-        motion_id: gpu_ir.ResourceId,
+        color_id: gpu_types.ResourceId,
+        depth_id: gpu_types.ResourceId,
+        motion_id: gpu_types.ResourceId,
     ) void {
         self.color.push(color_id);
         self.depth.push(depth_id);

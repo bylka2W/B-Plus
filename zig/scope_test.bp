@@ -1,0 +1,11 @@
+extern fn print_i64(x: i64);
+
+fn main() {
+    var x: i64 = 10;
+    print_i64(x);
+    {
+        var x: i64 = 99;
+        print_i64(x);
+    }
+    print_i64(x);
+}

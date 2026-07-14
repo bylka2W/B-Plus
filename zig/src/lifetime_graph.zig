@@ -1,11 +1,11 @@
 const std = @import("std");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const frame_graph = @import("frame_graph.zig");
 const resource_system = @import("resource_system.zig");
 
 /// A single resource's lifetime interval [first_pass, last_pass].
 pub const LifetimeEntry = struct {
-    resource_id: gpu_ir.ResourceId,
+    resource_id: gpu_types.ResourceId,
     first_pass: u32,
     last_pass: u32,
     transient: bool,
@@ -18,7 +18,7 @@ pub const AliasGroup = struct {
     max_size: u64,
     max_alignment: u64,
     /// Resources assigned to this group (sorted by first_pass).
-    resources: []gpu_ir.ResourceId,
+    resources: []gpu_types.ResourceId,
 };
 
 /// Complete lifetime analysis: per-resource intervals + alias groups.
@@ -26,7 +26,7 @@ pub const LifetimeGraph = struct {
     entries: []LifetimeEntry,
     groups: []AliasGroup,
     /// resource_id → alias_group_id (only for resources assigned to a group).
-    alias_map: std.AutoHashMap(gpu_ir.ResourceId, u32),
+    alias_map: std.AutoHashMap(gpu_types.ResourceId, u32),
 
     pub fn build(
         allocator: std.mem.Allocator,
@@ -36,7 +36,7 @@ pub const LifetimeGraph = struct {
         const entries = try computeLifetimes(allocator, gpu_passes, pool);
         errdefer allocator.free(entries);
 
-        var map = std.AutoHashMap(gpu_ir.ResourceId, u32).init(allocator);
+        var map = std.AutoHashMap(gpu_types.ResourceId, u32).init(allocator);
         errdefer map.deinit();
 
         const groups = try findAliasGroups(allocator, entries, &map);
@@ -83,12 +83,12 @@ pub const LifetimeGraph = struct {
     }
 
     /// Return the alias group id for a resource, or null if ungrouped.
-    pub fn aliasGroup(self: *const LifetimeGraph, resource_id: gpu_ir.ResourceId) ?u32 {
+    pub fn aliasGroup(self: *const LifetimeGraph, resource_id: gpu_types.ResourceId) ?u32 {
         return self.alias_map.get(resource_id);
     }
 
     /// Estimate resource memory size in bytes.
-    fn resourceSize(desc: gpu_ir.ResourceDesc) u64 {
+    fn resourceSize(desc: gpu_types.ResourceDesc) u64 {
         return switch (desc) {
             .buffer => |b| @max(b.size, b.stride * b.elements),
             .texture2d => |t| {
@@ -132,7 +132,7 @@ pub const LifetimeGraph = struct {
         gpu_passes: []const frame_graph.GPUPassDesc,
         pool: *resource_system.ResourcePool,
     ) ![]LifetimeEntry {
-        var interval_map = std.AutoHashMap(gpu_ir.ResourceId, struct { first: u32, last: u32, transient: bool }).init(allocator);
+        var interval_map = std.AutoHashMap(gpu_types.ResourceId, struct { first: u32, last: u32, transient: bool }).init(allocator);
         defer interval_map.deinit();
 
         for (gpu_passes, 0..) |gp, pi| {
@@ -168,7 +168,7 @@ pub const LifetimeGraph = struct {
     fn findAliasGroups(
         allocator: std.mem.Allocator,
         entries: []LifetimeEntry,
-        alias_map: *std.AutoHashMap(gpu_ir.ResourceId, u32),
+        alias_map: *std.AutoHashMap(gpu_types.ResourceId, u32),
     ) ![]AliasGroup {
         // Only consider transient resources
         var candidates = std.ArrayList(LifetimeEntry).init(allocator);
@@ -192,7 +192,7 @@ pub const LifetimeGraph = struct {
         // Greedy group assignment
         var groups = std.ArrayList(struct {
             last_pass: u32,
-            resources: std.ArrayList(gpu_ir.ResourceId),
+            resources: std.ArrayList(gpu_types.ResourceId),
         }).init(allocator);
         defer {
             for (groups.items) |*g| g.resources.deinit();
@@ -211,7 +211,7 @@ pub const LifetimeGraph = struct {
                 }
             }
             if (!assigned) {
-                var new_resources = std.ArrayList(gpu_ir.ResourceId).init(allocator);
+                var new_resources = std.ArrayList(gpu_types.ResourceId).init(allocator);
                 try new_resources.append(candidate.resource_id);
                 try groups.append(.{
                     .last_pass = candidate.last_pass,

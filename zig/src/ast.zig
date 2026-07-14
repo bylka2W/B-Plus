@@ -47,6 +47,7 @@ pub const StateDefNode = struct {
 
 pub const EntryDecl = struct {
     name: []const u8,
+    params: std.ArrayList(KernelParam),
     body_lines: std.ArrayList([]const u8),
     return_type: ?[]const u8,
     is_export: bool,
@@ -121,6 +122,7 @@ pub const ProgramNode = struct {
         for (self.entries.items) |*e| {
             for (e.body_lines.items) |line| self.allocator.free(line);
             e.body_lines.deinit();
+            e.params.deinit();
         }
         self.entries.deinit();
         for (self.kernels.items) |*k| {

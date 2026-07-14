@@ -1,6 +1,6 @@
 const std = @import("std");
 const frame_graph = @import("frame_graph.zig");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const resource_system = @import("resource_system.zig");
 const lifetime_graph = @import("lifetime_graph.zig");
 const barrier_optimizer = @import("barrier_optimizer.zig");
@@ -14,9 +14,9 @@ pub const ResourceAccess = enum(u8) {
 
 pub const ResourceNode = struct {
     id: u32,
-    resource_id: gpu_ir.ResourceId,
+    resource_id: gpu_types.ResourceId,
     passes: []const u32,
-    state: gpu_ir.ResourceState = .common,
+    state: gpu_types.ResourceState = .common,
     access: ResourceAccess = .read,
     transient: bool = false,
 };
@@ -139,15 +139,15 @@ pub const RenderGraph = struct {
     /// Returns barriers for optical flow, confidence, disocclusion, and output resources.
     pub fn buildFSR3Barriers(
         pool: *resource_system.ResourcePool,
-        optical_flow: gpu_ir.ResourceId,
-        confidence: gpu_ir.ResourceId,
-        disocclusion: gpu_ir.ResourceId,
-        output: gpu_ir.ResourceId,
-    ) ![4]gpu_ir.BarrierDesc {
-        var result: [4]gpu_ir.BarrierDesc = undefined;
+        optical_flow: gpu_types.ResourceId,
+        confidence: gpu_types.ResourceId,
+        disocclusion: gpu_types.ResourceId,
+        output: gpu_types.ResourceId,
+    ) ![4]gpu_types.BarrierDesc {
+        var result: [4]gpu_types.BarrierDesc = undefined;
         var i: u32 = 0;
 
-        const entries = [_]struct { id: gpu_ir.ResourceId, target: gpu_ir.ResourceState }{
+        const entries = [_]struct { id: gpu_types.ResourceId, target: gpu_types.ResourceState }{
             .{ .id = optical_flow, .target = .unordered_access },
             .{ .id = confidence, .target = .unordered_access },
             .{ .id = disocclusion, .target = .unordered_access },

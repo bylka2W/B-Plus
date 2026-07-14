@@ -53,6 +53,8 @@ const TokenKind = enum {
     minus,
     star,
     slash,
+    percent,
+    percenteq,
     assign,
     pluseq,
     minuseq,
@@ -127,6 +129,7 @@ fn lookupTypeName(name: []const u8) ?gpu_ir.TypeRef {
         .{ "uint4", .vec4u },
         .{ "half", .f16 },
         .{ "bool", .u32 },
+        .{ "float4x4", .mat4x4f },
     });
     return types.get(name);
 }
@@ -177,6 +180,9 @@ fn tokenize(allocator: Allocator, source: []const u8) ![]Token {
             var is_float = false;
             while (i < source.len and (isDigit(source[i]) or source[i] == '.')) {
                 if (source[i] == '.') is_float = true;
+                i += 1;
+            }
+            if (!is_float and i < source.len and source[i] == 'u') {
                 i += 1;
             }
             if (i < source.len and (source[i] == 'e' or source[i] == 'E')) {
@@ -238,6 +244,10 @@ fn tokenize(allocator: Allocator, source: []const u8) ![]Token {
                 i += 1;
                 break :blk .slasheq;
             } else .slash,
+            '%' => if (i < source.len and source[i] == '=') blk: {
+                i += 1;
+                break :blk .percenteq;
+            } else .percent,
             '=' => if (i < source.len and source[i] == '=') blk: {
                 i += 1;
                 break :blk .eqeq;
@@ -282,6 +292,7 @@ const VarEntry = struct {
     value_id: gpu_ir.ValueId,
     type_ref: gpu_ir.TypeRef,
     is_array: bool,
+    array_dims: []const u32,
 };
 
 fn cloneVarMap(allocator: Allocator, src: *const std.StringHashMap(VarEntry)) !std.StringHashMap(VarEntry) {
@@ -309,8 +320,10 @@ const Parser = struct {
     cbuffer: []const gpu_ir.IrCbufferMember,
     locals: std.ArrayList(gpu_ir.LocalDecl),
     type_map: std.AutoHashMapUnmanaged(gpu_ir.ValueId, gpu_ir.TypeRef),
+    resource_format_map: std.AutoHashMapUnmanaged(gpu_ir.ValueId, gpu_ir.TypeRef),
+    func_types: std.StringHashMap(gpu_ir.TypeRef),
 
-    fn init(allocator: Allocator, source: []const u8, tokens: []const Token, resources: []const gpu_ir.IrResourceDecl, cbuffer: []const gpu_ir.IrCbufferMember) Parser {
+    fn init(allocator: Allocator, source: []const u8, tokens: []const Token, resources: []const gpu_ir.IrResourceDecl, cbuffer: []const gpu_ir.IrCbufferMember, func_types: std.StringHashMap(gpu_ir.TypeRef)) Parser {
         return .{
             .allocator = allocator,
             .source = source,
@@ -325,6 +338,8 @@ const Parser = struct {
             .cbuffer = cbuffer,
             .locals = std.ArrayList(gpu_ir.LocalDecl).init(allocator),
             .type_map = .{},
+            .resource_format_map = .{},
+            .func_types = func_types,
         };
     }
 
@@ -344,6 +359,7 @@ const Parser = struct {
         self.blocks.deinit();
         self.var_map.deinit();
         self.type_map.deinit(self.allocator);
+        self.resource_format_map.deinit(self.allocator);
     }
 
     fn curKind(self: *const Parser) TokenKind {
@@ -415,14 +431,15 @@ const Parser = struct {
             if (std.mem.eql(u8, res.name, name)) {
                 const name_dup = self.allocator.dupe(u8, res.name) catch return null;
                 const val_id = self.emit(.load, res.type_ref, &.{}, .{ .string = name_dup }) catch return null;
-                return VarEntry{ .value_id = val_id, .type_ref = res.type_ref, .is_array = false };
+                self.resource_format_map.put(self.allocator, val_id, res.format) catch {};
+                return VarEntry{ .value_id = val_id, .type_ref = res.type_ref, .is_array = false, .array_dims = &.{} };
             }
         }
         for (self.cbuffer) |mem| {
             if (std.mem.eql(u8, mem.name, name)) {
                 const name_dup = self.allocator.dupe(u8, mem.name) catch return null;
                 const val_id = self.emit(.load, mem.type_ref, &.{}, .{ .string = name_dup }) catch return null;
-                return VarEntry{ .value_id = val_id, .type_ref = mem.type_ref, .is_array = false };
+                return VarEntry{ .value_id = val_id, .type_ref = mem.type_ref, .is_array = false, .array_dims = &.{} };
             }
         }
         return null;
@@ -437,7 +454,7 @@ const Parser = struct {
         // Unknown identifier — treat as HLSL builtin (DispatchThreadId, lerp, saturate, etc.)
         const name_dup = try self.allocator.dupe(u8, name);
         const val_id = try self.emit(.load, .f32, &.{}, .{ .string = name_dup });
-        return VarEntry{ .value_id = val_id, .type_ref = .f32, .is_array = false };
+        return VarEntry{ .value_id = val_id, .type_ref = .f32, .is_array = false, .array_dims = &.{} };
     }
 
     fn getType(self: *const Parser, id: gpu_ir.ValueId) gpu_ir.TypeRef {
@@ -516,8 +533,8 @@ const Parser = struct {
         const name = self.curText();
         try self.expect(.identifier);
 
-        var array_dims = std.ArrayList(u32).init(self.allocator);
-        defer array_dims.deinit();
+        var array_dims_list = std.ArrayList(u32).init(self.allocator);
+        defer array_dims_list.deinit();
 
         while (self.curKind() == .lbracket) {
             self.advance();
@@ -525,10 +542,11 @@ const Parser = struct {
             const dim = try std.fmt.parseInt(u32, dim_str, 10);
             self.advance();
             try self.expect(.rbracket);
-            try array_dims.append(dim);
+            try array_dims_list.append(dim);
         }
 
-        const is_array = array_dims.items.len > 0;
+        const is_array = array_dims_list.items.len > 0;
+        const array_dims = if (is_array) try self.allocator.dupe(u32, array_dims_list.items) else &.{};
 
         if (self.curKind() == .assign) {
             self.advance();
@@ -537,6 +555,7 @@ const Parser = struct {
                 .value_id = init_val,
                 .type_ref = type_ref,
                 .is_array = is_array,
+                .array_dims = array_dims,
             });
         } else {
             const name_dup = try self.allocator.dupe(u8, name);
@@ -545,10 +564,12 @@ const Parser = struct {
                 .value_id = val_id,
                 .type_ref = type_ref,
                 .is_array = is_array,
+                .array_dims = array_dims,
             });
             try self.locals.append(.{
                 .name = name_dup,
                 .type_ref = type_ref,
+                .array_dims = array_dims,
             });
         }
 
@@ -564,6 +585,7 @@ const Parser = struct {
                     .value_id = init_val,
                     .type_ref = type_ref,
                     .is_array = false,
+                    .array_dims = &.{},
                 });
             } else {
                 const name_dup = try self.allocator.dupe(u8, next_name);
@@ -572,10 +594,12 @@ const Parser = struct {
                     .value_id = val_id,
                     .type_ref = type_ref,
                     .is_array = false,
+                    .array_dims = &.{},
                 });
                 try self.locals.append(.{
                     .name = name_dup,
                     .type_ref = type_ref,
+                    .array_dims = &.{},
                 });
             }
         }
@@ -610,7 +634,7 @@ const Parser = struct {
                 return self.parseMemberAssignStmt();
             }
 
-            if (self.curKind() == .assign or self.curKind() == .pluseq or self.curKind() == .minuseq or self.curKind() == .stareq or self.curKind() == .slasheq) {
+            if (self.curKind() == .assign or self.curKind() == .pluseq or self.curKind() == .minuseq or self.curKind() == .stareq or self.curKind() == .slasheq or self.curKind() == .percenteq) {
                 const assign_kind = self.curKind();
                 self.advance();
                 const rhs = try self.parseExpr();
@@ -619,23 +643,27 @@ const Parser = struct {
                 if (self.var_map.get(name)) |entry| {
                     switch (assign_kind) {
                         .assign => {
-                            try self.var_map.put(name, .{ .value_id = rhs, .type_ref = entry.type_ref, .is_array = entry.is_array });
+                            try self.var_map.put(name, .{ .value_id = rhs, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
                         },
                         .pluseq => {
                             const new_val = try self.emit(.add, entry.type_ref, &.{ entry.value_id, rhs }, .{ .none = {} });
-                            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array });
+                            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
                         },
                         .minuseq => {
                             const new_val = try self.emit(.sub, entry.type_ref, &.{ entry.value_id, rhs }, .{ .none = {} });
-                            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array });
+                            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
                         },
                         .stareq => {
                             const new_val = try self.emit(.mul, entry.type_ref, &.{ entry.value_id, rhs }, .{ .none = {} });
-                            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array });
+                            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
                         },
                         .slasheq => {
                             const new_val = try self.emit(.div, entry.type_ref, &.{ entry.value_id, rhs }, .{ .none = {} });
-                            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array });
+                            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
+                        },
+                        .percenteq => {
+                            const new_val = try self.emit(.mod, entry.type_ref, &.{ entry.value_id, rhs }, .{ .none = {} });
+                            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
                         },
                         else => unreachable,
                     }
@@ -647,7 +675,7 @@ const Parser = struct {
         }
 
         const val = try self.parseExpr();
-        if (self.curKind() == .assign or self.curKind() == .pluseq or self.curKind() == .minuseq or self.curKind() == .stareq or self.curKind() == .slasheq) {
+        if (self.curKind() == .assign or self.curKind() == .pluseq or self.curKind() == .minuseq or self.curKind() == .stareq or self.curKind() == .slasheq or self.curKind() == .percenteq) {
             const name = self.tryGetVariableName(val);
             if (name) |n| {
                 const assign_kind = self.curKind();
@@ -655,22 +683,26 @@ const Parser = struct {
                 const rhs = try self.parseExpr();
                 if (self.var_map.get(n)) |entry| {
                     switch (assign_kind) {
-                        .assign => try self.var_map.put(n, .{ .value_id = rhs, .type_ref = entry.type_ref, .is_array = entry.is_array }),
+                        .assign => try self.var_map.put(n, .{ .value_id = rhs, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims }),
                         .pluseq => {
                             const new_val = try self.emit(.add, entry.type_ref, &.{ entry.value_id, rhs }, .{ .none = {} });
-                            try self.var_map.put(n, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array });
+                            try self.var_map.put(n, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
                         },
                         .minuseq => {
                             const new_val = try self.emit(.sub, entry.type_ref, &.{ entry.value_id, rhs }, .{ .none = {} });
-                            try self.var_map.put(n, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array });
+                            try self.var_map.put(n, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
                         },
                         .stareq => {
                             const new_val = try self.emit(.mul, entry.type_ref, &.{ entry.value_id, rhs }, .{ .none = {} });
-                            try self.var_map.put(n, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array });
+                            try self.var_map.put(n, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
                         },
                         .slasheq => {
                             const new_val = try self.emit(.div, entry.type_ref, &.{ entry.value_id, rhs }, .{ .none = {} });
-                            try self.var_map.put(n, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array });
+                            try self.var_map.put(n, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
+                        },
+                        .percenteq => {
+                            const new_val = try self.emit(.mod, entry.type_ref, &.{ entry.value_id, rhs }, .{ .none = {} });
+                            try self.var_map.put(n, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
                         },
                         else => unreachable,
                     }
@@ -760,7 +792,7 @@ const Parser = struct {
             }
 
             const new_val = try self.emit(.composite, entry.type_ref, comps, .{ .composite_info = .{ .count = 4 } });
-            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array });
+            try self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
             return;
         }
 
@@ -856,6 +888,7 @@ const Parser = struct {
         {
             var it = then_map.iterator();
             while (it.next()) |entry| {
+                if (entry.value_ptr.is_array) continue;
                 if (self.var_map.get(entry.key_ptr.*)) |else_entry| {
                     if (entry.value_ptr.value_id != else_entry.value_id) {
                         const incoming = try self.allocator.alloc(PhiIncoming, 2);
@@ -874,7 +907,7 @@ const Parser = struct {
                         try self.var_map.put(entry.key_ptr.*, .{
                             .value_id = phi_result,
                             .type_ref = entry.value_ptr.type_ref,
-                            .is_array = entry.value_ptr.is_array,
+                            .is_array = entry.value_ptr.is_array, .array_dims = entry.value_ptr.array_dims,
                         });
                     }
                 } else {
@@ -906,6 +939,7 @@ const Parser = struct {
 
         const before_cond = try cloneVarMap(self.allocator, &self.var_map);
 
+        const preheader_block_id = @as(u32, @intCast(self.blocks.items.len - 1));
         const header_idx = self.blocks.items.len;
         const header_block_id = self.addBlock("for.header") catch return;
         const body_idx = self.blocks.items.len;
@@ -933,12 +967,12 @@ const Parser = struct {
         const PendingPhiUpdate = struct { block_idx: usize, instr_idx: usize, var_name: []const u8, before_val: gpu_ir.ValueId };
         var pending_phis = std.ArrayList(PendingPhiUpdate).init(self.allocator);
         defer pending_phis.deinit();
-
         {
             var it = before_cond.iterator();
             while (it.next()) |entry| {
+                if (entry.value_ptr.is_array) continue;
                 const incoming = try self.allocator.alloc(PhiIncoming, 2);
-                incoming[0] = .{ .value = entry.value_ptr.value_id, .block = header_block_id };
+                incoming[0] = .{ .value = entry.value_ptr.value_id, .block = preheader_block_id };
                 incoming[1] = .{ .value = entry.value_ptr.value_id, .block = header_block_id };
                 const phi_result = self.next_value_id;
                 self.next_value_id += 1;
@@ -951,6 +985,7 @@ const Parser = struct {
                     .operands = ops,
                     .data = .{ .phi_incoming = incoming },
                 });
+                self.type_map.put(self.allocator, phi_result, entry.value_ptr.type_ref) catch {};
                 try pending_phis.append(.{
                     .block_idx = header_idx,
                     .instr_idx = instr_idx,
@@ -961,6 +996,7 @@ const Parser = struct {
                     .value_id = phi_result,
                     .type_ref = entry.value_ptr.type_ref,
                     .is_array = entry.value_ptr.is_array,
+                    .array_dims = entry.value_ptr.array_dims,
                 });
             }
         }
@@ -1051,12 +1087,19 @@ const Parser = struct {
                         self.allocator.free(phi_inst.data.phi_incoming);
                     }
                     const incoming = try self.allocator.alloc(PhiIncoming, 2);
-                    incoming[0] = .{ .value = pp.before_val, .block = header_block_id };
+                    incoming[0] = .{ .value = pp.before_val, .block = preheader_block_id };
                     incoming[1] = .{ .value = after.value_id, .block = continue_block_id };
                     phi_inst.data = .{ .phi_incoming = incoming };
                     phi_inst.ty = after.type_ref;
                     phi_inst.result = phi_inst.result;
                 }
+            }
+        }
+
+        for (pending_phis.items) |pp| {
+            const phi_inst = &self.blocks.items[pp.block_idx].instrs.items[pp.instr_idx];
+            if (self.var_map.getPtr(pp.var_name)) |entry| {
+                entry.value_id = phi_inst.result;
             }
         }
 
@@ -1069,6 +1112,7 @@ const Parser = struct {
 
         const before_loop = try cloneVarMap(self.allocator, &self.var_map);
 
+        const preheader_block_id = @as(u32, @intCast(self.blocks.items.len - 1));
         const header_idx = self.blocks.items.len;
         const header_block_id = self.addBlock("while.header") catch return;
         const body_idx = self.blocks.items.len;
@@ -1098,8 +1142,9 @@ const Parser = struct {
         {
             var it = before_loop.iterator();
             while (it.next()) |entry| {
+                if (entry.value_ptr.is_array) continue;
                 const incoming = try self.allocator.alloc(PhiIncoming, 2);
-                incoming[0] = .{ .value = entry.value_ptr.value_id, .block = header_block_id };
+                incoming[0] = .{ .value = entry.value_ptr.value_id, .block = preheader_block_id };
                 incoming[1] = .{ .value = entry.value_ptr.value_id, .block = header_block_id };
                 const phi_result = self.next_value_id;
                 self.next_value_id += 1;
@@ -1112,6 +1157,7 @@ const Parser = struct {
                     .operands = ops,
                     .data = .{ .phi_incoming = incoming },
                 });
+                self.type_map.put(self.allocator, phi_result, entry.value_ptr.type_ref) catch {};
                 try pending_phis.append(.{
                     .block_idx = header_idx,
                     .instr_idx = instr_idx,
@@ -1121,7 +1167,7 @@ const Parser = struct {
                 try self.var_map.put(entry.key_ptr.*, .{
                     .value_id = phi_result,
                     .type_ref = entry.value_ptr.type_ref,
-                    .is_array = entry.value_ptr.is_array,
+                    .is_array = entry.value_ptr.is_array, .array_dims = entry.value_ptr.array_dims,
                 });
             }
         }
@@ -1179,7 +1225,7 @@ const Parser = struct {
                         self.allocator.free(phi_inst.data.phi_incoming);
                     }
                     const incoming = try self.allocator.alloc(PhiIncoming, 2);
-                    incoming[0] = .{ .value = pp.before_val, .block = header_block_id };
+                    incoming[0] = .{ .value = pp.before_val, .block = preheader_block_id };
                     incoming[1] = .{ .value = after.value_id, .block = body_block_id };
                     phi_inst.data = .{ .phi_incoming = incoming };
                     phi_inst.ty = after.type_ref;
@@ -1231,23 +1277,62 @@ const Parser = struct {
         const lhs = try self.parseTernary();
         if (self.match(.assign)) {
             const rhs = try self.parseAssignment();
+            if (self.tryGetVariableName(lhs)) |name| {
+                if (self.var_map.get(name)) |entry| {
+                    try self.var_map.put(name, .{ .value_id = rhs, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
+                }
+            }
             return rhs;
         }
         if (self.match(.pluseq)) {
             const rhs = try self.parseAssignment();
-            return try self.emit(.add, .f32, &.{ lhs, rhs }, .{ .none = {} });
+            const result = try self.emit(.add, .f32, &.{ lhs, rhs }, .{ .none = {} });
+            if (self.tryGetVariableName(lhs)) |name| {
+                if (self.var_map.get(name)) |entry| {
+                    try self.var_map.put(name, .{ .value_id = result, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
+                }
+            }
+            return result;
         }
         if (self.match(.minuseq)) {
             const rhs = try self.parseAssignment();
-            return try self.emit(.sub, .f32, &.{ lhs, rhs }, .{ .none = {} });
+            const result = try self.emit(.sub, .f32, &.{ lhs, rhs }, .{ .none = {} });
+            if (self.tryGetVariableName(lhs)) |name| {
+                if (self.var_map.get(name)) |entry| {
+                    try self.var_map.put(name, .{ .value_id = result, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
+                }
+            }
+            return result;
         }
         if (self.match(.stareq)) {
             const rhs = try self.parseAssignment();
-            return try self.emit(.mul, .f32, &.{ lhs, rhs }, .{ .none = {} });
+            const result = try self.emit(.mul, .f32, &.{ lhs, rhs }, .{ .none = {} });
+            if (self.tryGetVariableName(lhs)) |name| {
+                if (self.var_map.get(name)) |entry| {
+                    try self.var_map.put(name, .{ .value_id = result, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
+                }
+            }
+            return result;
         }
         if (self.match(.slasheq)) {
             const rhs = try self.parseAssignment();
-            return try self.emit(.div, .f32, &.{ lhs, rhs }, .{ .none = {} });
+            const result = try self.emit(.div, .f32, &.{ lhs, rhs }, .{ .none = {} });
+            if (self.tryGetVariableName(lhs)) |name| {
+                if (self.var_map.get(name)) |entry| {
+                    try self.var_map.put(name, .{ .value_id = result, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
+                }
+            }
+            return result;
+        }
+        if (self.match(.percenteq)) {
+            const rhs = try self.parseAssignment();
+            const result = try self.emit(.mod, .f32, &.{ lhs, rhs }, .{ .none = {} });
+            if (self.tryGetVariableName(lhs)) |name| {
+                if (self.var_map.get(name)) |entry| {
+                    try self.var_map.put(name, .{ .value_id = result, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims });
+                }
+            }
+            return result;
         }
         return lhs;
     }
@@ -1267,7 +1352,7 @@ const Parser = struct {
         var lhs = try self.parseLogicalAnd();
         while (self.match(.oror)) {
             const rhs = try self.parseLogicalAnd();
-            lhs = try self.emit(.max, .u32, &.{ lhs, rhs }, .{ .none = {} });
+            lhs = try self.emit(.or_op, .u32, &.{ lhs, rhs }, .{ .none = {} });
         }
         return lhs;
     }
@@ -1276,7 +1361,7 @@ const Parser = struct {
         var lhs = try self.parseEquality();
         while (self.match(.andand)) {
             const rhs = try self.parseEquality();
-            lhs = try self.emit(.min, .u32, &.{ lhs, rhs }, .{ .none = {} });
+            lhs = try self.emit(.and_op, .u32, &.{ lhs, rhs }, .{ .none = {} });
         }
         return lhs;
     }
@@ -1286,10 +1371,10 @@ const Parser = struct {
         while (true) {
             if (self.match(.eqeq)) {
                 const rhs = try self.parseRelational();
-                lhs = try self.emit(.sub, .u32, &.{ lhs, rhs }, .{ .none = {} });
+                lhs = try self.emit(.eq, .u32, &.{ lhs, rhs }, .{ .none = {} });
             } else if (self.match(.neq)) {
                 const rhs = try self.parseRelational();
-                lhs = try self.emit(.sub, .u32, &.{ lhs, rhs }, .{ .none = {} });
+                lhs = try self.emit(.ne, .u32, &.{ lhs, rhs }, .{ .none = {} });
             } else break;
         }
         return lhs;
@@ -1300,16 +1385,16 @@ const Parser = struct {
         while (true) {
             if (self.match(.lt)) {
                 const rhs = try self.parseAdditive();
-                lhs = try self.emit(.sub, .u32, &.{ lhs, rhs }, .{ .none = {} });
+                lhs = try self.emit(.lt, .u32, &.{ lhs, rhs }, .{ .none = {} });
             } else if (self.match(.gt)) {
                 const rhs = try self.parseAdditive();
-                lhs = try self.emit(.sub, .u32, &.{ rhs, lhs }, .{ .none = {} });
+                lhs = try self.emit(.gt, .u32, &.{ lhs, rhs }, .{ .none = {} });
             } else if (self.match(.lte)) {
                 const rhs = try self.parseAdditive();
-                lhs = try self.emit(.sub, .u32, &.{ lhs, rhs }, .{ .none = {} });
+                lhs = try self.emit(.le, .u32, &.{ lhs, rhs }, .{ .none = {} });
             } else if (self.match(.gte)) {
                 const rhs = try self.parseAdditive();
-                lhs = try self.emit(.sub, .u32, &.{ rhs, lhs }, .{ .none = {} });
+                lhs = try self.emit(.ge, .u32, &.{ lhs, rhs }, .{ .none = {} });
             } else break;
         }
         return lhs;
@@ -1342,6 +1427,10 @@ const Parser = struct {
                 const rhs = try self.parseUnary();
                 const result_ty = self.inferBinaryResultType(lhs, rhs);
                 lhs = try self.emit(.div, result_ty, &.{ lhs, rhs }, .{ .none = {} });
+            } else if (self.match(.percent)) {
+                const rhs = try self.parseUnary();
+                const result_ty = self.inferBinaryResultType(lhs, rhs);
+                lhs = try self.emit(.mod, result_ty, &.{ lhs, rhs }, .{ .none = {} });
             } else break;
         }
         return lhs;
@@ -1350,7 +1439,7 @@ const Parser = struct {
     fn updateVarForValue(self: *Parser, old_val: gpu_ir.ValueId, new_val: gpu_ir.ValueId) void {
         if (self.tryGetVariableName(old_val)) |name| {
             if (self.var_map.get(name)) |entry| {
-                self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array }) catch {};
+                self.var_map.put(name, .{ .value_id = new_val, .type_ref = entry.type_ref, .is_array = entry.is_array, .array_dims = entry.array_dims }) catch {};
             }
         }
     }
@@ -1384,8 +1473,7 @@ const Parser = struct {
         }
         if (self.match(.bang)) {
             const operand = try self.parseUnary();
-            const zero = try self.emit(.@"const", .u32, &.{}, .{ .int_val = 0 });
-            return try self.emit(.sub, .u32, &.{ zero, operand }, .{ .none = {} });
+            return try self.emit(.not, .u32, &.{operand}, .{ .none = {} });
         }
         if (self.match(.plus)) {
             return self.parseUnary();
@@ -1400,7 +1488,8 @@ const Parser = struct {
             if (self.match(.lbracket)) {
                 const idx = try self.parseExpr();
                 try self.expect(.rbracket);
-                val = try self.emit(.call, .f32, &.{ val, idx }, .{ .call_info = .{
+                const elem_type = self.getType(val);
+                val = try self.emit(.call, elem_type, &.{ val, idx }, .{ .call_info = .{
                     .callee = try self.allocator.dupe(u8, "@array_get"),
                     .args = try self.allocator.dupe(gpu_ir.ValueId, &.{ val, idx }),
                 } });
@@ -1420,7 +1509,9 @@ const Parser = struct {
                     }
                     try self.expect(.rparen);
                     const args_slice = try args.toOwnedSlice();
-                    const method_type: gpu_ir.TypeRef = if (std.mem.eql(u8, member, "GetDimensions")) .void else .vec4f;
+                    const method_type: gpu_ir.TypeRef = if (std.mem.eql(u8, member, "GetDimensions")) .void else blk: {
+                        break :blk self.resource_format_map.get(val) orelse .vec4f;
+                    };
                     val = try self.emit(.call, method_type, args_slice, .{ .call_info = .{ .callee = try self.allocator.dupe(u8, member), .args = args_slice } });
                 } else if (self.curKind() == .lparen) {
                     self.advance();
@@ -1434,7 +1525,8 @@ const Parser = struct {
                     }
                     try self.expect(.rparen);
                     const args_slice = try args.toOwnedSlice();
-                    val = try self.emit(.call, .f32, args_slice, .{ .call_info = .{ .callee = try self.allocator.dupe(u8, member), .args = args_slice } });
+                    const call_type = if (self.func_types.get(member)) |t| t else if (args_slice.len > 1) self.getType(args_slice[1]) else self.getType(args_slice[0]);
+                    val = try self.emit(.call, call_type, args_slice, .{ .call_info = .{ .callee = try self.allocator.dupe(u8, member), .args = args_slice } });
                 } else if (isSwizzle(member)) {
                     val = try self.parseSwizzle(val, member);
                 }
@@ -1464,7 +1556,8 @@ const Parser = struct {
             .int_literal => {
                 self.advance();
                 const text = self.tokenText(tok);
-                const val = try std.fmt.parseInt(i64, text, 10);
+                const actual = if (text.len > 1 and text[text.len - 1] == 'u') text[0 .. text.len - 1] else text;
+                const val = try std.fmt.parseInt(i64, actual, 10);
                 return self.emit(.@"const", .i32, &.{}, .{ .int_val = val });
             },
             .float_literal => {
@@ -1497,7 +1590,21 @@ const Parser = struct {
                     }
                     try self.expect(.rparen);
                     const args_slice = try args.toOwnedSlice();
-                    return self.emit(.call, .f32, args_slice, .{ .call_info = .{ .callee = try self.allocator.dupe(u8, name), .args = args_slice } });
+
+                    // Wave intrinsic recognition
+                    if (try self.tryEmitWaveIntrinsic(name, args_slice)) |result| {
+                        return result;
+                    }
+
+                    const call_type = if (self.func_types.get(name)) |t| t else blk: {
+                        var widest: gpu_ir.TypeRef = .f32;
+                        for (args_slice) |a| {
+                            const at = self.getType(a);
+                            if (@intFromEnum(at) > @intFromEnum(widest)) widest = at;
+                        }
+                        break :blk widest;
+                    };
+                    return self.emit(.call, call_type, args_slice, .{ .call_info = .{ .callee = try self.allocator.dupe(u8, name), .args = args_slice } });
                 }
 
                 const entry = try self.getVar(name);
@@ -1571,6 +1678,25 @@ const Parser = struct {
         const comps = try components.toOwnedSlice();
         return self.emit(.composite, vec_type, comps, .{ .composite_info = .{ .count = @intCast(sw.count) } });
     }
+
+    fn tryEmitWaveIntrinsic(self: *Parser, name: []const u8, args: []const gpu_ir.ValueId) !?gpu_ir.ValueId {
+        const op: gpu_ir.Op = if (std.mem.eql(u8, name, "WaveReadLaneFirst")) .wave_read_lane_first
+        else if (std.mem.eql(u8, name, "WaveGetLaneIndex")) .wave_get_lane_index
+        else if (std.mem.eql(u8, name, "WaveIsFirstLane")) .wave_is_first_lane
+        else if (std.mem.eql(u8, name, "WaveActiveAllEqual")) .wave_active_all_equal
+        else if (std.mem.eql(u8, name, "QuadReadAcrossX")) .quad_read_across_x
+        else if (std.mem.eql(u8, name, "QuadReadAcrossY")) .quad_read_across_y
+        else return null;
+
+        const result_ty: gpu_ir.TypeRef = switch (op) {
+            .wave_get_lane_index, .wave_is_first_lane, .wave_active_all_equal => .i32,
+            else => if (args.len > 0) self.getType(args[0]) else .i32,
+        };
+
+        const src = if (args.len > 0) args[0] else 0;
+        const val = try self.emit(op, result_ty, args, .{ .wave_op = .{ .source = src } });
+        return @as(?gpu_ir.ValueId, val);
+    }
 };
 
 const SwizzleResult = struct {
@@ -1625,14 +1751,14 @@ fn joinLines(allocator: Allocator, lines: []const []const u8) ![]const u8 {
     return buf;
 }
 
-pub fn parseBody(allocator: Allocator, body_lines: []const []const u8, resources: []const gpu_ir.IrResourceDecl, cbuffer: []const gpu_ir.IrCbufferMember) !gpu_ir.IrFunction {
+pub fn parseBody(allocator: Allocator, body_lines: []const []const u8, resources: []const gpu_ir.IrResourceDecl, cbuffer: []const gpu_ir.IrCbufferMember, func_types: std.StringHashMap(gpu_ir.TypeRef)) !gpu_ir.IrFunction {
     const source = try joinLines(allocator, body_lines);
     defer allocator.free(source);
 
     const tokens = try tokenize(allocator, source);
     defer allocator.free(tokens);
 
-    var p = Parser.init(allocator, source, tokens, resources, cbuffer);
+    var p = Parser.init(allocator, source, tokens, resources, cbuffer, func_types);
     errdefer p.deinit();
 
     _ = try p.addBlock("entry");
@@ -1645,6 +1771,7 @@ pub fn parseBody(allocator: Allocator, body_lines: []const []const u8, resources
 
     return gpu_ir.IrFunction{
         .name = "",
+        .kernel_name = "",
         .blocks = p.blocks,
         .next_block_id = p.next_block_id,
         .numthreads = .{ .x = 8, .y = 8, .z = 1 },

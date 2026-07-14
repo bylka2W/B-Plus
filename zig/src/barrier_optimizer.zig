@@ -1,12 +1,12 @@
 const std = @import("std");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const frame_graph = @import("frame_graph.zig");
 const lifetime_graph = @import("lifetime_graph.zig");
 
 /// A single barrier slot: pass index + barrier descriptor.
 pub const BarrierSlot = struct {
     pass_index: u32,
-    barrier: gpu_ir.BarrierDesc,
+    barrier: gpu_types.BarrierDesc,
 };
 
 /// Barrier optimization statistics.
@@ -62,22 +62,22 @@ pub const BarrierOptimizer = struct {
         gpu_passes: []const frame_graph.GPUPassDesc,
         lifetimes: *const lifetime_graph.LifetimeGraph,
     ) ![]BarrierSlot {
-        var state_map = std.AutoHashMap(gpu_ir.ResourceId, gpu_ir.ResourceState).init(self.allocator);
+        var state_map = std.AutoHashMap(gpu_types.ResourceId, gpu_types.ResourceState).init(self.allocator);
         defer state_map.deinit();
 
         var list = std.ArrayList(BarrierSlot).init(self.allocator);
 
         for (gpu_passes, 0..) |gp, pi| {
             const pass_idx: u32 = @intCast(pi);
-            const want_read = gpu_ir.ResourceState.non_pixel_shader_resource;
-            const want_write = gpu_ir.ResourceState.unordered_access;
+            const want_read = gpu_types.ResourceState.non_pixel_shader_resource;
+            const want_write = gpu_types.ResourceState.unordered_access;
 
             for (gp.bindings.entries) |entry| {
                 const alias_group = lifetimes.aliasGroup(entry.resource_id);
                 const current_state = if (alias_group) |_|
-                    gpu_ir.ResourceState.common
+                    gpu_types.ResourceState.common
                 else
-                    state_map.get(entry.resource_id) orelse gpu_ir.ResourceState.common;
+                    state_map.get(entry.resource_id) orelse gpu_types.ResourceState.common;
 
                 const desired_state = switch (entry.key.kind) {
                     .srv => want_read,
@@ -108,7 +108,7 @@ pub const BarrierOptimizer = struct {
         if (barriers.len == 0) return self.allocator.alloc(BarrierSlot, 0);
 
         // Build per-resource barrier sequences
-        var res_map = std.AutoHashMap(gpu_ir.ResourceId, std.ArrayList(BarrierSlot)).init(self.allocator);
+        var res_map = std.AutoHashMap(gpu_types.ResourceId, std.ArrayList(BarrierSlot)).init(self.allocator);
         defer {
             var it = res_map.valueIterator();
             while (it.next()) |list| list.deinit();

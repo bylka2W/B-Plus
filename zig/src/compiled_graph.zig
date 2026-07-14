@@ -1,12 +1,12 @@
 const std = @import("std");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const d3d = @import("d3d12_bindings.zig");
 const dx12 = @import("dx12_compute.zig");
 
 /// A binding key mapped to a FrameInputs resource slot.
 /// Compiled at graph-build time: zero lookup in execute.
 pub const BindSlot = struct {
-    key: gpu_ir.BindingKey,
+    key: gpu_types.BindingKey,
     /// Index into FrameInputs.resources[].
     input_slot: u32,
     /// Descriptor heap offset within this pass's descriptor region.
@@ -22,9 +22,9 @@ pub const CompiledPass = struct {
     descriptor_base_within_frame: u32,
     descriptor_count: u32,
     grid: [3]u32,
-    queue: gpu_ir.QueueType,
+    queue: gpu_types.QueueType,
     /// Pre-filtered barriers for this pass only. Zero conditionals in execute.
-    barriers: []const gpu_ir.BarrierDesc,
+    barriers: []const gpu_types.BarrierDesc,
     /// Pre-mapped binding slots. Each entry says which input_slot
     /// to read from FrameInputs and which heap_offset to write to.
     bind_slots: []const BindSlot,
@@ -34,13 +34,13 @@ pub const CompiledPass = struct {
 /// No graph topology, no plan, no DAG — just flat resource IDs.
 pub const FrameInputs = struct {
     /// Flat array of resource IDs. Indexed by BindSlot.input_slot.
-    resources: []const gpu_ir.ResourceId,
+    resources: []const gpu_types.ResourceId,
 };
 
 /// Pre-compiled batch (same-queue run of passes).
 pub const CompiledBatch = struct {
     passes: []CompiledPass,
-    queue: gpu_ir.QueueType,
+    queue: gpu_types.QueueType,
 };
 
 /// Immutable compiled graph artifact.

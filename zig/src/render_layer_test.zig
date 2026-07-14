@@ -1,6 +1,6 @@
 const std = @import("std");
 const frame_graph = @import("frame_graph.zig");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const resource_system = @import("resource_system.zig");
 const dx12 = @import("dx12_compute.zig");
 const d3d = @import("d3d12_bindings.zig");
@@ -98,20 +98,20 @@ pub fn main() !void {
         \\}
     ;
 
-    const scene_layout = gpu_ir.BindLayout{ .slots = &.{
-        gpu_ir.BindSlot{ .register = 0, .space = 0, .bind_type = .uav },
+    const scene_layout = gpu_types.BindLayout{ .slots = &.{
+        gpu_types.BindSlot{ .register = 0, .space = 0, .bind_type = .uav },
     } };
-    const motion_layout = gpu_ir.BindLayout{ .slots = &.{
-        gpu_ir.BindSlot{ .register = 0, .space = 0, .bind_type = .uav },
+    const motion_layout = gpu_types.BindLayout{ .slots = &.{
+        gpu_types.BindSlot{ .register = 0, .space = 0, .bind_type = .uav },
     } };
-    const taa_layout = gpu_ir.BindLayout{ .slots = &.{
-        gpu_ir.BindSlot{ .register = 0, .space = 0, .bind_type = .uav },
-        gpu_ir.BindSlot{ .register = 0, .space = 0, .bind_type = .srv },
-        gpu_ir.BindSlot{ .register = 1, .space = 0, .bind_type = .srv },
+    const taa_layout = gpu_types.BindLayout{ .slots = &.{
+        gpu_types.BindSlot{ .register = 0, .space = 0, .bind_type = .uav },
+        gpu_types.BindSlot{ .register = 0, .space = 0, .bind_type = .srv },
+        gpu_types.BindSlot{ .register = 1, .space = 0, .bind_type = .srv },
     } };
-    const sharpen_layout = gpu_ir.BindLayout{ .slots = &.{
-        gpu_ir.BindSlot{ .register = 0, .space = 0, .bind_type = .uav },
-        gpu_ir.BindSlot{ .register = 0, .space = 0, .bind_type = .srv },
+    const sharpen_layout = gpu_types.BindLayout{ .slots = &.{
+        gpu_types.BindSlot{ .register = 0, .space = 0, .bind_type = .uav },
+        gpu_types.BindSlot{ .register = 0, .space = 0, .bind_type = .srv },
     } };
 
     // Build graph topology once (static for all frames)
@@ -184,7 +184,7 @@ pub fn main() !void {
         history.beginFrame();
 
         const inputs = compiled_graph.FrameInputs{
-            .resources = &[_]gpu_ir.ResourceId{
+            .resources = &[_]gpu_types.ResourceId{
                 scene_color_id,                            // slot 0
                 motion_velocity_id,                        // slot 1
                 history.color.textures[0],                 // slot 2

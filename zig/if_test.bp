@@ -1,0 +1,13 @@
+extern fn print_i64(x: i64);
+
+fn max(a: i64, b: i64) -> i64 {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+fn main() {
+    print_i64(max(20, 22));
+    print_i64(max(30, 10));
+}

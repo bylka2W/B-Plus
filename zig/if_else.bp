@@ -1,0 +1,14 @@
+extern fn print_i64(x: i64);
+
+fn main() {
+    if (1 > 0) {
+        print_i64(10);
+    } else {
+        print_i64(20);
+    }
+    if (0 > 1) {
+        print_i64(30);
+    } else {
+        print_i64(40);
+    }
+}

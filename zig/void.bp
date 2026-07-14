@@ -1,0 +1,9 @@
+extern fn print_i64(x: i64);
+
+fn print_answer() -> void {
+    print_i64(42);
+}
+
+fn main() {
+    print_answer();
+}

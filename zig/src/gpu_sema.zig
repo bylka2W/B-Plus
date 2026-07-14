@@ -48,8 +48,6 @@ pub const GpuSema = struct {
         self.checkEntries(kernel);
     }
 
-    fn checkResourceTypes(_: *GpuSema, _: *const gpu_ast.GpuKernel) void {}
-
     fn checkResourceBindings(self: *GpuSema, kernel: *const gpu_ast.GpuKernel) void {
         var seen = std.AutoHashMap(u64, usize).init(self.allocator);
         defer seen.deinit();

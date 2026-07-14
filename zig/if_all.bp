@@ -1,0 +1,44 @@
+extern fn print_i64(x: i64);
+
+fn main() {
+    if (1 > 0) {
+        print_i64(10);
+    } else {
+        print_i64(99);
+    }
+    if (0 < 1) {
+        print_i64(20);
+    } else {
+        print_i64(99);
+    }
+    if (1 >= 0) {
+        print_i64(30);
+    } else {
+        print_i64(99);
+    }
+    if (0 <= 1) {
+        print_i64(40);
+    } else {
+        print_i64(99);
+    }
+    if (1 == 1) {
+        print_i64(50);
+    } else {
+        print_i64(99);
+    }
+    if (1 != 0) {
+        print_i64(60);
+    } else {
+        print_i64(99);
+    }
+    if (1 > 2) {
+        print_i64(99);
+    } else {
+        print_i64(70);
+    }
+    if (3 < 2) {
+        print_i64(99);
+    } else {
+        print_i64(80);
+    }
+}

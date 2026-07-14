@@ -6,9 +6,19 @@ const pe = @import("pe.zig");
 const test_runner = @import("test_runner.zig");
 const hlslgen = @import("hlslgen.zig");
 const gpu_ast = @import("gpu_ast.zig");
-const gpu_hlsl = @import("gpu_hlsl.zig");
+const gpu_ir = @import("gpu_ir.zig");
 const gpu_sema = @import("gpu_sema.zig");
 const gpu_lower = @import("gpu_lower.zig");
+const gpu_dxil = @import("gpu_dxil.zig");
+const gpu_cpp = @import("gpu_cpp.zig");
+const bir = @import("bir.zig");
+const bir_frontend = @import("bir_frontend.zig");
+const bir_passes = @import("bir_passes.zig");
+const bir_lower = @import("bir_lower.zig");
+const bir_cfg = @import("bir_cfg.zig");
+const bir_dominators = @import("bir_dominators.zig");
+const bir_loops = @import("bir_loops.zig");
+const bir_hlsl = @import("bir_hlsl.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -20,12 +30,16 @@ pub fn main() !void {
 
     if (args.len < 3) {
         const stderr = std.io.getStdErr().writer();
-        try stderr.writeAll("Usage: bpc build <input.b+> [-o <output>] [-exports <name1,name2,...>]\n");
-        try stderr.writeAll("       bpc dll  <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]\n");
-        try stderr.writeAll("       bpc run  <input.b+>\n");
-        try stderr.writeAll("       bpc test <test.bpt>\n");
-        try stderr.writeAll("       bpc hlsl <input.b+> [-o <output.hlsl>]\n");
-        try stderr.writeAll("       bpc gpu  <input.b+> [-o <output.hlsl>]\n");
+        try stderr.writeAll("Usage: bpc build <pipeline.b+> [-o <output_dir>]\n");
+        try stderr.writeAll("       bpc dll   <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]\n");
+        try stderr.writeAll("       bpc run   <input.b+>\n");
+        try stderr.writeAll("       bpc test  <test.bpt>\n");
+        try stderr.writeAll("       bpc hlsl  <input.b+> [-o <output.hlsl>]\n");
+        try stderr.writeAll("       bpc gpu   <input.b+> [-o <output>]\n");
+        try stderr.writeAll("       bpc ir    <pipeline.b+>\n");
+        try stderr.writeAll("       bpc cfg   <pipeline.b+>\n");
+        try stderr.writeAll("       bpc dom   <pipeline.b+>\n");
+        try stderr.writeAll("       bpc loops <pipeline.b+>\n");
         std.process.exit(1);
     }
 
@@ -87,6 +101,34 @@ pub fn main() !void {
         std.process.exit(if (result.status == .pass) 0 else 1);
     }
 
+    // C++ mode: generate C++ from B+
+    if (std.mem.eql(u8, command, "cpp")) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const trimmed = std.mem.trim(u8, src, " \t\r\n");
+        if (std.mem.startsWith(u8, trimmed, "kernel ")) {
+            // GPU kernel → UE C++ shader class via gpu_cpp
+            try gpuCompileAndWrite(arena_alloc, src, input_path, output_path, .cpp);
+        } else {
+            // General B+ → full C++ via cppgen
+            const cppgen = @import("cppgen.zig");
+            var p = parser.Parser.init(arena_alloc, src);
+            const program = try p.parse();
+            const output = try cppgen.generate(arena_alloc, program);
+            const out_path = output_path orelse blk: {
+                const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
+                const base = input_path[0..ext_idx];
+                break :blk try std.fmt.allocPrint(arena_alloc, "{s}.cpp", .{base});
+            };
+            try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = output.text });
+            const stdout = std.io.getStdOut().writer();
+            try stdout.print("C++ written to {s}\n", .{out_path});
+        }
+        return;
+    }
+
     // HLSL mode: generate HLSL shader text
     if (std.mem.eql(u8, command, "hlsl")) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -96,23 +138,186 @@ pub fn main() !void {
         // Auto-detect GPU kernel syntax
         const trimmed = std.mem.trim(u8, src, " \t\r\n");
         if (std.mem.startsWith(u8, trimmed, "kernel ")) {
-            try gpuCompileAndWrite(arena_alloc, src, input_path, output_path);
+            try gpuCompileAndWrite(arena_alloc, src, input_path, output_path, .hlsl);
             return;
         }
 
-        var p2 = parser.Parser.init(arena_alloc, src);
-        const prog = try p2.parse();
+        // Pipeline description → BIR → HLSL
+        {
+            const pipeline_gen_m = @import("pipeline_gen.zig");
+            const pipeline = pipeline_gen_m.parsePipeline(arena_alloc, src) catch {
+                // Fallback to old HLSLgen
+                var p2 = parser.Parser.init(arena_alloc, src);
+                const prog = try p2.parse();
+                const output = try hlslgen.generate(arena_alloc, prog, src);
+                const out_path = output_path orelse blk: {
+                    const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
+                    const base = input_path[0..ext_idx];
+                    break :blk try std.fmt.allocPrint(arena_alloc, "{s}.hlsl", .{base});
+                };
+                try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = output.text });
+                const stdout = std.io.getStdOut().writer();
+                try stdout.print("HLSL written to {s}\n", .{out_path});
+                return;
+            };
+            var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
+            var pm = bir_passes.StandardPasses.init(arena_alloc);
+            try pm.run(&module);
+            const output = try bir_hlsl.generateHlsl(arena_alloc, &module);
+            const out_path = output_path orelse blk: {
+                const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
+                const base = input_path[0..ext_idx];
+                break :blk try std.fmt.allocPrint(arena_alloc, "{s}.hlsl", .{base});
+            };
+            try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = output });
+            const stdout = std.io.getStdOut().writer();
+            try stdout.print("BIR→HLSL written to {s}\n", .{out_path});
+            return;
+        }
+    }
 
-        const output = try hlslgen.generate(arena_alloc, prog, src);
-        const out_path = output_path orelse blk: {
-            const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
-            const base = input_path[0..ext_idx];
-            break :blk try std.fmt.allocPrint(arena_alloc, "{s}.hlsl", .{base});
+    // IR mode: lower pipeline to BIR and dump it
+    if (std.mem.eql(u8, command, "ir")) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const pipeline_gen_m = @import("pipeline_gen.zig");
+        const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
+
+        var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
+        var pm = bir_passes.StandardPasses.init(arena_alloc);
+        try pm.run(&module);
+
+        const stdout = std.io.getStdOut().writer();
+        try bir_lower.dumpModule(&module, stdout);
+        return;
+    }
+
+    // CFG mode: dump control flow graph for pipeline
+    if (std.mem.eql(u8, command, "cfg")) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const pipeline_gen_m = @import("pipeline_gen.zig");
+        const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
+
+        var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
+        var pm = bir_passes.StandardPasses.init(arena_alloc);
+        try pm.run(&module);
+
+        const stdout = std.io.getStdOut().writer();
+        for (module.functions.items) |func| {
+            try stdout.print("; Function: {s}\n", .{func.name});
+            var cfg = try bir_cfg.buildCFG(arena_alloc, &func);
+            defer cfg.deinit();
+            try bir_cfg.dumpCFG(&cfg, stdout);
+        }
+        return;
+    }
+
+    // DOM mode: dump dominator tree for pipeline
+    if (std.mem.eql(u8, command, "dom")) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const pipeline_gen_m = @import("pipeline_gen.zig");
+        const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
+
+        var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
+        var pm = bir_passes.StandardPasses.init(arena_alloc);
+        try pm.run(&module);
+
+        const stdout = std.io.getStdOut().writer();
+        for (module.functions.items) |func| {
+            try stdout.print("; Function: {s}\n", .{func.name});
+            var cfg = try bir_cfg.buildCFG(arena_alloc, &func);
+            defer cfg.deinit();
+            try bir_cfg.dumpCFG(&cfg, stdout);
+            var dt = try bir_dominators.buildDominators(arena_alloc, &cfg);
+            defer dt.deinit();
+            try dt.dump(stdout, cfg.blocks.items.len);
+        }
+        return;
+    }
+
+    // LOOPS mode: dump loop hierarchy
+    if (std.mem.eql(u8, command, "loops")) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const pipeline_gen_m = @import("pipeline_gen.zig");
+        const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
+
+        var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
+        var pm = bir_passes.StandardPasses.init(arena_alloc);
+        try pm.run(&module);
+
+        const stdout = std.io.getStdOut().writer();
+        for (module.functions.items) |func| {
+            try stdout.print("; Function: {s}\n", .{func.name});
+            var cfg = try bir_cfg.buildCFG(arena_alloc, &func);
+            defer cfg.deinit();
+            var dt = try bir_dominators.buildDominators(arena_alloc, &cfg);
+            defer dt.deinit();
+            const loops = try bir_loops.findLoops(arena_alloc, &cfg, &dt);
+            try bir_loops.dumpLoops(loops, stdout);
+        }
+        return;
+    }
+
+    // Build mode: generate C++ UE5 plugin code from pipeline description
+    if (std.mem.eql(u8, command, "build")) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const pipeline_gen = @import("pipeline_gen.zig");
+        const pipeline = try pipeline_gen.parsePipeline(arena_alloc, src);
+
+        // Output dir = -o <dir> or same dir as input file
+        const out_dir = if (output_path) |p| p else blk: {
+            const last_slash = std.mem.lastIndexOfScalar(u8, input_path, '\\') orelse
+                std.mem.lastIndexOfScalar(u8, input_path, '/') orelse 0;
+            break :blk input_path[0..last_slash];
         };
 
-        try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = output.text });
         const stdout = std.io.getStdOut().writer();
-        try stdout.print("HLSL written to {s}\n", .{out_path});
+        try stdout.writeAll("Pipeline '");
+        try stdout.writeAll(pipeline.name);
+        try stdout.writeAll("': generating C++ in '");
+        try stdout.writeAll(out_dir);
+        try stdout.writeAll("'...\n");
+
+        const shaders_h = try pipeline_gen.generateShadersHeader(arena_alloc, &pipeline);
+        const shaders_cpp = try pipeline_gen.generateShadersCpp(arena_alloc, &pipeline);
+        const runtime_h = try pipeline_gen.generateRuntimeHeader(arena_alloc, &pipeline);
+        const runtime_cpp = try pipeline_gen.generateRuntimeCpp(arena_alloc, &pipeline);
+        const viewext_h = try pipeline_gen.generateViewExtensionHeader(arena_alloc, &pipeline);
+        const viewext_cpp = try pipeline_gen.generateViewExtensionCpp(arena_alloc, &pipeline);
+
+        const file_infos = [_]struct { []const u8, []const u8 }{
+            .{ "TSSShaders.h", shaders_h },
+            .{ "TSSShaders.cpp", shaders_cpp },
+            .{ "TSSRuntime.h", runtime_h },
+            .{ "TSSRuntime.cpp", runtime_cpp },
+            .{ "TSSViewExtension.h", viewext_h },
+            .{ "TSSViewExtension.cpp", viewext_cpp },
+        };
+        for (file_infos) |pair| {
+            const full_path = try std.fs.path.join(arena_alloc, &.{ out_dir, pair.@"0" });
+            try std.fs.cwd().writeFile(.{ .sub_path = full_path, .data = pair.@"1" });
+            try stdout.writeAll("  wrote ");
+            try stdout.writeAll(full_path);
+            try stdout.writeAll("\n");
+        }
+
+        try stdout.writeAll("Done. Pipeline '");
+        try stdout.writeAll(pipeline.name);
+        try stdout.writeAll("' built: 6 files.\n");
         return;
     }
 
@@ -121,7 +326,7 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
-        try gpuCompileAndWrite(arena_alloc, src, input_path, output_path);
+        try gpuCompileAndWrite(arena_alloc, src, input_path, output_path, .dxil);
         return;
     }
 
@@ -192,7 +397,7 @@ pub fn main() !void {
     }
 }
 
-fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_path: []const u8, output_path_arg: ?[]const u8) !void {
+fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_path: []const u8, output_path_arg: ?[]const u8, target: gpu_ir.BackendType) !void {
     var p = parser.Parser.init(arena_alloc, src);
     const kernel = p.parseGpuKernelBlock() catch |err| {
         const stderr = std.io.getStdErr().writer();
@@ -200,14 +405,14 @@ fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_pat
         std.process.exit(1);
     };
 
-    var module = gpu_ast.GpuModule{
+    var gpu_mod = gpu_ast.GpuModule{
         .allocator = arena_alloc,
         .kernels = std.ArrayList(gpu_ast.GpuKernel).init(arena_alloc),
     };
-    try module.kernels.append(kernel);
+    try gpu_mod.kernels.append(kernel);
 
     var sema = gpu_sema.GpuSema.init(arena_alloc);
-    sema.analyze(&module);
+    sema.analyze(&gpu_mod);
     if (sema.hasErrors()) {
         const stderr = std.io.getStdErr().writer();
         try stderr.writeAll("Semantic errors:\n");
@@ -215,15 +420,49 @@ fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_pat
         std.process.exit(1);
     }
 
-    // Lower AST → IR, then generate HLSL from IR
-    const ir = try gpu_lower.lowerModule(arena_alloc, &module);
-    const hlsl = try gpu_hlsl.generateHlslFromIr(arena_alloc, &ir);
+    // BIR path for HLSL
+    if (target == .hlsl) {
+        var bir_mod = try bir_frontend.lowerToBir(arena_alloc, &gpu_mod);
+        defer bir_mod.deinit();
+
+        var pm = bir_passes.StandardPasses.init(arena_alloc);
+        try pm.run(&bir_mod);
+
+        const output = try bir_hlsl.generateHlsl(arena_alloc, &bir_mod);
+        const out_path = output_path_arg orelse blk: {
+            const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
+            const base = input_path[0..ext_idx];
+            break :blk try std.fmt.allocPrint(arena_alloc, "{s}.hlsl", .{base});
+        };
+        try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = output });
+        const stdout = std.io.getStdOut().writer();
+        try stdout.print("BIR→HLSL written to {s}\n", .{out_path});
+        return;
+    }
+
+    // Fallback: old gpu_ir path for DXIL/C++
+    const ir = try gpu_lower.lowerModule(arena_alloc, &gpu_mod);
+
+    const compile_opts = gpu_ir.CompileOptions{ .target = target, .entry = "main" };
+    var result = switch (target) {
+        .dxil => try gpu_dxil.backend.compile(arena_alloc, &ir, compile_opts),
+        .cpp => try gpu_cpp.backend.compile(arena_alloc, &ir, compile_opts),
+        else => unreachable,
+    };
+    defer result.deinit();
+
+    const ext = switch (target) {
+        .dxil => "dxil",
+        .cpp => "cpp",
+        else => unreachable,
+    };
     const out_path = output_path_arg orelse blk: {
         const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
         const base = input_path[0..ext_idx];
-        break :blk try std.fmt.allocPrint(arena_alloc, "{s}.hlsl", .{base});
+        break :blk try std.fmt.allocPrint(arena_alloc, "{s}.{s}", .{ base, ext });
     };
-    try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = hlsl });
+    try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = result.bytecode });
     const stdout = std.io.getStdOut().writer();
-    try stdout.print("HLSL written to {s}\n", .{out_path});
+    const name = if (target == .dxil) "DXIL" else "C++";
+    try stdout.print("{s} written to {s}\n", .{ name, out_path });
 }

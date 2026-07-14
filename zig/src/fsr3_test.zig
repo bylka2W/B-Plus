@@ -1,5 +1,5 @@
 const std = @import("std");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const frame_graph = @import("frame_graph.zig");
 const history_manager = @import("history_manager.zig");
 const temporal_pipeline = @import("temporal_pipeline.zig");
@@ -247,7 +247,7 @@ fn testBarrierOptimizer(allocator: std.mem.Allocator) !void {
 
     // No redundant transitions: single pass
     {
-        const bindings = gpu_ir.BindGroup{
+        const bindings = gpu_types.BindGroup{
             .entries = &.{
                 .{ .resource_id = 10, .key = .{ .reg = 0, .space = 0, .kind = .uav } },
             },
@@ -276,7 +276,7 @@ fn testBarrierOptimizer(allocator: std.mem.Allocator) !void {
 
     // Determinism: same input → same output order
     {
-        const bindings1 = gpu_ir.BindGroup{
+        const bindings1 = gpu_types.BindGroup{
             .entries = &.{
                 .{ .resource_id = 20, .key = .{ .reg = 0, .space = 0, .kind = .uav } },
                 .{ .resource_id = 10, .key = .{ .reg = 1, .space = 0, .kind = .srv } },
@@ -484,7 +484,7 @@ fn testGpuExecutionPlan(allocator: std.mem.Allocator) !void {
         };
         defer lg.deinit(allocator);
 
-        const bindings = gpu_ir.BindGroup{
+        const bindings = gpu_types.BindGroup{
             .entries = &.{
                 .{ .resource_id = 10, .key = .{ .reg = 0, .space = 0, .kind = .uav } },
                 .{ .resource_id = 20, .key = .{ .reg = 1, .space = 0, .kind = .srv } },
@@ -551,14 +551,14 @@ fn testGpuExecutionPlan(allocator: std.mem.Allocator) !void {
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "a" } },
                 .grid = .{ .x = 1, .y = 1, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
             .{
                 .pass_id = 1,
                 .queue = .graphics,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "b" } },
                 .grid = .{ .x = 2, .y = 2, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
         };
 
@@ -616,7 +616,7 @@ fn testGpuExecutionPlan(allocator: std.mem.Allocator) !void {
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "main" } },
                 .grid = .{ .x = 4, .y = 4, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
         };
         const ctx = gpu_execution.ExecutionContext{ .frame_index = 0, .budget_us = 500, .motion_intensity = 0.0, .history_valid = false };
@@ -658,7 +658,7 @@ fn testCostScheduler(allocator: std.mem.Allocator) !void {
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "main" } },
                 .grid = .{ .x = 8, .y = 8, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
         };
         const ctx = gpu_execution.ExecutionContext{
@@ -679,14 +679,14 @@ fn testCostScheduler(allocator: std.mem.Allocator) !void {
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "a" } },
                 .grid = .{ .x = 8, .y = 8, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
             .{
                 .pass_id = 2,
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "b" } },
                 .grid = .{ .x = 64, .y = 64, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
         };
         const ctx = gpu_execution.ExecutionContext{
@@ -706,14 +706,14 @@ fn testCostScheduler(allocator: std.mem.Allocator) !void {
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "a" } },
                 .grid = .{ .x = 4, .y = 4, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
             .{
                 .pass_id = 2,
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "b" } },
                 .grid = .{ .x = 4, .y = 4, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
         };
         // Budget fits both (16 groups × 2us = 32us each, total 64us)
@@ -734,21 +734,21 @@ fn testCostScheduler(allocator: std.mem.Allocator) !void {
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "render" } },
                 .grid = .{ .x = 4, .y = 4, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
             .{
                 .pass_id = 102, // FSR3 generate pass
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "fsr3_gen" } },
                 .grid = .{ .x = 4, .y = 4, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
             .{
                 .pass_id = 100, // FSR3 optical flow
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "fsr3_of" } },
                 .grid = .{ .x = 4, .y = 4, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
         };
         const ctx = gpu_execution.ExecutionContext{
@@ -772,7 +772,7 @@ fn testCostScheduler(allocator: std.mem.Allocator) !void {
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "a" } },
                 .grid = .{ .x = 4, .y = 4, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
         };
         const ctx = gpu_execution.ExecutionContext{
@@ -793,14 +793,14 @@ fn testCostScheduler(allocator: std.mem.Allocator) !void {
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "a" } },
                 .grid = .{ .x = 16, .y = 16, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
             .{
                 .pass_id = 3,
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "b" } },
                 .grid = .{ .x = 16, .y = 16, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             },
         };
         const ctx = gpu_execution.ExecutionContext{
@@ -886,7 +886,7 @@ fn testCompileFrame(allocator: std.mem.Allocator) !void {
             .queue = .compute,
             .pipeline = .{ .shader = .{ .source = "", .entry = "expensive" } },
             .grid = .{ .x = 64, .y = 64, .z = 1 },
-            .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+            .bindings = gpu_types.BindGroup{ .entries = &.{} },
         };
 
         var lg = makeEmptyLG(allocator);
@@ -942,7 +942,7 @@ fn testCompileFrame(allocator: std.mem.Allocator) !void {
         try testing.expectEqual(@as(usize, 4), gpu_passes.len);
         for (gpu_passes, 0..) |gp, i| {
             try testing.expectEqual(@as(u32, 100 + @as(u32, @intCast(i))), gp.pass_id);
-            try testing.expectEqual(gpu_ir.QueueType.compute, gp.queue);
+            try testing.expectEqual(gpu_types.QueueType.compute, gp.queue);
         }
     }
 }

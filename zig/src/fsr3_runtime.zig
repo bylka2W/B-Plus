@@ -1,5 +1,5 @@
 const std = @import("std");
-const gpu_ir = @import("gpu_ir.zig");
+const gpu_types = @import("gpu_types.zig");
 const frame_graph = @import("frame_graph.zig");
 const render_graph = @import("render_graph.zig");
 const resource_system = @import("resource_system.zig");
@@ -58,11 +58,11 @@ const post_process_deps: []const u32 = &.{@intFromEnum(FSR3Pass.generate)};
 
 /// FSR 3.1 resource IDs (beyond those managed by history).
 pub const FSR3Resources = struct {
-    optical_flow: gpu_ir.ResourceId = 0,
-    disocclusion: gpu_ir.ResourceId = 0,
-    confidence: gpu_ir.ResourceId = 0,
-    generated_frame: gpu_ir.ResourceId = 0,
-    debug_output: gpu_ir.ResourceId = 0,
+    optical_flow: gpu_types.ResourceId = 0,
+    disocclusion: gpu_types.ResourceId = 0,
+    confidence: gpu_types.ResourceId = 0,
+    generated_frame: gpu_types.ResourceId = 0,
+    debug_output: gpu_types.ResourceId = 0,
 };
 
 /// Frame classification determined by policy engine.
@@ -274,7 +274,7 @@ pub const FSR3Runtime = struct {
                 .queue = .compute,
                 .pipeline = .{ .shader = .{ .source = "", .entry = "main" } },
                 .grid = .{ .x = 8, .y = 8, .z = 1 },
-                .bindings = gpu_ir.BindGroup{ .entries = &.{} },
+                .bindings = gpu_types.BindGroup{ .entries = &.{} },
             };
             idx += 1;
         }

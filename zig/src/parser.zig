@@ -462,7 +462,16 @@ pub const Parser = struct {
                 var ret: ?[]const u8 = null;
                 if (p.peek(.arrow)) { p.advance(); ret = p.identText(); p.advance(); }
                 try program.extern_cpp_fns.append(.{ .name = fn_name, .parameters = params, .return_type = ret });
-            } else if (p.peek(.annotation) or p.peek(.ident) or p.peek(.keyword_if) or p.peek(.keyword_return) or p.peek(.keyword_print) or p.peek(.keyword_free)) {
+            } else if (p.peek(.ident)) {
+                // Try to parse as function definition: name(params): rettype { body }
+                if (try p.tryParseFunction()) |fn_decl| {
+                    try program.entries.append(fn_decl);
+                } else {
+                    // Skip stray ident at top level
+                    while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
+                    if (p.peek(.newline)) p.advance();
+                }
+            } else if (p.peek(.annotation) or p.peek(.keyword_if) or p.peek(.keyword_return) or p.peek(.keyword_print) or p.peek(.keyword_free)) {
                 // Skip stray statements at top level
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 if (p.peek(.newline)) p.advance();
@@ -744,21 +753,152 @@ pub const Parser = struct {
         };
     }
 
+    fn tryParseFunction(p: *Parser) !?ast.EntryDecl {
+        // Check for pattern: name (...) : type { body }
+        // Save position in case it's not a function
+        const save_pos = p.lexer.pos;
+        const save_char = p.lexer.char;
+        const save_tok = p.cur_tok;
+
+        const name = p.identText();
+        p.advance();
+        p.consumeNewlines();
+
+        if (!p.peek(.lparen)) {
+            p.lexer.pos = save_pos;
+            p.lexer.char = save_char;
+            p.cur_tok = save_tok;
+            return null;
+        }
+        p.advance(); // (
+
+        var params = std.ArrayList(ast.KernelParam).init(p.allocator);
+        errdefer params.deinit();
+        while (!p.peek(.rparen) and !p.peek(.eof)) {
+            const pname = p.identText();
+            p.advance();
+            if (p.peek(.colon)) {
+                p.advance();
+                const ptype = p.identText();
+                p.advance();
+                try params.append(.{ .name = pname, .type_name = ptype });
+            } else {
+                try params.append(.{ .name = pname, .type_name = "int" });
+            }
+            if (p.peek(.comma)) p.advance();
+        }
+        if (!p.peek(.rparen)) {
+            params.deinit();
+            p.lexer.pos = save_pos;
+            p.lexer.char = save_char;
+            p.cur_tok = save_tok;
+            return null;
+        }
+        p.advance(); // )
+        p.consumeNewlines();
+
+        var ret_type: ?[]const u8 = null;
+        if (p.peek(.arrow) or p.peek(.colon)) {
+            p.advance();
+            ret_type = p.identText();
+            p.advance();
+            p.consumeNewlines();
+        }
+
+        // Now check for { body } — if not, restore and return null
+        if (!p.peek(.lbrace)) {
+            params.deinit();
+            p.lexer.pos = save_pos;
+            p.lexer.char = save_char;
+            p.cur_tok = save_tok;
+            return null;
+        }
+        if (p.peek(.arrow)) {
+            p.advance();
+            ret_type = p.identText();
+            p.advance();
+            p.consumeNewlines();
+        }
+
+        if (!p.peek(.lbrace)) {
+            params.deinit();
+            p.lexer.pos = save_pos;
+            p.lexer.char = save_char;
+            p.cur_tok = save_tok;
+            return null;
+        }
+
+        const lbrace_start = p.cur_tok.start;
+        p.advance();
+        var depth: u32 = 1;
+        var scan_pos = lbrace_start + 1;
+        while (scan_pos < p.src.len and depth > 0) {
+            if (p.src[scan_pos] == '"') {
+                scan_pos += 1;
+                while (scan_pos < p.src.len and p.src[scan_pos] != '"') {
+                    if (p.src[scan_pos] == '\\') scan_pos += 1;
+                    scan_pos += 1;
+                }
+            }
+            if (p.src[scan_pos] == '{') depth += 1;
+            if (p.src[scan_pos] == '}') depth -= 1;
+            scan_pos += 1;
+        }
+        var body_lines = std.ArrayList([]const u8).init(p.allocator);
+        errdefer body_lines.deinit();
+        if (scan_pos > lbrace_start + 1) {
+            const body_text = p.src[lbrace_start + 1 .. scan_pos - 1];
+            var lines_iter = std.mem.splitScalar(u8, body_text, '\n');
+            while (lines_iter.next()) |raw_line| {
+                const t = std.mem.trim(u8, raw_line, " \t\r");
+                if (t.len > 0) try body_lines.append(try p.allocator.dupe(u8, t));
+            }
+        }
+        p.lexer.pos = scan_pos - 1;
+        p.lexer.char = if (scan_pos - 1 < p.src.len) p.src[scan_pos - 1] else 0;
+        p.cur_tok = p.lexer.next();
+
+        return ast.EntryDecl{
+            .name = try p.allocator.dupe(u8, name),
+            .params = params,
+            .body_lines = body_lines,
+            .return_type = ret_type,
+            .is_export = false,
+        };
+    }
+
     fn parseEntry(p: *Parser) !ast.EntryDecl {
         try p.expect(.keyword_entry);
         const name = p.identText();
         p.advance();
         p.consumeNewlines();
 
+        var params = std.ArrayList(ast.KernelParam).init(p.allocator);
         if (p.peek(.lparen)) {
             p.advance();
+            while (!p.peek(.rparen) and !p.peek(.eof)) {
+                const pname = p.identText();
+                p.advance();
+                try p.expect(.colon);
+                var ptype_buf: []const u8 = "";
+                if (p.peek(.star)) {
+                    ptype_buf = "*";
+                    p.advance();
+                }
+                const ptype_start = p.identText();
+                p.advance();
+                ptype_buf = if (ptype_buf.len > 0) try std.mem.concat(p.allocator, u8, &.{ ptype_buf, ptype_start }) else ptype_start;
+                try params.append(.{ .name = pname, .type_name = ptype_buf });
+                if (p.peek(.comma)) p.advance();
+            }
             if (p.peek(.rparen)) p.advance();
             p.consumeNewlines();
         }
 
-        if (p.peek(.arrow)) {
+        var entry_ret_type: ?[]const u8 = null;
+        if (p.peek(.arrow) or p.peek(.colon)) {
             p.advance();
-            _ = p.identText();
+            entry_ret_type = p.identText();
             p.advance();
             p.consumeNewlines();
         }
@@ -806,7 +946,7 @@ pub const Parser = struct {
             }
         }
 
-        return ast.EntryDecl{ .name = name, .body_lines = body_lines, .return_type = null, .is_export = false };
+        return ast.EntryDecl{ .name = name, .params = params, .body_lines = body_lines, .return_type = entry_ret_type, .is_export = false };
     }
 
     fn parseForward(p: *Parser) !ast.ForwardDecl {
@@ -1035,6 +1175,7 @@ pub const Parser = struct {
         errdefer fields.deinit();
         while (!p.peek(.rbrace)) {
             p.consumeNewlines();
+            if (p.peek(.rbrace)) break;
             const fname = p.identText(); p.advance();
             try p.expect(.colon);
             const ftype = p.identText(); p.advance();
