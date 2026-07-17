@@ -13,10 +13,13 @@ jobs:
           fetch-depth: 0
 
       - name: Push to GitVerse
+        env:
+          GITVERSE_USER: ${{ secrets.GITVERSE_USER }}
+          GITVERSE_TOKEN: ${{ secrets.GITVERSE_TOKEN }}
         run: |
-          git remote add gitverse https://gitverse.ru/bylka2W/B-Plus.git 2>/dev/null || \
-            git remote set-url gitverse https://gitverse.ru/bylka2W/B-Plus.git
-          git push gitverse --all
+          git remote add gitverse https://${GITVERSE_USER}:${GITVERSE_TOKEN}@gitverse.ru/bylka2W/B-Plus.git 2>/dev/null || \
+            git remote set-url gitverse https://${GITVERSE_USER}:${GITVERSE_TOKEN}@gitverse.ru/bylka2W/B-Plus.git
+          git push gitverse main --force
           git push gitverse --tags
 
       - name: Push to GitFlic
@@ -25,5 +28,5 @@ jobs:
         run: |
           git remote add gitflic https://oauth2:${GITFLIC_TOKEN}@gitflic.ru/project/bylka2w/b-plus.git 2>/dev/null || \
             git remote set-url gitflic https://oauth2:${GITFLIC_TOKEN}@gitflic.ru/project/bylka2w/b-plus.git
-          git push gitflic --all
+          git push gitflic main --force
           git push gitflic --tags
