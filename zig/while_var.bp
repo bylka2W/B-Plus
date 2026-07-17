@@ -1,9 +1,0 @@
-extern fn print_i64(x: i64);
-
-fn main() {
-    var x:i64 = 0;
-    while (x < 3) {
-        print_i64(x);
-        x = x + 1;
-    }
-}

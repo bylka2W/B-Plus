@@ -1,6 +1,0 @@
-entry main {
-    var a: float = 1
-    print("START");
-    if (a) { print("THEN"); } else { print("ELSE"); };
-    print("END");
-}

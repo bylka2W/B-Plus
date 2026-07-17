@@ -1,5 +1,0 @@
-entry main {
-    print("START");
-    if (0) { print("THEN"); } else { print("ELSE"); };
-    print("END");
-}

@@ -1,4 +1,0 @@
-entry stdcall main() {
-    MessageBoxA(0, "Hello from B+!", "B+", 0);
-    ret;
-}

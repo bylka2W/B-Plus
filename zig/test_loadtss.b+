@@ -1,5 +1,0 @@
-state TSS_Init { h }
-export entry TSS_Init {
-    h = LoadLibraryA("C:\\TSS\\build\\test.dll");
-    ExitProcess(h)
-}

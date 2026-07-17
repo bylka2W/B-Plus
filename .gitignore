@@ -57,3 +57,5 @@ crash_dumps/
 # OS
 Thumbs.db
 .DS_Store
+
+zig/NUL

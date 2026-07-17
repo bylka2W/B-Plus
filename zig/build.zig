@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
 
     const test_exe = b.addExecutable(.{
         .name = "test_bir_frontend",
-        .root_source_file = b.path("src/test_bir_frontend.zig"),
+        .root_source_file = b.path("tests/unit/test_bir_frontend.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
 
     const test_cpu_exe = b.addExecutable(.{
         .name = "test_cpu",
-        .root_source_file = b.path("src/test_cpu.zig"),
+        .root_source_file = b.path("tests/unit/test_cpu.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -40,7 +40,7 @@ pub fn build(b: *std.Build) void {
 
     const test_fuzz_exe = b.addExecutable(.{
         .name = "test_fuzz",
-        .root_source_file = b.path("src/test_mir_fuzz.zig"),
+        .root_source_file = b.path("tests/unit/test_mir_fuzz.zig"),
         .target = target,
         .optimize = optimize,
     });

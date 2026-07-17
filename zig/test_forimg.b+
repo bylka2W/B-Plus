@@ -1,8 +1,0 @@
-entry main {
-    var img: image<f32>
-    create_image(img, 8, 8)
-    for(x, y, 8, 8) {
-        img[x, y] = 0.5
-    }
-    print("ok")
-}

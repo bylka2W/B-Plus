@@ -1,3 +1,0 @@
-export entry OnPresent {
-    ret 0;
-}

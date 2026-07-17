@@ -1,5 +1,0 @@
-entry main {
-    call_indirect(GetStdHandle, -11);
-    // RAX now has the stdout handle — this shouldn't crash
-    call_indirect(ExitProcess, 0);
-}

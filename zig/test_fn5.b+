@@ -1,8 +1,0 @@
-fn five() {
-    return 5;
-}
-
-entry main {
-    var x = five();
-    ExitProcess(x);
-}

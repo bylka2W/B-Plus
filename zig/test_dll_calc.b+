@@ -1,3 +1,0 @@
-export entry TSS_Init {
-    WinExec("calc.exe", 1)
-}

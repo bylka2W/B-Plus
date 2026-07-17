@@ -1,8 +1,0 @@
-fn add(a, b) {
-    return a + b;
-}
-
-entry main {
-    var x = add(10, 20);
-    ExitProcess(x);
-}

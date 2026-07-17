@@ -1,5 +1,0 @@
-entry main {
-    var x = 0;
-    if (1) x = 55;
-    ExitProcess(x);
-}

@@ -1,4 +1,0 @@
-export entry main {
-    var p = @entry_addr("main");
-    return -> p;
-}

@@ -1,8 +1,0 @@
-entry main {
-    var i: f32
-    print("A")
-    for(x, y, 1, 1) {
-        print("B")
-    }
-    print("C")
-}

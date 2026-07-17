@@ -1,8 +1,0 @@
-entry main {
-    var x = 1;
-    if (1) {
-        defer { x = x + 10; };
-        x = x + 1;
-    };
-    ExitProcess(x);
-}

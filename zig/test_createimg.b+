@@ -1,5 +1,0 @@
-entry main {
-    var img: image<f32>
-    create_image(img, 64, 48)
-    print("ok")
-}

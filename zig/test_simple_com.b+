@@ -1,4 +1,0 @@
-entry main {
-    obj.AddRef();
-    call_indirect(ExitProcess, 0);
-}

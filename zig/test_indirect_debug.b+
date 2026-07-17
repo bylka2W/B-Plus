@@ -1,9 +1,0 @@
-entry debug {
-    // Test 1: Load function pointer from IAT into var and call it
-    // (var is NOT supported in entry bodies, so we use standalone call_indirect)
-    // Test 2: Use call_indirect to call GetProcessHeap which should return non-zero
-    // We can't store the result, but it should not crash
-    call_indirect(GetProcessHeap);
-    // If we survive that, test ExitProcess
-    call_indirect(ExitProcess, 42);
-}

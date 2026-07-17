@@ -1,2 +1,0 @@
-state A { var x : int32 @Cache(L1) entry { x = 42 print("A\n") } always - } 
-state B { var y : int32 @Cache(L1) entry { y = 24 print("B\n") } always - } 

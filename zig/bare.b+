@@ -1,7 +1,0 @@
-state A {
-    on go -> B
-}
-
-state B {
-    always -> A
-}

@@ -1,7 +1,0 @@
-﻿export entry main {
-    var p = @entry_addr("Init");
-    ret -> p;
-}
-export entry Init {
-    ret 0;
-}

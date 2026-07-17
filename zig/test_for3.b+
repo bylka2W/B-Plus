@@ -1,7 +1,0 @@
-entry main {
-    var i: f32
-    for(x, y, 4, 1) {
-        i = 1.0
-    }
-    print("ok")
-}

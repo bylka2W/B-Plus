@@ -1,8 +1,0 @@
-entry main {
-    var img: image<f32>
-    var x: int
-    var y: int
-    var p: vec4f
-    img[x,y] = p;
-    print("ok");
-}

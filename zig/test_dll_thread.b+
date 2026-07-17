@@ -1,5 +1,0 @@
-state TSS_Init { hThread }
-export entry TSS_Init {
-    hThread = CreateRemoteThread(-1, 0, 0, 0, 0, 0, 0);
-    print("createremotethread ok")
-}

@@ -1,6 +1,0 @@
-state TSS_Init { hProc, wr }
-export entry TSS_Init {
-    hProc = OpenProcess(0x400, 0, -1);
-    wr = WaitForSingleObject(-1, 100);
-    print("wait ok")
-}

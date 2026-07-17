@@ -10,64 +10,82 @@ $failures = @()
 # Expected exit codes for each test (file path → expected code)
 $expect = @{
     # if
-    "if\true.b+"       = 42
-    "if\false.b+"      = 99
-    "if\expr.b+"       = 42
-    "if\nested.b+"     = 7
-    "if\no_braces.b+"  = 55
+    "if\true.plan"       = 42
+    "if\false.plan"      = 99
+    "if\expr.plan"       = 42
+    "if\nested.plan"     = 7
+    "if\no_braces.plan"  = 55
     # loops
-    "loops\while_simple.b+"     = 10
-    "loops\while_break.b+"      = 5
-    "loops\while_continue.b+"   = 9
-    "loops\for_range.b+"        = 45
-    "loops\for_simple.b+"       = 5
+    "loops\while_simple.plan"     = 10
+    "loops\while_break.plan"      = 5
+    "loops\while_continue.plan"   = 9
+    "loops\for_range.plan"        = 45
+    "loops\for_simple.plan"       = 5
     # match
-    "match\simple.b+"   = 20
-    "match\wildcard.b+" = 42
-    "match\enum.b+"     = 20
+    "match\simple.plan"   = 20
+    "match\wildcard.plan" = 42
+    "match\enum.plan"     = 20
     # defer
-    "defer\simple.b+"   = 11
-    "defer\if.b+"       = 12
-    "defer\while.b+"    = 5
-    # enum — баги: сравнение enum, цепочка сложений
-    "enum\values.b+"    = 3
-    "enum\compare.b+"   = 0
+    "defer\simple.plan"   = 11
+    "defer\if.plan"       = 12
+    "defer\while.plan"    = 5
+    # enum
+    "enum\values.plan"    = 3
+    "enum\compare.plan"   = 1
     # fn
-    "fn\no_args.b+"     = 5
-    "fn\two_args.b+"    = 30
-    "fn\first_arg.b+"   = 10
-    "fn\nested_call.b+" = 5
-    "fn\nested_add.b+"  = 30
-    # recursion — нужен `*` в expr и правильная рекурсия
-    "recursion\factorial.b+"  = 0
-    "recursion\fibonacci.b+"  = 0
-    # scope — var в блоке не перекрывает outer scope
-    "scope\block.b+"    = 10
-    # expr — `*` не поддерживается
-    "expr\arith.b+"     = 10
-    "expr\sub.b+"       = 50
+    "fn\no_args.plan"     = 5
+    "fn\two_args.plan"    = 30
+    "fn\first_arg.plan"   = 10
+    "fn\nested_call.plan" = 5
+    "fn\nested_add.plan"  = 30
+    # recursion — `*` and recursion working
+    "recursion\factorial.plan"  = 120
+    "recursion\fibonacci.plan"  = 55
+    # scope
+    "scope\block.plan"    = 30
+    # expr — `*` now supported
+    "expr\arith.plan"     = 50
+    "expr\sub.plan"       = 50
+    # ref — `&var` (address-of)
+    "ref\ampersand.plan"  = 99
+    # plan — FSM / Plan backend
+    "plan\basic.plan"     = 42
+    "plan\chain.plan"     = 99
+    "plan\on_event.plan"  = 77
+    # mega — combined feature tests
+    "mega\megatest_bitops.plan"    = 29
+    "mega\megatest_shifts.plan"    = 2
+    "mega\megatest_shifts2.plan"   = 8
+    "mega\megatest_shifts3.plan"   = 16
+    "mega\megatest_ifelse.plan"    = 42
+    "mega\megatest_ifelse2.plan"   = 99
+    "mega\megatest_while.plan"     = 45
+    "mega\robot_fsm.plan"          = 111
+    "mega\calc.plan"               = 15
+    "mega\combined.plan"           = 95
+}
+
+# Stdin input for tests that need it (file path → string to pipe)
+$piped_input = @{
+    "plan\on_event.plan"  = "Go"
 }
 
 Write-Host "=== B+ Regression Tests ===" -ForegroundColor Cyan
 Write-Host ""
 
-Get-ChildItem -Path $TESTDIR -Recurse -Filter "*.b+" | ForEach-Object {
+Get-ChildItem -Path $TESTDIR -Recurse -Filter "*.plan" | ForEach-Object {
     $rel = $_.FullName.Substring($TESTDIR.Length + 1)
-    $exe = $_.FullName -replace '\.b\+$', '.exe'
+    $exe = $_.FullName -replace '\.plan$', '.exe'
 
     Write-Host -NoNewline "  $rel ... "
 
-    # Compile
-    $compile = & $BPC compile $_.FullName 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "COMPILE FAIL" -ForegroundColor Red
-        $failed++
-        $failures += @{ file = $rel; expected = "compile"; got = $LASTEXITCODE }
-        return
+    # Compile & run in one step via bpc run
+    $inputStr = $piped_input[$rel]
+    if ($inputStr -ne $null) {
+        $result = $inputStr | & $BPC run $_.FullName 2>&1
+    } else {
+        $result = & $BPC run $_.FullName 2>&1
     }
-
-    # Run
-    $result = & $exe
     $got = $LASTEXITCODE
 
     # Check expected

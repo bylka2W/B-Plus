@@ -1,4 +1,0 @@
-entry main {
-    call_indirect(GetProcessHeap);
-    call_indirect(ExitProcess, 0);
-}

@@ -1,8 +1,0 @@
-entry main {
-    var x = 0;
-    while (x < 100) {
-        if (x >= 5) { break; };
-        x = x + 1;
-    };
-    ExitProcess(x);
-}

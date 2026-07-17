@@ -1,6 +1,0 @@
-entry main {
-    for(x, y, 4, 1) {
-        print("X")
-    }
-    print("ok")
-}

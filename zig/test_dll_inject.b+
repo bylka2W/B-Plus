@@ -1,6 +1,0 @@
-state TSS_Init { hProc, mem, written, hThread, ret }
-export entry TSS_Init {
-    hProc = OpenProcess(0x1FFFFF, 0, 1234);
-    mem = VirtualAllocEx(hProc, 0, 260, 0x1000, 4);
-    print("allocated")
-}

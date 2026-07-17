@@ -1,4 +1,0 @@
-entry main {
-    var a: float = 1
-    if (a) { print("ok"); } else { print("FAIL"); };
-}

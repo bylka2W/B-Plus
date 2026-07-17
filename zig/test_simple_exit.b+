@@ -1,3 +1,0 @@
-entry main {
-    ExitProcess(0);
-}

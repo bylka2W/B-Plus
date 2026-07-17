@@ -1,6 +1,0 @@
-state TSS_Init { hKernel, pLoadLibrary }
-export entry TSS_Init {
-    hKernel = LoadLibraryA("kernel32.dll");
-    pLoadLibrary = GetProcAddress(hKernel, "LoadLibraryA");
-    print("chain ok")
-}

@@ -1,4 +1,0 @@
-entry main {
-    var img: image<f32>
-    print("ok");
-}

@@ -1,5 +1,0 @@
-entry main {
-    var i: f32
-    i = 42.0
-    print("ok")
-}

@@ -1,9 +1,0 @@
-state S1 {
-    var a: int32 = 0
-    enter { a = 1; if (a) { print("ok"); } else { print("FAIL"); }; }
-    always -> S1
-}
-
-entry main {
-    always { }
-}

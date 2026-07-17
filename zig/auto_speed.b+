@@ -1,8 +1,0 @@
-state A {
-    entry { }
-    always -> B
-}
-state B {
-    entry { }
-    always -> A
-}

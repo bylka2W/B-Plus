@@ -1,6 +1,0 @@
-fn add(a, b) {
-    return a + b;
-}
-entry main {
-    ExitProcess(add(10, 20));
-}

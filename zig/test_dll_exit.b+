@@ -1,3 +1,0 @@
-export entry TSS_Init {
-    ExitProcess(42)
-}

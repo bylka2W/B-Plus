@@ -1,4 +1,0 @@
-entry main {
-    fn_addr = ExitProcess;
-    call_indirect(fn_addr, 0);
-}

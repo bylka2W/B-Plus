@@ -1,8 +1,0 @@
-state A @hot(0.9) {
-    entry { print(".") }
-    on go -> B
-}
-state B {
-    entry { print(".") }
-    on go -> A
-}

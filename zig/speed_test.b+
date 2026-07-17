@@ -1,7 +1,0 @@
-state Start {
-    entry { print("START\n") }
-    always -> Loop
-}
-state Loop {
-    always -> Loop
-}

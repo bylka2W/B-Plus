@@ -1,4 +1,0 @@
-entry main {
-    var x = 100 - 50;
-    ExitProcess(x);
-}

@@ -1,5 +1,0 @@
-entry {
-    fn_ptr = 0;
-    result = call_indirect(fn_ptr, 42);
-    return -> result;
-}

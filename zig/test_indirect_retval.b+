@@ -1,9 +1,0 @@
-entry main {
-    // GetProcessHeap is index 4 in IMPORT_FNS
-    // call_indirect(GetProcessHeap) should call it and return heap handle in RAX
-    // Since RAX is set, we can then use it
-    // But we can't save it without var, so we make another call that uses RAX
-    
-    // For debugging: call ExitProcess through call_indirect with a specific exit code
-    call_indirect(ExitProcess, 7);
-}

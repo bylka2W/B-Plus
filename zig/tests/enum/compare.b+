@@ -1,8 +1,0 @@
-enum Color { Red, Green, Blue }
-
-entry main {
-    var x = Color.Green;
-    var r = 0;
-    if (x == Color.Green) { r = 1; };
-    ExitProcess(r);
-}
