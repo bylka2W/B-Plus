@@ -1,0 +1,25 @@
+name: Mirror
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to GitVerse
+        run: |
+          git remote add gitverse https://gitverse.ru/bylka2W/B-Plus.git
+          git push gitverse --all
+          git push gitverse --tags
+
+      - name: Push to GitFlic
+        run: |
+          git remote add gitflic https://gitflic.ru/project/bylka2w/b-plus.git
+          git push gitflic --all
+          git push gitflic --tags
