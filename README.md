@@ -3,6 +3,17 @@
 > [English version ↓](#b-v456--compiled-bp-language-mir--coff-pipeline)
 
 
+**v4.5.8 (VS Code extension + стресс-тесты):**
+- **VS Code extension**: полная поддержка `.plan` и `.metal` — подсветка синтаксиса, B+: Build/Run/Test, сниппеты, установка через `.vsix`.
+- **Runtime stack overflow fix**: `emitSingleAction` больше не эмитит CALL для bare state names — только `cur_state` + RET. `changeToState` JMP на `always_dispatch`. Устранён глубинный стек (500+ CALL фреймов).
+- **Budget 1024→4**: начальный budget поднят до 1024 для длинных startup-цепочек, runtime budget сбрасывается до 4 в `evloop`.
+- **Resolver iterative**: рекурсивный `loadRecursive` заменён на очередь — больше нет stack overflow при 500+ файлах.
+- **Exit code fix**: исправлен баг Zig 0.14 `Child.Term.Exited(u8)` — ручной `WaitForSingleObjectEx` + `GetExitCodeProcess`.
+- **Bitwise operators**: `|`, `&`, `<<`, `>>` в `emitExprToRAX`.
+- **`if`/`else` как statement**.
+- **rename .b+ → .plan, .bp → .metal**: полный рефакторинг (код, README, тесты, resolver).
+- **Все 90 регрессионных тестов PASS**, import_hell корректен (f003 имеет цикл → exit 0).
+
 **v4.5.7 (пользовательские функции `fn` в `bpc`):**
 - **Парсер `fn`**: новый `keyword_fn` хендлер + `tryParseFunction()` — парсит `fn name(args) { body }` в `ast.EntryDecl`, сохраняет в `program.func_defs`.
 - **Генерация кода функций**: пролог (PUSH RBP, MOV RBP,RSP, SUB RSP,32), сохранение параметров из RCX/RDX/R8/R9 на стек, компиляция тела через `emitAction`, эпилог (MOV RSP,RBP, POP RBP, RET).
