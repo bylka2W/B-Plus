@@ -40,11 +40,8 @@ pub fn build(allocator: Allocator, func: *const bir.Function, cfg: *const bir_cf
 
     const nblocks = cfg.blocks.items.len;
 
-    const df = try computeDomFrontiers(allocator, cfg, dom_tree);
-    defer {
-        for (df) |d| allocator.free(d);
-        allocator.free(df);
-    }
+    var df = try bir_dominators.buildDominanceFrontiers(allocator, cfg, dom_tree);
+    defer df.deinit();
 
     var store_sites = try allocator.alloc(std.ArrayList(MemOpKey), nblocks);
     defer {
@@ -99,7 +96,7 @@ pub fn build(allocator: Allocator, func: *const bir.Function, cfg: *const bir_cf
 
             while (phi_queue.items.len > 0) {
                 const cur = phi_queue.pop().?;
-                for (df[cur]) |dfb| {
+                for (df.get(cur)) |dfb| {
                     const key = .{ dfb, ptr };
                     if (!phi_store.contains(key)) {
                         try phi_store.put(key, {});
@@ -265,66 +262,4 @@ fn renameRecursive(ssa: *MemorySSA, rename_stack: *std.AutoHashMap(ValueId, std.
     }
 }
 
-fn computeDomFrontiers(allocator: Allocator, cfg: *const bir_cfg.CFG, dom_tree: *const bir_dominators.DominatorTree) ![][]BlockId {
-    const n = cfg.blocks.items.len;
-    var df_lists = try allocator.alloc(std.ArrayList(BlockId), n);
-    for (0..n) |i| {
-        df_lists[i] = std.ArrayList(BlockId).init(allocator);
-    }
 
-    for (0..n) |i| {
-        const bid = @as(BlockId, @intCast(i));
-        for (cfg.get(bid).successors.items) |succ| {
-            if (!dom_tree.strictlyDominates(bid, succ)) {
-                try df_lists[bid].append(succ);
-            }
-        }
-    }
-
-    var df_post = try allocator.alloc(BlockId, 0);
-    defer allocator.free(df_post);
-    {
-        var stack = std.ArrayList(BlockId).init(allocator);
-        defer stack.deinit();
-        var vis = try allocator.alloc(bool, n);
-        defer allocator.free(vis);
-        @memset(vis, false);
-        try stack.append(cfg.entry);
-        var po = std.ArrayList(BlockId).init(allocator);
-        defer po.deinit();
-        while (stack.items.len > 0) {
-            const top = stack.pop().?;
-            if (vis[top]) continue;
-            vis[top] = true;
-            try po.append(top);
-            for (dom_tree.children[top]) |child| {
-                try stack.append(child);
-            }
-        }
-        for (0..po.items.len / 2) |k| {
-            const a = po.items[k];
-            const b = po.items[po.items.len - 1 - k];
-            po.items[k] = b;
-            po.items[po.items.len - 1 - k] = a;
-        }
-        df_post = try allocator.dupe(BlockId, po.items);
-    }
-
-    for (df_post) |bid| {
-        for (dom_tree.children[bid]) |child| {
-            for (df_lists[child].items) |x| {
-                if (!dom_tree.strictlyDominates(bid, x)) {
-                    try df_lists[bid].append(x);
-                }
-            }
-        }
-    }
-
-    var result = try allocator.alloc([]BlockId, n);
-    for (0..n) |i| {
-        result[i] = try allocator.dupe(BlockId, df_lists[i].items);
-        df_lists[i].deinit();
-    }
-    allocator.free(df_lists);
-    return result;
-}

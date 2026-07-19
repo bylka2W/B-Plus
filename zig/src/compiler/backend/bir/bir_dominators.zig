@@ -60,6 +60,104 @@ pub const DominatorTree = struct {
     }
 };
 
+// ─── Dominance Frontier ───
+
+pub const DominanceFrontier = struct {
+    allocator: Allocator,
+    df: [][]BlockId,
+
+    pub fn deinit(self: *DominanceFrontier) void {
+        for (self.df) |list| self.allocator.free(list);
+        self.allocator.free(self.df);
+    }
+
+    pub fn get(self: *const DominanceFrontier, block: BlockId) []const BlockId {
+        return self.df[block];
+    }
+
+    pub fn contains(self: *const DominanceFrontier, block: BlockId, target: BlockId) bool {
+        for (self.df[block]) |dfb| {
+            if (dfb == target) return true;
+        }
+        return false;
+    }
+
+    pub fn dump(self: *const DominanceFrontier, writer: anytype) !void {
+        try writer.writeAll("; Dominance Frontiers\n");
+        for (self.df, 0..) |list, i| {
+            try writer.print("  block_{d}: [", .{i});
+            for (list, 0..) |dfb, di| {
+                if (di > 0) try writer.writeAll(", ");
+                try writer.print("{d}", .{dfb});
+            }
+            try writer.writeAll("]\n");
+        }
+    }
+};
+
+pub fn buildDominanceFrontiers(allocator: Allocator, cfg: *const bir_cfg.CFG, dom_tree: *const DominatorTree) !DominanceFrontier {
+    const n = cfg.blocks.items.len;
+    var df_lists = try allocator.alloc(std.ArrayList(BlockId), n);
+    for (0..n) |i| {
+        df_lists[i] = std.ArrayList(BlockId).init(allocator);
+    }
+
+    for (0..n) |i| {
+        const bid = @as(BlockId, @intCast(i));
+        for (cfg.get(bid).successors.items) |succ| {
+            if (!dom_tree.strictlyDominates(bid, succ)) {
+                try df_lists[bid].append(succ);
+            }
+        }
+    }
+
+    var po = std.ArrayList(BlockId).init(allocator);
+    defer po.deinit();
+    var vis = try allocator.alloc(bool, n);
+    defer allocator.free(vis);
+    @memset(vis, false);
+    var stack = std.ArrayList(BlockId).init(allocator);
+    defer stack.deinit();
+    try stack.append(cfg.entry);
+    while (stack.items.len > 0) {
+        const top = stack.pop().?;
+        if (vis[top]) continue;
+        vis[top] = true;
+        try po.append(top);
+        for (dom_tree.children[top]) |child| {
+            try stack.append(child);
+        }
+    }
+    for (0..po.items.len / 2) |k| {
+        const a = po.items[k];
+        const b = po.items[po.items.len - 1 - k];
+        po.items[k] = b;
+        po.items[po.items.len - 1 - k] = a;
+    }
+
+    for (po.items) |bid| {
+        for (dom_tree.children[bid]) |child| {
+            for (df_lists[child].items) |x| {
+                if (!dom_tree.strictlyDominates(bid, x)) {
+                    try df_lists[bid].append(x);
+                }
+            }
+        }
+    }
+
+    var result_df = try allocator.alloc([]BlockId, n);
+    for (0..n) |i| {
+        result_df[i] = try allocator.dupe(BlockId, df_lists[i].items);
+        df_lists[i].deinit();
+    }
+    allocator.free(df_lists);
+
+    return DominanceFrontier{
+        .allocator = allocator,
+        .df = result_df,
+    };
+}
+
 pub fn buildDominators(allocator: Allocator, cfg: *const bir_cfg.CFG) !DominatorTree {
     const n = cfg.blocks.items.len;
     if (n == 0) {

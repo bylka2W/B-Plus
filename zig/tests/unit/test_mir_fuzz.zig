@@ -41,6 +41,7 @@ fn dumpMIR(writer: anytype, mfunc: *const mir.MFunction, num_vregs: u32) !void {
                     try writer.print("ret ", .{});
                     try dumpOp(writer, m.val);
                 },
+                .phi => try writer.print("phi", .{}),
             }
             try writer.print("\n", .{});
         }
@@ -337,6 +338,7 @@ fn interpretMFunction(mfunc: *const mir.MFunction) !i64 {
                 .ret => |m| {
                     return resolveOp(&values, m.val);
                 },
+                .phi => {},
             }
         }
 

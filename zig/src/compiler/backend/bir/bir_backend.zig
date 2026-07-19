@@ -1,0 +1,15 @@
+pub const bir = @import("bir.zig");
+pub const bir_types = @import("bir_types.zig");
+pub const bir_cfg = @import("bir_cfg.zig");
+pub const bir_dominators = @import("bir_dominators.zig");
+pub const bir_loops = @import("bir_loops.zig");
+pub const bir_analysis = @import("bir_analysis.zig");
+pub const bir_passes = @import("bir_passes.zig");
+pub const bir_verify = @import("bir_verify.zig");
+pub const bir_mem2reg = @import("bir_mem2reg.zig");
+pub const bir_cfgsimplify = @import("bir_cfgsimplify.zig");
+pub const bir_licm = @import("bir_licm.zig");
+pub const bir_memory_ssa = @import("bir_memory_ssa.zig");
+pub const bir_alias = @import("bir_alias.zig");
+pub const bir_unroll = @import("bir_unroll.zig");
+pub const bir_cpu = @import("bir_cpu.zig");

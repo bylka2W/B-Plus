@@ -1,6 +1,6 @@
 const std = @import("std");
-const mir = @import("mir.zig");
-const coff = @import("coff.zig");
+const mir = @import("compiler/backend/mir/mir.zig");
+const coff = @import("compiler/backend/pe/coff.zig");
 
 const TypeKind = enum {
     void, bool,
@@ -1340,8 +1340,8 @@ pub fn main() !void {
 
     if (args.len < 3) {
         const stderr = std.io.getStdErr().writer();
-        try stderr.writeAll("Usage: bplus build <input.bp> [-o <output.exe>]\n");
-        try stderr.writeAll("       bplus run   <input.bp>\n");
+        try stderr.writeAll("Usage: bplus build <input.metal> [-o <output.exe>]\n");
+        try stderr.writeAll("       bplus run   <input.metal>\n");
         std.process.exit(1);
     }
 

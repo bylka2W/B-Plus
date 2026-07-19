@@ -48,6 +48,16 @@ pub const LoadInst = struct { dst: MOperand, ptr: MOperand };
 pub const StoreInst = struct { ptr: MOperand, src: MOperand };
 pub const RetInst = struct { val: MOperand, is_void: bool = false };
 
+pub const PhiIncoming = struct {
+    src: MOperand,
+    pred_block: usize,
+};
+
+pub const PhiInst = struct {
+    dst: MOperand,
+    incoming: []const PhiIncoming,
+};
+
 pub const MInst = union(enum) {
     mov: MovInst,
     add: AddInst,
@@ -63,6 +73,7 @@ pub const MInst = union(enum) {
     load: LoadInst,
     store: StoreInst,
     ret: RetInst,
+    phi: PhiInst,
 };
 
 pub const MBlock = struct {
@@ -95,7 +106,11 @@ pub const MFunction = struct {
         for (self.blocks.items) |*b| {
             self.allocator.free(b.label);
             for (b.instrs.items) |*inst| {
-                if (inst.* == .call) self.allocator.free(inst.call.name);
+                switch (inst.*) {
+                    .call => self.allocator.free(inst.call.name),
+                    .phi => |p| self.allocator.free(p.incoming),
+                    else => {},
+                }
             }
             b.instrs.deinit();
         }

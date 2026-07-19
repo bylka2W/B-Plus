@@ -1,90 +1,8 @@
-# B+ v4.5.9 — Compiled `.bp` Language (MIR + COFF pipeline)
+# B+ v4.6.0 — Compiled `.plan` / `.metal` Language (SSA + MIR + COFF pipeline)
 
-> [English version ↓](#b-v459--compiled-bp-language-mir--coff-pipeline)
+> [English version ↓](#b-v460--compiled-plan--metal-language-ssa--mir--coff-pipeline)
 
-
-**v4.5.9 (реструктуризация проекта):**
-- **Модульная структура исходников**: 78 `.zig` файлов перемещены из плоского `src/` в подкаталоги по назначению — `compiler/parser/`, `compiler/backend/{x64,pe,gpu,bir,mir}/`, `runtime/`, `render/`. Все `@import` пути обновлены (433+ импорта).
-- **Категоризация тестов**: 282+ exe файлов распределены по 30+ папкам в `tests/` — `if/`, `loops/`, `fn/`, `defer/`, `enum/`, `dll/`, `speed/`, `stress/`, `plan/`, `gpu/`, `kernel/` и др. 36 `.zig` тестов перемещены в `tests/{unit,gpu,kernel}/`.
-- **Чистка корня**: `C:\B-Plus` — только `bpc.exe`, `LICENSE`, `README.md`, `.gitignore`. Корень `zig/` — только `build.zig` и `bpc.exe`. Мусорные файлы (0-байтные артефакты компилятора) удалены.
-- **Утилиты и артефакты**: `.py`/`.ps1` скрипты → `tools/`, `.prof` → `prof/`, `.obj`/`.pdb` → `build-artifacts/`, `.hlsl`/`.cso` → `shaders/`.
-
-**v4.5.8 (VS Code extension + стресс-тесты):**
-- **VS Code extension**: полная поддержка `.plan` и `.metal` — подсветка синтаксиса, B+: Build/Run/Test, сниппеты, установка через `.vsix`.
-- **Runtime stack overflow fix**: `emitSingleAction` больше не эмитит CALL для bare state names — только `cur_state` + RET. `changeToState` JMP на `always_dispatch`. Устранён глубинный стек (500+ CALL фреймов).
-- **Budget 1024→4**: начальный budget поднят до 1024 для длинных startup-цепочек, runtime budget сбрасывается до 4 в `evloop`.
-- **Resolver iterative**: рекурсивный `loadRecursive` заменён на очередь — больше нет stack overflow при 500+ файлах.
-- **Exit code fix**: исправлен баг Zig 0.14 `Child.Term.Exited(u8)` — ручной `WaitForSingleObjectEx` + `GetExitCodeProcess`.
-- **Bitwise operators**: `|`, `&`, `<<`, `>>` в `emitExprToRAX`.
-- **`if`/`else` как statement**.
-- **rename .b+ → .plan, .bp → .metal**: полный рефакторинг (код, README, тесты, resolver).
-- **Все 90 регрессионных тестов PASS**, import_hell корректен (f003 имеет цикл → exit 0).
-
-**v4.5.7 (пользовательские функции `fn` в `bpc`):**
-- **Парсер `fn`**: новый `keyword_fn` хендлер + `tryParseFunction()` — парсит `fn name(args) { body }` в `ast.EntryDecl`, сохраняет в `program.func_defs`.
-- **Генерация кода функций**: пролог (PUSH RBP, MOV RBP,RSP, SUB RSP,32), сохранение параметров из RCX/RDX/R8/R9 на стек, компиляция тела через `emitAction`, эпилог (MOV RSP,RBP, POP RBP, RET).
-- **Вызов функций**: определение в `emitExprToRAX` — поиск по `p.func_defs`, загрузка аргументов в регистры Win64, `CALL rel32` через `emitCallToLabel`.
-- **`return expr` в теле функции**: вычисление выражения в RAX, `JMP` к эпилогу.
-- **Фикс порядка фиксапов**: блок эмиссии тел функций перемещён до `applyFixups`, чтобы `fn_{name}` лейблы были выставлены до резолва CALL/JMP-rel32. Исправляет вызовы функций (раньше CALL был no-op).
-- **Depth-aware split аргументов**: новый `splitArgsDepthAware()` — разбивает строку аргументов по запятым только на глубине 0 (учитывает вложенные скобки). Исправляет `ExitProcess(add(10,20))` и другие вложенные вызовы.
-- Удалены отладочные `std.debug.print`.
-- Все 5 тестов `test_fn*.b+` проходят: `five() → 5`, `add(10,20) → 30`, `returnA(10,20) → 10`, `ExitProcess(add(10,20)) → 30`, `ExitProcess(five()) → 5`.
-
-**v4.5.6 (нормальные ошибки + фикс line tracking):**
-- **Исправлен `body_line_indices`**: пустые строки и комментарии больше не отфильтровываются при загрузке, поэтому `body_line_indices` правильно указывает на `ctx.source_lines`. Ошибки показывают правильную строку исходника.
-- **Column tracking**: `ctx.err_col` добавлен в `CompilerContext`, `reportErr` показывает каретку `^`.
-- Все 8 `.bp` тестов проходят (включая `test_error.bp`, `test_implicit2.bp`).
-
-**v4.5.5 (CompilerContext refactor + structs complete):**
-- **Structs fully implemented**: `StructDef`/`Field` types, two-pass parser (register names → resolve types/offsets/sizes), field offset layout, `p.x` read/write in expressions and assignments, `&p.x` address-of-field
-- **CompilerContext refactor**: global `var struct_table: StructTable = undefined;` eliminated — replaced with `CompilerContext` struct containing `allocator: std.mem.Allocator` and `structs: StructTable`
-- **`*CompilerContext` idiom**: all compile/parse functions take `*CompilerContext` instead of separate `allocator` parameter; `Type.fromString`/`Type.size` take `*const StructTable` for struct table access
-- Все 8 `.bp` тестов проходят (включая `test_struct.bp`)
-
-**v4.5.4 (Полноценный expression parser + if/while/var + idiv):**
-- **Recursive descent expression parser**: 6 уровней приоритета — `||`, `&&`, сравнения (`>= <= == != > <`), `+`/`-`, `*`/`/`. Поддерживает скобки, вложенные вызовы функций с аргументами, целые литералы, переменные.
-- **`var` declarations**: `var x: i64 = 42;` — аллокация vreg, инициализация, хранение в var_map.
-- **`if`/`else`**: полная поддержка `if (cond) { ... } else { ... }`, включая `} else {` на той же строке.
-- **`while` loops**: header-cond-body-exit схема, корректная работа с `if` внутри тела.
-- **`break`/`continue`**: `break` → `jmp(exit)`, `continue` → `jmp(header)`.
-- **`IDivInst`** в MIR: `idiv` теперь полноценный MIR-инструкция со всеми проходами (dce, peephole, verify, regalloc, x64 codegen).
-- **Typed function returns**: парсер разбирает `fn add(a:i64,b:i64) -> i64`, возвращаемый тип учитывается при генерации `ret` (void → `is_void=true`).
-- Все `.bp` тесты проходят.
-
-**v4.5.3 (CLI + `.bp` → `.exe` end-to-end):**
-- **CLI tool `bplus.zig`**: команды `bplus build <input.bp> [-o <output.exe>]` и `bplus run <input.bp>`. Парсер .bp строит MIR напрямую (fn, extern fn, return, вызовы, целые литералы, `+` выражения, параметры-переменные). Линковка через `zig build-exe` с `bplusrt.obj` и `-lkernel32`.
-- **End-to-end `.bp` → `.exe`**: `hello.bp` с `extern fn print_i64(x: i64); fn main() { print_i64(42); }` → stdout `42`, exit code **0**. Утечки устранены (arena allocator). Автоматический `ret 0` при отсутствии явного `return`.
-- **Прямой MIR builder**: MIR строится из распарсенных строк `.bp` без промежуточного BIR — vreg аллокация, param→vreg prologue, expression compiler.
-
-**v4.5.2 (BIR→MIR→x64→COFF→.exe pipeline):**
-- **COFF object writer** (`coff.zig`): полноценный COFF-формат — IMAGE_FILE_HEADER, .text section, IMAGE_REL_AMD64_REL32 relocations, symbol table (IMAGE_SYM_CLASS_EXTERNAL), string table.
-- **Runtime library** (`bplusrt.zig`): `print_i64` через kernel32!GetStdHandle + WriteFile, компилируется в `bplusrt.obj`.
-- **Extern calls**: нерезолвленные имена в COFF становятся undefined external symbols, резолвятся линкером.
-
-**v4.5.1 (CPU backend stabilisation):**
-- **100 000 / 100 000 MIR fuzz tests passed** — нулевой miscompile на случайных программах.
-- **CMP_R64_MEM**, **ADD_R64_MEM**, **SUB_R64_MEM** — новые opcode в `x64enc.zig`.
-- **`regalloc.spilledMemOp()`** — хелпер для чтения второго операнда из памяти без перезаписи scratch.
-
-**v4.5.0 (Linear Scan Register Allocator):**
-- **Linear Scan Register Allocator** (`regalloc.zig`): live intervals, linear scan с expire/spill, 9 GP-регистров, r11 зарезервирован под spill scratch.
-- `mir_x64.zig` полностью переписан: emit-функции для каждой MIR-инструкции, единый `ra: *const RegAllocResult`.
-
-**v4.4.0:**
-- Удалён `emitMfunction`. Все CPU-тесты через единый linker `emitModule`.
-- `mir_verify.zig` — верификатор MIR перед эмитом.
-- `x64enc.disassemble` — дизассемблер (30+ инструкций).
-
-**v4.3.2:**
-- Все примеры в README переведены на русский.
-- GPU IR: BackendApi, ShaderKey, PipelineKey, CompileOptions/Result.
-- DXIL backend (черновик): GPU IR → HLSL → DXC subprocess → DXBC.
-
-**v4.3.1:**
-- Исправлено выравнивание стека в прологе entry point (x64gen.zig).
-- Добавлены русские псевдонимы ключевых слов.
-
-**B+** транслирует `.b+` / `.bp` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
+**B+** транслирует `.plan` / `.metal` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор написан с нуля на Zig.
 
 ---
@@ -93,7 +11,7 @@
 
 1. [Быстрый старт](#1-быстрый-старт)
 2. [Команды компилятора](#2-команды-компилятора)
-3. [Синтаксис языка (.b+)](#3-синтаксис-языка)
+3. [Синтаксис языка (.plan)](#3-синтаксис-языка)
    - [3.1 Состояния](#31-состояния)
    - [3.2 Переходы (on)](#32-переходы-on)
    - [3.3 Безусловные переходы (always)](#33-безусловные-переходы-always)
@@ -112,7 +30,7 @@
    - [3.16 Внешние функции (extern)](#316-внешние-функции-extern)
    - [3.17 Комментарии](#317-комментарии)
    - [3.18 Русские ключевые слова](#318-русские-ключевые-слова)
-4. [Синтаксис .bp (новый CPU backend)](#4-синтаксис-bp-новый-cpu-backend)
+4. [Синтаксис .metal (новый CPU backend)](#4-синтаксис-metal-новый-cpu-backend)
    - [4.1 Типы](#41-типы)
    - [4.2 Функции](#42-функции)
    - [4.3 Внешние функции](#43-внешние-функции)
@@ -139,17 +57,17 @@
 ## 1. Быстрый старт
 
 ```bash
-bpc.exe build hello.b+
+bpc.exe build hello.plan
 .\hello.exe
 ```
 
-Первая команда компилирует `hello.b+` в `hello.exe`.
+Первая команда компилирует `hello.plan` в `hello.exe`.
 Вторая — запускает.
 
 Можно совместить:
 
 ```bash
-bpc.exe run hello.b+
+bpc.exe run hello.plan
 ```
 
 ---
@@ -159,21 +77,21 @@ bpc.exe run hello.b+
 ### Синтаксис
 
 ```text
-bpc build <входной.b+>              — скомпилировать в <входной>.exe
-bpc build <входной.b+> -o <выход.exe> — скомпилировать с указанием имени
-bpc dll   <входной.b+>              — скомпилировать в DLL
-bpc run   <входной.b+>              — скомпилировать и сразу запустить
-bpc hlsl  <входной.b+>              — сгенерировать HLSL шейдер
+bpc build <входной.plan>              — скомпилировать в <входной>.exe
+bpc build <входной.plan> -o <выход.exe> — скомпилировать с указанием имени
+bpc dll   <входной.plan>              — скомпилировать в DLL
+bpc run   <входной.plan>              — скомпилировать и сразу запустить
+bpc hlsl  <входной.plan>              — сгенерировать HLSL шейдер
 ```
 
-#### `bpc dll <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]`
+#### `bpc dll <input.plan> [-o <output.dll>] [-exports <name1,name2,...>]`
 
-Компилирует `.b+` файл в DLL с таблицей экспорта. Все `export entry` или
+Компилирует `.plan` файл в DLL с таблицей экспорта. Все `export entry` или
 перечисленные в `-exports` становятся экспортируемыми функциями.
 
 | Шаг | Описание |
 |-----|----------|
-| 1 | Читает файл `.b+` целиком в память |
+| 1 | Читает файл `.plan` целиком в память |
 | 2 | Разбирает (парсит) исходный код в AST |
 | 3 | Генерирует машинный код x64 с DllMain (возвращает TRUE) |
 | 4 | Создаёт таблицу импорта (kernel32.dll + runtime) |
@@ -183,17 +101,17 @@ bpc hlsl  <входной.b+>              — сгенерировать HLSL �
 
 **Примеры:**
 ```bash
-bpc dll test.b+ -o test.dll -exports Init,Update
-bpc dll module.b+
+bpc dll test.plan -o test.dll -exports Init,Update
+bpc dll module.plan
 ```
 
-#### `bpc build <input.b+> [-o <output.exe>]`
+#### `bpc build <input.plan> [-o <output.exe>]`
 
 Что делает:
 
 | Шаг | Описание |
 |-----|----------|
-| 1 | Читает файл `.b+` целиком в память |
+| 1 | Читает файл `.plan` целиком в память |
 | 2 | Разбирает (парсит) исходный код в AST |
 | 3 | Проверяет, что есть хотя бы одно состояние |
 | 4 | Генерирует машинный код x64 напрямую (без ассемблера) |
@@ -208,19 +126,19 @@ bpc dll module.b+
 
 **Примеры:**
 ```bash
-bpc build traffic.b+              → traffic.exe
-bpc build traffic.b+ -o light.exe → light.exe
-bpc build source.b+               → source.exe
+bpc build traffic.plan              → traffic.exe
+bpc build traffic.plan -o light.exe → light.exe
+bpc build source.plan               → source.exe
 ```
 
-#### `bpc gpu <input.b+> [-o <output.hlsl>]` / `bpc hlsl <input.b+> [-o <output.hlsl>]`
+#### `bpc gpu <input.plan> [-o <output.hlsl>]` / `bpc hlsl <input.plan> [-o <output.hlsl>]`
 
 Генерирует HLSL-код из B+ файла с новым блочным `kernel { ... }` синтаксисом
 или старым (legacy `@bind`/`@cbuffer`). `bpc hlsl` автодетектит синтаксис.
 
 | Шаг | Описание (новый pipeline) |
 |-----|--------------------------|
-| 1 | Читает файл `.b+` целиком в память |
+| 1 | Читает файл `.plan` целиком в память |
 | 2 | Разбирает (парсит) в GPU AST (`gpu_ast.zig`) |
 | 3 | Семантический анализ (`gpu_sema.zig`): дубликаты регистров, лимиты, numthreads |
 | 4 | Понижение до GPU IR (`gpu_lower.zig`): GPU AST → SSA IR |
@@ -249,11 +167,11 @@ HLSL-интринсики (WaveActiveSum, InterlockedAdd, mad, lerp и др.) п
 
 **Пример:**
 ```bash
-bpc hlsl fsr2_easu.b+ -o fsr2_easu.hlsl
+bpc hlsl fsr2_easu.plan -o fsr2_easu.hlsl
 dxc -T cs_6_6 -E main -Fo fsr2_easu.cso fsr2_easu.hlsl
 ```
 
-#### `bpc run <input.b+>`
+#### `bpc run <input.plan>`
 
 Что делает:
 
@@ -266,8 +184,8 @@ dxc -T cs_6_6 -E main -Fo fsr2_easu.cso fsr2_easu.hlsl
 
 **Примеры:**
 ```bash
-bpc run traffic.b+    — компилирует и сразу запускает
-bpc run hello.b+      — компилирует и сразу запускает
+bpc run traffic.plan    — компилирует и сразу запускает
+bpc run hello.plan      — компилирует и сразу запускает
 ```
 
 ### Коды возврата
@@ -280,7 +198,7 @@ bpc run hello.b+      — компилирует и сразу запускае�
 
 ### Примечания
 
-- Входной файл **обязан** иметь расширение `.b+`.
+- Входной файл **обязан** иметь расширение `.plan`.
 - Если расширения нет, компилятор всё равно добавит `.exe` к базовому имени.
 - Компилятор **не использует** внешние ассемблеры, линкеры или LLVM — весь машинный код генерируется самостоятельно.
 - Выходной файл — полноценный Windows PE x64 исполняемый файл.
@@ -679,9 +597,9 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ---
 
-## 4. Синтаксис `.bp` (новый CPU backend)
+## 4. Синтаксис `.metal` (новый CPU backend)
 
-Новый `.bp` синтаксис работает через прямой MIR pipeline (без BIR, без state-машины).
+Новый `.metal` синтаксис работает через MIR pipeline с полной SSA-архитектурой.
 Поддерживает функции, переменные, структуры, указатели, `if`/`while`/`for`, составные присваивания.
 
 ### 4.1 Типы
@@ -845,7 +763,7 @@ z *= 2;
 ### 4.13 Сообщения об ошибках
 
 ```
-error[UnknownVariable]: test_error.bp:4:1
+error[UnknownVariable]: test_error.metal:4:1
    4 |     print_i64(y);
        | ^
 ```
@@ -853,11 +771,11 @@ error[UnknownVariable]: test_error.bp:4:1
 ### 4.14 CLI
 
 ```text
-bplus build <input.bp> [-o <output.exe>]
-bplus run   <input.bp>
+bplus build <input.metal> [-o <output.exe>]
+bplus run   <input.metal>
 ```
 
-Pipeline: `.bp → парсер → MIR → DCE → peephole → reg alloc → x64 → COFF .obj → zig build-exe → .exe`
+Pipeline: `.metal → парсер → BIR (SSA) → mem2reg → cfgsimplify → понижение до MIR → уничтожение SSA → распространение копий → DCE → пеепхол → линейный аллокатор → x64 → COFF .obj → zig build-exe → .exe`
 
 ---
 
@@ -1017,7 +935,7 @@ zig build-exe src/main.zig -femit-bin=bpc.exe
 После сборки:
 
 ```bash
-bpc.exe run example.b+
+bpc.exe run example.plan
 ```
 
 ---
@@ -1038,7 +956,7 @@ zig/                    — исходники компилятора (Zig)
     compiler/
       parser/
         ast.zig         — типы AST
-        parser.zig      — лексер + парсер .b+
+        parser.zig      — лексер + парсер .plan
         symbol.zig      — таблица символов
         gpu_ast.zig     — GPU AST
         gpu_body_parser.zig — парсер тел GPU kernel
@@ -1070,7 +988,7 @@ zig/                    — исходники компилятора (Zig)
           bir.zig       — BIR (Bytecode IR)
           bir_types.zig — типы BIR
           bir_frontend.zig — фронтенд BIR
-          bir_cfg.zig   — CFG ( граф потока управления)
+          bir_cfg.zig   — CFG (граф потока управления)
           bir_dominators.zig — доминаторы
           bir_loops.zig — анализ циклов
           bir_alias.zig — анализ псевдонимов
@@ -1080,10 +998,12 @@ zig/                    — исходники компилятора (Zig)
           bir_verify.zig — верификация BIR
           bir_passes.zig — проходы BIR
           bir_lower.zig — понижение BIR → MIR
-          bir_cpu.zig   — CPU-специфичный BIR
+          bir_cpu.zig   — CPU-специфичный BIR, понижение до MIR
           bir_hlsl.zig  — HLSL из BIR
         mir/
-          mir.zig       — MIR (Machine IR)
+          mir.zig       — MIR (Machine IR), phi-инструкции
+          mir_ssa_destroy.zig — уничтожение SSA
+          mir_copy_prop.zig — распространение копий
           mir_dce.zig   — мёртвый код
           mir_peephole.zig — пеепхол-оптимизации
           mir_optimizer.zig — оптимизатор MIR
@@ -1205,81 +1125,11 @@ SOFTWARE.
 
 ---
 
-# B+ v4.5.9 — Compiled `.bp` Language (MIR + COFF pipeline)
+# B+ v4.6.0 — Compiled `.plan` / `.metal` Language (SSA + MIR + COFF pipeline)
 
-> [Russian version ↑](#b-v459--compiled-bp-language-mir--coff-pipeline)
+> [Russian version ↑](#b-v460--compiled-plan--metal-language-ssa--mir--coff-pipeline)
 
-**v4.5.9 (project restructuring):**
-- **Modular source layout**: 78 `.zig` files moved from flat `src/` into subdirectories — `compiler/parser/`, `compiler/backend/{x64,pe,gpu,bir,mir}/`, `runtime/`, `render/`. All `@import` paths updated (433+ imports).
-- **Test categorization**: 282+ exe files distributed across 30+ folders in `tests/` — `if/`, `loops/`, `fn/`, `defer/`, `enum/`, `dll/`, `speed/`, `stress/`, `plan/`, `gpu/`, `kernel/`, etc. 36 `.zig` tests moved to `tests/{unit,gpu,kernel}/`.
-- **Root cleanup**: `C:\B-Plus` — only `bpc.exe`, `LICENSE`, `README.md`, `.gitignore`. `zig/` root — only `build.zig` and `bpc.exe`. Junk files (0-byte compiler artifacts) removed.
-- **Utilities and artifacts**: `.py`/`.ps1` scripts → `tools/`, `.prof` → `prof/`, `.obj`/`.pdb` → `build-artifacts/`, `.hlsl`/`.cso` → `shaders/`.
-
-**v4.5.7 (user-defined `fn` functions in `bpc`):**
-- **`fn` parser**: new `keyword_fn` handler + `tryParseFunction()` — parses `fn name(args) { body }` into `ast.EntryDecl`, stored in `program.func_defs`.
-- **Function codegen**: prologue (PUSH RBP, MOV RBP,RSP, SUB RSP,32), store params from RCX/RDX/R8/R9 to stack, body via `emitAction`, epilogue (MOV RSP,RBP, POP RBP, RET).
-- **Function calls**: detection in `emitExprToRAX` — lookup in `p.func_defs`, load args into Win64 registers, `CALL rel32` via `emitCallToLabel`.
-- **`return expr` in function body**: evaluate into RAX, `JMP` to epilogue label.
-- **Fixup order fix**: function body emission block moved before `applyFixups` so `fn_{name}` labels exist when CALL/JMP-rel32 fixups resolve. Fixes all function calls (previously CALL was no-op).
-- **Depth-aware arg split**: new `splitArgsDepthAware()` — splits argument strings by commas only at depth 0 (respects nested parentheses). Fixes `ExitProcess(add(10,20))` and other nested calls.
-- Removed debug `std.debug.print` statements.
-- All 5 `test_fn*.b+` tests pass: `five() → 5`, `add(10,20) → 30`, `returnA(10,20) → 10`, `ExitProcess(add(10,20)) → 30`, `ExitProcess(five()) → 5`.
-
-**v4.5.6 (proper error reporting + line tracking fix):**
-- **`body_line_indices` fixed**: empty lines and comments are no longer filtered during loading, so `body_line_indices` correctly indexes into `ctx.source_lines`. Errors now show the correct source line.
-- **Column tracking**: `ctx.err_col` added to `CompilerContext`, `reportErr` shows caret `^`.
-- All 8 `.bp` tests pass (including `test_error.bp`, `test_implicit2.bp`).
-
-**v4.5.5 (CompilerContext refactor + structs complete):**
-- **Structs fully implemented**: `StructDef`/`Field` types, two-pass parser (register names → resolve types/offsets/sizes), field offset layout, `p.x` read/write in expressions and assignments, `&p.x` address-of-field
-- **CompilerContext refactor**: global `var struct_table: StructTable = undefined;` eliminated — replaced with `CompilerContext` struct containing `allocator: std.mem.Allocator` and `structs: StructTable`
-- **`*CompilerContext` idiom**: all compile/parse functions take `*CompilerContext` instead of separate `allocator` parameter; `Type.fromString`/`Type.size` take `*const StructTable` for struct table access
-- All 8 `.bp` tests pass (including `test_struct.bp`)
-
-**v4.5.4 (Full expression parser + if/while/var + idiv):**
-- **Recursive descent expression parser**: 6 precedence levels — `||`, `&&`, comparisons (`>= <= == != > <`), `+`/`-`, `*`/`/`. Supports parentheses, nested function calls with arguments, integer literals, variables.
-- **`var` declarations**: `var x: i64 = 42;` — vreg allocation, initialization, storage in var_map.
-- **`if`/`else`**: full support for `if (cond) { ... } else { ... }`, including `} else {` on the same line.
-- **`while` loops**: header-cond-body-exit scheme, correct interaction with `if` inside body.
-- **`break`/`continue`**: `break` → `jmp(exit)`, `continue` → `jmp(header)`.
-- **`IDivInst`** in MIR: `idiv` is now a full MIR instruction with all passes (dce, peephole, verify, regalloc, x64 codegen).
-- **Typed function returns**: parser handles `fn add(a:i64,b:i64) -> i64`, return type is considered when generating `ret` (void → `is_void=true`).
-- All `.bp` tests pass.
-
-**v4.5.3 (CLI + `.bp` → `.exe` end-to-end):**
-- **CLI tool `bplus.zig`**: commands `bplus build <input.bp> [-o <output.exe>]` and `bplus run <input.bp>`. .bp parser builds MIR directly (fn, extern fn, return, calls, integer literals, `+` expressions, parameter-variables). Linking via `zig build-exe` with `bplusrt.obj` and `-lkernel32`.
-- **End-to-end `.bp` → `.exe`**: `hello.bp` with `extern fn print_i64(x: i64); fn main() { print_i64(42); }` → stdout `42`, exit code **0**. Leaks fixed (arena allocator). Automatic `ret 0` when no explicit `return`.
-- **Direct MIR builder**: MIR is built from parsed `.bp` lines without intermediate BIR — vreg allocation, param→vreg prologue, expression compiler.
-
-**v4.5.2 (BIR→MIR→x64→COFF→.exe pipeline):**
-- **COFF object writer** (`coff.zig`): full COFF format — IMAGE_FILE_HEADER, .text section, IMAGE_REL_AMD64_REL32 relocations, symbol table (IMAGE_SYM_CLASS_EXTERNAL), string table.
-- **Runtime library** (`bplusrt.zig`): `print_i64` via kernel32!GetStdHandle + WriteFile, compiled to `bplusrt.obj`.
-- **Extern calls**: unresolved names in COFF become undefined external symbols, resolved by linker.
-
-**v4.5.1 (CPU backend stabilisation):**
-- **100,000 / 100,000 MIR fuzz tests passed** — zero miscompiles on random programs.
-- **CMP_R64_MEM**, **ADD_R64_MEM**, **SUB_R64_MEM** — new opcodes in `x64enc.zig`.
-- **`regalloc.spilledMemOp()`** — helper for reading second operand from memory without overwriting scratch.
-
-**v4.5.0 (Linear Scan Register Allocator):**
-- **Linear Scan Register Allocator** (`regalloc.zig`): live intervals, linear scan with expire/spill, 9 GP registers, r11 reserved as spill scratch.
-- `mir_x64.zig` fully rewritten: emit-functions for each MIR instruction, unified `ra: *const RegAllocResult`.
-
-**v4.4.0:**
-- Removed `emitMfunction`. All CPU tests through unified linker `emitModule`.
-- `mir_verify.zig` — MIR verifier before emit.
-- `x64enc.disassemble` — disassembler (30+ instructions).
-
-**v4.3.2:**
-- All examples in README translated to Russian.
-- GPU IR: BackendApi, ShaderKey, PipelineKey, CompileOptions/Result.
-- DXIL backend (draft): GPU IR → HLSL → DXC subprocess → DXBC.
-
-**v4.3.1:**
-- Fixed stack alignment in entry point prologue (x64gen.zig). `stack_frame_size` is now always 8 mod 16, ensuring RSP = 0 mod 16 after saving 6 registers. Resolved `ACCESS_VIOLATION` in `MOVAPS [RSP+0x30]` when calling `MessageBoxW` via ucrtbase.dll.
-- Added Russian keyword aliases: `состояние`, `если`, `иначе`, `печать`, `всегда`, `пер`, `вход`, `запуск` etc. Usable alongside English keywords in the same file. Zero performance overhead — `StaticStringMap` (compile-time perfect hash, O(1)).
-
-**B+** compiles `.b+` / `.bp` files directly to x64 machine code and packages them into Windows PE executables (.exe).
+**B+** compiles `.plan` / `.metal` files directly to x64 machine code and packages them into Windows PE executables (.exe).
 No assemblers, linkers, or LLVM — the entire code generator is written from scratch in Zig.
 
 ---
@@ -1305,7 +1155,7 @@ No assemblers, linkers, or LLVM — the entire code generator is written from sc
    - [3.14 Kernel Functions](#314-kernel-functions)
    - [3.15 External Functions (extern)](#315-external-functions-extern)
    - [3.16 Comments](#316-comments)
-4. [`.bp` Syntax (New CPU Backend)](#4-bp-syntax-new-cpu-backend)
+4. [`.metal` Syntax (New CPU Backend)](#4-metal-syntax-new-cpu-backend)
    - [4.1 Types](#41-types)
    - [4.2 Functions](#42-functions)
    - [4.3 Extern Functions](#43-extern-functions)
@@ -1332,17 +1182,17 @@ No assemblers, linkers, or LLVM — the entire code generator is written from sc
 ## 1. Quick Start
 
 ```bash
-bpc.exe build hello.b+
+bpc.exe build hello.plan
 .\hello.exe
 ```
 
-The first command compiles `hello.b+` into `hello.exe`.
+The first command compiles `hello.plan` into `hello.exe`.
 The second runs it.
 
 Or combine both:
 
 ```bash
-bpc.exe run hello.b+
+bpc.exe run hello.plan
 ```
 
 ---
@@ -1352,20 +1202,20 @@ bpc.exe run hello.b+
 ### Syntax
 
 ```text
-bpc build <input.b+>              — compile to <input>.exe
-bpc build <input.b+> -o <out.exe> — compile with custom output name
-bpc dll   <input.b+>              — compile to DLL
-bpc run   <input.b+>              — compile and run immediately
-bpc hlsl  <input.b+>              — generate HLSL shader code
+bpc build <input.plan>              — compile to <input>.exe
+bpc build <input.plan> -o <out.exe> — compile with custom output name
+bpc dll   <input.plan>              — compile to DLL
+bpc run   <input.plan>              — compile and run immediately
+bpc hlsl  <input.plan>              — generate HLSL shader code
 ```
 
-#### `bpc build <input.b+> [-o <output.exe>]`
+#### `bpc build <input.plan> [-o <output.exe>]`
 
 What it does:
 
 | Step | Description |
 |------|-------------|
-| 1 | Reads the entire `.b+` file into memory |
+| 1 | Reads the entire `.plan` file into memory |
 | 2 | Parses source code into an AST |
 | 3 | Verifies at least one state exists |
 | 4 | Generates raw x64 machine code (no assembler) |
@@ -1380,19 +1230,19 @@ If `-o` is omitted, the output name = input name with `.exe` extension.
 
 **Examples:**
 ```bash
-bpc build traffic.b+              → traffic.exe
-bpc build traffic.b+ -o light.exe → light.exe
-bpc build source.b+               → source.exe
+bpc build traffic.plan              → traffic.exe
+bpc build traffic.plan -o light.exe → light.exe
+bpc build source.plan               → source.exe
 ```
 
-#### `bpc hlsl <input.b+> [-o <output.hlsl>]`
+#### `bpc hlsl <input.plan> [-o <output.hlsl>]`
 
 Generates HLSL shader code from a B+ file using `@bind`, `@cbuffer`, `@groupshared` annotations.
 Designed for authoring GPU compute shaders in B+ and compiling them via DXC or FXC.
 
 | Step | Description |
 |------|-------------|
-| 1 | Reads the entire `.b+` file |
+| 1 | Reads the entire `.plan` file |
 | 2 | Parses source into AST |
 | 3 | Parses `@bind(kind, reg, format)` annotations |
 | 4 | Parses `@cbuffer(var, cbName, reg, type)` annotations |
@@ -1422,11 +1272,11 @@ HLSL intrinsics (WaveActiveSum, InterlockedAdd, mad, lerp, etc.) pass through ve
 
 **Example:**
 ```bash
-bpc hlsl fsr2_easu.b+ -o fsr2_easu.hlsl
+bpc hlsl fsr2_easu.plan -o fsr2_easu.hlsl
 dxc -T cs_6_6 -E main -Fo fsr2_easu.cso fsr2_easu.hlsl
 ```
 
-#### `bpc run <input.b+>`
+#### `bpc run <input.plan>`
 
 What it does:
 
@@ -1439,8 +1289,8 @@ What it does:
 
 **Examples:**
 ```bash
-bpc run traffic.b+    — compiles and runs immediately
-bpc run hello.b+      — compiles and runs immediately
+bpc run traffic.plan    — compiles and runs immediately
+bpc run hello.plan      — compiles and runs immediately
 ```
 
 ### Exit Codes
@@ -1453,7 +1303,7 @@ bpc run hello.b+      — compiles and runs immediately
 
 ### Notes
 
-- The input file **must** have a `.b+` extension.
+- The input file **must** have a `.plan` extension.
 - If the extension is missing, the compiler still adds `.exe` to the base name.
 - The compiler does **not** use external assemblers, linkers, or LLVM — all machine code is self-generated.
 - The output is a fully valid Windows PE x64 executable.
@@ -1741,9 +1591,9 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ---
 
-## 4. `.bp` Syntax (New CPU Backend)
+## 4. `.metal` Syntax (New CPU Backend)
 
-The new `.bp` syntax uses a direct MIR pipeline (no BIR, no state machine).
+The new `.metal` syntax uses a direct MIR pipeline (no BIR, no state machine).
 Supports functions, variables, structs, pointers, `if`/`while`/`for`, compound assignment.
 
 ### 4.1 Types
@@ -1907,7 +1757,7 @@ z *= 2;
 ### 4.13 Error Messages
 
 ```
-error[UnknownVariable]: test_error.bp:4:1
+error[UnknownVariable]: test_error.metal:4:1
    4 |     print_i64(y);
        | ^
 ```
@@ -1915,11 +1765,11 @@ error[UnknownVariable]: test_error.bp:4:1
 ### 4.14 CLI
 
 ```text
-bplus build <input.bp> [-o <output.exe>]
-bplus run   <input.bp>
+bplus build <input.metal> [-o <output.exe>]
+bplus run   <input.metal>
 ```
 
-Pipeline: `.bp → parser → MIR → DCE → peephole → reg alloc → x64 → COFF .obj → zig build-exe → .exe`
+Pipeline: `.metal → parser → BIR (SSA) → mem2reg → cfgsimplify → lower to MIR → SSA destruction → copy propagation → DCE → peephole → linear scan RA → x64 → COFF .obj → zig build-exe → .exe`
 
 ---
 
@@ -2015,7 +1865,7 @@ zig build-exe src/main.zig -femit-bin=bpc.exe
 After building:
 
 ```bash
-bpc.exe run example.b+
+bpc.exe run example.plan
 ```
 
 ---
@@ -2036,7 +1886,7 @@ zig/                    — compiler source (Zig)
     compiler/
       parser/
         ast.zig         — AST types
-        parser.zig      — lexer + parser for .b+
+        parser.zig      — lexer + parser for .plan
         symbol.zig      — symbol table
         gpu_ast.zig     — GPU AST
         gpu_body_parser.zig — GPU kernel body parser
@@ -2078,14 +1928,16 @@ zig/                    — compiler source (Zig)
           bir_verify.zig — BIR verification
           bir_passes.zig — BIR passes
           bir_lower.zig — BIR → MIR lowering
-          bir_cpu.zig   — CPU-specific BIR
+          bir_cpu.zig   — CPU-specific BIR, MIR lowering
           bir_hlsl.zig  — HLSL from BIR
         mir/
-          mir.zig       — MIR (Machine IR)
+          mir.zig       — MIR (Machine IR), phi instructions
+          mir_ssa_destroy.zig — SSA destruction pass
+          mir_copy_prop.zig — copy propagation pass
           mir_dce.zig   — dead code elimination
           mir_peephole.zig — peephole optimizations
           mir_optimizer.zig — MIR optimizer
-          mir_verify.zig — MIR verification
+          mir_verify.zig — MIR verifier
           mir_x64.zig   — MIR → x64 code generation
           pipeline_gen.zig — pipeline generation
           sizes.zig     — type sizes

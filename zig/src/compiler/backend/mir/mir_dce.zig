@@ -17,6 +17,7 @@ fn dstVreg(inst: mir.MInst) ?u32 {
         .call => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .alloca => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .load => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .phi => |p| if (p.dst == .vreg) p.dst.vreg else null,
         .cmp_flags, .jmp, .jcc, .store, .ret => null,
     };
 }
@@ -24,7 +25,7 @@ fn dstVreg(inst: mir.MInst) ?u32 {
 fn isSideEffecting(inst: mir.MInst) bool {
     return switch (inst) {
         .call, .store, .ret, .jmp, .jcc, .cmp_flags => true,
-        .add, .sub, .imul, .idiv, .cmp, .alloca, .load => false,
+        .add, .sub, .imul, .idiv, .cmp, .alloca, .load, .phi => false,
         .mov => |m| m.dst != .vreg,
     };
 }
@@ -73,6 +74,11 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
         },
         .ret => |m| {
             if (m.val == .vreg) { buf[n] = m.val.vreg; n += 1; }
+        },
+        .phi => |p| {
+            for (p.incoming) |inc| {
+                if (inc.src == .vreg) { buf[n] = inc.src.vreg; n += 1; }
+            }
         },
         .jmp, .jcc, .alloca => {},
     }

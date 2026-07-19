@@ -1900,7 +1900,7 @@ fn emitStateEnterFuncs(p: *PendingOutput, program: ast.ProgramNode) !void {
         const pc = @min(lv.items.len, 3);
         for (0..pc) |ti| {
             const t = lv.items[ti];
-            const ti_idx = p.state_index_map.get(t.target).?;
+            const ti_idx = p.state_index_map.get(t.target) orelse return error.UndefinedStateTarget;
             const ts = program.states.items[ti_idx];
             const level: i32 = if (ts.cache_policy) |cp| blk: { if (std.mem.eql(u8, cp, "L2")) break :blk 2; if (std.mem.eql(u8, cp, "L3")) break :blk 3; break :blk 1; } else 1;
             if (p.state_vars.get(t.target)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, @as(i32, @intCast(sv.layout_offset)), level, p.state_base_reg); }
@@ -1947,7 +1947,7 @@ fn analyzeTraces(program: ast.ProgramNode, state_index_map: std.StringHashMap(us
             const prev = program.states.items[si + chain_len - 1];
             const has_always = prev.transitions.items.len == 1 and prev.transitions.items[0].is_always and (prev.transitions.items[0].event_name == null or prev.transitions.items[0].event_name.?.len == 0);
             if (!has_always) break;
-            const prev_ti = state_index_map.get(prev.transitions.items[0].target).?;
+            const prev_ti = state_index_map.get(prev.transitions.items[0].target) orelse return error.UndefinedStateTarget;
             if (prev_ti != si + chain_len) break;
             const trans_hw = prev.transitions.items[0].hot_weight orelse prev.hot_weight orelse 0.5;
             if (trans_hw < 0.4) break;
@@ -2504,7 +2504,7 @@ fn emitCompiledEventMatch(p: *PendingOutput, en: []const u8, done_label: u32, ws
 }
 
 fn changeToState(p: *PendingOutput, target: []const u8, current_si: usize, program: ast.ProgramNode, jump_to_scheduler: bool, fuse: bool, inline_enter: bool) !void {
-    const ti = p.state_index_map.get(target).?;
+    const ti = p.state_index_map.get(target) orelse return error.UndefinedStateTarget;
     if (!fuse) try emitIntrinsicCall(p, rt.Intrinsic.arena_l1_reset);
     const cur_state = program.states.items[current_si];
     if (cur_state.exit_body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, cur_state.name); }
@@ -3254,7 +3254,7 @@ fn emitPrefetchColdData(p: *PendingOutput, state: *const ast.StateDefNode) !void
 fn emitPrefetchForTransitionCacheAware(p: *PendingOutput, t: *const ast.TransitionNode) !void {
     const hw = t.hot_weight orelse 0.5;
     const level: i32 = if (hw >= 0.8) 1 else if (hw >= 0.4) 2 else 0;
-    const ti = p.state_index_map.get(t.target).?;
+    const ti = p.state_index_map.get(t.target) orelse return error.UndefinedStateTarget;
     if (p.state_vars.get(t.target)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, @as(i32, @intCast(sv.layout_offset)), level, p.state_base_reg); }
     try emitPrefetch(p, p.en_id[ti]);
 }

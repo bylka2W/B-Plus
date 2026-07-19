@@ -6,6 +6,7 @@ pub const VerifyError = error{
     MissingTerminator,
     UnreachableBlock,
     UndefinedVReg,
+    PhiNotEliminated,
 };
 
 fn checkDefined(defs: *std.AutoHashMap(u32, void), op: mir.MOperand) !void {
@@ -29,6 +30,7 @@ fn collectDefinedVRegs(mfunc: *const mir.MFunction) std.AutoHashMap(u32, void) {
                 .call => |c| c.dst,
                 .alloca => |a| a.dst,
                 .load => |l| l.dst,
+                .phi => |p| p.dst,
                 else => continue,
             };
             if (dst == .vreg) defs.put(dst.vreg, {}) catch {};
@@ -61,6 +63,11 @@ fn checkUsedVRegs(inst: mir.MInst, defs: *std.AutoHashMap(u32, void)) !void {
             try checkDefined(defs, s.src);
         },
         .ret => |r| try checkDefined(defs, r.val),
+        .phi => |p| {
+            for (p.incoming) |inc| {
+                try checkDefined(defs, inc.src);
+            }
+        },
         else => {},
     }
 }
@@ -134,5 +141,13 @@ pub fn verifyMir(mfunc: *const mir.MFunction) !void {
 
     for (0..num_blocks) |i| {
         if (!visited.contains(i)) return error.UnreachableBlock;
+    }
+}
+
+pub fn verifyNoPhis(mfunc: *const mir.MFunction) !void {
+    for (mfunc.blocks.items) |*block| {
+        for (block.instrs.items) |inst| {
+            if (inst == .phi) return error.PhiNotEliminated;
+        }
     }
 }

@@ -3,12 +3,6 @@ const bir = @import("bir.zig");
 const mir = @import("../mir/mir.zig");
 const Op = bir.Op;
 
-const PhiMove = struct {
-    pred_block: usize,
-    dst: u32,
-    src: u32,
-};
-
 const CmpDef = struct { op0: u32, op1: u32, cc: mir.CondCode };
 
 fn findCmpDef(bir_func: *const bir.Function, val: u32) ?CmpDef {
@@ -44,6 +38,12 @@ pub fn lowerModuleToMir(allocator: std.mem.Allocator, mod: *const bir.Module) ![
     return mfuncs.toOwnedSlice();
 }
 
+fn allocValue(next_vreg: *u32) u32 {
+    const v = next_vreg.*;
+    next_vreg.* += 1;
+    return v;
+}
+
 pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTable, bir_func: *const bir.Function) !mir.MFunction {
     var mfunc = mir.MFunction.init(allocator, bir_func.name);
     errdefer mfunc.deinit();
@@ -58,8 +58,7 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
     }
 
     const NO_VALUE = bir.NO_VALUE;
-    var phi_moves = std.ArrayList(PhiMove).init(allocator);
-    defer phi_moves.deinit();
+    var next_vreg: u32 = bir_func.locals_count + 1;
 
     for (bir_func.blocks.items) |bir_block| {
         var mblock = mir.MBlock{
@@ -94,13 +93,17 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
 
                 .phi => {
                     const inc = inst.data.phi_incoming;
-                    for (inc) |incoming| {
-                        try phi_moves.append(.{
+                    const mir_incoming = try allocator.alloc(mir.PhiIncoming, inc.len);
+                    for (inc, 0..) |incoming, ii| {
+                        mir_incoming[ii] = .{
+                            .src = .{ .vreg = incoming.value },
                             .pred_block = @intCast(incoming.block),
-                            .dst = result,
-                            .src = incoming.value,
-                        });
+                        };
                     }
+                    try mblock.instrs.append(.{ .phi = .{
+                        .dst = .{ .vreg = result },
+                        .incoming = mir_incoming,
+                    } });
                 },
 
                 .add => {
@@ -125,6 +128,35 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     const rhs = inst.operands[1];
                     try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
                     try mblock.instrs.append(.{ .imul = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = rhs } } });
+                },
+
+                .div => {
+                    if (result == NO_VALUE or inst.operands.len < 2) continue;
+                    const lhs = inst.operands[0];
+                    const rhs = inst.operands[1];
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
+                    try mblock.instrs.append(.{ .idiv = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = rhs } } });
+                },
+
+                .mod => {
+                    if (result == NO_VALUE or inst.operands.len < 2) continue;
+                    const lhs = inst.operands[0];
+                    const rhs = inst.operands[1];
+                    const q = allocValue(&next_vreg);
+                    const t = allocValue(&next_vreg);
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = q }, .src = .{ .vreg = lhs } } });
+                    try mblock.instrs.append(.{ .idiv = .{ .dst = .{ .vreg = q }, .src = .{ .vreg = rhs } } });
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = t }, .src = .{ .vreg = q } } });
+                    try mblock.instrs.append(.{ .imul = .{ .dst = .{ .vreg = t }, .src = .{ .vreg = rhs } } });
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
+                    try mblock.instrs.append(.{ .sub = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = t } } });
+                },
+
+                .neg => {
+                    if (result == NO_VALUE or inst.operands.len < 1) continue;
+                    const operand = inst.operands[0];
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
+                    try mblock.instrs.append(.{ .sub = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = operand } } });
                 },
 
                 .eq => if (result != NO_VALUE and inst.operands.len >= 2) try mblock.instrs.append(.{ .cmp = .{ .cc = .eq, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } }),
@@ -206,25 +238,6 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
         }
 
         try mfunc.blocks.append(mblock);
-    }
-
-    // Phi lowering: insert copy moves at end of predecessor blocks before terminators
-    for (phi_moves.items) |pm| {
-        if (pm.pred_block >= mfunc.blocks.items.len) continue;
-        const pred = &mfunc.blocks.items[pm.pred_block];
-        const copy_inst = mir.MInst{ .mov = .{ .dst = .{ .vreg = pm.dst }, .src = .{ .vreg = pm.src } } };
-        // Find first terminator to insert before it
-        var insert_idx: usize = pred.instrs.items.len;
-        for (pred.instrs.items, 0..) |mi, i| {
-            switch (mi) {
-                .jmp, .jcc, .cmp_flags, .ret => {
-                    insert_idx = i;
-                    break;
-                },
-                else => {},
-            }
-        }
-        try pred.instrs.insert(insert_idx, copy_inst);
     }
 
     return mfunc;

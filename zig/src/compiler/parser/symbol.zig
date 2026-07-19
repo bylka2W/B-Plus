@@ -52,7 +52,6 @@ pub const SymbolTable = struct {
     }
 
     pub fn filterByKind(self: *const SymbolTable, kind: SymbolKind) struct { items: []const Symbol } {
-        // Returns a view slice — caller must not outlive the table
         var result = std.ArrayList(Symbol).init(self.allocator);
         for (self.symbols.items) |s| {
             if (s.kind == kind) result.append(s) catch {};

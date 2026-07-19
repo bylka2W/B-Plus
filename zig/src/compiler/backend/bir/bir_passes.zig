@@ -8,6 +8,8 @@ const bir_memory_ssa = @import("bir_memory_ssa.zig");
 const bir_licm = @import("bir_licm.zig");
 const bir_unroll = @import("bir_unroll.zig");
 const bir_verify = @import("bir_verify.zig");
+const bir_mem2reg = @import("bir_mem2reg.zig");
+const bir_cfgsimplify = @import("bir_cfgsimplify.zig");
 const Module = bir.Module;
 const Op = bir.Op;
 const Inst = bir.Inst;
@@ -654,6 +656,10 @@ fn runVerify(module: *Module, allocator: Allocator) anyerror!void {
 pub const StandardPasses = struct {
     pub fn init(allocator: Allocator) bir.PassManager {
         var pm = bir.PassManager.init(allocator);
+        pm.addPass(VerifyPass) catch {};
+        pm.addPass(bir_mem2reg.Mem2RegPass) catch {};
+        pm.addPass(VerifyPass) catch {};
+        pm.addPass(bir_cfgsimplify.CFGSimplifyPass) catch {};
         pm.addPass(VerifyPass) catch {};
         pm.addPass(ConstantFoldingPass) catch {};
         pm.addPass(VerifyPass) catch {};

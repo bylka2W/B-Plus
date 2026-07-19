@@ -123,6 +123,12 @@ fn computeLiveIntervals(
                 .ret => |r| {
                     reads[read_count] = vregOf(r.val); read_count += 1;
                 },
+                .phi => |p| {
+                    writes[write_count] = vregOf(p.dst); write_count += 1;
+                    for (p.incoming) |inc| {
+                        reads[read_count] = vregOf(inc.src); read_count += 1;
+                    }
+                },
             }
 
             for (reads[0..read_count]) |vreg| {

@@ -345,7 +345,7 @@ pub const Parser = struct {
 
     fn stringText(p: *Parser) []const u8 {
         const s = p.src[p.cur_tok.start..p.cur_tok.end];
-        if (s.len > 0 and s[0] == '"' and s[s.len - 1] == '"')
+        if (s.len > 2 and s[0] == '"' and s[s.len - 1] == '"')
             return s[1 .. s.len - 1];
         return s;
     }
@@ -888,6 +888,7 @@ pub const Parser = struct {
                     scan_pos += 1;
                 }
             }
+            if (scan_pos >= p.src.len) break;
             if (p.src[scan_pos] == '{') depth += 1;
             if (p.src[scan_pos] == '}') depth -= 1;
             scan_pos += 1;
@@ -969,6 +970,7 @@ pub const Parser = struct {
                         scan_pos += 1;
                     }
                 }
+                if (scan_pos >= p.src.len) break;
                 if (p.src[scan_pos] == '{') depth += 1;
                 if (p.src[scan_pos] == '}') depth -= 1;
                 scan_pos += 1;
@@ -1127,6 +1129,7 @@ pub const Parser = struct {
                             scan_pos += 1;
                         }
                     }
+                    if (scan_pos >= p.src.len) break;
                     if (p.src[scan_pos] == '{') depth += 1;
                     if (p.src[scan_pos] == '}') depth -= 1;
                     if (depth > 0) scan_pos += 1;
@@ -1170,6 +1173,7 @@ pub const Parser = struct {
                             scan_pos += 1;
                         }
                     }
+                    if (scan_pos >= p.src.len) break;
                     if (p.src[scan_pos] == '{') depth += 1;
                     if (p.src[scan_pos] == '}') depth -= 1;
                     if (depth > 0) scan_pos += 1;
@@ -1297,6 +1301,7 @@ pub const Parser = struct {
                     scan_pos += 1;
                 }
             }
+            if (scan_pos >= p.src.len) break;
             if (p.src[scan_pos] == '{') depth += 1;
             if (p.src[scan_pos] == '}') depth -= 1;
             scan_pos += 1;
@@ -1325,7 +1330,7 @@ pub const Parser = struct {
     fn parseStringLiteral(p: *Parser) ![]const u8 {
         const s = p.src[p.cur_tok.start..p.cur_tok.end];
         p.advance();
-        if (s.len > 0 and s[0] == '"' and s[s.len - 1] == '"')
+        if (s.len > 2 and s[0] == '"' and s[s.len - 1] == '"')
             return s[1 .. s.len - 1];
         return s;
     }

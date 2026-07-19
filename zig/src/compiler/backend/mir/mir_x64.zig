@@ -173,6 +173,7 @@ pub fn emitSingleFunction(
                 .store => |s| try emitStore(code, &ra, s, scratch),
                 .call => |c| try emitCall(code, call_fixups, &ra, c, scratch),
                 .ret => |r| try emitRet(code, &ra, r, scratch, used_callee_saved.items),
+                .phi => unreachable,
             }
         }
     }
@@ -458,9 +459,18 @@ fn emitCmpFlags(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, cf
     const b_val = try resolveOpOrSpill(code, ra, cf.b, scratch);
 
     if (b_val.reg >= 0) {
-        try x64.emit(code, .CMP_R64_R64, &.{ a_val, b_val });
+        if (a_val.reg >= 0) {
+            try x64.emit(code, .CMP_R64_R64, &.{ a_val, b_val });
+        } else {
+            try x64.emit(code, .CMP_R64_IMM32, &.{ b_val, a_val });
+        }
     } else {
-        try x64.emit(code, .CMP_R64_IMM32, &.{ a_val, b_val });
+        if (a_val.reg >= 0) {
+            try x64.emit(code, .CMP_R64_IMM32, &.{ a_val, b_val });
+        } else {
+            try x64.emit(code, .MOV_R64_IMM64, &.{ .{ .reg = scratch }, a_val });
+            try x64.emit(code, .CMP_R64_IMM32, &.{ .{ .reg = scratch }, b_val });
+        }
     }
 }
 

@@ -150,3 +150,136 @@ fn getRPOPos(cfg: *const CFG, bid: bir.BlockId) ?usize {
     }
     return null;
 }
+
+// ─── Validation ───
+
+pub const ValidationError = error{
+    EntryHasPredecessor,
+    MissingTerminator,
+    ExtraTerminator,
+    InvalidBranchTarget,
+    UnreachableBlock,
+    BlockMissingInCFG,
+};
+
+pub fn validate(cfg: *const CFG, func: *const bir.Function) ValidationError!void {
+    if (cfg.entry >= cfg.blocks.items.len) return error.BlockMissingInCFG;
+    if (cfg.get(cfg.entry).predecessors.items.len > 0) return error.EntryHasPredecessor;
+
+    for (func.blocks.items, 0..) |*block, bi| {
+        const bid = @as(bir.BlockId, @intCast(bi));
+        if (bid >= cfg.blocks.items.len) return error.BlockMissingInCFG;
+
+        const n = block.instrs.items.len;
+        if (n == 0) continue;
+
+        var term_count: u32 = 0;
+        for (block.instrs.items) |inst| {
+            if (isTerminator(inst.op)) {
+                term_count += 1;
+                if (term_count > 1) return error.ExtraTerminator;
+
+                switch (inst.op) {
+                    .br => {
+                        const target = inst.data.block_target;
+                        if (target >= func.blocks.items.len) return error.InvalidBranchTarget;
+                    },
+                    .cond_br => {
+                        const cb = inst.data.cond_branch;
+                        if (cb.then_block >= func.blocks.items.len) return error.InvalidBranchTarget;
+                        if (cb.else_block >= func.blocks.items.len) return error.InvalidBranchTarget;
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        if (n > 0) {
+            const last = &block.instrs.items[n - 1];
+            if (!isTerminator(last.op)) return error.MissingTerminator;
+        }
+    }
+
+    for (cfg.blocks.items) |bi| {
+        for (bi.successors.items) |succ| {
+            if (succ >= cfg.blocks.items.len) return error.InvalidBranchTarget;
+        }
+        for (bi.predecessors.items) |pred| {
+            if (pred >= cfg.blocks.items.len) return error.InvalidBranchTarget;
+        }
+    }
+}
+
+fn isTerminator(op: bir.Op) bool {
+    return switch (op) {
+        .br, .cond_br, .ret, .unreachable_op => true,
+        else => false,
+    };
+}
+
+// ─── CFG Mutation Helpers ───
+
+pub fn getExitBlocks(cfg: *const CFG, func: *const bir.Function) std.ArrayList(bir.BlockId) {
+    var exits = std.ArrayList(bir.BlockId).init(cfg.allocator);
+    for (func.blocks.items, 0..) |*block, bi| {
+        if (block.instrs.items.len == 0) continue;
+        const last = block.instrs.items[block.instrs.items.len - 1];
+        if (last.op == .ret or last.op == .unreachable_op) {
+            exits.append(@as(bir.BlockId, @intCast(bi))) catch {};
+        }
+    }
+    return exits;
+}
+
+pub fn getBlockSuccessors(func: *const bir.Function, bid: bir.BlockId) []const bir.BlockId {
+    const block = &func.blocks.items[bid];
+    if (block.instrs.items.len == 0) return &.{};
+    const last = &block.instrs.items[block.instrs.items.len - 1];
+    return switch (last.op) {
+        .br => &.{last.data.block_target},
+        .cond_br => &.{ last.data.cond_branch.then_block, last.data.cond_branch.else_block },
+        else => &.{},
+    };
+}
+
+pub fn replaceSuccessor(cfg: *CFG, from: bir.BlockId, old_succ: bir.BlockId, new_succ: bir.BlockId) void {
+    const bi = cfg.getMut(from);
+    for (bi.successors.items, 0..) |s, i| {
+        if (s == old_succ) {
+            bi.successors.items[i] = new_succ;
+            break;
+        }
+    }
+    const pred_list = cfg.getMut(new_succ);
+    for (pred_list.predecessors.items, 0..) |p, i| {
+        if (p == from) {
+            _ = pred_list.predecessors.swapRemove(i);
+            break;
+        }
+    }
+    pred_list.predecessors.append(from) catch {};
+}
+
+pub fn removeBlockFromCFG(cfg: *CFG, bid: bir.BlockId) void {
+    const bi = cfg.getMut(bid);
+    for (bi.predecessors.items) |pred| {
+        const pred_bi = cfg.getMut(pred);
+        for (pred_bi.successors.items, 0..) |s, i| {
+            if (s == bid) {
+                _ = pred_bi.successors.swapRemove(i);
+                break;
+            }
+        }
+    }
+    for (bi.successors.items) |succ| {
+        const succ_bi = cfg.getMut(succ);
+        for (succ_bi.predecessors.items, 0..) |p, i| {
+            if (p == bid) {
+                _ = succ_bi.predecessors.swapRemove(i);
+                break;
+            }
+        }
+    }
+    bi.predecessors.clearRetainingCapacity();
+    bi.successors.clearRetainingCapacity();
+}

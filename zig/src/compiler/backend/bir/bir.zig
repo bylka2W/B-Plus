@@ -544,10 +544,18 @@ pub const Module = struct {
         const fn_ptr = self.getFunctionMut(func_id);
         const val = fn_ptr.createValue();
 
-        const idx = fn_ptr.blocks.items[block_id].instrs.items.len;
+        var insert_idx: u32 = 0;
+        for (fn_ptr.blocks.items[block_id].instrs.items) |inst| {
+            if (inst.op == .phi) {
+                insert_idx += 1;
+            } else {
+                break;
+            }
+        }
+
         fn_ptr.getValueInfo(val).def = .{
             .block = block_id,
-            .idx = @as(u32, @intCast(idx)),
+            .idx = insert_idx,
         };
 
         for (incoming) |inc| {
@@ -556,13 +564,24 @@ pub const Module = struct {
             }
         }
 
-        try fn_ptr.blocks.items[block_id].instrs.append(.{
+        try fn_ptr.blocks.items[block_id].instrs.insert(insert_idx, .{
             .op = .phi,
             .ty = ty,
             .result = val,
             .operands = &.{},
             .data = .{ .phi_incoming = incoming },
         });
+
+        if (insert_idx < @as(u32, @intCast(fn_ptr.blocks.items[block_id].instrs.items.len - 1))) {
+            var bi: u32 = insert_idx + 1;
+            while (bi < @as(u32, @intCast(fn_ptr.blocks.items[block_id].instrs.items.len))) : (bi += 1) {
+                const shifted = &fn_ptr.blocks.items[block_id].instrs.items[bi];
+                if (shifted.result != NO_VALUE) {
+                    fn_ptr.getValueInfo(shifted.result).def.idx = bi;
+                }
+            }
+        }
+
         return val;
     }
 
@@ -646,7 +665,7 @@ pub const Module = struct {
         }
 
         inst.deinit(self.allocator);
-        _ = block.instrs.swapRemove(idx);
+        _ = block.instrs.orderedRemove(idx);
     }
 };
 

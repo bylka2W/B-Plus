@@ -1,24 +1,28 @@
 const std = @import("std");
-const ast = @import("ast.zig");
-const parser = @import("parser.zig");
-const x64gen = @import("x64gen.zig");
-const pe = @import("pe.zig");
-const test_runner = @import("test_runner.zig");
-const hlslgen = @import("hlslgen.zig");
-const gpu_ast = @import("gpu_ast.zig");
-const gpu_ir = @import("gpu_ir.zig");
-const gpu_sema = @import("gpu_sema.zig");
-const gpu_lower = @import("gpu_lower.zig");
-const gpu_dxil = @import("gpu_dxil.zig");
-const gpu_cpp = @import("gpu_cpp.zig");
-const bir = @import("bir.zig");
-const bir_frontend = @import("bir_frontend.zig");
-const bir_passes = @import("bir_passes.zig");
-const bir_lower = @import("bir_lower.zig");
-const bir_cfg = @import("bir_cfg.zig");
-const bir_dominators = @import("bir_dominators.zig");
-const bir_loops = @import("bir_loops.zig");
-const bir_hlsl = @import("bir_hlsl.zig");
+const ast = @import("compiler/parser/ast.zig");
+const parser = @import("compiler/parser/parser.zig");
+const x64gen = @import("compiler/backend/x64/x64gen.zig");
+const pe = @import("compiler/backend/pe/pe.zig");
+const test_runner = @import("compiler/parser/test_runner.zig");
+const sema_mod = @import("compiler/parser/sema.zig");
+const hlslgen = @import("compiler/parser/hlslgen.zig");
+const gpu_ast = @import("compiler/parser/gpu_ast.zig");
+const gpu_ir = @import("compiler/backend/gpu/gpu_ir.zig");
+const gpu_sema = @import("compiler/parser/gpu_sema.zig");
+const gpu_lower = @import("compiler/backend/gpu/gpu_lower.zig");
+const gpu_dxil = @import("compiler/backend/gpu/gpu_dxil.zig");
+const gpu_cpp = @import("compiler/backend/gpu/gpu_cpp.zig");
+const bir = @import("compiler/backend/bir/bir.zig");
+const bir_frontend = @import("compiler/backend/bir/bir_frontend.zig");
+const bir_passes = @import("compiler/backend/bir/bir_passes.zig");
+const bir_lower = @import("compiler/backend/bir/bir_lower.zig");
+const bir_cfg = @import("compiler/backend/bir/bir_cfg.zig");
+const bir_dominators = @import("compiler/backend/bir/bir_dominators.zig");
+const bir_loops = @import("compiler/backend/bir/bir_loops.zig");
+const bir_hlsl = @import("compiler/backend/bir/bir_hlsl.zig");
+
+const bir_bplus_frontend = @import("compiler/backend/bir/bir_bplus_frontend.zig");
+const bir_lower_dump = @import("compiler/backend/bir/bir_lower.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -40,6 +44,7 @@ pub fn main() !void {
         try stderr.writeAll("       bpc cfg   <pipeline.b+>\n");
         try stderr.writeAll("       bpc dom   <pipeline.b+>\n");
         try stderr.writeAll("       bpc loops <pipeline.b+>\n");
+        try stderr.writeAll("       bpc bpl   <input.b+>\n");
         std.process.exit(1);
     }
 
@@ -113,8 +118,8 @@ pub fn main() !void {
             try gpuCompileAndWrite(arena_alloc, src, input_path, output_path, .cpp);
         } else {
             // General B+ → full C++ via cppgen
-            const cppgen = @import("cppgen.zig");
-            var p = parser.Parser.init(arena_alloc, src);
+            const cppgen = @import("compiler/parser/cppgen.zig");
+            var p = parser.Parser.init(arena_alloc, src, input_path);
             const program = try p.parse();
             const output = try cppgen.generate(arena_alloc, program);
             const out_path = output_path orelse blk: {
@@ -144,10 +149,10 @@ pub fn main() !void {
 
         // Pipeline description → BIR → HLSL
         {
-            const pipeline_gen_m = @import("pipeline_gen.zig");
+            const pipeline_gen_m = @import("compiler/backend/mir/pipeline_gen.zig");
             const pipeline = pipeline_gen_m.parsePipeline(arena_alloc, src) catch {
                 // Fallback to old HLSLgen
-                var p2 = parser.Parser.init(arena_alloc, src);
+                var p2 = parser.Parser.init(arena_alloc, src, input_path);
                 const prog = try p2.parse();
                 const output = try hlslgen.generate(arena_alloc, prog, src);
                 const out_path = output_path orelse blk: {
@@ -182,7 +187,7 @@ pub fn main() !void {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        const pipeline_gen_m = @import("pipeline_gen.zig");
+        const pipeline_gen_m = @import("compiler/backend/mir/pipeline_gen.zig");
         const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
 
         var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
@@ -200,7 +205,7 @@ pub fn main() !void {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        const pipeline_gen_m = @import("pipeline_gen.zig");
+        const pipeline_gen_m = @import("compiler/backend/mir/pipeline_gen.zig");
         const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
 
         var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
@@ -223,7 +228,7 @@ pub fn main() !void {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        const pipeline_gen_m = @import("pipeline_gen.zig");
+        const pipeline_gen_m = @import("compiler/backend/mir/pipeline_gen.zig");
         const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
 
         var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
@@ -249,7 +254,7 @@ pub fn main() !void {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        const pipeline_gen_m = @import("pipeline_gen.zig");
+        const pipeline_gen_m = @import("compiler/backend/mir/pipeline_gen.zig");
         const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
 
         var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
@@ -269,13 +274,36 @@ pub fn main() !void {
         return;
     }
 
+    // BPL mode: lower B+ source to BIR and dump
+    if (std.mem.eql(u8, command, "bpl")) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        var p = parser.Parser.init(arena_alloc, src, input_path);
+        var program = try p.parse();
+        defer program.deinit();
+
+        sema_mod.analyze(arena_alloc, program, src, input_path) catch |err| {
+            std.log.err("semantic analysis failed: {}", .{err});
+            std.process.exit(1);
+        };
+
+        var module = try bir_bplus_frontend.lowerProgram(arena_alloc, &program);
+        defer module.deinit();
+
+        const stdout = std.io.getStdOut().writer();
+        try bir_lower_dump.dumpModule(&module, stdout);
+        return;
+    }
+
     // Build mode: generate C++ UE5 plugin code from pipeline description
     if (std.mem.eql(u8, command, "build")) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        const pipeline_gen = @import("pipeline_gen.zig");
+        const pipeline_gen = @import("compiler/backend/mir/pipeline_gen.zig");
         const pipeline = try pipeline_gen.parsePipeline(arena_alloc, src);
 
         // Output dir = -o <dir> or same dir as input file
@@ -330,9 +358,15 @@ pub fn main() !void {
         return;
     }
 
-    var p = parser.Parser.init(allocator, src);
+    var p = parser.Parser.init(allocator, src, input_path);
     var program = try p.parse();
     defer program.deinit();
+
+    // ── Semantic analysis pass ──
+    sema_mod.analyze(allocator, program, src, input_path) catch |err| {
+        std.log.err("semantic analysis failed: {}", .{err});
+        std.process.exit(1);
+    };
 
     const is_dll = std.mem.eql(u8, command, "dll");
 
@@ -398,7 +432,7 @@ pub fn main() !void {
 }
 
 fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_path: []const u8, output_path_arg: ?[]const u8, target: gpu_ir.BackendType) !void {
-    var p = parser.Parser.init(arena_alloc, src);
+    var p = parser.Parser.init(arena_alloc, src, input_path);
     const kernel = p.parseGpuKernelBlock() catch |err| {
         const stderr = std.io.getStdErr().writer();
         try stderr.print("GPU parse error: {}\n", .{err});
