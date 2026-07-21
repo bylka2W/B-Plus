@@ -1,5 +1,5 @@
-const std = @import("std");
-const gpu_types = @import("../compiler/backend/gpu/gpu_types.zig");
+﻿const std = @import("std");
+const gpu_types = @import("../compiler/gpu/gpu_types.zig");
 const render_graph = @import("../render/render_graph.zig");
 
 pub const ResolvedPass = struct {

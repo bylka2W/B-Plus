@@ -247,7 +247,7 @@ fn testLinearCFG(alloc: std.mem.Allocator, stdout: anytype) !void {
     var mod = try buildSimpleAddModule(alloc);
     defer mod.deinit();
 
-    const func = mod.getFunction(0);
+    const func = mod.getFunctionMut(0);
     var cfg = try bir_cfg.buildCFG(alloc, func);
     defer cfg.deinit();
 
@@ -264,7 +264,7 @@ fn testIfElseCFG(alloc: std.mem.Allocator, stdout: anytype) !void {
     var mod = try buildIfElseModule(alloc);
     defer mod.deinit();
 
-    const func = mod.getFunction(0);
+    const func = mod.getFunctionMut(0);
     var cfg = try bir_cfg.buildCFG(alloc, func);
     defer cfg.deinit();
 
@@ -288,7 +288,7 @@ fn testLoopCFG(alloc: std.mem.Allocator, stdout: anytype) !void {
     var mod = try buildLoopModule(alloc);
     defer mod.deinit();
 
-    const func = mod.getFunction(0);
+    const func = mod.getFunctionMut(0);
     var cfg = try bir_cfg.buildCFG(alloc, func);
     defer cfg.deinit();
 
@@ -325,7 +325,7 @@ fn testDominators(alloc: std.mem.Allocator, stdout: anytype) !void {
     var mod = try buildDiamondModule(alloc);
     defer mod.deinit();
 
-    const func = mod.getFunction(0);
+    const func = mod.getFunctionMut(0);
     var cfg = try bir_cfg.buildCFG(alloc, func);
     defer cfg.deinit();
 
@@ -355,7 +355,7 @@ fn testDominanceFrontiers(alloc: std.mem.Allocator, stdout: anytype) !void {
     var mod = try buildDiamondModule(alloc);
     defer mod.deinit();
 
-    const func = mod.getFunction(0);
+    const func = mod.getFunctionMut(0);
     var cfg = try bir_cfg.buildCFG(alloc, func);
     defer cfg.deinit();
 
@@ -382,7 +382,7 @@ fn testCFGValidation(alloc: std.mem.Allocator, stdout: anytype) !void {
     var mod = try buildIfElseModule(alloc);
     defer mod.deinit();
 
-    const func = mod.getFunction(0);
+    const func = mod.getFunctionMut(0);
     var cfg = try bir_cfg.buildCFG(alloc, func);
     defer cfg.deinit();
 
@@ -405,7 +405,7 @@ fn testConstantFolding(alloc: std.mem.Allocator, stdout: anytype) !void {
     var pm = bir_passes.ConstantFoldingPass;
     _ = try pm.run(&mod, alloc);
 
-    const func = mod.getFunction(0);
+    const func = mod.getFunctionMut(0);
     const block = &func.blocks.items[0];
 
     var found_const30 = false;
@@ -430,7 +430,7 @@ fn testDCE(alloc: std.mem.Allocator, stdout: anytype) !void {
     var mod = try buildSimpleAddModule(alloc);
     defer mod.deinit();
 
-    const func = mod.getFunction(0);
+    const func = mod.getFunctionMut(0);
     const instrs_before = func.blocks.items[0].instrs.items.len;
 
     var pm = bir_passes.DCEPass;
@@ -452,7 +452,7 @@ fn testFullPipeline(alloc: std.mem.Allocator, stdout: anytype) !void {
     defer pm.deinit();
     try pm.run(&mod);
 
-    const func = mod.getFunction(0);
+    const func = mod.getFunctionMut(0);
     try stdout.print("  blocks: {d}, values: {d}\n", .{ func.blocks.items.len, func.locals_count });
 
     try stdout.print("  OK\n", .{});

@@ -38,7 +38,7 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                     }
                     i += 1;
                 },
-                .add, .sub, .imul, .idiv => {
+                .add, .sub, .imul, .idiv, .@"and", .@"or", .xor => {
                     replaceOpWithResolved(map, &block.instrs.items[i]);
                     if (dstOf(block.instrs.items[i])) |dv| invalidatePointers(&map, dv);
                     i += 1;
@@ -54,6 +54,12 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                     const cf = &block.instrs.items[i].cmp_flags;
                     cf.a = resolve(map, cf.a);
                     cf.b = resolve(map, cf.b);
+                    i += 1;
+                },
+                .test_flags => {
+                    const tf = &block.instrs.items[i].test_flags;
+                    tf.a = resolve(map, tf.a);
+                    tf.b = resolve(map, tf.b);
                     i += 1;
                 },
                 .load => {
@@ -82,6 +88,69 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                     i += 1;
                 },
                 .jmp, .jcc, .alloca, .phi => i += 1,
+                .lea => {
+                    const l = &block.instrs.items[i].lea;
+                    l.base = resolveVregOnly(map, l.base);
+                    l.index = resolveVregOnly(map, l.index);
+                    if (dstOf(block.instrs.items[i])) |dv| invalidatePointers(&map, dv);
+                    i += 1;
+                },
+                .shl, .shr, .sar => {
+                    replaceShiftAmount(map, &block.instrs.items[i]);
+                    if (dstOf(block.instrs.items[i])) |dv| invalidatePointers(&map, dv);
+                    i += 1;
+                },
+                .not_op, .neg_op => {
+                    if (dstOf(block.instrs.items[i])) |dv| invalidatePointers(&map, dv);
+                    i += 1;
+                },
+                .fadd, .fsub, .fmul, .fdiv => {
+                    const f = &block.instrs.items[i];
+                    const fb = switch (f.*) {
+                        .fadd => |*v| v,
+                        .fsub => |*v| v,
+                        .fmul => |*v| v,
+                        .fdiv => |*v| v,
+                        else => unreachable,
+                    };
+                    fb.a = resolve(map, fb.a);
+                    fb.b = resolve(map, fb.b);
+                    if (fb.dst == .vreg) invalidatePointers(&map, fb.dst.vreg);
+                    i += 1;
+                },
+                .fneg_op, .fsqrt_op => {
+                    if (dstOf(block.instrs.items[i])) |dv| invalidatePointers(&map, dv);
+                    i += 1;
+                },
+                .fcmp => {
+                    const c = &block.instrs.items[i].fcmp;
+                    c.a = resolve(map, c.a);
+                    c.b = resolve(map, c.b);
+                    if (c.dst == .vreg) invalidatePointers(&map, c.dst.vreg);
+                    i += 1;
+                },
+                .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => {
+                    const c = &block.instrs.items[i];
+                    const ci = switch (c.*) {
+                        .sitofp => |*v| v,
+                        .fptosi => |*v| v,
+                        .fpext => |*v| v,
+                        .fptrunc => |*v| v,
+                        .sext_op => |*v| v,
+                        .zext_op => |*v| v,
+                        .trunc_op => |*v| v,
+                        else => unreachable,
+                    };
+                    ci.src = resolve(map, ci.src);
+                    if (ci.dst == .vreg) invalidatePointers(&map, ci.dst.vreg);
+                    i += 1;
+                },
+                .select => {
+                    const s = &block.instrs.items[i].select;
+                    s.src = resolve(map, s.src);
+                    if (s.dst == .vreg) invalidatePointers(&map, s.dst.vreg);
+                    i += 1;
+                },
             }
         }
     }
@@ -97,6 +166,23 @@ fn resolve(map: std.AutoHashMap(u32, CopyEntry), op: mir.MOperand) mir.MOperand 
                 cur = v;
             },
             .constant => |c| return .{ .imm = c },
+        }
+    }
+    return .{ .vreg = cur };
+}
+
+/// Like resolve(), but never resolves to a constant — only vreg→vreg.
+/// Used for LEA base/index which must remain register operands.
+fn resolveVregOnly(map: std.AutoHashMap(u32, CopyEntry), op: mir.MOperand) mir.MOperand {
+    if (op != .vreg) return op;
+    var cur = op.vreg;
+    for (0..16) |_| {
+        switch (map.get(cur) orelse return .{ .vreg = cur }) {
+            .vreg => |v| {
+                if (v == cur) return .{ .vreg = cur };
+                cur = v;
+            },
+            .constant => return .{ .vreg = cur },
         }
     }
     return .{ .vreg = cur };
@@ -143,8 +229,19 @@ fn dstOf(inst: mir.MInst) ?u32 {
         .sub => |m| vregOf(m.dst),
         .imul => |m| vregOf(m.dst),
         .idiv => |m| vregOf(m.dst),
+        .@"and" => |m| vregOf(m.dst),
+        .@"or" => |m| vregOf(m.dst),
+        .xor => |m| vregOf(m.dst),
+        .shl, .shr, .sar => |m| vregOf(m.dst),
+        .not_op, .neg_op => |m| vregOf(m.dst),
+        .fneg_op, .fsqrt_op => |m| vregOf(m.dst),
+        .fadd, .fsub, .fmul, .fdiv => |m| vregOf(m.dst),
+        .fcmp => |m| vregOf(m.dst),
+        .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => |m| vregOf(m.dst),
+        .select => |s| vregOf(s.dst),
         .cmp => |m| vregOf(m.dst),
         .load => |m| vregOf(m.dst),
+        .lea => |m| vregOf(m.dst),
         else => null,
     };
 }
@@ -155,6 +252,18 @@ fn replaceOpWithResolved(map: std.AutoHashMap(u32, CopyEntry), inst: *mir.MInst)
         .sub => |*m| { m.src = resolve(map, m.src); },
         .imul => |*m| { m.src = resolve(map, m.src); },
         .idiv => |*m| { m.src = resolve(map, m.src); },
+        .@"and" => |*m| { m.src = resolve(map, m.src); },
+        .@"or" => |*m| { m.src = resolve(map, m.src); },
+        .xor => |*m| { m.src = resolve(map, m.src); },
+        else => {},
+    }
+}
+
+fn replaceShiftAmount(map: std.AutoHashMap(u32, CopyEntry), inst: *mir.MInst) void {
+    switch (inst.*) {
+        .shl => |*m| { m.amount = resolve(map, m.amount); },
+        .shr => |*m| { m.amount = resolve(map, m.amount); },
+        .sar => |*m| { m.amount = resolve(map, m.amount); },
         else => {},
     }
 }

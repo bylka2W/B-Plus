@@ -1,12 +1,12 @@
-const std = @import("std");
-const gpu_ast = @import("../../src/compiler/parser/gpu_ast.zig");
-const bir = @import("../../src/compiler/backend/bir/bir.zig");
-const bir_frontend = @import("../../src/compiler/backend/bir/bir_frontend.zig");
-const bir_passes = @import("../../src/compiler/backend/bir/bir_passes.zig");
-const bir_unroll = @import("../../src/compiler/backend/bir/bir_unroll.zig");
-const bir_cfg = @import("../../src/compiler/backend/bir/bir_cfg.zig");
-const bir_dominators = @import("../../src/compiler/backend/bir/bir_dominators.zig");
-const bir_hlsl = @import("../../src/compiler/backend/bir/bir_hlsl.zig");
+﻿const std = @import("std");
+const gpu_ast = @import("../../src/compiler/gpu/frontend/gpu_ast.zig");
+const bir = @import("../../src/compiler/middle/bir/bir.zig");
+const bir_frontend = @import("../../src/compiler/middle/bir/bir_frontend.zig");
+const bir_passes = @import("../../src/compiler/middle/bir/bir_passes.zig");
+const bir_unroll = @import("../../src/compiler/middle/bir/bir_unroll.zig");
+const bir_cfg = @import("../../src/compiler/middle/bir/bir_cfg.zig");
+const bir_dominators = @import("../../src/compiler/middle/bir/bir_dominators.zig");
+const bir_hlsl = @import("../../src/compiler/middle/bir/bir_hlsl.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

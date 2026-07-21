@@ -1,5 +1,5 @@
-const std = @import("std");
-const gpu_types = @import("../compiler/backend/gpu/gpu_types.zig");
+﻿const std = @import("std");
+const gpu_types = @import("../compiler/gpu/gpu_types.zig");
 const frame_graph = @import("frame_graph.zig");
 const lifetime_graph = @import("lifetime_graph.zig");
 const barrier_optimizer = @import("barrier_optimizer.zig");

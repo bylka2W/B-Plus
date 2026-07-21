@@ -1,5 +1,5 @@
-const std = @import("std");
-const gpu_types = @import("../compiler/backend/gpu/gpu_types.zig");
+﻿const std = @import("std");
+const gpu_types = @import("../compiler/gpu/gpu_types.zig");
 const history_manager = @import("history_manager.zig");
 const camera_jitter = @import("camera_jitter.zig");
 

@@ -1,6 +1,6 @@
-const std = @import("std");
-const gpu_ir = @import("../../src/compiler/backend/gpu/gpu_ir.zig");
-const gpu_body_parser = @import("../../src/compiler/parser/gpu_body_parser.zig");
+﻿const std = @import("std");
+const gpu_ir = @import("../../src/compiler/gpu/gpu_ir.zig");
+const gpu_body_parser = @import("../../src/compiler/gpu/frontend/gpu_body_parser.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

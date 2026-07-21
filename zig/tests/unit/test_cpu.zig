@@ -1,9 +1,9 @@
-const std = @import("std");
-const bir = @import("../../src/compiler/backend/bir/bir.zig");
-const bir_cpu = @import("../../src/compiler/backend/bir/bir_cpu.zig");
+﻿const std = @import("std");
+const bir = @import("../../src/compiler/middle/bir/bir.zig");
+const bir_cpu = @import("../../src/compiler/middle/bir/bir_cpu.zig");
 const mir = @import("../../src/compiler/backend/mir/mir.zig");
 const mir_x64 = @import("../../src/compiler/backend/mir/mir_x64.zig");
-const coff = @import("../../src/compiler/backend/pe/coff.zig");
+const coff = @import("../../src/compiler/backend/object/coff/coff.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

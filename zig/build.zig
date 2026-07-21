@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_backend_analysis_exe.root_module.addImport("bir_backend", b.createModule(.{
-        .root_source_file = b.path("src/compiler/backend/bir/bir_backend.zig"),
+        .root_source_file = b.path("src/compiler/middle/bir/bir_backend.zig"),
     }));
     const test_backend_analysis_run = b.addRunArtifact(test_backend_analysis_exe);
     const test_backend_analysis_step = b.step("test-backend", "Run backend analysis tests (CFG, dominators, DF, mem2reg)");
@@ -53,13 +53,10 @@ pub fn build(b: *std.Build) void {
 
     const test_bir_to_mir_exe = b.addExecutable(.{
         .name = "test_bir_to_mir_e2e",
-        .root_source_file = b.path("tests/unit/test_bir_to_mir_e2e.zig"),
+        .root_source_file = b.path("test_bir_mir_main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    test_bir_to_mir_exe.root_module.addImport("backend", b.createModule(.{
-        .root_source_file = b.path("src/compiler/backend/backend.zig"),
-    }));
     const test_bir_to_mir_run = b.addRunArtifact(test_bir_to_mir_exe);
     const test_bir_to_mir_step = b.step("test-bir-mir", "Run BIR→MIR end-to-end tests");
     test_bir_to_mir_step.dependOn(&test_bir_to_mir_run.step);

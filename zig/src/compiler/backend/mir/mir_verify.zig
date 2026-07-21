@@ -26,11 +26,35 @@ fn collectDefinedVRegs(mfunc: *const mir.MFunction) std.AutoHashMap(u32, void) {
                 .sub => |s| s.dst,
                 .imul => |m| m.dst,
                 .idiv => |m| m.dst,
+                .@"and" => |a| a.dst,
+                .@"or" => |o| o.dst,
+                .xor => |x| x.dst,
+                .shl => |s| s.dst,
+                .shr => |s| s.dst,
+                .sar => |s| s.dst,
+                .not_op => |n| n.dst,
+                .neg_op => |n| n.dst,
                 .cmp => |c| c.dst,
                 .call => |c| c.dst,
                 .alloca => |a| a.dst,
                 .load => |l| l.dst,
+                .lea => |l| l.dst,
                 .phi => |p| p.dst,
+                .fadd => |f| f.dst,
+                .fsub => |f| f.dst,
+                .fmul => |f| f.dst,
+                .fdiv => |f| f.dst,
+                .fneg_op => |f| f.dst,
+                .fsqrt_op => |f| f.dst,
+                .fcmp => |f| f.dst,
+                .sitofp => |c| c.dst,
+                .fptosi => |c| c.dst,
+                .fpext => |c| c.dst,
+                .fptrunc => |c| c.dst,
+                .sext_op => |c| c.dst,
+                .zext_op => |c| c.dst,
+                .trunc_op => |c| c.dst,
+                .select => |s| s.dst,
                 else => continue,
             };
             if (dst == .vreg) defs.put(dst.vreg, {}) catch {};
@@ -46,6 +70,18 @@ fn checkUsedVRegs(inst: mir.MInst, defs: *std.AutoHashMap(u32, void)) !void {
         .sub => |s| try checkDefined(defs, s.src),
         .imul => |m| try checkDefined(defs, m.src),
         .idiv => |m| try checkDefined(defs, m.src),
+        .@"and" => |a| try checkDefined(defs, a.src),
+        .@"or" => |o| try checkDefined(defs, o.src),
+        .xor => |x| try checkDefined(defs, x.src),
+        .shl => |s| try checkDefined(defs, s.amount),
+        .shr => |s| try checkDefined(defs, s.amount),
+        .sar => |s| try checkDefined(defs, s.amount),
+        .not_op => |n| try checkDefined(defs, n.dst),
+        .neg_op => |n| try checkDefined(defs, n.dst),
+        .test_flags => |tf| {
+            try checkDefined(defs, tf.a);
+            try checkDefined(defs, tf.b);
+        },
         .cmp => |c| {
             try checkDefined(defs, c.a);
             try checkDefined(defs, c.b);
@@ -58,6 +94,10 @@ fn checkUsedVRegs(inst: mir.MInst, defs: *std.AutoHashMap(u32, void)) !void {
             for (c.args[0..c.arg_count]) |arg| try checkDefined(defs, arg);
         },
         .load => |l| try checkDefined(defs, l.ptr),
+        .lea => |l| {
+            try checkDefined(defs, l.base);
+            if (l.index != .imm) try checkDefined(defs, l.index);
+        },
         .store => |s| {
             try checkDefined(defs, s.ptr);
             try checkDefined(defs, s.src);
@@ -67,6 +107,39 @@ fn checkUsedVRegs(inst: mir.MInst, defs: *std.AutoHashMap(u32, void)) !void {
             for (p.incoming) |inc| {
                 try checkDefined(defs, inc.src);
             }
+        },
+        .fadd => |f| {
+            try checkDefined(defs, f.a);
+            try checkDefined(defs, f.b);
+        },
+        .fsub => |f| {
+            try checkDefined(defs, f.a);
+            try checkDefined(defs, f.b);
+        },
+        .fmul => |f| {
+            try checkDefined(defs, f.a);
+            try checkDefined(defs, f.b);
+        },
+        .fdiv => |f| {
+            try checkDefined(defs, f.a);
+            try checkDefined(defs, f.b);
+        },
+        .fneg_op => |f| try checkDefined(defs, f.dst),
+        .fsqrt_op => |f| try checkDefined(defs, f.dst),
+        .fcmp => |f| {
+            try checkDefined(defs, f.a);
+            try checkDefined(defs, f.b);
+        },
+        .sitofp => |c| try checkDefined(defs, c.src),
+        .fptosi => |c| try checkDefined(defs, c.src),
+        .fpext => |c| try checkDefined(defs, c.src),
+        .fptrunc => |c| try checkDefined(defs, c.src),
+        .sext_op => |c| try checkDefined(defs, c.src),
+        .zext_op => |c| try checkDefined(defs, c.src),
+        .trunc_op => |c| try checkDefined(defs, c.src),
+        .select => |s| {
+            try checkDefined(defs, s.dst);
+            try checkDefined(defs, s.src);
         },
         else => {},
     }

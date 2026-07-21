@@ -1,6 +1,6 @@
-const std = @import("std");
+﻿const std = @import("std");
 const frame_graph = @import("frame_graph.zig");
-const gpu_types = @import("../compiler/backend/gpu/gpu_types.zig");
+const gpu_types = @import("../compiler/gpu/gpu_types.zig");
 const resource_system = @import("resource_system.zig");
 const dx12 = @import("dx12_compute.zig");
 const d3d = @import("d3d12_bindings.zig");
@@ -10,7 +10,7 @@ const history_manager = @import("history_manager.zig");
 const frame_runtime = @import("frame_runtime.zig");
 const gpu_scheduler = @import("../runtime/gpu_scheduler.zig");
 const compiled_graph = @import("compiled_graph.zig");
-const dxil_backend = @import("../compiler/backend/gpu/dxil_backend.zig");
+const dxil_backend = @import("../compiler/gpu/dxil_backend.zig");
 
 pub const FrameGraphGPUExecutor = struct {
     ctx: *dx12.ComputeContext,

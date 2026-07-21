@@ -1,28 +1,30 @@
-const std = @import("std");
-const ast = @import("compiler/parser/ast.zig");
-const parser = @import("compiler/parser/parser.zig");
-const x64gen = @import("compiler/backend/x64/x64gen.zig");
-const pe = @import("compiler/backend/pe/pe.zig");
-const test_runner = @import("compiler/parser/test_runner.zig");
-const sema_mod = @import("compiler/parser/sema.zig");
-const hlslgen = @import("compiler/parser/hlslgen.zig");
-const gpu_ast = @import("compiler/parser/gpu_ast.zig");
-const gpu_ir = @import("compiler/backend/gpu/gpu_ir.zig");
-const gpu_sema = @import("compiler/parser/gpu_sema.zig");
-const gpu_lower = @import("compiler/backend/gpu/gpu_lower.zig");
-const gpu_dxil = @import("compiler/backend/gpu/gpu_dxil.zig");
-const gpu_cpp = @import("compiler/backend/gpu/gpu_cpp.zig");
-const bir = @import("compiler/backend/bir/bir.zig");
-const bir_frontend = @import("compiler/backend/bir/bir_frontend.zig");
-const bir_passes = @import("compiler/backend/bir/bir_passes.zig");
-const bir_lower = @import("compiler/backend/bir/bir_lower.zig");
-const bir_cfg = @import("compiler/backend/bir/bir_cfg.zig");
-const bir_dominators = @import("compiler/backend/bir/bir_dominators.zig");
-const bir_loops = @import("compiler/backend/bir/bir_loops.zig");
-const bir_hlsl = @import("compiler/backend/bir/bir_hlsl.zig");
+﻿const std = @import("std");
+const ast = @import("compiler/frontend/ast.zig");
+const parser = @import("compiler/frontend/parser/parser.zig");
+const x64gen = @import("compiler/backend/targets/x64/x64gen.zig");
+const pe = @import("compiler/backend/object/pe/pe.zig");
+const coff = @import("compiler/backend/object/coff/coff.zig");
+const test_runner = @import("tools/test_runner/test_runner.zig");
+const sema_mod = @import("compiler/frontend/sema/sema.zig");
+const hlslgen = @import("compiler/gpu/frontend/hlslgen.zig");
+const gpu_ast = @import("compiler/gpu/frontend/gpu_ast.zig");
+const gpu_ir = @import("compiler/gpu/gpu_ir.zig");
+const gpu_sema = @import("compiler/gpu/frontend/gpu_sema.zig");
+const gpu_lower = @import("compiler/gpu/gpu_lower.zig");
+const gpu_dxil = @import("compiler/gpu/gpu_dxil.zig");
+const gpu_cpp = @import("compiler/gpu/gpu_cpp.zig");
+const bir = @import("compiler/middle/bir/bir.zig");
+const bir_frontend = @import("compiler/middle/bir/bir_frontend.zig");
+const bir_passes = @import("compiler/middle/bir/bir_passes.zig");
+const bir_lower = @import("compiler/middle/bir/bir_lower.zig");
+const bir_cfg = @import("compiler/middle/bir/bir_cfg.zig");
+const bir_dominators = @import("compiler/middle/bir/bir_dominators.zig");
+const bir_loops = @import("compiler/middle/bir/bir_loops.zig");
+const bir_hlsl = @import("compiler/middle/bir/bir_hlsl.zig");
 
-const bir_bplus_frontend = @import("compiler/backend/bir/bir_bplus_frontend.zig");
-const bir_lower_dump = @import("compiler/backend/bir/bir_lower.zig");
+const bir_bplus_frontend = @import("compiler/middle/bir/bir_bplus_frontend.zig");
+const bir_cpu = @import("compiler/middle/bir/bir_cpu.zig");
+const bir_lower_dump = @import("compiler/middle/bir/bir_lower.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -118,7 +120,7 @@ pub fn main() !void {
             try gpuCompileAndWrite(arena_alloc, src, input_path, output_path, .cpp);
         } else {
             // General B+ → full C++ via cppgen
-            const cppgen = @import("compiler/parser/cppgen.zig");
+            const cppgen = @import("compiler/frontend/cppgen.zig");
             var p = parser.Parser.init(arena_alloc, src, input_path);
             const program = try p.parse();
             const output = try cppgen.generate(arena_alloc, program);
@@ -165,9 +167,16 @@ pub fn main() !void {
                 try stdout.print("HLSL written to {s}\n", .{out_path});
                 return;
             };
-            var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
-            var pm = bir_passes.StandardPasses.init(arena_alloc);
-            try pm.run(&module);
+        var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
+        var am = bir.AnalysisManager.init(arena_alloc, &module);
+        defer am.deinit();
+        var ctx = bir.PassContext{
+            .module = &module,
+            .analysis = &am,
+            .allocator = arena_alloc,
+        };
+        var pm = bir_passes.StandardPasses.init(arena_alloc);
+        try pm.run(&ctx);
             const output = try bir_hlsl.generateHlsl(arena_alloc, &module);
             const out_path = output_path orelse blk: {
                 const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
@@ -191,8 +200,15 @@ pub fn main() !void {
         const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
 
         var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
+        var am = bir.AnalysisManager.init(arena_alloc, &module);
+        defer am.deinit();
+        var ctx = bir.PassContext{
+            .module = &module,
+            .analysis = &am,
+            .allocator = arena_alloc,
+        };
         var pm = bir_passes.StandardPasses.init(arena_alloc);
-        try pm.run(&module);
+        try pm.run(&ctx);
 
         const stdout = std.io.getStdOut().writer();
         try bir_lower.dumpModule(&module, stdout);
@@ -209,15 +225,22 @@ pub fn main() !void {
         const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
 
         var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
+        var am = bir.AnalysisManager.init(arena_alloc, &module);
+        defer am.deinit();
+        var ctx = bir.PassContext{
+            .module = &module,
+            .analysis = &am,
+            .allocator = arena_alloc,
+        };
         var pm = bir_passes.StandardPasses.init(arena_alloc);
-        try pm.run(&module);
+        try pm.run(&ctx);
 
         const stdout = std.io.getStdOut().writer();
-        for (module.functions.items) |func| {
+        for (module.functions.items) |*func| {
             try stdout.print("; Function: {s}\n", .{func.name});
-            var cfg = try bir_cfg.buildCFG(arena_alloc, &func);
+            var cfg = try bir_cfg.buildCFG(arena_alloc, func);
             defer cfg.deinit();
-            try bir_cfg.dumpCFG(&cfg, stdout);
+            try bir_cfg.dumpCFG(&cfg, func, stdout);
         }
         return;
     }
@@ -232,18 +255,22 @@ pub fn main() !void {
         const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
 
         var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
+        var am = bir.AnalysisManager.init(arena_alloc, &module);
+        defer am.deinit();
+        var ctx = bir.PassContext{
+            .module = &module,
+            .analysis = &am,
+            .allocator = arena_alloc,
+        };
         var pm = bir_passes.StandardPasses.init(arena_alloc);
-        try pm.run(&module);
+        try pm.run(&ctx);
 
         const stdout = std.io.getStdOut().writer();
-        for (module.functions.items) |func| {
+        for (module.functions.items) |*func| {
             try stdout.print("; Function: {s}\n", .{func.name});
-            var cfg = try bir_cfg.buildCFG(arena_alloc, &func);
+            var cfg = try bir_cfg.buildCFG(arena_alloc, func);
             defer cfg.deinit();
-            try bir_cfg.dumpCFG(&cfg, stdout);
-            var dt = try bir_dominators.buildDominators(arena_alloc, &cfg);
-            defer dt.deinit();
-            try dt.dump(stdout, cfg.blocks.items.len);
+            try bir_cfg.dumpCFG(&cfg, func, stdout);
         }
         return;
     }
@@ -258,19 +285,57 @@ pub fn main() !void {
         const pipeline = try pipeline_gen_m.parsePipeline(arena_alloc, src);
 
         var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
+        var am = bir.AnalysisManager.init(arena_alloc, &module);
+        defer am.deinit();
+        var ctx = bir.PassContext{
+            .module = &module,
+            .analysis = &am,
+            .allocator = arena_alloc,
+        };
         var pm = bir_passes.StandardPasses.init(arena_alloc);
-        try pm.run(&module);
+        try pm.run(&ctx);
 
         const stdout = std.io.getStdOut().writer();
-        for (module.functions.items) |func| {
+        for (module.functions.items) |*func| {
             try stdout.print("; Function: {s}\n", .{func.name});
-            var cfg = try bir_cfg.buildCFG(arena_alloc, &func);
+            var cfg = try bir_cfg.buildCFG(arena_alloc, func);
             defer cfg.deinit();
-            var dt = try bir_dominators.buildDominators(arena_alloc, &cfg);
+            var dt = try bir_dominators.buildDominators(arena_alloc, &cfg, func);
             defer dt.deinit();
-            const loops = try bir_loops.findLoops(arena_alloc, &cfg, &dt);
-            try bir_loops.dumpLoops(loops, stdout);
+            const loops = try bir_loops.findLoops(arena_alloc, &cfg, func, &dt);
+            try stdout.print("; {d} loops found\n", .{loops.loops.len});
         }
+        return;
+    }
+
+    // MIR mode: B+ source → BIR → MIR → x64 COFF object
+    if (std.mem.eql(u8, command, "mir")) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        var p = parser.Parser.init(arena_alloc, src, input_path);
+        var program = try p.parse();
+        sema_mod.analyze(arena_alloc, program, src, input_path) catch |err| {
+            std.log.err("semantic analysis failed: {}", .{err});
+            std.process.exit(1);
+        };
+
+        const bir_module = try bir_bplus_frontend.lowerProgram(arena_alloc, &program);
+        const mfuncs = try bir_cpu.lowerModuleToMir(arena_alloc, &bir_module);
+
+        const coff_result = try coff.emitCoff(mfuncs);
+        defer coff_result.bytes.deinit();
+
+        const out_path = output_path orelse blk: {
+            const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
+            const base = input_path[0..ext_idx];
+            break :blk try std.fmt.allocPrint(arena_alloc, "{s}.obj", .{base});
+        };
+        try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = coff_result.bytes.items });
+        const stdout = std.io.getStdOut().writer();
+        try stdout.print("COFF object written to {s}\n", .{out_path});
+        try stdout.print("  functions: {d}\n", .{mfuncs.len});
         return;
     }
 
@@ -459,8 +524,15 @@ fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_pat
         var bir_mod = try bir_frontend.lowerToBir(arena_alloc, &gpu_mod);
         defer bir_mod.deinit();
 
+        var am = bir.AnalysisManager.init(arena_alloc, &bir_mod);
+        defer am.deinit();
+        var ctx = bir.PassContext{
+            .module = &bir_mod,
+            .analysis = &am,
+            .allocator = arena_alloc,
+        };
         var pm = bir_passes.StandardPasses.init(arena_alloc);
-        try pm.run(&bir_mod);
+        try pm.run(&ctx);
 
         const output = try bir_hlsl.generateHlsl(arena_alloc, &bir_mod);
         const out_path = output_path_arg orelse blk: {

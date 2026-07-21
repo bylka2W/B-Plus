@@ -1,5 +1,5 @@
-const std = @import("std");
-const dxil_bc = @import("../../src/compiler/backend/gpu/dxil_bitcode.zig");
+﻿const std = @import("std");
+const dxil_bc = @import("../../src/compiler/gpu/dxil_bitcode.zig");
 
 /// Minimal test: just MODULE_BLOCK with VERSION record.
 /// This strips everything else to isolate the basic bitstream structure.

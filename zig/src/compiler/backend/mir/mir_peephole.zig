@@ -29,6 +29,34 @@ pub fn optimize(mfunc: *mir.MFunction) !void {
                 .ret => try handleRet(&map, block, &i),
                 .call => try handleCall(&map, block, &i),
                 .jmp, .jcc, .alloca, .phi => i += 1,
+                .lea => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
+                .@"and", .@"or", .xor, .shl, .shr, .sar, .not_op, .neg_op, .test_flags => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
+                .fadd, .fsub, .fmul, .fdiv => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
+                .fneg_op, .fsqrt_op => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
+                .fcmp => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
+                .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
+                .select => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
             }
         }
     }
@@ -225,11 +253,29 @@ fn handleCmp(map: *std.AutoHashMap(u32, VRegVal), block: *mir.MBlock, ip: *usize
 fn handleCmpFlags(map: *std.AutoHashMap(u32, VRegVal), block: *mir.MBlock, ip: *usize) !void {
     const m = block.instrs.items[ip.*].cmp_flags;
     const new_a = resolveCopyOp(map, m.a);
-    const new_b = resolveCopyOp(map, m.b);
+    const new_b = resolveConstOp(map, m.b);
+
+    if (isZero(new_b)) {
+        const av = if (vreg(new_a)) |v| v else {
+            ip.* += 1;
+            return;
+        };
+        block.instrs.items[ip.*] = .{ .test_flags = .{ .a = .{ .vreg = av }, .b = .{ .vreg = av } } };
+        ip.* += 1;
+        return;
+    }
+
     if (!operandEq(new_a, m.a) or !operandEq(new_b, m.b)) {
         block.instrs.items[ip.*] = .{ .cmp_flags = .{ .a = new_a, .b = new_b } };
     }
     ip.* += 1;
+}
+
+fn isZero(op: mir.MOperand) bool {
+    return switch (op) {
+        .imm => |v| v == 0,
+        else => false,
+    };
 }
 
 fn handleLoad(map: *std.AutoHashMap(u32, VRegVal), block: *mir.MBlock, ip: *usize) !void {
@@ -293,6 +339,32 @@ fn operandEq(a: mir.MOperand, b: mir.MOperand) bool {
 fn vreg(op: mir.MOperand) ?u32 {
     return switch (op) {
         .vreg => |v| v,
+        else => null,
+    };
+}
+
+fn dstOf(inst: mir.MInst) ?u32 {
+    return switch (inst) {
+        .mov => |m| vreg(m.dst),
+        .add => |m| vreg(m.dst),
+        .sub => |m| vreg(m.dst),
+        .imul => |m| vreg(m.dst),
+        .idiv => |m| vreg(m.dst),
+        .@"and" => |m| vreg(m.dst),
+        .@"or" => |m| vreg(m.dst),
+        .xor => |m| vreg(m.dst),
+        .shl, .shr, .sar => |m| vreg(m.dst),
+        .not_op, .neg_op => |m| vreg(m.dst),
+        .cmp => |m| vreg(m.dst),
+        .load => |m| vreg(m.dst),
+        .call => |m| vreg(m.dst),
+        .alloca => |m| vreg(m.dst),
+        .lea => |m| vreg(m.dst),
+        .fadd, .fsub, .fmul, .fdiv => |m| vreg(m.dst),
+        .fneg_op, .fsqrt_op => |m| vreg(m.dst),
+        .fcmp => |c| vreg(c.dst),
+        .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => |c| vreg(c.dst),
+        .select => |s| vreg(s.dst),
         else => null,
     };
 }

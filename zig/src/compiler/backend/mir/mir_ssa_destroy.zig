@@ -51,7 +51,7 @@ fn splitCriticalEdges(mfunc: *mir.MFunction, next_vreg: u32) !void {
         for (block.instrs.items) |inst| {
             const targets: [2]?usize = switch (inst) {
                 .jmp => |j| .{ j.target, null },
-                .jcc => |j| .{ inst.jcc.target, j.target },
+                .jcc => |j| .{ j.target, null },
                 else => continue,
             };
             for (targets) |t_opt| {
@@ -304,6 +304,11 @@ fn dstVReg(inst: mir.MInst) ?u32 {
         .sub => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .imul => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .idiv => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .@"and" => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .@"or" => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .xor => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .shl, .shr, .sar => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .not_op, .neg_op => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .cmp => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .call => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .alloca => |m| if (m.dst == .vreg) m.dst.vreg else null,
@@ -346,6 +351,36 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
                 n += 1;
             }
         },
+        .@"and" => |m| {
+            if (m.src == .vreg) {
+                buf[n] = m.src.vreg;
+                n += 1;
+            }
+        },
+        .@"or" => |m| {
+            if (m.src == .vreg) {
+                buf[n] = m.src.vreg;
+                n += 1;
+            }
+        },
+        .xor => |m| {
+            if (m.src == .vreg) {
+                buf[n] = m.src.vreg;
+                n += 1;
+            }
+        },
+        .shl, .shr, .sar => |m| {
+            if (m.amount == .vreg) {
+                buf[n] = m.amount.vreg;
+                n += 1;
+            }
+        },
+        .not_op, .neg_op => |m| {
+            if (m.dst == .vreg) {
+                buf[n] = m.dst.vreg;
+                n += 1;
+            }
+        },
         .cmp => |m| {
             if (m.a == .vreg) {
                 buf[n] = m.a.vreg;
@@ -357,6 +392,16 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
             }
         },
         .cmp_flags => |m| {
+            if (m.a == .vreg) {
+                buf[n] = m.a.vreg;
+                n += 1;
+            }
+            if (m.b == .vreg) {
+                buf[n] = m.b.vreg;
+                n += 1;
+            }
+        },
+        .test_flags => |m| {
             if (m.a == .vreg) {
                 buf[n] = m.a.vreg;
                 n += 1;

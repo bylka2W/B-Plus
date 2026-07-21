@@ -1,7 +1,7 @@
-const std = @import("std");
-const parser = @import("../../src/compiler/parser/parser.zig");
-const x64gen = @import("../../src/compiler/backend/x64/x64gen.zig");
-const pe = @import("../../src/compiler/backend/pe/pe.zig");
+﻿const std = @import("std");
+const parser = @import("../../src/compiler/frontend/parser/parser.zig");
+const x64gen = @import("../../src/compiler/backend/targets/x64/x64gen.zig");
+const pe = @import("../../src/compiler/backend/object/pe/pe.zig");
 
 // --- v1: per-case return expectations ---
 pub const Expect = union(enum) {

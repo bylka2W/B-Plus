@@ -1,6 +1,6 @@
-const std = @import("std");
+﻿const std = @import("std");
 const mir = @import("compiler/backend/mir/mir.zig");
-const coff = @import("compiler/backend/pe/coff.zig");
+const coff = @import("compiler/backend/object/coff/coff.zig");
 
 const TypeKind = enum {
     void, bool,

@@ -1,9 +1,30 @@
-# B+ v4.6.0 — Compiled `.plan` / `.metal` Language (SSA + MIR + COFF pipeline)
+# B+ v4.6.1-beta — Compiled `.plan` / `.metal` Language (Frontend → HIR → BIR → MIR → Targets)
 
-> [English version ↓](#b-v460--compiled-plan--metal-language-ssa--mir--coff-pipeline)
+> [English version ↓](#b-v461-beta--compiled-plan--metal-language-frontend--hir--bir--mir--targets)
 
-**B+** транслирует `.plan` / `.metal` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
-Никаких ассемблеров, линкеров, LLVM — весь кодогенератор написан с нуля на Zig.
+**B+** компилирует `.plan` / `.metal` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
+Никаких ассемблеров, линкеров, LLVM — весь кодогенератор и оптимизатор написаны с нуля на Zig.
+
+### Что нового в v4.6.1-beta
+
+- **Архитектура Frontend → HIR → BIR → MIR → Targets** — полная миграция компилятора на
+  многоуровневую архитектуру в стиле LLVM/rustc с однонаправленным потоком зависимостей.
+- **Разделение frontend / middle / backend** — исходный код компилятора перемещён из плоской
+  структуры `compiler/parser/` и `compiler/backend/bir/` в иерархию `compiler/frontend/`,
+  `compiler/middle/bir/`, `compiler/backend/mir/`, `compiler/backend/targets/`.
+- **BIR core модуль** — новый `bir/core/` с типизированными `Module`, `Function`, `Block`,
+  `Value`, `Instruction` и системой типов (`TypeSystem`).
+- **BIR optimizer framework** — `bir/optimizer/` с `PassManager` и `PassResult` для
+  построения пайплайнов оптимизаций.
+- **BIR analysis** — `bir/analysis/` с `AnalysisManager` и `cfg.zig` (CFG построение).
+- **MIR core модуль** — `mir/core/` с типизированными `MFunction`, `MBlock`, `MInst`,
+  `MOperand`, `MOpcode`, `PhiInst`, `PhiIncoming`.
+- **Targets abstraction** — `targets/common/` (общий target) и `targets/x64/` с
+  instruction selection (`isel/`), encoder (`x64enc.zig`), frame manager, register allocator.
+- **Critical edge fix** — исправлен hang теста `testCriticalEdgePhi`: эпилог теперь
+  генерируется после каждого блока, заканчивающегося `ret`, предотвращая infinite loop
+  при critical edge splitting.
+- **9/9 E2E тестов BIR → MIR → x64 → execute** проходят (ранее 7/8).
 
 ---
 
@@ -47,10 +68,11 @@
    - [4.14 CLI](#414-cli)
 5. [Типы данных](#5-типы-данных)
 6. [Примеры](#6-примеры)
-7. [Сборка из исходников](#7-сборка-из-исходников)
-8. [Структура проекта](#8-структура-проекта)
-9. [Лицензия](#9-лицензия)
-10. [Контакты](#10-контакты)
+7. [Оптимизатор BIR — бенчмарки и архитектура](#7-оптимизатор-bir--бенчмарки-и-архитектура)
+8. [Сборка из исходников](#8-сборка-из-исходников)
+9. [Структура проекта](#9-структура-проекта)
+10. [Лицензия](#10-лицензия)
+11. [Контакты](#11-контакты)
 
 ---
 
@@ -775,7 +797,7 @@ bplus build <input.metal> [-o <output.exe>]
 bplus run   <input.metal>
 ```
 
-Pipeline: `.metal → парсер → BIR (SSA) → mem2reg → cfgsimplify → понижение до MIR → уничтожение SSA → распространение копий → DCE → пеепхол → линейный аллокатор → x64 → COFF .obj → zig build-exe → .exe`
+Pipeline: `.metal → парсер → BIR (SSA) → mem2reg → cfgsimplify → SCCP → InstCombine → ConstantFolding → GVN → LICM → Unroll → DCE → понижение до MIR → уничтожение SSA → addr_fold → распространение копий → DCE → пеепхол → линейный аллокатор → x64 → COFF .obj → zig build-exe → .exe`
 
 ---
 
@@ -916,7 +938,77 @@ context {
 
 ---
 
-## 7. Сборка из исходников
+## 7. Оптимизатор BIR — бенчмарки и архитектура
+
+### Архитектура backend
+
+Backend компилятора построен по архитектуре, аналогичной LLVM:
+
+```
+BIR (SSA)  ──── MIR (Machine IR)  ──── x64 Machine Code
+  │                    │                        │
+  ├─ mem2reg           ├─ SSA destruction        ├─ Linear Scan RA
+  ├─ cfgsimplify        ├─ addr_fold (LEA)        ├─ Frame Manager
+  ├─ SCCP               ├─ copy propagation       ├─ Instruction Encoder
+  ├─ InstCombine         ├─ DCE                    └─ COFF/PE
+  ├─ ConstantFolding     └─ peephole
+  ├─ GVN
+  ├─ LICM
+  ├─ Unroll
+  └─ DCE
+```
+
+### BIR Optimization Pipeline
+
+| Проход | Описание |
+|--------|----------|
+| **mem2reg** | Продвижение памяти в SSA-регистры |
+| **cfgsimplify** | Упрощение графа потока управления |
+| **SCCP** | Распространение условных констант |
+| **InstCombine** | Алгебраические тождества, свёртка сравнений |
+| **ConstantFolding** | Вычисление константных выражений, max/min |
+| **GVN** | Глобальная свёртка значений (CSE для commutative ops) |
+| **LICM** | Вынос инвариантов из циклов |
+| **Unroll** | Развёртка коротких циклов |
+| **DCE** | Удаление мёртвого кода |
+
+### MIR Optimization Pipeline
+
+| Проход | Описание |
+|--------|----------|
+| **SSA Destruction** | Замена phi на mov через CopyProp |
+| **AddrFold** | Синтез LEA из адресной арифметики [base+index*scale+disp] |
+| **Copy Propagation** | Распространение копий (3 итерации) |
+| **DCE** | Удаление мёртвого кода |
+| **Peephole** | Константная свёртка, оптимизация сравнений |
+
+### Бенчмарки оптимизаций
+
+| Тест | Без опт. | С опт. | Экономия |
+|------|----------|--------|----------|
+| P1: Цепочка арифметики (mul/div pow2, mul -1) | 91 B, 14 инстр. | 51 B, 10 инстр. | **44.0%** |
+| P2: Мёртвая ветка (SCCP: if(true) → else) | 74 B, 8 инстр., 4 блока | — 4 инстр., 2 блока | ветка удалена |
+| P3: Избыточный CSE (5+3 вычисляется 3 раза) | 74 B, 8 инстр. | 26 B, 2 инстр. | **64.9%** |
+| P4: Стресс (200 vregs, цепочка add) | 2026 B, 402 инстр. | 26 B, 2 инстр. | **98.7%** |
+| P5: max/min constant folding | 107 B, 8 инстр. | 26 B, 2 инстр. | **75.7%** |
+
+### Тесты
+
+25 E2E тестов кодогенерации (BIR → MIR → x64 → execute):
+
+- Целочисленная арифметика: add, sub, mul, div, neg, not, and/or/xor
+- Ветвление: if/else, phi-ноды
+- Стресс: 200 и 500 vreg, спилы
+- Strength reduction: mul→shl, div→shr, mul -1→neg
+- SCCP: мёртвые ветки, свёртка констант
+- InstCombine: двойное neg, add/sub cancellation
+- Плавающая арифметика: f32/f64 add, mul, sub, div, neg
+- Конверсии: int↔float, sext, zext, trunc
+- min/max: CMOVcc (branchless)
+
+---
+
+## 8. Сборка из исходников
 
 Требуется [Zig](https://ziglang.org/) (master, >= 0.14).
 
@@ -940,150 +1032,223 @@ bpc.exe run example.plan
 
 ---
 
-## 8. Структура проекта
+## 9. Структура проекта
+
+### Архитектура компилятора
+
+```
+Frontend (парсер, AST, семантика)
+    │
+    ▼
+HIR (High-Level IR) — BIR SSA
+    │  mem2reg → cfgsimplify → SCCP → InstCombine → ConstantFolding
+    │  → GVN → Unroll → LICM → ForwardStoreToLoad → DeadStoreElimination → DCE
+    ▼
+MIR (Machine IR) — target-independent
+    │  SSA Destroy → AddrFold → CopyProp → Peephole ×3 → DCE
+    ▼
+Targets (code generation)
+    │  ISEL → RegAlloc → Encoding
+    ▼
+Object (PE/COFF → .exe)
+```
+
+### Дерево исходников
 
 ```text
-C:\B-Plus\
-  bpc.exe                — компилятор (исполняемый файл)
-  LICENSE
-  README.md
+src/
+  main.zig                — точка входа, CLI, оркестрация
+  bplus.zig               — CLI (bplus build/run)
 
-zig/                    — исходники компилятора (Zig)
-  build.zig             — скрипт сборки
-  src/
-    main.zig            — точка входа, CLI, оркестрация
-    bplus.zig           — CLI-инструмент (bplus build/run)
-    compiler/
+  compiler/
+    frontend/
+      ast.zig             — типы AST (TypeId, AST-структуры)
+      cppgen.zig          — C++ кодогенератор из AST
       parser/
-        ast.zig         — типы AST
-        parser.zig      — лексер + парсер .plan
-        symbol.zig      — таблица символов
-        gpu_ast.zig     — GPU AST
-        gpu_body_parser.zig — парсер тел GPU kernel
-        gpu_sema.zig    — семантический анализ GPU
-        cppgen.zig      — C++ кодогенератор
-        hlslgen.zig     — HLSL кодогенератор (legacy)
-      backend/
+        ast.zig           — re-export ../ast.zig
+        gpu_ast.zig       — re-export ../../gpu/frontend/gpu_ast.zig
+        parser.zig        — лексер + парсер .plan
+      sema/
+        ast.zig           — re-export ../ast.zig
+        scope.zig         — re-export resolver/scope.zig
+        sema.zig          — семантический анализ
+        resolver/
+          scope.zig       — разрешение scopes (SymbolKind, scope resolution)
+        symbols/
+          symbol.zig      — типы символов (SymbolKind: code, ...)
+
+    middle/
+      bir/
+        bir.zig           — публичный BIR API; re-export core/
+        bir_analysis.zig  — re-export analysis/manager.zig
+        bir_alias.zig     — анализ псевдонимов (AliasResult: NoAlias, ...)
+        bir_backend.zig   — re-export bir, bir_types, bir_cfg, bir_loops, ...
+        bir_bplus_frontend.zig — фронтенд B+ → BIR (импортирует frontend/ast)
+        bir_cfg.zig       — re-export analysis/cfg/cfg.zig
+        bir_cfgsimplify.zig — упрощение CFG
+        bir_cpu.zig       — CPU target lowering (BIR → MIR)
+        bir_dominators.zig — дерево доминаторов
+        bir_frontend.zig  — GPU фронтенд → BIR
+        bir_hlsl.zig      — BIR → HLSL
+        bir_ivopt.zig     — оптимизация индуктивных переменных
+        bir_licm.zig      — LICM (вынос инвариантов из циклов)
+        bir_loops.zig     — анализ циклов
+        bir_loop_rotate.zig — loop rotation transform
+        bir_lower.zig     — понижение BIR (импортирует pipeline_gen)
+        bir_mem2reg.zig   — продвижение памяти в регистры (SSA)
+        bir_memory_ssa.zig — построение MemorySSA
+        bir_passes.zig    — инфраструктура BIR-проходов
+        bir_sccp.zig      — SCCP (sparse conditional constant propagation)
+        bir_types.zig     — re-export core/types.zig
+        bir_unroll.zig    — развёртка циклов
+        bir_verify.zig    — верификация BIR
+        core/
+          block.zig       — базовый блок (BlockId)
+          function.zig    — представление функции
+          instruction.zig — определения BIR-инструкций
+          module.zig      — контейнер модуля
+          types.zig       — система типов BIR (TypeId)
+          value.zig       — типы значений (ValueId, BlockId, FunctionId)
+        optimizer/
+          pass_manager.zig — менеджер проходов оптимизации
+          pass_types.zig  — идентификаторы проходов/анализов (AnalysisKind bitmask)
+        analysis/
+          manager.zig     — менеджер анализов (кэш CFG, доминаторов, циклов)
+          cfg/
+            cfg.zig       — построение графа потока управления
+
+    backend/
+      backend.zig          — корневой модуль (re-export bir, mir, targets, object)
+      mir/
+        mir.zig            — публичный MIR API
+        mir_backend.zig    — re-export mir, mir_verify, mir_optimizer, ...
+        mir_addr_fold.zig  —.AddrFold (синтез LEA из адресной арифметики)
+        mir_copy_prop.zig  — распространение копий
+        mir_dce.zig        — удаление мёртвого кода
+        mir_optimizer.zig  — пайплайн MIR-оптимизаций (оркестрирует DCE, peephole, SSA destroy)
+        mir_peephole.zig   — пеепхол-оптимизации
+        mir_ssa_destroy.zig — уничтожение SSA (элиминация phi)
+        mir_verify.zig     — верификация MIR
+        mir_x64.zig        — legacy wrapper → targets/x64/lowering.zig
+        pipeline_gen.zig   — генерация рендер-пайплайна
+        sizes.zig          — утилита размеров D3D12 структур
+        core/
+          mir.zig          — MIR core: target-independent типы
+          function.zig     — представление MIR-функции
+          opcode.zig       — MIR opcodes (MovInst, и т.д.)
+          operand.zig      — типы MIR-операндов (MOperand, PhysReg, CondCode)
+          value.zig        — MIR data types (DataType enum: void, i1, i8, ...)
+
+      targets/
+        common/
+          target.zig       — target-independent типы (RegAllocResult)
         x64/
-          x64gen.zig    — генератор машинного кода x64
-          x64enc.zig    — кодировщик инструкций x64
-          layout.zig    — стековый фрейм, раскладка слотов
-          codebuffer.zig — буфер кода
-          abi.zig       — ABI-конвенции (Win64)
-          regalloc.zig  — регистровый аллокатор (Linear Scan)
+          x64_backend.zig  — точка входа x64 backend (MIR → x86-64 пайплайн)
+          x64enc.zig       — кодировщик инструкций x64
+          x64gen.zig       — генератор кода x64
+          abi.zig          — ABI-константы (frame_size, shadow_size)
+          branches.zig     — хелперы кодирования ветвлений
+          codebuffer.zig   — буфер кода с fixup-ами (LabelId)
+          debug.zig        — отладочные/трассировочные утилиты x64
+          encoder.zig      — re-export x64enc.zig
+          frame.zig        — раскладка стекового фрейма (Abi: win64, ...)
+          isel.zig         — оркестрация instruction selection
+          layout.zig       — раскладка слотов локальных (SlotKind enum)
+          lowering.zig     — оркестрация x64 lowering (regalloc → isel → encode)
+          memory.zig       — хелперы addressing modes (base + displacement)
+          peephole.zig     — x64-specific пеепхол
+          regalloc.zig     — аллокация регистров
+          registers.zig    — enum регистров x64 (X64Reg)
+          ir/
+            inst.zig       — типы IR-инструкций x64
+          isel/
+            context.zig    — общий контекст ISEL-подмодулей
+            control.zig    — ISEL контроля потока (branch/call/ret/select)
+            conversions.zig — ISEL конверсий типов (sext/zext/trunc/sitofp/...)
+            float.zig      — ISEL плавающей арифметики (SSE scalar)
+            integer.zig    — ISEL целочисленной арифметики
+            memory.zig     — ISEL доступа к памяти (load/store/lea/alloca)
+
+      object/
         pe/
-          pe.zig        — генератор PE (.exe/.dll)
-          coff.zig      — COFF-объектный формат
-        gpu/
-          gpu_ir.zig    — GPU SSA IR
-          gpu_lower.zig — понижение GPU AST → IR
-          gpu_hlsl.zig  — HLSL из GPU IR
-          gpu_dxil.zig  — DXIL бэкенд
-          gpu_cpp.zig   — C++ GPU бэкенд
-          gpu_types.zig — типы GPU
-          dxil_backend.zig — DXIL pipeline
-          dxil_bitcode.zig — LLVM bitcode для DXIL
-          shader_backend.zig — общий shader backend
-        bir/
-          bir.zig       — BIR (Bytecode IR)
-          bir_types.zig — типы BIR
-          bir_frontend.zig — фронтенд BIR
-          bir_cfg.zig   — CFG (граф потока управления)
-          bir_dominators.zig — доминаторы
-          bir_loops.zig — анализ циклов
-          bir_alias.zig — анализ псевдонимов
-          bir_memory_ssa.zig — MemorySSA
-          bir_licm.zig  — LICM (вынос инвариантов)
-          bir_unroll.zig — развёртка циклов
-          bir_verify.zig — верификация BIR
-          bir_passes.zig — проходы BIR
-          bir_lower.zig — понижение BIR → MIR
-          bir_cpu.zig   — CPU-специфичный BIR, понижение до MIR
-          bir_hlsl.zig  — HLSL из BIR
-        mir/
-          mir.zig       — MIR (Machine IR), phi-инструкции
-          mir_ssa_destroy.zig — уничтожение SSA
-          mir_copy_prop.zig — распространение копий
-          mir_dce.zig   — мёртвый код
-          mir_peephole.zig — пеепхол-оптимизации
-          mir_optimizer.zig — оптимизатор MIR
-          mir_verify.zig — верификация MIR
-          mir_x64.zig   — MIR → x64 кодогенерация
-          pipeline_gen.zig — генерация пайплайна
-          sizes.zig     — размеры типов
+          pe.zig           — генератор PE (.exe/.dll)
+        coff/
+          coff.zig         — генератор COFF-объектов
+
+    gpu/
+      dxil_backend.zig     — DXIL backend
+      dxil_bitcode.zig     — LLVM bitstream writer (формат DXIL)
+      gpu_cpp.zig          — C++ UE shader class generation из GPU IR
+      gpu_dxil.zig         — GPU IR → DXIL кодогенерация
+      gpu_hlsl.zig         — GPU IR → HLSL кодогенерация
+      gpu_ir.zig           — GPU промежуточное представление (ValueId)
+      gpu_lower.zig        — понижение GPU AST → IR
+      gpu_types.zig        — GPU runtime типы (ResourceId, DispatchGrid, ...)
+      shader_backend.zig   — диспетчер shader backend (IrModule, CompileOptions)
+      frontend/
+        ast.zig            — re-export gpu_ast.zig
+        gpu_ast.zig        — GPU AST (ResourceKind: texture2d, ...)
+        gpu_body_parser.zig — парсинг тел GPU shader (1784 строк)
+        gpu_sema.zig       — семантический анализ GPU (Severity: error, warning)
+        hlslgen.zig        — HLSL генерация из GPU AST
+
     runtime/
-      runtime.zig       — runtime kernel (FSM, аллокатор, миграция)
-      bplusrt.zig       — runtime библиотека (print_i64, и т.д.)
-      cpu.zig           — топология CPU
-      latency.zig       — профиль задержек
-      scheduler.zig     — NUMA-aware планировщик
-      scheduler_config.zig — конфигурация планировщика
-      scheduler_state.zig  — глобальное состояние
-      cost_scheduler.zig   — cost-based планировщик
-      gpu_scheduler.zig    — GPU планировщик
-      gpu_job.zig          — GPU задания
-      bench.zig            — бенчмарки
-      frame.zig            — кадровые данные
-    render/
-      frame_graph.zig       — FrameGraph (DAG рендер-проходов)
-      compiled_graph.zig    — скомпилированный граф
-      frame_graph_executor.zig — исполнитель графа
-      frame_runtime.zig     — runtime графа
-      resource_system.zig   — система ресурсов (GPU lifetime)
-      root_signature_builder.zig — компилятор root signatures
-      render_graph.zig      — render graph
-      render_helpers.zig    — вспомогательные функции
-      camera_jitter.zig     — jitter камеры (TAA)
-      d3d12_bindings.zig    — D3D12 привязки
-      dx12_compute.zig      — D3D12 compute
-      history_manager.zig   — менеджер истории (TAA)
-      lifetime_graph.zig    — график жизненного цикла
-      barrier_optimizer.zig — оптимизатор барьеров
-      temporal_history.zig  — temporal история
-      temporal_pipeline.zig — temporal пайплайн
-      gpu_execution.zig     — GPU исполнение
-      gpu_executor.zig      — GPU исполнитель
-      fsr3_runtime.zig      — FSR3 runtime
-  tests/
-    unit/              — 18 .zig модульных тестов (test_bir_frontend, test_runner, test_types, ...)
-    gpu/               — 39 файлов (GPU тесты: .zig + .exe)
-    kernel/            — 20 файлов (kernel тесты)
-    alloc/             — 4 exe (тесты аллокации)
-    com/               — 8 exe (COM-тесты)
-    defer/             — 17 exe (defer-тесты)
-    dll/               — 81 exe/dll (DLL-тесты)
-    entry/             — 17 exe (entry point тесты)
-    enum/              — 14 exe (enum-тесты)
-    expr/              — 2 exe (выражения)
-    float/             — 5 exe (float-тесты)
-    fn/                — 15 exe (функции)
-    if/                — 28 exe (if/else тесты)
-    img/               — 13 exe (image тесты)
-    indirect/          — 18 exe (косвенные вызовы)
-    inject/            — 10 exe (инъекция DLL)
-    loops/             — 52 exe (for/while/break/continue)
-    match/             — 3 exe (match-тесты)
-    mega/              — 10 exe (mega тесты)
-    minimal/           — 13 exe (минимальные программы)
-    misc/              — 26 exe (прочее)
-    plan/              — 51 exe (plan-тесты)
-    print/             — 11 exe (печать)
-    recursion/         — 2 exe (рекурсия)
-    speed/             — 32 exe (бенчмарки производительности)
-    state/             — 6 exe (state-тесты)
-    stress/            — 36 exe (нагрузочные тесты)
-    struct/            — 2 exe (структуры)
-    ref/               — 1 exe (референсные тесты)
-    scope/             — 1 exe (scope-тесты)
-  tools/               — утилиты (.py, .ps1, .txt — 32 файла)
-  prof/                — профили (.prof — 28 файлов)
-  build-artifacts/     — артефакты сборки (.obj, .pdb — 80 файлов)
-  shaders/             — шейдеры (.hlsl, .cso — 18 файлов)
+      runtime.zig          — re-export ../../runtime/runtime.zig
+
+  runtime/
+    runtime.zig            — основной runtime (Panic Runtime, Windows OS layer)
+    bplusrt.zig            — B+ runtime (kernel32, print_i64, ...)
+    cpu.zig                — определение/утилиты CPU (Windows API)
+    latency.zig            — модель задержек (HT_COST_NS, CORE_COST_NS)
+    scheduler.zig          — ядро планировщика задач (CPU/GPU)
+    scheduler_config.zig   — конфигурация планировщика
+    scheduler_state.zig    — состояние планировщика (DecisionOverride enum)
+    cost_scheduler.zig     — cost-based GPU планировщик
+    gpu_scheduler.zig      — планировщик GPU-проходов (ResolvedPass)
+    gpu_job.zig            — определение GPU-задания (GPUJob)
+    frame.zig              — управление фреймами (Stage: upsample, sharpen, temporal)
+    bench.zig              — харнесс бенчмарков
+
+  render/
+    frame_graph.zig        — FrameGraph (istorical validity per resource)
+    compiled_graph.zig     — скомпилированный граф
+    frame_graph_executor.zig — исполнитель графа
+    frame_runtime.zig      — runtime графа (D3D12 + scheduler)
+    resource_system.zig    — управление GPU-ресурсами (текстуры, буферы)
+    root_signature_builder.zig — компилятор root signatures D3D12
+    render_graph.zig       — high-level render graph
+    render_helpers.zig     — утилиты (dispatch2D grid calculation)
+    camera_jitter.zig      — Halton sequence camera jitter (TAA)
+    d3d12_bindings.zig     — D3D12 API bindings (HRESULT, GUID, ...)
+    dx12_compute.zig       — DX12 compute dispatch утилиты
+    history_manager.zig    — ring-buffer истории кадров (TAA)
+    lifetime_graph.zig     — график жизненного цикла ресурсов
+    barrier_optimizer.zig  — оптимизатор ресурс-барьеров
+    temporal_history.zig   — temporal scoring confidence кадров
+    temporal_pipeline.zig  — temporal upscaling пайплайн
+    gpu_execution.zig      — запись GPU-исполнения
+    gpu_executor.zig       — оркестрация GPU-исполнения
+    fsr3_runtime.zig       — FSR 3 frame generation runtime
+
+  platform/
+    linux/                  — (заготовка)
+    macos/                  — (заготовка)
+    shared/                 — (заготовка)
+    windows/                — (заготовка)
+
+  tools/
+    test_runner/
+      test_runner.zig       — test runner (импортирует parser, x64gen, pe)
 ```
+
+### E2E тесты
+
+BIR → MIR → x64 → execute: **9/9 PASS** + 25 E2E тестов целочисленной арифметики,
+плавающей арифметики, конверсий, min/max (CMOVcc), strength reduction, стресс-тестов (200/500 vreg).
 
 ---
 
-## 9. Лицензия
+## 10. Лицензия
 
 MIT License
 
@@ -1113,7 +1278,7 @@ SOFTWARE.
 
 ---
 
-## 10. Контакты
+## 11. Контакты
 
 - **GitHub**: [github.com/bylka2W](https://github.com/bylka2W)
 - **Репозиторий**: [github.com/bylka2W/B-Plus](https://github.com/bylka2W/B-Plus)
@@ -1125,12 +1290,33 @@ SOFTWARE.
 
 ---
 
-# B+ v4.6.0 — Compiled `.plan` / `.metal` Language (SSA + MIR + COFF pipeline)
+# B+ v4.6.1-beta — Compiled `.plan` / `.metal` Language (Frontend → HIR → BIR → MIR → Targets)
 
-> [Russian version ↑](#b-v460--compiled-plan--metal-language-ssa--mir--coff-pipeline)
+> [Russian version ↑](#b-v461-beta--compiled-plan--metal-language-frontend--hir--bir--mir--targets)
 
 **B+** compiles `.plan` / `.metal` files directly to x64 machine code and packages them into Windows PE executables (.exe).
-No assemblers, linkers, or LLVM — the entire code generator is written from scratch in Zig.
+No assemblers, linkers, or LLVM — the entire code generator and optimizer are written from scratch in Zig.
+
+### What's new in v4.6.1-beta
+
+- **Frontend → HIR → BIR → MIR → Targets architecture** — full compiler migration to a
+  multi-level architecture inspired by LLVM/rustc with strictly one-way dependency flow.
+- **frontend / middle / backend split** — compiler source moved from flat `compiler/parser/`
+  and `compiler/backend/bir/` into `compiler/frontend/`, `compiler/middle/bir/`,
+  `compiler/backend/mir/`, `compiler/backend/targets/`.
+- **BIR core module** — new `bir/core/` with typed `Module`, `Function`, `Block`, `Value`,
+  `Instruction` and a `TypeSystem`.
+- **BIR optimizer framework** — `bir/optimizer/` with `PassManager` and `PassResult` for
+  building optimization pipelines.
+- **BIR analysis** — `bir/analysis/` with `AnalysisManager` and `cfg.zig` (CFG construction).
+- **MIR core module** — `mir/core/` with typed `MFunction`, `MBlock`, `MInst`, `MOperand`,
+  `MOpcode`, `PhiInst`, `PhiIncoming`.
+- **Targets abstraction** — `targets/common/` (shared target) and `targets/x64/` with
+  instruction selection (`isel/`), encoder, frame manager, register allocator.
+- **Critical edge fix** — fixed `testCriticalEdgePhi` hang: epilogue now emitted after each
+  block ending with `ret`, preventing infinite loop when critical edge splitting places
+  blocks after a return block.
+- **9/9 BIR → MIR → x64 → execute E2E tests pass** (was 7/8).
 
 ---
 
@@ -1151,7 +1337,7 @@ No assemblers, linkers, or LLVM — the entire code generator is written from sc
    - [3.10 Context (context)](#310-context-context)
    - [3.11 Annotations](#311-annotations)
    - [3.12 Enums (enum)](#312-enums-enum)
-   - [3.13 Parallel Blocks (parallel)](#313-parallel-blocks-parallel)
+   - [3.13 Parallel Blocks (parallel)](#313-parallel-blocks)
    - [3.14 Kernel Functions](#314-kernel-functions)
    - [3.15 External Functions (extern)](#315-external-functions-extern)
    - [3.16 Comments](#316-comments)
@@ -1172,10 +1358,11 @@ No assemblers, linkers, or LLVM — the entire code generator is written from sc
    - [4.14 CLI](#414-cli)
 5. [Data Types](#5-data-types)
 6. [Examples](#6-examples)
-7. [Building from Source](#7-building-from-source)
-8. [Project Structure](#8-project-structure)
-9. [License](#9-license)
-10. [Contact](#10-contact)
+7. [BIR Optimizer — Benchmarks & Architecture](#7-bir-optimizer--benchmarks--architecture)
+8. [Building from Source](#8-building-from-source)
+9. [Project Structure](#9-project-structure)
+10. [License](#10-license)
+11. [Contact](#11-contact)
 
 ---
 
@@ -1769,7 +1956,7 @@ bplus build <input.metal> [-o <output.exe>]
 bplus run   <input.metal>
 ```
 
-Pipeline: `.metal → parser → BIR (SSA) → mem2reg → cfgsimplify → lower to MIR → SSA destruction → copy propagation → DCE → peephole → linear scan RA → x64 → COFF .obj → zig build-exe → .exe`
+Pipeline: `.metal → parser → BIR (SSA) → mem2reg → cfgsimplify → SCCP → InstCombine → ConstantFolding → GVN → LICM → Unroll → DCE → lower to MIR → SSA destruction → addr_fold → copy propagation → DCE → peephole → linear scan RA → x64 → COFF .obj → zig build-exe → .exe`
 
 ---
 
@@ -1846,7 +2033,77 @@ context {
 
 ---
 
-## 7. Building from Source
+## 7. BIR Optimizer — Benchmarks & Architecture
+
+### Backend Architecture
+
+The compiler backend follows an LLVM-like architecture:
+
+```
+BIR (SSA)  ──── MIR (Machine IR)  ──── x64 Machine Code
+  │                    │                        │
+  ├─ mem2reg           ├─ SSA destruction        ├─ Linear Scan RA
+  ├─ cfgsimplify        ├─ addr_fold (LEA)        ├─ Frame Manager
+  ├─ SCCP               ├─ copy propagation       ├─ Instruction Encoder
+  ├─ InstCombine         ├─ DCE                    └─ COFF/PE
+  ├─ ConstantFolding     └─ peephole
+  ├─ GVN
+  ├─ LICM
+  ├─ Unroll
+  └─ DCE
+```
+
+### BIR Optimization Pipeline
+
+| Pass | Description |
+|------|-------------|
+| **mem2reg** | Promote memory to SSA registers |
+| **cfgsimplify** | Control flow graph simplification |
+| **SCCP** | Sparse conditional constant propagation |
+| **InstCombine** | Algebraic identities, comparison folding |
+| **ConstantFolding** | Constant expression evaluation, max/min |
+| **GVN** | Global value numbering (CSE for commutative ops) |
+| **LICM** | Loop-invariant code motion |
+| **Unroll** | Short loop unrolling |
+| **DCE** | Dead code elimination |
+
+### MIR Optimization Pipeline
+
+| Pass | Description |
+|------|-------------|
+| **SSA Destruction** | Replace phi with mov via CopyProp |
+| **AddrFold** | LEA synthesis from address arithmetic [base+index*scale+disp] |
+| **Copy Propagation** | Copy propagation (3 iterations) |
+| **DCE** | Dead code elimination |
+| **Peephole** | Constant folding, comparison optimization |
+
+### Optimization Benchmarks
+
+| Test | Without opts | With opts | Savings |
+|------|-------------|-----------|---------|
+| P1: Arithmetic chain (mul/div pow2, mul -1) | 91 B, 14 instrs | 51 B, 10 instrs | **44.0%** |
+| P2: Dead branch (SCCP: if(true) → else) | 74 B, 8 instrs, 4 blocks | — 4 instrs, 2 blocks | branch eliminated |
+| P3: Redundant CSE (5+3 computed 3×) | 74 B, 8 instrs | 26 B, 2 instrs | **64.9%** |
+| P4: Stress (200 vregs, chain of adds) | 2026 B, 402 instrs | 26 B, 2 instrs | **98.7%** |
+| P5: max/min constant folding | 107 B, 8 instrs | 26 B, 2 instrs | **75.7%** |
+
+### E2E Tests
+
+25 codegen E2E tests (BIR → MIR → x64 → execute):
+
+- Integer arithmetic: add, sub, mul, div, neg, not, and/or/xor
+- Branching: if/else, phi nodes
+- Stress: 200 and 500 vregs, spills
+- Strength reduction: mul→shl, div→shr, mul -1→neg
+- SCCP: dead branches, constant folding
+- InstCombine: double neg, add/sub cancellation
+- Floating point: f32/f64 add, mul, sub, div, neg
+- Conversions: int↔float, sext, zext, trunc
+- min/max: CMOVcc (branchless)
+
+---
+
+## 8. Building from Source
 
 Requires [Zig](https://ziglang.org/) (master, >= 0.14).
 
@@ -1870,148 +2127,223 @@ bpc.exe run example.plan
 
 ---
 
-## 8. Project Structure
+## 9. Project Structure
+
+### Compiler Architecture
+
+```
+Frontend (parser, AST, semantic analysis)
+    │
+    ▼
+HIR (High-Level IR) — BIR SSA
+    │  mem2reg → cfgsimplify → SCCP → InstCombine → ConstantFolding
+    │  → GVN → Unroll → LICM → ForwardStoreToLoad → DeadStoreElimination → DCE
+    ▼
+MIR (Machine IR) — target-independent
+    │  SSA Destroy → AddrFold → CopyProp → Peephole ×3 → DCE
+    ▼
+Targets (code generation)
+    │  ISEL → RegAlloc → Encoding
+    ▼
+Object (PE/COFF → .exe)
+```
+
+### Source Tree
 
 ```text
-C:\B-Plus\
-  bpc.exe                — compiler executable
-  LICENSE
-  README.md
+src/
+  main.zig                — entry point, CLI, orchestration
+  bplus.zig               — CLI tool (bplus build/run)
 
-zig/                    — compiler source (Zig)
-  build.zig             — build script
-  src/
-    main.zig            — entry point, CLI, orchestration
-    bplus.zig           — CLI tool (bplus build/run)
-    compiler/
+  compiler/
+    frontend/
+      ast.zig             — AST node types (TypeId, AST structs)
+      cppgen.zig          — C++ code generation from AST
       parser/
-        ast.zig         — AST types
-        parser.zig      — lexer + parser for .plan
-        symbol.zig      — symbol table
-        gpu_ast.zig     — GPU AST
-        gpu_body_parser.zig — GPU kernel body parser
-        gpu_sema.zig    — GPU semantic analysis
-        cppgen.zig      — C++ code generator
-        hlslgen.zig     — HLSL code generator (legacy)
-      backend/
+        ast.zig           — re-export ../ast.zig
+        gpu_ast.zig       — re-export ../../gpu/frontend/gpu_ast.zig
+        parser.zig        — lexer + parser for .plan
+      sema/
+        ast.zig           — re-export ../ast.zig
+        scope.zig         — re-export resolver/scope.zig
+        sema.zig          — semantic analysis
+        resolver/
+          scope.zig       — scope resolution (SymbolKind, scope resolution)
+        symbols/
+          symbol.zig      — symbol types (SymbolKind: code, ...)
+
+    middle/
+      bir/
+        bir.zig           — public BIR API; re-export core/
+        bir_analysis.zig  — re-export analysis/manager.zig
+        bir_alias.zig     — alias analysis (AliasResult: NoAlias, ...)
+        bir_backend.zig   — re-export bir, bir_types, bir_cfg, bir_loops, ...
+        bir_bplus_frontend.zig — B+ language frontend to BIR (imports frontend/ast)
+        bir_cfg.zig       — re-export analysis/cfg/cfg.zig
+        bir_cfgsimplify.zig — CFG simplification pass
+        bir_cpu.zig       — CPU target lowering (BIR → MIR)
+        bir_dominators.zig — dominator tree computation
+        bir_frontend.zig  — GPU frontend to BIR
+        bir_hlsl.zig      — BIR to HLSL
+        bir_ivopt.zig     — induction variable optimization
+        bir_licm.zig      — loop-invariant code motion
+        bir_loops.zig     — loop analysis
+        bir_loop_rotate.zig — loop rotation transform
+        bir_lower.zig     — BIR lowering (imports pipeline_gen)
+        bir_mem2reg.zig   — memory to register promotion (SSA)
+        bir_memory_ssa.zig — Memory SSA construction
+        bir_passes.zig    — BIR pass infrastructure
+        bir_sccp.zig      — SCCP (sparse conditional constant propagation)
+        bir_types.zig     — re-export core/types.zig
+        bir_unroll.zig    — loop unrolling
+        bir_verify.zig    — BIR verification/validation
+        core/
+          block.zig       — basic block definition (BlockId)
+          function.zig    — function representation
+          instruction.zig — BIR instruction definitions
+          module.zig      — module container
+          types.zig       — BIR type system (TypeId)
+          value.zig       — value types (ValueId, BlockId, FunctionId)
+        optimizer/
+          pass_manager.zig — optimization pass manager
+          pass_types.zig  — pass/analysis identifiers (AnalysisKind bitmask)
+        analysis/
+          manager.zig     — analysis manager (caches CFG, dominators, loops)
+          cfg/
+            cfg.zig       — control-flow graph construction
+
+    backend/
+      backend.zig          — backend module root (re-export bir, mir, targets, object)
+      mir/
+        mir.zig            — public MIR API
+        mir_backend.zig    — re-export mir, mir_verify, mir_optimizer, ...
+        mir_addr_fold.zig  — AddrFold (LEA synthesis from address arithmetic)
+        mir_copy_prop.zig  — copy propagation pass
+        mir_dce.zig        — dead code elimination
+        mir_optimizer.zig  — MIR optimization pipeline (orchestrates DCE, peephole, SSA destroy)
+        mir_peephole.zig   — peephole optimizations
+        mir_ssa_destroy.zig — SSA destruction (phi elimination)
+        mir_verify.zig     — MIR verification
+        mir_x64.zig        — legacy wrapper → targets/x64/lowering.zig
+        pipeline_gen.zig   — render pipeline generation
+        sizes.zig          — D3D12 struct size utility
+        core/
+          mir.zig          — MIR core: target-independent types
+          function.zig     — MIR function representation
+          opcode.zig       — MIR opcodes (MovInst, etc.)
+          operand.zig      — MIR operand types (MOperand, PhysReg, CondCode)
+          value.zig        — MIR data types (DataType enum: void, i1, i8, ...)
+
+      targets/
+        common/
+          target.zig       — target-independent types (RegAllocResult)
         x64/
-          x64gen.zig    — x64 machine code generator
-          x64enc.zig    — x64 instruction encoder
-          layout.zig    — stack frame layout
-          codebuffer.zig — code buffer
-          abi.zig       — ABI conventions (Win64)
-          regalloc.zig  — register allocator (Linear Scan)
+          x64_backend.zig  — x64 backend entry point (MIR → x86-64 pipeline)
+          x64enc.zig       — x64 instruction encoding
+          x64gen.zig       — x64 code generator
+          abi.zig          — ABI constants (frame_size, shadow_size)
+          branches.zig     — branch encoding helpers
+          codebuffer.zig   — code buffer with label fixups (LabelId)
+          debug.zig        — debug/trace utilities for x64
+          encoder.zig      — re-export x64enc.zig
+          frame.zig        — stack frame layout (Abi: win64, ...)
+          isel.zig         — instruction selection orchestration
+          layout.zig       — slot layout for locals (SlotKind enum)
+          lowering.zig     — x64 lowering orchestrator (regalloc → isel → encode)
+          memory.zig       — addressing mode helpers (base + displacement)
+          peephole.zig     — x64-specific peephole optimizations
+          regalloc.zig     — register allocation
+          registers.zig    — x64 register enum (X64Reg)
+          ir/
+            inst.zig       — x64 IR instruction types
+          isel/
+            context.zig    — shared context for ISEL sub-modules
+            control.zig    — control-flow ISEL (branch/call/ret/select)
+            conversions.zig — type conversion ISEL (sext/zext/trunc/sitofp/...)
+            float.zig      — floating-point ISEL (SSE scalar)
+            integer.zig    — integer arithmetic ISEL
+            memory.zig     — memory access ISEL (load/store/lea/alloca)
+
+      object/
         pe/
-          pe.zig        — PE (.exe/.dll) generator
-          coff.zig      — COFF object format
-        gpu/
-          gpu_ir.zig    — GPU SSA IR
-          gpu_lower.zig — GPU AST → IR lowering
-          gpu_hlsl.zig  — HLSL from GPU IR
-          gpu_dxil.zig  — DXIL backend
-          gpu_cpp.zig   — C++ GPU backend
-          gpu_types.zig — GPU types
-          dxil_backend.zig — DXIL pipeline
-          dxil_bitcode.zig — LLVM bitcode for DXIL
-          shader_backend.zig — shared shader backend
-        bir/
-          bir.zig       — BIR (Bytecode IR)
-          bir_types.zig — BIR types
-          bir_frontend.zig — BIR frontend
-          bir_cfg.zig   — control flow graph
-          bir_dominators.zig — dominator tree
-          bir_loops.zig — loop analysis
-          bir_alias.zig — alias analysis
-          bir_memory_ssa.zig — MemorySSA
-          bir_licm.zig  — loop-invariant code motion
-          bir_unroll.zig — loop unrolling
-          bir_verify.zig — BIR verification
-          bir_passes.zig — BIR passes
-          bir_lower.zig — BIR → MIR lowering
-          bir_cpu.zig   — CPU-specific BIR, MIR lowering
-          bir_hlsl.zig  — HLSL from BIR
-        mir/
-          mir.zig       — MIR (Machine IR), phi instructions
-          mir_ssa_destroy.zig — SSA destruction pass
-          mir_copy_prop.zig — copy propagation pass
-          mir_dce.zig   — dead code elimination
-          mir_peephole.zig — peephole optimizations
-          mir_optimizer.zig — MIR optimizer
-          mir_verify.zig — MIR verifier
-          mir_x64.zig   — MIR → x64 code generation
-          pipeline_gen.zig — pipeline generation
-          sizes.zig     — type sizes
+          pe.zig           — PE (.exe/.dll) generator
+        coff/
+          coff.zig         — COFF object file writer
+
+    gpu/
+      dxil_backend.zig     — DXIL backend
+      dxil_bitcode.zig     — LLVM bitstream writer (DXIL format)
+      gpu_cpp.zig          — C++ UE shader class generation from GPU IR
+      gpu_dxil.zig         — GPU IR → DXIL code generation
+      gpu_hlsl.zig         — GPU IR → HLSL code generation
+      gpu_ir.zig           — GPU intermediate representation (ValueId)
+      gpu_lower.zig        — GPU AST → IR lowering
+      gpu_types.zig        — GPU runtime types (ResourceId, DispatchGrid, ...)
+      shader_backend.zig   — shader backend dispatcher (IrModule, CompileOptions)
+      frontend/
+        ast.zig            — re-export gpu_ast.zig
+        gpu_ast.zig        — GPU AST (ResourceKind: texture2d, ...)
+        gpu_body_parser.zig — GPU shader body parser (1784 lines)
+        gpu_sema.zig       — GPU semantic analysis (Severity: error, warning)
+        hlslgen.zig        — HLSL code generation from GPU AST
+
     runtime/
-      runtime.zig       — runtime kernel (FSM, allocator, migration)
-      bplusrt.zig       — runtime library (print_i64, etc.)
-      cpu.zig           — CPU topology
-      latency.zig       — latency profiling
-      scheduler.zig     — NUMA-aware scheduler
-      scheduler_config.zig — scheduler configuration
-      scheduler_state.zig  — global state
-      cost_scheduler.zig   — cost-based scheduler
-      gpu_scheduler.zig    — GPU scheduler
-      gpu_job.zig          — GPU jobs
-      bench.zig            — benchmarks
-      frame.zig            — frame data
-    render/
-      frame_graph.zig       — FrameGraph (render pass DAG)
-      compiled_graph.zig    — compiled graph
-      frame_graph_executor.zig — graph executor
-      frame_runtime.zig     — graph runtime
-      resource_system.zig   — resource system (GPU lifetime)
-      root_signature_builder.zig — root signature compiler
-      render_graph.zig      — render graph
-      render_helpers.zig    — helper functions
-      camera_jitter.zig     — camera jitter (TAA)
-      d3d12_bindings.zig    — D3D12 bindings
-      dx12_compute.zig      — D3D12 compute
-      history_manager.zig   — history manager (TAA)
-      lifetime_graph.zig    — lifetime graph
-      barrier_optimizer.zig — barrier optimizer
-      temporal_history.zig  — temporal history
-      temporal_pipeline.zig — temporal pipeline
-      gpu_execution.zig     — GPU execution
-      gpu_executor.zig      — GPU executor
-      fsr3_runtime.zig      — FSR3 runtime
-  tests/
-    unit/              — 18 .zig unit tests
-    gpu/               — 39 files (GPU tests: .zig + .exe)
-    kernel/            — 20 files (kernel tests)
-    alloc/             — 4 exe (allocation tests)
-    com/               — 8 exe (COM tests)
-    defer/             — 17 exe (defer tests)
-    dll/               — 81 exe/dll (DLL tests)
-    entry/             — 17 exe (entry point tests)
-    enum/              — 14 exe (enum tests)
-    expr/              — 2 exe (expressions)
-    float/             — 5 exe (float tests)
-    fn/                — 15 exe (functions)
-    if/                — 28 exe (if/else tests)
-    img/               — 13 exe (image tests)
-    indirect/          — 18 exe (indirect calls)
-    inject/            — 10 exe (DLL injection)
-    loops/             — 52 exe (for/while/break/continue)
-    match/             — 3 exe (match tests)
-    mega/              — 10 exe (mega tests)
-    minimal/           — 12 exe (minimal programs)
-    misc/              — 26 exe (miscellaneous)
-    plan/              — 51 exe (plan tests)
-    print/             — 10 exe (print tests)
-    recursion/         — 2 exe (recursion)
-    speed/             — 34 exe (performance benchmarks)
-    state/             — 6 exe (state tests)
-    stress/            — 35 exe (stress tests)
-    struct/            — 2 exe (struct tests)
-  tools/               — utilities (.py, .ps1, .txt — 32 files)
-  prof/                — profiles (.prof — 28 files)
-  build-artifacts/     — build artifacts (.obj, .pdb — 80 files)
-  shaders/             — shaders (.hlsl, .cso — 18 files)
+      runtime.zig          — re-export ../../runtime/runtime.zig
+
+  runtime/
+    runtime.zig            — main runtime (Panic Runtime, Windows OS layer)
+    bplusrt.zig            — B+ runtime (kernel32, print_i64, ...)
+    cpu.zig                — CPU detection/utilities (Windows API)
+    latency.zig            — latency modeling (HT_COST_NS, CORE_COST_NS)
+    scheduler.zig          — core task scheduler (CPU/GPU)
+    scheduler_config.zig   — scheduler configuration
+    scheduler_state.zig    — scheduler state (DecisionOverride enum)
+    cost_scheduler.zig     — cost-based GPU scheduler
+    gpu_scheduler.zig      — GPU pass scheduler (ResolvedPass)
+    gpu_job.zig            — GPU job definition (GPUJob)
+    frame.zig              — frame management (Stage: upsample, sharpen, temporal)
+    bench.zig              — benchmarking harness
+
+  render/
+    frame_graph.zig        — FrameGraph (per-resource history validity)
+    compiled_graph.zig     — compiled render graph
+    frame_graph_executor.zig — frame graph execution engine
+    frame_runtime.zig      — frame runtime (D3D12 + scheduler)
+    resource_system.zig    — GPU resource management (textures, buffers)
+    root_signature_builder.zig — D3D12 root signature builder
+    render_graph.zig       — high-level render graph
+    render_helpers.zig     — utility: dispatch2D grid calculation
+    camera_jitter.zig      — Halton sequence camera jitter (TAA)
+    d3d12_bindings.zig     — D3D12 API bindings (HRESULT, GUID, ...)
+    dx12_compute.zig       — DX12 compute dispatch utilities
+    history_manager.zig    — ring-buffer frame history (TAA)
+    lifetime_graph.zig     — resource lifetime graph
+    barrier_optimizer.zig  — resource barrier optimizer
+    temporal_history.zig   — temporal frame confidence scoring
+    temporal_pipeline.zig  — temporal upscaling pipeline
+    gpu_execution.zig      — GPU execution recording
+    gpu_executor.zig       — GPU executor orchestration
+    fsr3_runtime.zig       — FSR 3 frame generation runtime
+
+  platform/
+    linux/                  — (stub)
+    macos/                  — (stub)
+    shared/                 — (stub)
+    windows/                — (stub)
+
+  tools/
+    test_runner/
+      test_runner.zig       — test runner (imports parser, x64gen, pe)
 ```
+
+### E2E Tests
+
+BIR → MIR → x64 → execute: **9/9 PASS** + 25 E2E tests covering integer arithmetic,
+floating-point arithmetic, conversions, min/max (CMOVcc), strength reduction, stress tests (200/500 vreg).
 
 ---
 
-## 9. License
+## 10. License
 
 MIT License
 
@@ -2041,7 +2373,7 @@ SOFTWARE.
 
 ---
 
-## 10. Contact
+## 11. Contact
 
 - **GitHub**: [github.com/bylka2W](https://github.com/bylka2W)
 - **Repository**: [github.com/bylka2W/B-Plus](https://github.com/bylka2W/B-Plus)

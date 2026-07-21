@@ -1,5 +1,5 @@
-const std = @import("std");
-const Writer = @import("../../src/compiler/backend/gpu/dxil_bitcode.zig").Writer;
+﻿const std = @import("std");
+const Writer = @import("../../src/compiler/gpu/dxil_bitcode.zig").Writer;
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

@@ -1,5 +1,5 @@
-const std = @import("std");
-const dxil_bc = @import("../../src/compiler/backend/gpu/dxil_bitcode.zig");
+﻿const std = @import("std");
+const dxil_bc = @import("../../src/compiler/gpu/dxil_bitcode.zig");
 
 /// Test with more realistic records (source_filename, triple, datalayout)
 pub fn main() !void {

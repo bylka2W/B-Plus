@@ -1,4 +1,4 @@
-const gpu_types = @import("../compiler/backend/gpu/gpu_types.zig");
+﻿const gpu_types = @import("../compiler/gpu/gpu_types.zig");
 
 pub fn dispatch2D(width: u32, height: u32) gpu_types.DispatchGrid {
     return .{

@@ -1,3 +1,31 @@
+**v4.6.1-beta (архитектура Frontend → HIR → BIR → MIR → Targets + backend optimizer):**
+- **Многоуровневая архитектура** — полная миграция компилятора на архитектуру в стиле LLVM/rustc. Зависимости строго однонаправленные: Frontend → HIR → BIR → MIR → Targets.
+- **Разделение frontend / middle / backend** — исходный код перемещён из плоской структуры `compiler/parser/`, `compiler/backend/bir/` в иерархию `compiler/frontend/`, `compiler/middle/bir/`, `compiler/backend/mir/`, `compiler/backend/targets/`. Все ~500+ `@import` путей переписаны.
+- **BIR core модуль** (`bir/core/`) — типизированные `Module`, `Function`, `Block`, `ValueId`, `Instruction`, `TypeSystem`, `PassManager`, `PassResult`, `PassContext`, `AnalysisManager`.
+- **BIR analysis** (`bir/analysis/`) — `AnalysisManager`, `cfg.zig` (CFG построение и доминаторный анализ).
+- **MIR core модуль** (`mir/core/`) — типизированные `MFunction`, `MBlock`, `MInst`, `MOperand`, `MOpcode`, `PhiInst`, `PhiIncoming`.
+- **Targets abstraction** — `targets/common/target.zig` (общий target) и `targets/x64/` с instruction selection (`isel/` с `context.zig`, `control.zig`, `integer.zig`, `float.zig`, `memory.zig`, `conversions.zig`), encoder (`x64enc.zig`, `encoder.zig`), frame manager (`frame.zig`), register allocator (`regalloc.zig`), lowering orchestrator (`lowering.zig`).
+- **GPU frontend** (`gpu/frontend/`) — `ast.zig` (facade для `gpu_ast.zig`), `hlslgen.zig`, `gpu_body_parser.zig`, `gpu_sema.zig`.
+- **Object formats** — `object/pe/pe.zig`, `object/coff/coff.zig`.
+- **BIR optimization pipeline** — полный набор проходов: SCCP (sparse conditional constant propagation), InstCombine (алгебраические тождества), ConstantFolding (вычисление константных выражений, включая max/min), GVN (глобальная свёртка значений для коммутативных операций), LICM (вынос инвариантов из циклов), Unroll (развёртка коротких циклов), DCE. Пайплайн: `Verify → Mem2Reg → Verify → CFGSimplify → Verify → SCCP → Verify → InstCombine → Verify → ConstantFolding → Verify → GVN → Verify → Unroll → Verify → LICM → Verify → ForwardStoreToLoad → Verify → DeadStoreElimination → Verify → DCE → Verify`.
+- **MIR optimization pipeline** — `SSA Destroy → Verify → AddrFold → Verify → CopyProp → (DCE → Peephole → CopyProp)×3 → DCE`. AddrFold — новый проход, синтезирующий LEA из адресной арифметики.
+- **AddrFold** (`mir_addr_fold.zig`) — отслеживание происхождения значений (Origin: copy/known_imm/scaled/addr) через mov/shl/add цепочки. Pass 1 строит карту origins, pass 2 заменяет `add v_r, v_s` на `lea` с addressing mode [base+index*scale+disp]. Поддержка known-immediate propagation для размеров сдвигов и дисплейсментов.
+- **Constant folding max/min** — SCCP и ConstantFoldingPass вычисляют `max(a,b)` и `min(b,a)` для константных операндов. Экономия до 75.7% на P5 бенчмарке.
+- **Strength reduction** — mul на степень двойки → shl, div на степень двойки → shr, mul -1 → neg.
+- **GVN commutative canonicalization** — сортировка ключей VN для коммутативных операций (add, mul, and, or, xor) для корректного CSE.
+- **InstCombine** — алгебраические тождества (x+0, x*1, x*0, x|x, x&x), двойная отрицательная отмена (neg neg → identity), add/sub cancellation (x+y-y → x).
+- **Branchless min/max** — через CMOVcc (select instruction). BIR `max(a,b)` → MIR `cmp_flags + select`.
+- **Critical edge fix** — исправлен hang теста `testCriticalEdgePhi`: эпилог теперь генерируется после каждого блока, заканчивающегося `ret` MIR-инструкцией. Без этого контрольный поток падал из `ret`-блока в критическое ребро → infinite loop.
+- **Исправления**:
+  - addr_fold: запрещено создание LEA для чисто константной арифметики (const+const → known_imm вместо addr).
+  - addr_fold: исправлен двойной подсчёт дисплейсмента в pass 2 (было `addr.disp + d`, стало `addr.disp`).
+  - peephole: добавлен `redefineVReg` для LEA destinations (иначе constant propagation протекала через LEA в ret).
+  - DCE srcVregs: удалён dst из списка источников для add/sub/imul/idiv/and/or/xor.
+- **E2E тесты** — 9/9 BIR→MIR tests проходят + 25 E2E тестов (целочисленная арифметика, ветвление, phi, стресс 200/500 vreg, strength reduction, SCCP dead branch, instcombine, плавающая арифметика f32/f64, конверсии sext/zext/trunc/sitofp/fptosi, min/max CMOVcc). Добавлены: `testNestedIfWithPhi`, `testLoopWithPhi`, `testCriticalEdgePhi`, `testOptComparison`.
+- **Бенчмарки оптимизаций**: P1 arithmetic chain 44.0%, P3 redundant CSE 64.9%, P4 stress 98.7%, P5 max/min 75.7%.
+- **Пайплайн**: `.metal → парсер → BIR (SSA) → mem2reg → cfgsimplify → SCCP → InstCombine → ConstantFolding → GVN → LICM → Unroll → DCE → понижение до MIR → уничтожение SSA → addr_fold → распространение копий → DCE → пеепхол → линейный аллокатор → x64 → PE/COFF → .exe`.
+- **bpc.bat** — обёртка для запуска из проводника (двойной клик / drag-and-drop).
+
 **v4.6.0 (SSA инфраструктура):**
 - **MIR phi инструкции**: структуры `PhiInst`, `PhiIncoming` добавлены в `mir.zig`. BIR phi-узлы теперь понижаются до MIR phi-инструкций в `bir_cpu.zig` (вместо эмита inline-копий).
 - **Проход уничтожения SSA** (`mir_ssa_destroy.zig`): полное устранение SSA как MIR-прохода — `computeNextVReg()` для выделения scratch-врегов выше всех существующих, `splitCriticalEdges()` вставляет транплинг-блоки на рёбра с >1 предшественником И >1 преемником, `eliminatePhis()` группирует копии по предшественникам, `resolveAndEmitCopies()` выполняет корректное параллельное разрешение копий (извлечение безопасных источников, разрыв циклов через scratch-регистры с полным эмитом `mov tmp, src` + `mov dst, tmp`).
@@ -38,6 +66,60 @@
 - **Depth-aware split аргументов**: новый `splitArgsDepthAware()` — разбивает строку аргументов по запятым только на глубине 0 (учитывает вложенные скобки). Исправляет `ExitProcess(add(10,20))` и другие вложенные вызовы.
 - Удалены отладочные `std.debug.print`.
 - Все 5 тестов `test_fn*.b+` проходят: `five() → 5`, `add(10,20) → 30`, `returnA(10,20) → 10`, `ExitProcess(add(10,20)) → 30`, `ExitProcess(five()) → 5`.
+
+**v4.5.6 (нормальные ошибки + фикс line tracking):**
+- **Исправлен `body_line_indices`**: пустые строки и комментарии больше не отфильтровываются при загрузке, поэтому `body_line_indices` правильно указывает на `ctx.source_lines`. Ошибки показывают правильную строку исходника.
+- **Column tracking**: `ctx.err_col` добавлен в `CompilerContext`, `reportErr` показывает каретку `^`.
+- Все 8 `.bp` тестов проходят (включая `test_error.bp`, `test_implicit2.bp`).
+
+**v4.5.5 (CompilerContext refactor + structs complete):**
+- **Structs fully implemented**: `StructDef`/`Field` types, two-pass parser (register names → resolve types/offsets/sizes), field offset layout, `p.x` read/write in expressions and assignments, `&p.x` address-of-field
+- **CompilerContext refactor**: global `var struct_table: StructTable = undefined;` eliminated — replaced with `CompilerContext` struct containing `allocator: std.mem.Allocator` and `structs: StructTable`
+- **`*CompilerContext` idiom**: all compile/parse functions take `*CompilerContext` instead of separate `allocator` parameter; `Type.fromString`/`Type.size` take `*const StructTable` for struct table access
+- Все 8 `.bp` тестов проходят (включая `test_struct.bp`)
+
+**v4.5.4 (Полноценный expression parser + if/while/var + idiv):**
+- **Recursive descent expression parser**: 6 уровней приоритета — `||`, `&&`, сравнения (`>= <= == != > <`), `+`/`-`, `*`/`/`. Поддерживает скобки, вложенные вызовы функций с аргументами, целые литералы, переменные.
+- **`var` declarations**: `var x: i64 = 42;` — аллокация vreg, инициализация, хранение в var_map.
+- **`if`/`else`**: полная поддержка `if (cond) { ... } else { ... }`, включая `} else {` на той же строке.
+- **`while` loops**: header-cond-body-exit схема, корректная работа с `if` внутри тела.
+- **`break`/`continue`**: `break` → `jmp(exit)`, `continue` → `jmp(header)`.
+- **`IDivInst`** в MIR: `idiv` теперь полноценный MIR-инструкция со всеми проходами (dce, peephole, verify, regalloc, x64 codegen).
+- **Typed function returns**: парсер разбирает `fn add(a:i64,b:i64) -> i64`, возвращаемый тип учитывается при генерации `ret` (void → `is_void=true`).
+- Все `.bp` тесты проходят.
+
+**v4.5.3 (CLI + `.bp` → `.exe` end-to-end):**
+- **CLI tool `bplus.zig`**: команды `bplus build <input.bp> [-o <output.exe>]` и `bplus run <input.bp>`. Парсер .bp строит MIR напрямую (fn, extern fn, return, вызовы, целые литералы, `+` выражения, параметры-переменные). Линковка через `zig build-exe` с `bplusrt.obj` и `-lkernel32`.
+- **End-to-end `.bp` → `.exe`**: `hello.bp` с `extern fn print_i64(x: i64); fn main() { print_i64(42); }` → stdout `42`, exit code **0**. Утечки устранены (arena allocator). Автоматический `ret 0` при отсутствии явного `return`.
+- **Прямой MIR builder**: MIR строится из распарсенных строк `.bp` без промежуточного BIR — vreg аллокация, param→vreg prologue, expression compiler.
+
+**v4.5.2 (BIR→MIR→x64→COFF→.exe pipeline):**
+- **COFF object writer** (`coff.zig`): полноценный COFF-формат — IMAGE_FILE_HEADER, .text section, IMAGE_REL_AMD64_REL32 relocations, symbol table (IMAGE_SYM_CLASS_EXTERNAL), string table.
+- **Runtime library** (`bplusrt.zig`): `print_i64` через kernel32!GetStdHandle + WriteFile, компилируется в `bplusrt.obj`.
+- **Extern calls**: нерезолвленные имена в COFF становятся undefined external symbols, резолвятся линкером.
+
+**v4.5.1 (CPU backend stabilisation):**
+- **100 000 / 100 000 MIR fuzz tests passed** — нулевой miscompile на случайных программах.
+- **CMP_R64_MEM**, **ADD_R64_MEM**, **SUB_R64_MEM** — новые opcode в `x64enc.zig`.
+- **`regalloc.spilledMemOp()`** — хелпер для чтения второго операнда из памяти без перезаписи scratch.
+
+**v4.5.0 (Linear Scan Register Allocator):**
+- **Linear Scan Register Allocator** (`regalloc.zig`): live intervals, linear scan с expire/spill, 9 GP-регистров, r11 зарезервирован под spill scratch.
+- `mir_x64.zig` полностью переписан: emit-функции для каждой MIR-инструкции, единый `ra: *const RegAllocResult`.
+
+**v4.4.0:**
+- Удалён `emitMfunction`. Все CPU-тесты через единый linker `emitModule`.
+- `mir_verify.zig` — верификатор MIR перед эмитом.
+- `x64enc.disassemble` — дизассемблер (30+ инструкций).
+
+**v4.3.2:**
+- Все примеры в README переведены на русский.
+- GPU IR: BackendApi, ShaderKey, PipelineKey, CompileOptions/Result.
+- DXIL backend (черновик): GPU IR → HLSL → DXC subprocess → DXBC.
+
+**v4.3.1:**
+- Исправлено выравнивание стека в прологе entry point (x64gen.zig).
+- Добавлены русские псевдонимы ключевых слов.
 
 **v4.5.6 (нормальные ошибки + фикс line tracking):**
 - **Исправлен `body_line_indices`**: пустые строки и комментарии больше не отфильтровываются при загрузке, поэтому `body_line_indices` правильно указывает на `ctx.source_lines`. Ошибки показывают правильную строку исходника.

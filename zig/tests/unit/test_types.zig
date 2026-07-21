@@ -1,6 +1,6 @@
-const std = @import("std");
-const bc = @import("../../src/compiler/backend/gpu/dxil_bitcode.zig");
-const dxil = @import("../../src/compiler/backend/gpu/gpu_dxil.zig");
+﻿const std = @import("std");
+const bc = @import("../../src/compiler/gpu/dxil_bitcode.zig");
+const dxil = @import("../../src/compiler/gpu/gpu_dxil.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

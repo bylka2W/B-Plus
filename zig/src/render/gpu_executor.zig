@@ -1,12 +1,12 @@
-const std = @import("std");
-const gpu_types = @import("../compiler/backend/gpu/gpu_types.zig");
+﻿const std = @import("std");
+const gpu_types = @import("../compiler/gpu/gpu_types.zig");
 const gpu_execution = @import("gpu_execution.zig");
 const frame_graph = @import("frame_graph.zig");
 const resource_system = @import("resource_system.zig");
 const dx12 = @import("dx12_compute.zig");
 const d3d = @import("d3d12_bindings.zig");
 const rs_builder = @import("root_signature_builder.zig");
-const dxil_backend = @import("../compiler/backend/gpu/dxil_backend.zig");
+const dxil_backend = @import("../compiler/gpu/dxil_backend.zig");
 const barrier_opt = @import("barrier_optimizer.zig");
 
 /// Bridges GpuExecutionPlan → D3D12.

@@ -1,5 +1,5 @@
-const std = @import("std");
-const dxil_bc = @import("../../src/compiler/backend/gpu/dxil_bitcode.zig");
+﻿const std = @import("std");
+const dxil_bc = @import("../../src/compiler/gpu/dxil_bitcode.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

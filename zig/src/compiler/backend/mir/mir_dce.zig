@@ -13,19 +13,33 @@ fn dstVreg(inst: mir.MInst) ?u32 {
         .sub => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .imul => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .idiv => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .@"and" => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .@"or" => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .xor => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .shl, .shr, .sar => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .not_op, .neg_op => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .cmp => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .call => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .alloca => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .load => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .lea => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .phi => |p| if (p.dst == .vreg) p.dst.vreg else null,
-        .cmp_flags, .jmp, .jcc, .store, .ret => null,
+        .fadd, .fsub, .fmul, .fdiv => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .fneg_op, .fsqrt_op => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .fcmp => |c| if (c.dst == .vreg) c.dst.vreg else null,
+        .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => |c| if (c.dst == .vreg) c.dst.vreg else null,
+        .select => |s| if (s.dst == .vreg) s.dst.vreg else null,
+        .cmp_flags, .test_flags, .jmp, .jcc, .store, .ret => null,
     };
 }
 
 fn isSideEffecting(inst: mir.MInst) bool {
     return switch (inst) {
-        .call, .store, .ret, .jmp, .jcc, .cmp_flags => true,
-        .add, .sub, .imul, .idiv, .cmp, .alloca, .load, .phi => false,
+        .call, .store, .ret, .jmp, .jcc, .cmp_flags, .test_flags => true,
+        .add, .sub, .imul, .idiv, .@"and", .@"or", .xor, .shl, .shr, .sar, .not_op, .neg_op, .cmp, .alloca, .load, .lea, .phi => false,
+        .fadd, .fsub, .fmul, .fdiv, .fneg_op, .fsqrt_op, .fcmp => false,
+        .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => false,
+        .select => false,
         .mov => |m| m.dst != .vreg,
     };
 }
@@ -37,26 +51,42 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
             if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
         },
         .add => |m| {
-            if (m.dst == .vreg) { buf[n] = m.dst.vreg; n += 1; }
             if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
         },
         .sub => |m| {
-            if (m.dst == .vreg) { buf[n] = m.dst.vreg; n += 1; }
             if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
         },
         .imul => |m| {
-            if (m.dst == .vreg) { buf[n] = m.dst.vreg; n += 1; }
             if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
         },
         .idiv => |m| {
-            if (m.dst == .vreg) { buf[n] = m.dst.vreg; n += 1; }
             if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
+        },
+        .@"and" => |m| {
+            if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
+        },
+        .@"or" => |m| {
+            if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
+        },
+        .xor => |m| {
+            if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
+        },
+        .shl, .shr, .sar => |m| {
+            if (m.dst == .vreg) { buf[n] = m.dst.vreg; n += 1; }
+            if (m.amount == .vreg) { buf[n] = m.amount.vreg; n += 1; }
+        },
+        .not_op, .neg_op => |m| {
+            if (m.dst == .vreg) { buf[n] = m.dst.vreg; n += 1; }
         },
         .cmp => |m| {
             if (m.a == .vreg) { buf[n] = m.a.vreg; n += 1; }
             if (m.b == .vreg) { buf[n] = m.b.vreg; n += 1; }
         },
         .cmp_flags => |m| {
+            if (m.a == .vreg) { buf[n] = m.a.vreg; n += 1; }
+            if (m.b == .vreg) { buf[n] = m.b.vreg; n += 1; }
+        },
+        .test_flags => |m| {
             if (m.a == .vreg) { buf[n] = m.a.vreg; n += 1; }
             if (m.b == .vreg) { buf[n] = m.b.vreg; n += 1; }
         },
@@ -81,6 +111,28 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
             }
         },
         .jmp, .jcc, .alloca => {},
+        .lea => |m| {
+            if (m.base == .vreg) { buf[n] = m.base.vreg; n += 1; }
+            if (m.index == .vreg) { buf[n] = m.index.vreg; n += 1; }
+        },
+        .fadd, .fsub, .fmul, .fdiv => |m| {
+            if (m.a == .vreg) { buf[n] = m.a.vreg; n += 1; }
+            if (m.b == .vreg) { buf[n] = m.b.vreg; n += 1; }
+        },
+        .fneg_op, .fsqrt_op => |m| {
+            if (m.dst == .vreg) { buf[n] = m.dst.vreg; n += 1; }
+        },
+        .fcmp => |m| {
+            if (m.a == .vreg) { buf[n] = m.a.vreg; n += 1; }
+            if (m.b == .vreg) { buf[n] = m.b.vreg; n += 1; }
+        },
+        .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => |m| {
+            if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
+        },
+        .select => |s| {
+            if (s.dst == .vreg) { buf[n] = s.dst.vreg; n += 1; }
+            if (s.src == .vreg) { buf[n] = s.src.vreg; n += 1; }
+        },
     }
     return n;
 }

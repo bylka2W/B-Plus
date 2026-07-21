@@ -1,6 +1,6 @@
-const std = @import("std");
+﻿const std = @import("std");
 const gpu_job = @import("../runtime/gpu_job.zig");
-const gpu_types = @import("../compiler/backend/gpu/gpu_types.zig");
+const gpu_types = @import("../compiler/gpu/gpu_types.zig");
 
 /// Per-resource history validity.
 pub const HistoryUsage = packed struct {

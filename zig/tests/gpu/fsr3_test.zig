@@ -1,5 +1,5 @@
-const std = @import("std");
-const gpu_types = @import("../../src/compiler/backend/gpu/gpu_types.zig");
+﻿const std = @import("std");
+const gpu_types = @import("../../src/compiler/gpu/gpu_types.zig");
 const frame_graph = @import("../../src/render/frame_graph.zig");
 const history_manager = @import("../../src/render/history_manager.zig");
 const temporal_pipeline = @import("../../src/render/temporal_pipeline.zig");
