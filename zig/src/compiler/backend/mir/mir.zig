@@ -52,6 +52,17 @@ pub const MInstUtils = core.MInstUtils;
 pub const MBlock = core.MBlock;
 pub const MFunction = core.MFunction;
 
+/// ─── Passes ───
+pub const passes = struct {
+    pub const ssa_destroy = @import("passes/ssa/ssa_destroy.zig");
+    pub const dce = @import("passes/cleanup/dce.zig");
+    pub const copy_prop = @import("passes/cleanup/copy_prop.zig");
+    pub const peephole = @import("passes/cleanup/peephole.zig");
+    pub const addr_fold = @import("passes/memory/addr_fold.zig");
+    pub const verify = @import("passes/verify.zig");
+    pub const manager = @import("passes/manager.zig");
+};
+
 /// ─── Target API ───
 pub const target = struct {
     pub const Target = @import("../targets/common/target.zig").Target;

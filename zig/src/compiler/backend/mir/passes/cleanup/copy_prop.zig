@@ -1,5 +1,5 @@
 const std = @import("std");
-const mir = @import("mir.zig");
+const mir = @import("../../mir.zig");
 
 const CopyEntry = union(enum) {
     vreg: u32,

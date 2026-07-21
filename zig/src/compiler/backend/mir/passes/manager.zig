@@ -1,11 +1,11 @@
 const std = @import("std");
-const mir = @import("mir.zig");
-const mir_dce = @import("mir_dce.zig");
-const mir_peephole = @import("mir_peephole.zig");
-const mir_ssa_destroy = @import("mir_ssa_destroy.zig");
-const mir_copy_prop = @import("mir_copy_prop.zig");
-const mir_verify = @import("mir_verify.zig");
-const mir_addr_fold = @import("mir_addr_fold.zig");
+const mir = @import("../mir.zig");
+const mir_dce = @import("cleanup/dce.zig");
+const mir_peephole = @import("cleanup/peephole.zig");
+const mir_ssa_destroy = @import("ssa/ssa_destroy.zig");
+const mir_copy_prop = @import("cleanup/copy_prop.zig");
+const mir_verify = @import("verify.zig");
+const mir_addr_fold = @import("memory/addr_fold.zig");
 
 fn hasBackedge(mfunc: *const mir.MFunction) bool {
     for (mfunc.blocks.items, 0..) |*block, bi| {

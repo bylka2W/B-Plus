@@ -15,16 +15,16 @@ const gpu_dxil = @import("compiler/gpu/gpu_dxil.zig");
 const gpu_cpp = @import("compiler/gpu/gpu_cpp.zig");
 const bir = @import("compiler/middle/bir/bir.zig");
 const bir_frontend = @import("compiler/middle/bir/bir_frontend.zig");
-const bir_passes = @import("compiler/middle/bir/bir_passes.zig");
-const bir_lower = @import("compiler/middle/bir/bir_lower.zig");
+const bir_passes = @import("compiler/middle/bir/passes/manager.zig");
+const bir_lower = @import("compiler/middle/bir/lowering/lower.zig");
 const bir_cfg = @import("compiler/middle/bir/bir_cfg.zig");
-const bir_dominators = @import("compiler/middle/bir/bir_dominators.zig");
-const bir_loops = @import("compiler/middle/bir/bir_loops.zig");
+const bir_dominators = @import("compiler/middle/bir/analysis/dominator/dominator.zig");
+const bir_loops = @import("compiler/middle/bir/analysis/loops/loops.zig");
 const bir_hlsl = @import("compiler/middle/bir/bir_hlsl.zig");
 
 const bir_bplus_frontend = @import("compiler/middle/bir/bir_bplus_frontend.zig");
-const bir_cpu = @import("compiler/middle/bir/bir_cpu.zig");
-const bir_lower_dump = @import("compiler/middle/bir/bir_lower.zig");
+const bir_cpu = @import("compiler/middle/bir/lowering/cpu.zig");
+const bir_lower_dump = @import("compiler/middle/bir/lowering/lower.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

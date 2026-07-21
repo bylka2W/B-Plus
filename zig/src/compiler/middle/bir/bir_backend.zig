@@ -1,0 +1,15 @@
+pub const bir = @import("bir.zig");
+pub const bir_types = @import("bir_types.zig");
+pub const bir_cfg = @import("analysis/cfg/cfg.zig");
+pub const bir_dominators = @import("analysis/dominator/dominator.zig");
+pub const bir_loops = @import("analysis/loops/loops.zig");
+pub const bir_analysis = @import("analysis/manager.zig");
+pub const bir_passes = @import("passes/manager.zig");
+pub const bir_verify = @import("verify/verify.zig");
+pub const bir_mem2reg = @import("passes/ssa/mem2reg.zig");
+pub const bir_cfgsimplify = @import("passes/cleanup/cfgsimplify.zig");
+pub const bir_licm = @import("passes/scalar/licm.zig");
+pub const bir_memory_ssa = @import("analysis/memoryssa/memoryssa.zig");
+pub const bir_alias = @import("analysis/alias/alias.zig");
+pub const bir_unroll = @import("passes/scalar/unroll.zig");
+pub const bir_cpu = @import("lowering/cpu.zig");

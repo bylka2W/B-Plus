@@ -1,5 +1,5 @@
 const std = @import("std");
-const mir = @import("mir.zig");
+const mir = @import("../../mir.zig");
 
 pub fn destroySSA(mfunc: *mir.MFunction) !void {
     const next_vreg = computeNextVReg(mfunc);
