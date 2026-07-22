@@ -1,5 +1,10 @@
 const std = @import("std");
 const machine = @import("../machine.zig");
+const operands = @import("verify/operands.zig");
+const vregs = @import("verify/vregs.zig");
+const cfg = @import("verify/cfg.zig");
+
+pub const VerifyError = operands.VerifyError || vregs.VerifyError || cfg.VerifyError;
 
 pub fn verifyModule(mod: *const machine.MModule) !void {
     for (mod.functions.items) |*func| {
@@ -7,10 +12,22 @@ pub fn verifyModule(mod: *const machine.MModule) !void {
     }
 }
 
-pub fn verifyFunction(func: *const machine.MFunction) !void {
+pub fn verifyFunction(func: *const machine.MFunction) VerifyError!void {
+    try cfg.verifyCFG(func);
+
+    var defined = std.AutoHashMap(u32, void).init(func.allocator);
+    defer defined.deinit();
+
     for (func.blocks.items) |*blk| {
         for (blk.instrs.items) |inst| {
-            _ = inst;
+            if (instruction.dstVReg(inst)) |dst_id| {
+                try defined.put(dst_id, {});
+            }
+            try operands.verifyInst(inst, func, &defined);
         }
     }
+
+    try vregs.checkDefUse(func);
 }
+
+const instruction = @import("../core/instruction.zig");

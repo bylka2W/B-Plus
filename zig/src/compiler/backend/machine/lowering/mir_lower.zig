@@ -35,7 +35,8 @@ fn lowerFunction(mir_func: *const mir.MFunction) !machine.MFunction {
         };
 
         for (mir_blk.instrs.items) |mir_inst| {
-            try blk.instrs.append(lowerInst(mir_inst));
+            if (mir_inst == .phi) continue;
+            try blk.instrs.append(try lowerInst(mir_func, mir_inst));
         }
 
         try mfunc.blocks.append(blk);
@@ -44,58 +45,58 @@ fn lowerFunction(mir_func: *const mir.MFunction) !machine.MFunction {
     return mfunc;
 }
 
-fn lowerInst(mir_inst: mir.MInst) machine.MInst {
+fn lowerInst(mir_func: *const mir.MFunction, mir_inst: mir.MInst) !machine.MInst {
     return switch (mir_inst) {
-        .mov => |m| .{ .mov = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .add => |m| .{ .add = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .sub => |m| .{ .sub = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .imul => |m| .{ .imul = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .idiv => |m| .{ .idiv = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .@"and" => |m| .{ .@"and" = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .@"or" => |m| .{ .@"or" = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .xor => |m| .{ .xor = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .shl => |m| .{ .shl = .{ .dst = lowerOp(m.dst), .amount = lowerOp(m.amount) } },
-        .shr => |m| .{ .shr = .{ .dst = lowerOp(m.dst), .amount = lowerOp(m.amount) } },
-        .sar => |m| .{ .sar = .{ .dst = lowerOp(m.dst), .amount = lowerOp(m.amount) } },
-        .not_op => |m| .{ .not_op = .{ .dst = lowerOp(m.dst) } },
-        .neg_op => |m| .{ .neg_op = .{ .dst = lowerOp(m.dst) } },
-        .test_flags => |m| .{ .test_flags = .{ .a = lowerOp(m.a), .b = lowerOp(m.b) } },
-        .cmp => |m| .{ .cmp = .{ .cc = m.cc, .dst = lowerOp(m.dst), .a = lowerOp(m.a), .b = lowerOp(m.b) } },
-        .cmp_flags => |m| .{ .cmp_flags = .{ .a = lowerOp(m.a), .b = lowerOp(m.b) } },
+        .mov => |m| .{ .mov = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .add => |m| .{ .add = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .sub => |m| .{ .sub = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .imul => |m| .{ .imul = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .idiv => |m| .{ .idiv = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .@"and" => |m| .{ .@"and" = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .@"or" => |m| .{ .@"or" = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .xor => |m| .{ .xor = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .shl => |m| .{ .shl = .{ .dst = lowerOp(mir_func, m.dst), .amount = lowerOp(mir_func, m.amount) } },
+        .shr => |m| .{ .shr = .{ .dst = lowerOp(mir_func, m.dst), .amount = lowerOp(mir_func, m.amount) } },
+        .sar => |m| .{ .sar = .{ .dst = lowerOp(mir_func, m.dst), .amount = lowerOp(mir_func, m.amount) } },
+        .not_op => |m| .{ .not_op = .{ .dst = lowerOp(mir_func, m.dst) } },
+        .neg_op => |m| .{ .neg_op = .{ .dst = lowerOp(mir_func, m.dst) } },
+        .test_flags => |m| .{ .test_flags = .{ .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
+        .cmp => |m| .{ .cmp = .{ .cc = m.cc, .dst = lowerOp(mir_func, m.dst), .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
+        .cmp_flags => |m| .{ .cmp_flags = .{ .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
         .jmp => |m| .{ .jmp = .{ .target = @intCast(m.target) } },
         .jcc => |m| .{ .jcc = .{ .cc = m.cc, .target = @intCast(m.target) } },
         .call => |m| blk: {
             var args: [4]machine.MOperand = .{ .{ .imm = 0 }, .{ .imm = 0 }, .{ .imm = 0 }, .{ .imm = 0 } };
-            for (0..m.arg_count) |i| args[i] = lowerOp(m.args[i]);
-            break :blk .{ .call = .{ .name = m.name, .args = args, .arg_count = m.arg_count, .dst = lowerOp(m.dst) } };
+            for (0..m.arg_count) |i| args[i] = lowerOp(mir_func, m.args[i]);
+            break :blk .{ .call = .{ .name = m.name, .args = args, .arg_count = m.arg_count, .dst = lowerOp(mir_func, m.dst) } };
         },
-        .alloca => |m| .{ .alloca = .{ .size = m.size, .dst = lowerOp(m.dst) } },
-        .load => |m| .{ .load = .{ .dst = lowerOp(m.dst), .ptr = lowerOp(m.ptr) } },
-        .store => |m| .{ .store = .{ .ptr = lowerOp(m.ptr), .src = lowerOp(m.src) } },
-        .lea => |m| .{ .lea = .{ .dst = lowerOp(m.dst), .base = lowerOp(m.base), .index = lowerOp(m.index), .scale = m.scale, .disp = m.disp } },
-        .ret => |m| .{ .ret = .{ .val = lowerOp(m.val), .is_void = m.is_void } },
-        .fadd => |m| .{ .fadd = .{ .dst = lowerOp(m.dst), .a = lowerOp(m.a), .b = lowerOp(m.b) } },
-        .fsub => |m| .{ .fsub = .{ .dst = lowerOp(m.dst), .a = lowerOp(m.a), .b = lowerOp(m.b) } },
-        .fmul => |m| .{ .fmul = .{ .dst = lowerOp(m.dst), .a = lowerOp(m.a), .b = lowerOp(m.b) } },
-        .fdiv => |m| .{ .fdiv = .{ .dst = lowerOp(m.dst), .a = lowerOp(m.a), .b = lowerOp(m.b) } },
-        .fneg_op => |m| .{ .fneg_op = .{ .dst = lowerOp(m.dst) } },
-        .fsqrt_op => |m| .{ .fsqrt_op = .{ .dst = lowerOp(m.dst) } },
-        .fcmp => |m| .{ .fcmp = .{ .setcc_op = m.setcc_op, .dst = lowerOp(m.dst), .a = lowerOp(m.a), .b = lowerOp(m.b) } },
-        .sitofp => |m| .{ .sitofp = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .fptosi => |m| .{ .fptosi = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .fpext => |m| .{ .fpext = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .fptrunc => |m| .{ .fptrunc = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .sext_op => |m| .{ .sext_op = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .zext_op => |m| .{ .zext_op = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .trunc_op => |m| .{ .trunc_op = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src) } },
-        .select => |m| .{ .select = .{ .dst = lowerOp(m.dst), .src = lowerOp(m.src), .cc = m.cc } },
-        .phi => .{ .phi = .{ .dst = .{ .imm = 0 }, .incoming = &.{} } },
+        .alloca => |m| .{ .alloca = .{ .size = m.size, .dst = lowerOp(mir_func, m.dst) } },
+        .load => |m| .{ .load = .{ .dst = lowerOp(mir_func, m.dst), .ptr = lowerOp(mir_func, m.ptr) } },
+        .store => |m| .{ .store = .{ .ptr = lowerOp(mir_func, m.ptr), .src = lowerOp(mir_func, m.src) } },
+        .lea => |m| .{ .lea = .{ .dst = lowerOp(mir_func, m.dst), .base = lowerOp(mir_func, m.base), .index = lowerOp(mir_func, m.index), .scale = m.scale, .disp = m.disp } },
+        .ret => |m| .{ .ret = .{ .val = lowerOp(mir_func, m.val), .is_void = m.is_void } },
+        .phi => unreachable,
+        .fadd => |m| .{ .fadd = .{ .dst = lowerOp(mir_func, m.dst), .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
+        .fsub => |m| .{ .fsub = .{ .dst = lowerOp(mir_func, m.dst), .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
+        .fmul => |m| .{ .fmul = .{ .dst = lowerOp(mir_func, m.dst), .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
+        .fdiv => |m| .{ .fdiv = .{ .dst = lowerOp(mir_func, m.dst), .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
+        .fneg_op => |m| .{ .fneg_op = .{ .dst = lowerOp(mir_func, m.dst) } },
+        .fsqrt_op => |m| .{ .fsqrt_op = .{ .dst = lowerOp(mir_func, m.dst) } },
+        .fcmp => |m| .{ .fcmp = .{ .setcc_op = m.setcc_op, .dst = lowerOp(mir_func, m.dst), .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
+        .sitofp => |m| .{ .sitofp = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .fptosi => |m| .{ .fptosi = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .fpext => |m| .{ .fpext = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .fptrunc => |m| .{ .fptrunc = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .sext_op => |m| .{ .sext_op = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .zext_op => |m| .{ .zext_op = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .trunc_op => |m| .{ .trunc_op = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
+        .select => |m| .{ .select = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src), .cc = m.cc } },
     };
 }
 
-fn lowerOp(op: mir.MOperand) machine.MOperand {
+fn lowerOp(mir_func: *const mir.MFunction, op: mir.MOperand) machine.MOperand {
     return switch (op) {
-        .vreg => |v| .{ .vreg = .{ .id = v, .class = .gpr } },
+        .vreg => |v| .{ .vreg = .{ .id = v, .class = mir_func.getVRegClass(v) } },
         .phys => |r| .{ .phys = r },
         .imm => |v| .{ .imm = v },
         .mem => |m| .{ .mem = .{ .base = m.base, .offset = m.offset, .size = m.size, .index = m.index, .scale = m.scale } },

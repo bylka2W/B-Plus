@@ -34,16 +34,6 @@ pub const LeaInst = struct {
 };
 pub const RetInst = struct { val: MOperand, is_void: bool = false };
 
-pub const PhiIncoming = struct {
-    src: MOperand,
-    pred_block: u32,
-};
-
-pub const PhiInst = struct {
-    dst: MOperand,
-    incoming: []const PhiIncoming,
-};
-
 pub const MInst = union(enum) {
     mov: MovInst,
     add: AddInst,
@@ -69,7 +59,6 @@ pub const MInst = union(enum) {
     store: StoreInst,
     lea: LeaInst,
     ret: RetInst,
-    phi: PhiInst,
     fadd: FloatBinOp,
     fsub: FloatBinOp,
     fmul: FloatBinOp,
@@ -93,7 +82,7 @@ pub fn hasDst(inst: MInst) bool {
         .@"and", .@"or", .xor,
         .shl, .shr, .sar,
         .not_op, .neg_op,
-        .cmp, .alloca, .load, .lea, .call, .phi,
+        .cmp, .alloca, .load, .lea, .call,
         .fadd, .fsub, .fmul, .fdiv,
         .fneg_op, .fsqrt_op,
         .fcmp,
@@ -122,7 +111,6 @@ pub fn dstVReg(inst: MInst) ?u32 {
         .load => |m| vregOf(m.dst),
         .lea => |m| vregOf(m.dst),
         .call => |m| vregOf(m.dst),
-        .phi => |p| vregOf(p.dst),
         .fadd, .fsub, .fmul, .fdiv => |m| vregOf(m.dst),
         .fneg_op, .fsqrt_op => |m| vregOf(m.dst),
         .fcmp => |c| vregOf(c.dst),
