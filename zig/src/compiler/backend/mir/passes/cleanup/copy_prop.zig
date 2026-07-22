@@ -104,6 +104,10 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                     if (dstOf(block.instrs.items[i])) |dv| invalidatePointers(&map, dv);
                     i += 1;
                 },
+                .setcc => {
+                    if (dstOf(block.instrs.items[i])) |dv| invalidatePointers(&map, dv);
+                    i += 1;
+                },
                 .fadd, .fsub, .fmul, .fdiv => {
                     const f = &block.instrs.items[i];
                     const fb = switch (f.*) {

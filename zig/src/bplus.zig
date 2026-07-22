@@ -1247,13 +1247,9 @@ fn parseComparison(ctx: *CompilerContext, block: *mir.MBlock, var_stack: *VarSta
         } else {
             const dst = next_vreg.*;
             next_vreg.* += 1;
-            const tmp = next_vreg.*;
-            next_vreg.* += 1;
             const cc: mir.CondCode = if (std.mem.eql(u8, op, ">=")) .ge else if (std.mem.eql(u8, op, "<=")) .le else if (std.mem.eql(u8, op, "==")) .eq else if (std.mem.eql(u8, op, "!=")) .ne else if (std.mem.eql(u8, op, ">")) .gt else .lt;
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = dst }, .src = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
             try block.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = left.vreg }, .b = .{ .vreg = right.vreg } } });
-            try block.instrs.append(.{ .select = .{ .dst = .{ .vreg = dst }, .src = .{ .vreg = tmp }, .cc = cc } });
+            try block.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = dst }, .cc = cc } });
             left = .{ .vreg = dst, .val = null };
         }
     }
@@ -1276,20 +1272,12 @@ fn parseLogicalAnd(ctx: *CompilerContext, block: *mir.MBlock, var_stack: *VarSta
         } else {
             const t1 = next_vreg.*;
             next_vreg.* += 1;
-            const t1_tmp = next_vreg.*;
-            next_vreg.* += 1;
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = t1 }, .src = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = t1_tmp }, .src = .{ .imm = 1 } } });
             try block.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = left.vreg }, .b = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .select = .{ .dst = .{ .vreg = t1 }, .src = .{ .vreg = t1_tmp }, .cc = .ne } });
+            try block.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = t1 }, .cc = .ne } });
             const t2 = next_vreg.*;
             next_vreg.* += 1;
-            const t2_tmp = next_vreg.*;
-            next_vreg.* += 1;
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = t2 }, .src = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = t2_tmp }, .src = .{ .imm = 1 } } });
             try block.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = right.vreg }, .b = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .select = .{ .dst = .{ .vreg = t2 }, .src = .{ .vreg = t2_tmp }, .cc = .ne } });
+            try block.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = t2 }, .cc = .ne } });
             const dst = next_vreg.*;
             next_vreg.* += 1;
             try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = dst }, .src = .{ .vreg = t1 } } });
@@ -1316,32 +1304,20 @@ fn parseLogicalOr(ctx: *CompilerContext, block: *mir.MBlock, var_stack: *VarStac
         } else {
             const t1 = next_vreg.*;
             next_vreg.* += 1;
-            const t1_tmp = next_vreg.*;
-            next_vreg.* += 1;
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = t1 }, .src = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = t1_tmp }, .src = .{ .imm = 1 } } });
             try block.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = left.vreg }, .b = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .select = .{ .dst = .{ .vreg = t1 }, .src = .{ .vreg = t1_tmp }, .cc = .ne } });
+            try block.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = t1 }, .cc = .ne } });
             const t2 = next_vreg.*;
             next_vreg.* += 1;
-            const t2_tmp = next_vreg.*;
-            next_vreg.* += 1;
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = t2 }, .src = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = t2_tmp }, .src = .{ .imm = 1 } } });
             try block.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = right.vreg }, .b = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .select = .{ .dst = .{ .vreg = t2 }, .src = .{ .vreg = t2_tmp }, .cc = .ne } });
+            try block.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = t2 }, .cc = .ne } });
             const sum = next_vreg.*;
             next_vreg.* += 1;
             try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = sum }, .src = .{ .vreg = t1 } } });
             try block.instrs.append(.{ .add = .{ .dst = .{ .vreg = sum }, .src = .{ .vreg = t2 } } });
             const dst = next_vreg.*;
             next_vreg.* += 1;
-            const dst_tmp = next_vreg.*;
-            next_vreg.* += 1;
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = dst }, .src = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = dst_tmp }, .src = .{ .imm = 1 } } });
             try block.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = sum }, .b = .{ .imm = 0 } } });
-            try block.instrs.append(.{ .select = .{ .dst = .{ .vreg = dst }, .src = .{ .vreg = dst_tmp }, .cc = .ne } });
+            try block.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = dst }, .cc = .ne } });
             left = .{ .vreg = dst, .val = null };
         }
     }

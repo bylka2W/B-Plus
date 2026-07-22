@@ -68,6 +68,7 @@ fn dumpInst(inst: mir.MInst) void {
         .select => |s| { std.debug.print("select ", .{}); dumpOp(s.dst); std.debug.print(", cc={s}", .{@tagName(s.cc)}); },
         .phi => |_| { std.debug.print("phi", .{}); },
         .test_flags => |tf| { std.debug.print("test_flags ", .{}); dumpOp(tf.a); std.debug.print(", ", .{}); dumpOp(tf.b); },
+        .setcc => |s| { std.debug.print("setcc ", .{}); dumpOp(s.dst); std.debug.print(", cc={s}", .{@tagName(s.cc)}); },
         .call => |c| { std.debug.print("call {s}", .{c.name}); },
         .sext_op => |c| { std.debug.print("sext ", .{}); dumpOp(c.dst); std.debug.print(", ", .{}); dumpOp(c.src); },
         .zext_op => |c| { std.debug.print("zext ", .{}); dumpOp(c.dst); std.debug.print(", ", .{}); dumpOp(c.src); },

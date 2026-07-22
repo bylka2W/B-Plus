@@ -19,6 +19,7 @@ pub const FCmpInst = struct { cc: CondCode, dst: MOperand, a: MOperand, b: MOper
 pub const ConvInst = struct { dst: MOperand, src: MOperand };
 pub const SelectInst = struct { dst: MOperand, src: MOperand, cc: CondCode };
 pub const TestFlagsInst = struct { a: MOperand, b: MOperand };
+pub const SetCCInst = struct { dst: MOperand, cc: CondCode };
 pub const CmpInst = struct { cc: CondCode, a: MOperand, b: MOperand };
 pub const CmpFlagsInst = struct { a: MOperand, b: MOperand };
 pub const JmpInst = struct { target: usize };
@@ -70,6 +71,7 @@ pub const MInst = union(enum) {
     not_op: UnaryInst,
     neg_op: UnaryInst,
     test_flags: TestFlagsInst,
+    setcc: SetCCInst,
     cmp: CmpInst,
     cmp_flags: CmpFlagsInst,
     jmp: JmpInst,
@@ -112,6 +114,7 @@ pub const MInstUtils = struct {
             .sitofp, .fptosi, .fpext, .fptrunc,
             .sext_op, .zext_op, .trunc_op,
             .select,
+            .setcc,
             => true,
             .call => |c| !c.is_void,
             else => false,
@@ -141,6 +144,7 @@ pub const MInstUtils = struct {
             .sitofp, .fptosi, .fpext, .fptrunc => |c| vregOf(c.dst),
             .sext_op, .zext_op, .trunc_op => |c| vregOf(c.dst),
             .select => |s| vregOf(s.dst),
+            .setcc => |s| vregOf(s.dst),
             else => null,
         };
     }

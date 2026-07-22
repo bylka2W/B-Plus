@@ -33,6 +33,7 @@ pub const FloatBinOp = core.FloatBinOp;
 pub const FCmpInst = core.FCmpInst;
 pub const ConvInst = core.ConvInst;
 pub const SelectInst = core.SelectInst;
+pub const SetCCInst = core.SetCCInst;
 pub const TestFlagsInst = core.TestFlagsInst;
 pub const CmpInst = core.CmpInst;
 pub const CmpFlagsInst = core.CmpFlagsInst;

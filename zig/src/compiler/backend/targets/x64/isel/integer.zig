@@ -187,6 +187,21 @@ pub fn selectIMul(ctx: *Ctx, m: mir.IMulInst) !void {
     }
 }
 
+pub fn selectSetCC(ctx: *Ctx, s: mir.SetCCInst) !void {
+    const cc_reg: i16 = @intCast(@intFromEnum(s.cc));
+    const dst_spilled = regalloc.isSpilled(ctx.ra, s.dst);
+
+    if (dst_spilled) {
+        try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), .{ .imm64 = 0 });
+        try append1(ctx, .SETCC_R8, Operand.r(cc_reg));
+        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+    } else {
+        const dst_reg = resolveReg(ctx.ra, s.dst);
+        try append2(ctx, .MOV_R64_IMM64, Operand.r(dst_reg), .{ .imm64 = 0 });
+        try append1(ctx, .SETCC_R8, Operand.r(cc_reg));
+    }
+}
+
 pub fn selectIDiv(ctx: *Ctx, m: mir.IDivInst) !void {
     const quotient_spilled = regalloc.isSpilled(ctx.ra, m.quotient);
     const quotient_reg = if (quotient_spilled) -1 else resolveReg(ctx.ra, m.quotient);
@@ -207,6 +222,11 @@ pub fn selectIDiv(ctx: *Ctx, m: mir.IDivInst) !void {
         try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, m.quotient, 0);
     } else if (!quotient_is_rax) {
         try append2(ctx, .MOV_R64_R64, Operand.r(0), Operand.r(quotient_reg));
+    } else {
+        const dividend_reg = resolveReg(ctx.ra, m.dividend);
+        if (dividend_reg != 0) {
+            try append2(ctx, .MOV_R64_R64, Operand.r(0), Operand.r(dividend_reg));
+        }
     }
 
     try append1(ctx, .CQO, .{});

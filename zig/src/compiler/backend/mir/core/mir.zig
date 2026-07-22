@@ -28,6 +28,7 @@ pub const FloatBinOp = opcode.FloatBinOp;
 pub const FCmpInst = opcode.FCmpInst;
 pub const ConvInst = opcode.ConvInst;
 pub const SelectInst = opcode.SelectInst;
+pub const SetCCInst = opcode.SetCCInst;
 pub const TestFlagsInst = opcode.TestFlagsInst;
 pub const CmpInst = opcode.CmpInst;
 pub const CmpFlagsInst = opcode.CmpFlagsInst;

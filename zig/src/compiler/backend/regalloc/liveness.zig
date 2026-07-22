@@ -413,6 +413,9 @@ pub fn computeLiveIntervals(
                     reads[read_count] = vregOf(s.dst); read_count += 1;
                     reads[read_count] = vregOf(s.src); read_count += 1;
                 },
+                .setcc => |s| {
+                    writes[write_count] = vregOf(s.dst); write_count += 1;
+                },
             }
 
             for (reads[0..read_count]) |vreg| {

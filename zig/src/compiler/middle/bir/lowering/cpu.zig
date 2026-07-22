@@ -155,53 +155,29 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     try mblock.instrs.append(.{ .sub = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = operand } } });
                 },
 
-                .eq => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
-                    const tmp = allocValue(&next_vreg);
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                .eq => if (result != NO_VALUE and inst.operands.len >= 2) {
                     try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
-                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .eq } });
-                    break :blk;
+                    try mblock.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = result }, .cc = .eq } });
                 },
-                .ne => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
-                    const tmp = allocValue(&next_vreg);
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                .ne => if (result != NO_VALUE and inst.operands.len >= 2) {
                     try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
-                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .ne } });
-                    break :blk;
+                    try mblock.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = result }, .cc = .ne } });
                 },
-                .lt => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
-                    const tmp = allocValue(&next_vreg);
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                .lt => if (result != NO_VALUE and inst.operands.len >= 2) {
                     try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
-                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .lt } });
-                    break :blk;
+                    try mblock.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = result }, .cc = .lt } });
                 },
-                .le => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
-                    const tmp = allocValue(&next_vreg);
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                .le => if (result != NO_VALUE and inst.operands.len >= 2) {
                     try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
-                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .le } });
-                    break :blk;
+                    try mblock.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = result }, .cc = .le } });
                 },
-                .gt => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
-                    const tmp = allocValue(&next_vreg);
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                .gt => if (result != NO_VALUE and inst.operands.len >= 2) {
                     try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
-                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .gt } });
-                    break :blk;
+                    try mblock.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = result }, .cc = .gt } });
                 },
-                .ge => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
-                    const tmp = allocValue(&next_vreg);
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                .ge => if (result != NO_VALUE and inst.operands.len >= 2) {
                     try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
-                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .ge } });
-                    break :blk;
+                    try mblock.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = result }, .cc = .ge } });
                 },
 
                 .br => {

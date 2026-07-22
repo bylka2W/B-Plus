@@ -62,6 +62,7 @@ pub fn selectFunction(mfunc: *const mir.MFunction, ra: *const regalloc.RegAllocR
                 .test_flags => |tf| try integer.selectTestFlags(&ctx, tf),
                 .cmp => |c| try integer.selectCmp(&ctx, c),
                 .cmp_flags => |cf| try integer.selectCmpFlags(&ctx, cf),
+                .setcc => |s| try integer.selectSetCC(&ctx, s),
                 .jmp => |j| try control.selectJmp(&ctx, j, allocator),
                 .jcc => |j| try control.selectJcc(&ctx, j, allocator),
                 .alloca => |a| try memory.selectAlloca(&ctx, a, alloca_offsets),

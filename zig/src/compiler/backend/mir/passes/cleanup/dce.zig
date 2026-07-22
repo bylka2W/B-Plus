@@ -28,6 +28,7 @@ fn dstVreg(inst: mir.MInst) ?u32 {
         .fcmp => |c| if (c.dst == .vreg) c.dst.vreg else null,
         .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => |c| if (c.dst == .vreg) c.dst.vreg else null,
         .select => |s| if (s.dst == .vreg) s.dst.vreg else null,
+        .setcc => |s| if (s.dst == .vreg) s.dst.vreg else null,
         .cmp_flags, .cmp, .test_flags, .jmp, .jcc, .store, .ret => null,
     };
 }
@@ -38,7 +39,7 @@ fn isSideEffecting(inst: mir.MInst) bool {
         .add, .sub, .imul, .idiv, .@"and", .@"or", .xor, .shl, .shr, .sar, .not_op, .neg_op, .cmp, .alloca, .load, .lea, .phi => false,
         .fadd, .fsub, .fmul, .fdiv, .fneg_op, .fsqrt_op, .fcmp => false,
         .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => false,
-        .select => false,
+        .select, .setcc => false,
         .mov => |m| m.dst != .vreg,
     };
 }
@@ -138,6 +139,7 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
             if (s.dst == .vreg) { buf[n] = s.dst.vreg; n += 1; }
             if (s.src == .vreg) { buf[n] = s.src.vreg; n += 1; }
         },
+        .setcc => {},
     }
     return n;
 }

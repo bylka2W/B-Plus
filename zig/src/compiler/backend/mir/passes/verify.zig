@@ -34,6 +34,7 @@ fn collectDefinedVRegs(mfunc: *const mir.MFunction) std.AutoHashMap(u32, void) {
                 .sar => |s| s.dst,
                 .not_op => |n| n.dst,
                 .neg_op => |n| n.dst,
+                .setcc => |s| s.dst,
                 .call => |c| if (c.is_void) continue else c.dst,
                 .alloca => |a| a.dst,
                 .load => |l| l.dst,
