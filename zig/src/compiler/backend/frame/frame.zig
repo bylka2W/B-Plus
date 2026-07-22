@@ -164,8 +164,9 @@ pub const FrameManager = struct {
         const shadow: u32 = if (self.abi == .win64) 32 else 0;
         const stack_args: u32 = switch (self.abi) {
             .win64 => blk: {
-                const total = int_arg_count + float_arg_count;
-                break :blk if (total > 4) (total - 4) * 8 else 0;
+                const stack_int: u32 = if (int_arg_count > 4) (int_arg_count - 4) * 8 else 0;
+                const stack_float: u32 = if (float_arg_count > 4) (float_arg_count - 4) * 8 else 0;
+                break :blk stack_int + stack_float;
             },
             .system_v => blk: {
                 const stack_int: u32 = if (int_arg_count > 6) (int_arg_count - 6) * 8 else 0;
@@ -201,8 +202,8 @@ pub const FrameManager = struct {
     }
 
     fn emitChkstk(code: *std.ArrayList(u8), frame_size: u32) !void {
-        try x64.emit(code, .MOV_R64_IMM64, &.{ enc.Operand.r(0), enc.Operand.immU32(frame_size) });
+        try x64.emit(code, .MOV_R64_IMM64, &.{ enc.Operand.r(10), enc.Operand.immU32(frame_size) });
         try x64.emit(code, .CALL_REL32, &.{enc.Operand.immU32(0)});
-        try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.r(0) });
+        try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.r(10) });
     }
 };
