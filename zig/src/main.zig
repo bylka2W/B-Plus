@@ -316,10 +316,11 @@ pub fn main() !void {
 
         var p = parser.Parser.init(arena_alloc, src, input_path);
         var program = try p.parse();
-        sema_mod.analyze(arena_alloc, program, src, input_path) catch |err| {
+        const sema_result = sema_mod.analyze(arena_alloc, program, src, input_path) catch |err| {
             std.log.err("semantic analysis failed: {}", .{err});
             std.process.exit(1);
         };
+        defer sema_result.deinit();
 
         const bir_module = try bir_bplus_frontend.lowerProgram(arena_alloc, &program);
         const mfuncs = try bir_cpu.lowerModuleToMir(arena_alloc, &bir_module);
@@ -349,10 +350,11 @@ pub fn main() !void {
         var program = try p.parse();
         defer program.deinit();
 
-        sema_mod.analyze(arena_alloc, program, src, input_path) catch |err| {
+        const sema_result_bpl = sema_mod.analyze(arena_alloc, program, src, input_path) catch |err| {
             std.log.err("semantic analysis failed: {}", .{err});
             std.process.exit(1);
         };
+        defer sema_result_bpl.deinit();
 
         var module = try bir_bplus_frontend.lowerProgram(arena_alloc, &program);
         defer module.deinit();
@@ -428,10 +430,11 @@ pub fn main() !void {
     defer program.deinit();
 
     // ── Semantic analysis pass ──
-    sema_mod.analyze(allocator, program, src, input_path) catch |err| {
+    const sema_result_main = sema_mod.analyze(allocator, program, src, input_path) catch |err| {
         std.log.err("semantic analysis failed: {}", .{err});
         std.process.exit(1);
     };
+    defer sema_result_main.deinit();
 
     const is_dll = std.mem.eql(u8, command, "dll");
 

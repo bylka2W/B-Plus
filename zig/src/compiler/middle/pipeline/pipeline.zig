@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ast = @import("../../frontend/ast.zig");
+const sema_mod = @import("../../frontend/sema/sema.zig");
 const hir = @import("../hir/hir.zig");
 const tir = @import("../tir/tir.zig");
 const bir_mod = @import("../bir/bir.zig");
@@ -19,8 +20,9 @@ pub const PipelineResult = struct {
     stage: Stage,
 };
 
-pub fn lowerToHIR(allocator: Allocator, program: *const ast.ProgramNode) !hir.HirModule {
-    return hir.lowerProgram(allocator, program) catch |err| {
+pub fn lowerToHIR(allocator: Allocator, program: *const ast.ProgramNode, sema_result: *const sema_mod.SemaResult) !hir.HirModule {
+    const ctx = hir.SemaContext.fromResult(sema_result);
+    return hir.lowerProgram(allocator, program, ctx) catch |err| {
         std.log.err("HIR lowering failed: {}", .{err});
         return PipelineError.HIRError;
     };
@@ -41,8 +43,8 @@ pub fn lowerToBIR(allocator: Allocator, program: *const ast.ProgramNode) !bir_mo
     };
 }
 
-pub fn runFullPipeline(allocator: Allocator, program: *const ast.ProgramNode) !bir_mod.Module {
-    var hir_module = try lowerToHIR(allocator, program);
+pub fn runFullPipeline(allocator: Allocator, program: *const ast.ProgramNode, sema_result: *const sema_mod.SemaResult) !bir_mod.Module {
+    var hir_module = try lowerToHIR(allocator, program, sema_result);
     defer hir_module.deinit();
 
     var tir_module = try lowerToTIR(allocator, &hir_module);

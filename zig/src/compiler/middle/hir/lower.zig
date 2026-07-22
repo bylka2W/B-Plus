@@ -1,33 +1,65 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ast = @import("../../frontend/ast.zig");
+const sema_mod = @import("../../frontend/sema/sema.zig");
 const hir = @import("node.zig");
 const types = @import("types.zig");
 const TypeId = types.TypeId;
 
 const LowerError = error{ ParseError, TypeNotFound, OutOfMemory };
 
-pub fn lowerProgram(allocator: Allocator, program: *const ast.ProgramNode) !hir.HirModule {
+pub const SemaContext = struct {
+    result: ?*const sema_mod.SemaResult,
+
+    pub fn empty() SemaContext {
+        return .{ .result = null };
+    }
+
+    pub fn fromResult(result: *const sema_mod.SemaResult) SemaContext {
+        return .{ .result = result };
+    }
+
+    pub fn resolveType(self: SemaContext, name: []const u8) TypeId {
+        if (self.result) |sr| {
+            for (sr.typed_vars.items) |v| {
+                if (v.type_name) |tn| {
+                    if (std.mem.eql(u8, tn, name)) return v.type_id;
+                }
+            }
+        }
+        return TypeId.fromName(name);
+    }
+
+    pub fn lookupVarType(self: SemaContext, name: []const u8) ?TypeId {
+        if (self.result) |sr| {
+            return sr.lookupVarType(name);
+        }
+        return null;
+    }
+};
+
+pub fn lowerProgram(allocator: Allocator, program: *const ast.ProgramNode, sema_ctx: SemaContext) !hir.HirModule {
     var module = hir.HirModule.init(allocator);
     errdefer module.deinit();
 
     for (program.func_defs.items) |func| {
-        const hir_func = try lowerFunction(allocator, func);
+        const hir_func = try lowerFunction(allocator, func, sema_ctx);
         try module.functions.append(hir_func);
     }
     for (program.states.items) |state| {
-        const hir_state = try lowerState(allocator, state);
+        const hir_state = try lowerState(allocator, state, sema_ctx);
         try module.states.append(hir_state);
     }
     return module;
 }
 
-fn lowerFunction(allocator: Allocator, func: ast.EntryDecl) !hir.HirFunction {
+fn lowerFunction(allocator: Allocator, func: ast.EntryDecl, sema_ctx: SemaContext) !hir.HirFunction {
     var params = std.ArrayList(types.FuncParam).init(allocator);
     for (func.params.items) |p| {
+        const resolved_ty = sema_ctx.resolveType(p.type_name);
         try params.append(.{
             .name = try allocator.dupe(u8, p.name),
-            .ty = TypeId.fromName(p.type_name),
+            .ty = if (resolved_ty != .invalid) resolved_ty else TypeId.fromName(p.type_name),
         });
     }
 
@@ -55,7 +87,7 @@ fn lowerFunction(allocator: Allocator, func: ast.EntryDecl) !hir.HirFunction {
     };
 }
 
-fn lowerState(allocator: Allocator, state: ast.StateDefNode) !hir.HirState {
+fn lowerState(allocator: Allocator, state: ast.StateDefNode, sema_ctx: SemaContext) !hir.HirState {
     var variables = std.ArrayList(hir.HirState.StateVar).init(allocator);
     for (state.variables.items) |v| {
         const default_val = if (v.default_value) |dv|

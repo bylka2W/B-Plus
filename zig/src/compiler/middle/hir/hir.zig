@@ -15,4 +15,5 @@ pub const HirFunction = node.HirFunction;
 pub const HirState = node.HirState;
 pub const HirModule = node.HirModule;
 
+pub const SemaContext = lower.SemaContext;
 pub const lowerProgram = lower.lowerProgram;
