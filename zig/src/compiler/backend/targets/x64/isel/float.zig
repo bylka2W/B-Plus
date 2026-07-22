@@ -108,6 +108,14 @@ pub fn selectFCmp(ctx: *Ctx, c: mir.FCmpInst) !void {
     try append2(ctx, ucomi_op, Operand.xmm(a_reg), Operand.xmm(b_reg));
 
     const dst = resolveReg(ctx.ra, c.dst);
-    try append2(ctx, .SETCC_R8, Operand.r(dst), .{ .imm64 = c.setcc_op });
+    const setcc_op: u64 = switch (c.cc) {
+        .eq => 0x94,
+        .ne => 0x95,
+        .lt => 0x9C,
+        .le => 0x9E,
+        .gt => 0x9F,
+        .ge => 0x9D,
+    };
+    try append2(ctx, .SETCC_R8, Operand.r(dst), .{ .imm64 = setcc_op });
     try append2(ctx, .MOVZX_R64_R32, Operand.r(dst), Operand.r(dst));
 }

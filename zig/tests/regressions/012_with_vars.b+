@@ -1,0 +1,7 @@
+state Main {
+  var counter: int = 0
+  entry {
+    counter = counter + 1
+    print(counter)
+  }
+}

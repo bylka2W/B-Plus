@@ -1,0 +1,4 @@
+state Main {
+    entry {
+        var x = "hello world
+}

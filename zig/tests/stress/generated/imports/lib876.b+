@@ -1,0 +1,1 @@
+state Lib876 { entry { print(876) } }

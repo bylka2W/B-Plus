@@ -1,0 +1,8 @@
+fn add(x: int, y: int) -> int {
+  return x + y
+}
+state Main {
+  entry {
+    var r = add(10, 20)
+  }
+}

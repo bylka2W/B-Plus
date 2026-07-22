@@ -1,0 +1,2 @@
+struct Empty {}
+state Main { entry { var e: Empty } }

@@ -1,0 +1,5 @@
+state Main {
+  entry {
+    undefined_target = 42
+  }
+}

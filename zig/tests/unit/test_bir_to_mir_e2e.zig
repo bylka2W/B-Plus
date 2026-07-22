@@ -60,11 +60,10 @@ fn dumpMIRInsts(writer: anytype, mfunc: *const mir.MFunction) !void {
                     dumpMIROp(writer, m.src) catch {};
                 },
                 .idiv => |m| {
-                    try writer.print("idiv v{d}, ", .{m.dst.vreg});
-                    dumpMIROp(writer, m.src) catch {};
+                    try writer.print("idiv v{d}, v{d} -> q:v{d} r:v{d}", .{ m.dividend.vreg, m.divisor.vreg, m.quotient.vreg, m.remainder.vreg });
                 },
                 .cmp => |m| {
-                    try writer.print("cmp {s} v{d}, ", .{ @tagName(m.cc), m.dst.vreg });
+                    try writer.print("cmp {s} ", .{@tagName(m.cc)});
                     dumpMIROp(writer, m.a) catch {};
                     try writer.print(", ", .{});
                     dumpMIROp(writer, m.b) catch {};
@@ -89,9 +88,12 @@ fn dumpMIRInsts(writer: anytype, mfunc: *const mir.MFunction) !void {
                     dumpMIROp(writer, m.src) catch {};
                 },
                 .call => |m| try writer.print("call v{d}", .{m.dst.vreg}),
-                .ret => |m| {
-                    try writer.print("ret ", .{});
-                    dumpMIROp(writer, m.val) catch {};
+                .ret => |m| switch (m) {
+                    .void_ret => try writer.print("ret void", .{}),
+                    .value => |v| {
+                        try writer.print("ret ", .{});
+                        dumpMIROp(writer, v) catch {};
+                    },
                 },
                 .phi => |p| {
                     try writer.print("phi v{d}", .{p.dst.vreg});

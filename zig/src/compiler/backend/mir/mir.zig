@@ -46,6 +46,7 @@ pub const LeaInst = core.LeaInst;
 pub const RetInst = core.RetInst;
 pub const PhiIncoming = core.PhiIncoming;
 pub const PhiInst = core.PhiInst;
+pub const MemSize = core.MemSize;
 pub const MInst = core.MInst;
 pub const MInstUtils = core.MInstUtils;
 

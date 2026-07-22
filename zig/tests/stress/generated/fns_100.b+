@@ -1,0 +1,306 @@
+fn add0(a, b) {
+    return a + b + 0
+}
+fn add1(a, b) {
+    return a + b + 1
+}
+fn add2(a, b) {
+    return a + b + 2
+}
+fn add3(a, b) {
+    return a + b + 3
+}
+fn add4(a, b) {
+    return a + b + 4
+}
+fn add5(a, b) {
+    return a + b + 5
+}
+fn add6(a, b) {
+    return a + b + 6
+}
+fn add7(a, b) {
+    return a + b + 7
+}
+fn add8(a, b) {
+    return a + b + 8
+}
+fn add9(a, b) {
+    return a + b + 9
+}
+fn add10(a, b) {
+    return a + b + 10
+}
+fn add11(a, b) {
+    return a + b + 11
+}
+fn add12(a, b) {
+    return a + b + 12
+}
+fn add13(a, b) {
+    return a + b + 13
+}
+fn add14(a, b) {
+    return a + b + 14
+}
+fn add15(a, b) {
+    return a + b + 15
+}
+fn add16(a, b) {
+    return a + b + 16
+}
+fn add17(a, b) {
+    return a + b + 17
+}
+fn add18(a, b) {
+    return a + b + 18
+}
+fn add19(a, b) {
+    return a + b + 19
+}
+fn add20(a, b) {
+    return a + b + 20
+}
+fn add21(a, b) {
+    return a + b + 21
+}
+fn add22(a, b) {
+    return a + b + 22
+}
+fn add23(a, b) {
+    return a + b + 23
+}
+fn add24(a, b) {
+    return a + b + 24
+}
+fn add25(a, b) {
+    return a + b + 25
+}
+fn add26(a, b) {
+    return a + b + 26
+}
+fn add27(a, b) {
+    return a + b + 27
+}
+fn add28(a, b) {
+    return a + b + 28
+}
+fn add29(a, b) {
+    return a + b + 29
+}
+fn add30(a, b) {
+    return a + b + 30
+}
+fn add31(a, b) {
+    return a + b + 31
+}
+fn add32(a, b) {
+    return a + b + 32
+}
+fn add33(a, b) {
+    return a + b + 33
+}
+fn add34(a, b) {
+    return a + b + 34
+}
+fn add35(a, b) {
+    return a + b + 35
+}
+fn add36(a, b) {
+    return a + b + 36
+}
+fn add37(a, b) {
+    return a + b + 37
+}
+fn add38(a, b) {
+    return a + b + 38
+}
+fn add39(a, b) {
+    return a + b + 39
+}
+fn add40(a, b) {
+    return a + b + 40
+}
+fn add41(a, b) {
+    return a + b + 41
+}
+fn add42(a, b) {
+    return a + b + 42
+}
+fn add43(a, b) {
+    return a + b + 43
+}
+fn add44(a, b) {
+    return a + b + 44
+}
+fn add45(a, b) {
+    return a + b + 45
+}
+fn add46(a, b) {
+    return a + b + 46
+}
+fn add47(a, b) {
+    return a + b + 47
+}
+fn add48(a, b) {
+    return a + b + 48
+}
+fn add49(a, b) {
+    return a + b + 49
+}
+fn add50(a, b) {
+    return a + b + 50
+}
+fn add51(a, b) {
+    return a + b + 51
+}
+fn add52(a, b) {
+    return a + b + 52
+}
+fn add53(a, b) {
+    return a + b + 53
+}
+fn add54(a, b) {
+    return a + b + 54
+}
+fn add55(a, b) {
+    return a + b + 55
+}
+fn add56(a, b) {
+    return a + b + 56
+}
+fn add57(a, b) {
+    return a + b + 57
+}
+fn add58(a, b) {
+    return a + b + 58
+}
+fn add59(a, b) {
+    return a + b + 59
+}
+fn add60(a, b) {
+    return a + b + 60
+}
+fn add61(a, b) {
+    return a + b + 61
+}
+fn add62(a, b) {
+    return a + b + 62
+}
+fn add63(a, b) {
+    return a + b + 63
+}
+fn add64(a, b) {
+    return a + b + 64
+}
+fn add65(a, b) {
+    return a + b + 65
+}
+fn add66(a, b) {
+    return a + b + 66
+}
+fn add67(a, b) {
+    return a + b + 67
+}
+fn add68(a, b) {
+    return a + b + 68
+}
+fn add69(a, b) {
+    return a + b + 69
+}
+fn add70(a, b) {
+    return a + b + 70
+}
+fn add71(a, b) {
+    return a + b + 71
+}
+fn add72(a, b) {
+    return a + b + 72
+}
+fn add73(a, b) {
+    return a + b + 73
+}
+fn add74(a, b) {
+    return a + b + 74
+}
+fn add75(a, b) {
+    return a + b + 75
+}
+fn add76(a, b) {
+    return a + b + 76
+}
+fn add77(a, b) {
+    return a + b + 77
+}
+fn add78(a, b) {
+    return a + b + 78
+}
+fn add79(a, b) {
+    return a + b + 79
+}
+fn add80(a, b) {
+    return a + b + 80
+}
+fn add81(a, b) {
+    return a + b + 81
+}
+fn add82(a, b) {
+    return a + b + 82
+}
+fn add83(a, b) {
+    return a + b + 83
+}
+fn add84(a, b) {
+    return a + b + 84
+}
+fn add85(a, b) {
+    return a + b + 85
+}
+fn add86(a, b) {
+    return a + b + 86
+}
+fn add87(a, b) {
+    return a + b + 87
+}
+fn add88(a, b) {
+    return a + b + 88
+}
+fn add89(a, b) {
+    return a + b + 89
+}
+fn add90(a, b) {
+    return a + b + 90
+}
+fn add91(a, b) {
+    return a + b + 91
+}
+fn add92(a, b) {
+    return a + b + 92
+}
+fn add93(a, b) {
+    return a + b + 93
+}
+fn add94(a, b) {
+    return a + b + 94
+}
+fn add95(a, b) {
+    return a + b + 95
+}
+fn add96(a, b) {
+    return a + b + 96
+}
+fn add97(a, b) {
+    return a + b + 97
+}
+fn add98(a, b) {
+    return a + b + 98
+}
+fn add99(a, b) {
+    return a + b + 99
+}
+state Main {
+    entry {
+        var x = add0(1, 2)
+        print(x)
+    }
+}

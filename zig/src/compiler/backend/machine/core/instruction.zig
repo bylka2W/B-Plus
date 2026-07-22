@@ -2,29 +2,45 @@ const operand = @import("operand.zig");
 const MOperand = operand.MOperand;
 const CondCode = operand.CondCode;
 
+pub const MemSize = enum {
+    u8,
+    u16,
+    u32,
+    u64,
+    f32,
+    f64,
+    xmm128,
+};
+
 pub const MovInst = struct { dst: MOperand, src: MOperand };
 pub const AddInst = struct { dst: MOperand, src: MOperand };
 pub const SubInst = struct { dst: MOperand, src: MOperand };
 pub const IMulInst = struct { dst: MOperand, src: MOperand };
-pub const IDivInst = struct { dst: MOperand, src: MOperand };
+pub const IDivInst = struct { dividend: MOperand, divisor: MOperand, quotient: MOperand, remainder: MOperand };
 pub const AndInst = struct { dst: MOperand, src: MOperand };
 pub const OrInst = struct { dst: MOperand, src: MOperand };
 pub const XorInst = struct { dst: MOperand, src: MOperand };
-pub const ShiftInst = struct { dst: MOperand, amount: MOperand };
+pub const ShiftInst = struct { dst: MOperand, amount: MOperand, uses_cl: bool };
 pub const UnaryInst = struct { dst: MOperand };
 pub const FloatBinOp = struct { dst: MOperand, a: MOperand, b: MOperand };
-pub const FCmpInst = struct { setcc_op: u8, dst: MOperand, a: MOperand, b: MOperand };
+pub const FCmpInst = struct { cc: CondCode, dst: MOperand, a: MOperand, b: MOperand };
 pub const ConvInst = struct { dst: MOperand, src: MOperand };
 pub const SelectInst = struct { dst: MOperand, src: MOperand, cc: CondCode };
 pub const TestFlagsInst = struct { a: MOperand, b: MOperand };
-pub const CmpInst = struct { cc: CondCode, dst: MOperand, a: MOperand, b: MOperand };
+pub const CmpInst = struct { cc: CondCode, a: MOperand, b: MOperand };
 pub const CmpFlagsInst = struct { a: MOperand, b: MOperand };
 pub const JmpInst = struct { target: u32 };
 pub const JccInst = struct { cc: CondCode, target: u32 };
-pub const CallInst = struct { name: []const u8, args: [4]MOperand, arg_count: u32, dst: MOperand };
+pub const CallInst = struct {
+    name: []const u8,
+    args: [14]MOperand,
+    arg_count: u32,
+    dst: MOperand,
+    is_void: bool = false,
+};
 pub const AllocaInst = struct { size: u32, dst: MOperand };
-pub const LoadInst = struct { dst: MOperand, ptr: MOperand };
-pub const StoreInst = struct { ptr: MOperand, src: MOperand };
+pub const LoadInst = struct { dst: MOperand, ptr: MOperand, size: MemSize };
+pub const StoreInst = struct { ptr: MOperand, src: MOperand, size: MemSize };
 pub const LeaInst = struct {
     dst: MOperand,
     base: MOperand,
@@ -32,7 +48,10 @@ pub const LeaInst = struct {
     scale: u8 = 1,
     disp: i32 = 0,
 };
-pub const RetInst = struct { val: MOperand, is_void: bool = false };
+pub const RetInst = union(enum) {
+    void_ret,
+    value: MOperand,
+};
 
 pub const MInst = union(enum) {
     mov: MovInst,
@@ -82,7 +101,7 @@ pub fn hasDst(inst: MInst) bool {
         .@"and", .@"or", .xor,
         .shl, .shr, .sar,
         .not_op, .neg_op,
-        .cmp, .alloca, .load, .lea, .call,
+        .alloca, .load, .lea,
         .fadd, .fsub, .fmul, .fdiv,
         .fneg_op, .fsqrt_op,
         .fcmp,
@@ -90,6 +109,7 @@ pub fn hasDst(inst: MInst) bool {
         .sext_op, .zext_op, .trunc_op,
         .select,
         => true,
+        .call => |c| !c.is_void,
         else => false,
     };
 }
@@ -100,17 +120,16 @@ pub fn dstVReg(inst: MInst) ?u32 {
         .add => |m| vregOf(m.dst),
         .sub => |m| vregOf(m.dst),
         .imul => |m| vregOf(m.dst),
-        .idiv => |m| vregOf(m.dst),
+        .idiv => |m| vregOf(m.quotient),
         .@"and" => |m| vregOf(m.dst),
         .@"or" => |m| vregOf(m.dst),
         .xor => |m| vregOf(m.dst),
         .shl, .shr, .sar => |m| vregOf(m.dst),
         .not_op, .neg_op => |m| vregOf(m.dst),
-        .cmp => |m| vregOf(m.dst),
         .alloca => |m| vregOf(m.dst),
         .load => |m| vregOf(m.dst),
         .lea => |m| vregOf(m.dst),
-        .call => |m| vregOf(m.dst),
+        .call => |c| if (c.is_void) null else vregOf(c.dst),
         .fadd, .fsub, .fmul, .fdiv => |m| vregOf(m.dst),
         .fneg_op, .fsqrt_op => |m| vregOf(m.dst),
         .fcmp => |c| vregOf(c.dst),

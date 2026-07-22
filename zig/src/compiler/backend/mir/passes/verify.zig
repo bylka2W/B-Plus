@@ -25,7 +25,7 @@ fn collectDefinedVRegs(mfunc: *const mir.MFunction) std.AutoHashMap(u32, void) {
                 .add => |a| a.dst,
                 .sub => |s| s.dst,
                 .imul => |m| m.dst,
-                .idiv => |m| m.dst,
+                .idiv => |m| m.quotient,
                 .@"and" => |a| a.dst,
                 .@"or" => |o| o.dst,
                 .xor => |x| x.dst,
@@ -34,8 +34,7 @@ fn collectDefinedVRegs(mfunc: *const mir.MFunction) std.AutoHashMap(u32, void) {
                 .sar => |s| s.dst,
                 .not_op => |n| n.dst,
                 .neg_op => |n| n.dst,
-                .cmp => |c| c.dst,
-                .call => |c| c.dst,
+                .call => |c| if (c.is_void) continue else c.dst,
                 .alloca => |a| a.dst,
                 .load => |l| l.dst,
                 .lea => |l| l.dst,
@@ -69,7 +68,10 @@ fn checkUsedVRegs(inst: mir.MInst, defs: *std.AutoHashMap(u32, void)) !void {
         .add => |a| try checkDefined(defs, a.src),
         .sub => |s| try checkDefined(defs, s.src),
         .imul => |m| try checkDefined(defs, m.src),
-        .idiv => |m| try checkDefined(defs, m.src),
+        .idiv => |m| {
+            try checkDefined(defs, m.dividend);
+            try checkDefined(defs, m.divisor);
+        },
         .@"and" => |a| try checkDefined(defs, a.src),
         .@"or" => |o| try checkDefined(defs, o.src),
         .xor => |x| try checkDefined(defs, x.src),
@@ -102,7 +104,10 @@ fn checkUsedVRegs(inst: mir.MInst, defs: *std.AutoHashMap(u32, void)) !void {
             try checkDefined(defs, s.ptr);
             try checkDefined(defs, s.src);
         },
-        .ret => |r| try checkDefined(defs, r.val),
+        .ret => |r| switch (r) {
+            .void_ret => {},
+            .value => |v| try checkDefined(defs, v),
+        },
         .phi => |p| {
             for (p.incoming) |inc| {
                 try checkDefined(defs, inc.src);

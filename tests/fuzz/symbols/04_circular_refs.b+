@@ -1,0 +1,2 @@
+state A { entry { } on ev -> B }
+state B { on ev -> A }

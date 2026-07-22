@@ -1,0 +1,500 @@
+state Main { entry { } on ev -> S0 }
+state S0 {
+  var x0: int = 0
+  entry { print(x0) }
+}
+state S1 {
+  var x1: int = 1
+  entry { print(x1) }
+  on ev -> S0
+}
+state S2 {
+  var x2: int = 2
+  entry { print(x2) }
+  on ev -> S1
+}
+state S3 {
+  var x3: int = 3
+  entry { print(x3) }
+  on ev -> S2
+}
+state S4 {
+  var x4: int = 4
+  entry { print(x4) }
+  on ev -> S3
+}
+state S5 {
+  var x5: int = 5
+  entry { print(x5) }
+  on ev -> S4
+}
+state S6 {
+  var x6: int = 6
+  entry { print(x6) }
+  on ev -> S5
+}
+state S7 {
+  var x7: int = 7
+  entry { print(x7) }
+  on ev -> S6
+}
+state S8 {
+  var x8: int = 8
+  entry { print(x8) }
+  on ev -> S7
+}
+state S9 {
+  var x9: int = 9
+  entry { print(x9) }
+  on ev -> S8
+}
+state S10 {
+  var x10: int = 10
+  entry { print(x10) }
+  on ev -> S9
+}
+state S11 {
+  var x11: int = 11
+  entry { print(x11) }
+  on ev -> S10
+}
+state S12 {
+  var x12: int = 12
+  entry { print(x12) }
+  on ev -> S11
+}
+state S13 {
+  var x13: int = 13
+  entry { print(x13) }
+  on ev -> S12
+}
+state S14 {
+  var x14: int = 14
+  entry { print(x14) }
+  on ev -> S13
+}
+state S15 {
+  var x15: int = 15
+  entry { print(x15) }
+  on ev -> S14
+}
+state S16 {
+  var x16: int = 16
+  entry { print(x16) }
+  on ev -> S15
+}
+state S17 {
+  var x17: int = 17
+  entry { print(x17) }
+  on ev -> S16
+}
+state S18 {
+  var x18: int = 18
+  entry { print(x18) }
+  on ev -> S17
+}
+state S19 {
+  var x19: int = 19
+  entry { print(x19) }
+  on ev -> S18
+}
+state S20 {
+  var x20: int = 20
+  entry { print(x20) }
+  on ev -> S19
+}
+state S21 {
+  var x21: int = 21
+  entry { print(x21) }
+  on ev -> S20
+}
+state S22 {
+  var x22: int = 22
+  entry { print(x22) }
+  on ev -> S21
+}
+state S23 {
+  var x23: int = 23
+  entry { print(x23) }
+  on ev -> S22
+}
+state S24 {
+  var x24: int = 24
+  entry { print(x24) }
+  on ev -> S23
+}
+state S25 {
+  var x25: int = 25
+  entry { print(x25) }
+  on ev -> S24
+}
+state S26 {
+  var x26: int = 26
+  entry { print(x26) }
+  on ev -> S25
+}
+state S27 {
+  var x27: int = 27
+  entry { print(x27) }
+  on ev -> S26
+}
+state S28 {
+  var x28: int = 28
+  entry { print(x28) }
+  on ev -> S27
+}
+state S29 {
+  var x29: int = 29
+  entry { print(x29) }
+  on ev -> S28
+}
+state S30 {
+  var x30: int = 30
+  entry { print(x30) }
+  on ev -> S29
+}
+state S31 {
+  var x31: int = 31
+  entry { print(x31) }
+  on ev -> S30
+}
+state S32 {
+  var x32: int = 32
+  entry { print(x32) }
+  on ev -> S31
+}
+state S33 {
+  var x33: int = 33
+  entry { print(x33) }
+  on ev -> S32
+}
+state S34 {
+  var x34: int = 34
+  entry { print(x34) }
+  on ev -> S33
+}
+state S35 {
+  var x35: int = 35
+  entry { print(x35) }
+  on ev -> S34
+}
+state S36 {
+  var x36: int = 36
+  entry { print(x36) }
+  on ev -> S35
+}
+state S37 {
+  var x37: int = 37
+  entry { print(x37) }
+  on ev -> S36
+}
+state S38 {
+  var x38: int = 38
+  entry { print(x38) }
+  on ev -> S37
+}
+state S39 {
+  var x39: int = 39
+  entry { print(x39) }
+  on ev -> S38
+}
+state S40 {
+  var x40: int = 40
+  entry { print(x40) }
+  on ev -> S39
+}
+state S41 {
+  var x41: int = 41
+  entry { print(x41) }
+  on ev -> S40
+}
+state S42 {
+  var x42: int = 42
+  entry { print(x42) }
+  on ev -> S41
+}
+state S43 {
+  var x43: int = 43
+  entry { print(x43) }
+  on ev -> S42
+}
+state S44 {
+  var x44: int = 44
+  entry { print(x44) }
+  on ev -> S43
+}
+state S45 {
+  var x45: int = 45
+  entry { print(x45) }
+  on ev -> S44
+}
+state S46 {
+  var x46: int = 46
+  entry { print(x46) }
+  on ev -> S45
+}
+state S47 {
+  var x47: int = 47
+  entry { print(x47) }
+  on ev -> S46
+}
+state S48 {
+  var x48: int = 48
+  entry { print(x48) }
+  on ev -> S47
+}
+state S49 {
+  var x49: int = 49
+  entry { print(x49) }
+  on ev -> S48
+}
+state S50 {
+  var x50: int = 50
+  entry { print(x50) }
+  on ev -> S49
+}
+state S51 {
+  var x51: int = 51
+  entry { print(x51) }
+  on ev -> S50
+}
+state S52 {
+  var x52: int = 52
+  entry { print(x52) }
+  on ev -> S51
+}
+state S53 {
+  var x53: int = 53
+  entry { print(x53) }
+  on ev -> S52
+}
+state S54 {
+  var x54: int = 54
+  entry { print(x54) }
+  on ev -> S53
+}
+state S55 {
+  var x55: int = 55
+  entry { print(x55) }
+  on ev -> S54
+}
+state S56 {
+  var x56: int = 56
+  entry { print(x56) }
+  on ev -> S55
+}
+state S57 {
+  var x57: int = 57
+  entry { print(x57) }
+  on ev -> S56
+}
+state S58 {
+  var x58: int = 58
+  entry { print(x58) }
+  on ev -> S57
+}
+state S59 {
+  var x59: int = 59
+  entry { print(x59) }
+  on ev -> S58
+}
+state S60 {
+  var x60: int = 60
+  entry { print(x60) }
+  on ev -> S59
+}
+state S61 {
+  var x61: int = 61
+  entry { print(x61) }
+  on ev -> S60
+}
+state S62 {
+  var x62: int = 62
+  entry { print(x62) }
+  on ev -> S61
+}
+state S63 {
+  var x63: int = 63
+  entry { print(x63) }
+  on ev -> S62
+}
+state S64 {
+  var x64: int = 64
+  entry { print(x64) }
+  on ev -> S63
+}
+state S65 {
+  var x65: int = 65
+  entry { print(x65) }
+  on ev -> S64
+}
+state S66 {
+  var x66: int = 66
+  entry { print(x66) }
+  on ev -> S65
+}
+state S67 {
+  var x67: int = 67
+  entry { print(x67) }
+  on ev -> S66
+}
+state S68 {
+  var x68: int = 68
+  entry { print(x68) }
+  on ev -> S67
+}
+state S69 {
+  var x69: int = 69
+  entry { print(x69) }
+  on ev -> S68
+}
+state S70 {
+  var x70: int = 70
+  entry { print(x70) }
+  on ev -> S69
+}
+state S71 {
+  var x71: int = 71
+  entry { print(x71) }
+  on ev -> S70
+}
+state S72 {
+  var x72: int = 72
+  entry { print(x72) }
+  on ev -> S71
+}
+state S73 {
+  var x73: int = 73
+  entry { print(x73) }
+  on ev -> S72
+}
+state S74 {
+  var x74: int = 74
+  entry { print(x74) }
+  on ev -> S73
+}
+state S75 {
+  var x75: int = 75
+  entry { print(x75) }
+  on ev -> S74
+}
+state S76 {
+  var x76: int = 76
+  entry { print(x76) }
+  on ev -> S75
+}
+state S77 {
+  var x77: int = 77
+  entry { print(x77) }
+  on ev -> S76
+}
+state S78 {
+  var x78: int = 78
+  entry { print(x78) }
+  on ev -> S77
+}
+state S79 {
+  var x79: int = 79
+  entry { print(x79) }
+  on ev -> S78
+}
+state S80 {
+  var x80: int = 80
+  entry { print(x80) }
+  on ev -> S79
+}
+state S81 {
+  var x81: int = 81
+  entry { print(x81) }
+  on ev -> S80
+}
+state S82 {
+  var x82: int = 82
+  entry { print(x82) }
+  on ev -> S81
+}
+state S83 {
+  var x83: int = 83
+  entry { print(x83) }
+  on ev -> S82
+}
+state S84 {
+  var x84: int = 84
+  entry { print(x84) }
+  on ev -> S83
+}
+state S85 {
+  var x85: int = 85
+  entry { print(x85) }
+  on ev -> S84
+}
+state S86 {
+  var x86: int = 86
+  entry { print(x86) }
+  on ev -> S85
+}
+state S87 {
+  var x87: int = 87
+  entry { print(x87) }
+  on ev -> S86
+}
+state S88 {
+  var x88: int = 88
+  entry { print(x88) }
+  on ev -> S87
+}
+state S89 {
+  var x89: int = 89
+  entry { print(x89) }
+  on ev -> S88
+}
+state S90 {
+  var x90: int = 90
+  entry { print(x90) }
+  on ev -> S89
+}
+state S91 {
+  var x91: int = 91
+  entry { print(x91) }
+  on ev -> S90
+}
+state S92 {
+  var x92: int = 92
+  entry { print(x92) }
+  on ev -> S91
+}
+state S93 {
+  var x93: int = 93
+  entry { print(x93) }
+  on ev -> S92
+}
+state S94 {
+  var x94: int = 94
+  entry { print(x94) }
+  on ev -> S93
+}
+state S95 {
+  var x95: int = 95
+  entry { print(x95) }
+  on ev -> S94
+}
+state S96 {
+  var x96: int = 96
+  entry { print(x96) }
+  on ev -> S95
+}
+state S97 {
+  var x97: int = 97
+  entry { print(x97) }
+  on ev -> S96
+}
+state S98 {
+  var x98: int = 98
+  entry { print(x98) }
+  on ev -> S97
+}
+state S99 {
+  var x99: int = 99
+  entry { print(x99) }
+  on ev -> S98
+}

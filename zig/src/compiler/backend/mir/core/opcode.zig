@@ -2,29 +2,37 @@ const operand = @import("operand.zig");
 const MOperand = operand.MOperand;
 const CondCode = operand.CondCode;
 
+pub const MemSize = @import("../../machine/core/instruction.zig").MemSize;
+
 pub const MovInst = struct { dst: MOperand, src: MOperand };
 pub const AddInst = struct { dst: MOperand, src: MOperand };
 pub const SubInst = struct { dst: MOperand, src: MOperand };
 pub const IMulInst = struct { dst: MOperand, src: MOperand };
-pub const IDivInst = struct { dst: MOperand, src: MOperand };
+pub const IDivInst = struct { dividend: MOperand, divisor: MOperand, quotient: MOperand, remainder: MOperand };
 pub const AndInst = struct { dst: MOperand, src: MOperand };
 pub const OrInst = struct { dst: MOperand, src: MOperand };
 pub const XorInst = struct { dst: MOperand, src: MOperand };
-pub const ShiftInst = struct { dst: MOperand, amount: MOperand };
+pub const ShiftInst = struct { dst: MOperand, amount: MOperand, uses_cl: bool };
 pub const UnaryInst = struct { dst: MOperand };
 pub const FloatBinOp = struct { dst: MOperand, a: MOperand, b: MOperand };
-pub const FCmpInst = struct { setcc_op: u8, dst: MOperand, a: MOperand, b: MOperand };
+pub const FCmpInst = struct { cc: CondCode, dst: MOperand, a: MOperand, b: MOperand };
 pub const ConvInst = struct { dst: MOperand, src: MOperand };
 pub const SelectInst = struct { dst: MOperand, src: MOperand, cc: CondCode };
 pub const TestFlagsInst = struct { a: MOperand, b: MOperand };
-pub const CmpInst = struct { cc: CondCode, dst: MOperand, a: MOperand, b: MOperand };
+pub const CmpInst = struct { cc: CondCode, a: MOperand, b: MOperand };
 pub const CmpFlagsInst = struct { a: MOperand, b: MOperand };
 pub const JmpInst = struct { target: usize };
 pub const JccInst = struct { cc: CondCode, target: usize };
-pub const CallInst = struct { name: []const u8, args: [4]MOperand, arg_count: u32, dst: MOperand };
+pub const CallInst = struct {
+    name: []const u8,
+    args: [14]MOperand,
+    arg_count: u32,
+    dst: MOperand,
+    is_void: bool = false,
+};
 pub const AllocaInst = struct { size: u32, dst: MOperand };
-pub const LoadInst = struct { dst: MOperand, ptr: MOperand };
-pub const StoreInst = struct { ptr: MOperand, src: MOperand };
+pub const LoadInst = struct { dst: MOperand, ptr: MOperand, size: MemSize };
+pub const StoreInst = struct { ptr: MOperand, src: MOperand, size: MemSize };
 pub const LeaInst = struct {
     dst: MOperand,
     base: MOperand,
@@ -32,7 +40,10 @@ pub const LeaInst = struct {
     scale: u8 = 1,
     disp: i32 = 0,
 };
-pub const RetInst = struct { val: MOperand, is_void: bool = false };
+pub const RetInst = union(enum) {
+    void_ret,
+    value: MOperand,
+};
 
 pub const PhiIncoming = struct {
     src: MOperand,
@@ -70,16 +81,13 @@ pub const MInst = union(enum) {
     lea: LeaInst,
     ret: RetInst,
     phi: PhiInst,
-    // Float arithmetic
     fadd: FloatBinOp,
     fsub: FloatBinOp,
     fmul: FloatBinOp,
     fdiv: FloatBinOp,
     fneg_op: UnaryInst,
     fsqrt_op: UnaryInst,
-    // Float comparison
     fcmp: FCmpInst,
-    // Type conversions
     sitofp: ConvInst,
     fptosi: ConvInst,
     fpext: ConvInst,
@@ -87,7 +95,6 @@ pub const MInst = union(enum) {
     sext_op: ConvInst,
     zext_op: ConvInst,
     trunc_op: ConvInst,
-    // Conditional move
     select: SelectInst,
 };
 
@@ -98,7 +105,7 @@ pub const MInstUtils = struct {
             .@"and", .@"or", .xor,
             .shl, .shr, .sar,
             .not_op, .neg_op,
-            .cmp, .alloca, .load, .lea, .call, .phi,
+            .alloca, .load, .lea, .phi,
             .fadd, .fsub, .fmul, .fdiv,
             .fneg_op, .fsqrt_op,
             .fcmp,
@@ -106,6 +113,7 @@ pub const MInstUtils = struct {
             .sext_op, .zext_op, .trunc_op,
             .select,
             => true,
+            .call => |c| !c.is_void,
             else => false,
         };
     }
@@ -116,17 +124,16 @@ pub const MInstUtils = struct {
             .add => |m| vregOf(m.dst),
             .sub => |m| vregOf(m.dst),
             .imul => |m| vregOf(m.dst),
-            .idiv => |m| vregOf(m.dst),
+            .idiv => |m| vregOf(m.quotient),
             .@"and" => |m| vregOf(m.dst),
             .@"or" => |m| vregOf(m.dst),
             .xor => |m| vregOf(m.dst),
             .shl, .shr, .sar => |m| vregOf(m.dst),
             .not_op, .neg_op => |m| vregOf(m.dst),
-            .cmp => |m| vregOf(m.dst),
             .alloca => |m| vregOf(m.dst),
             .load => |m| vregOf(m.dst),
             .lea => |m| vregOf(m.dst),
-            .call => |m| vregOf(m.dst),
+            .call => |c| if (c.is_void) null else vregOf(c.dst),
             .phi => |p| vregOf(p.dst),
             .fadd, .fsub, .fmul, .fdiv => |m| vregOf(m.dst),
             .fneg_op, .fsqrt_op => |m| vregOf(m.dst),

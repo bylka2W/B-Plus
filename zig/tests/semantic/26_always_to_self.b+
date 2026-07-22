@@ -1,0 +1,4 @@
+state Main {
+  entry { print(1) }
+  always -> Main
+}

@@ -134,8 +134,9 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     if (result == NO_VALUE or inst.operands.len < 2) continue;
                     const lhs = inst.operands[0];
                     const rhs = inst.operands[1];
+                    const rem = allocValue(&next_vreg);
                     try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
-                    try mblock.instrs.append(.{ .idiv = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = rhs } } });
+                    try mblock.instrs.append(.{ .idiv = .{ .dividend = .{ .vreg = result }, .divisor = .{ .vreg = rhs }, .quotient = .{ .vreg = result }, .remainder = .{ .vreg = rem } } });
                 },
 
                 .mod => {
@@ -143,13 +144,8 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     const lhs = inst.operands[0];
                     const rhs = inst.operands[1];
                     const q = allocValue(&next_vreg);
-                    const t = allocValue(&next_vreg);
                     try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = q }, .src = .{ .vreg = lhs } } });
-                    try mblock.instrs.append(.{ .idiv = .{ .dst = .{ .vreg = q }, .src = .{ .vreg = rhs } } });
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = t }, .src = .{ .vreg = q } } });
-                    try mblock.instrs.append(.{ .imul = .{ .dst = .{ .vreg = t }, .src = .{ .vreg = rhs } } });
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
-                    try mblock.instrs.append(.{ .sub = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = t } } });
+                    try mblock.instrs.append(.{ .idiv = .{ .dividend = .{ .vreg = q }, .divisor = .{ .vreg = rhs }, .quotient = .{ .vreg = q }, .remainder = .{ .vreg = result } } });
                 },
 
                 .neg => {
@@ -159,12 +155,54 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     try mblock.instrs.append(.{ .sub = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = operand } } });
                 },
 
-                .eq => if (result != NO_VALUE and inst.operands.len >= 2) try mblock.instrs.append(.{ .cmp = .{ .cc = .eq, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } }),
-                .ne => if (result != NO_VALUE and inst.operands.len >= 2) try mblock.instrs.append(.{ .cmp = .{ .cc = .ne, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } }),
-                .lt => if (result != NO_VALUE and inst.operands.len >= 2) try mblock.instrs.append(.{ .cmp = .{ .cc = .lt, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } }),
-                .le => if (result != NO_VALUE and inst.operands.len >= 2) try mblock.instrs.append(.{ .cmp = .{ .cc = .le, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } }),
-                .gt => if (result != NO_VALUE and inst.operands.len >= 2) try mblock.instrs.append(.{ .cmp = .{ .cc = .gt, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } }),
-                .ge => if (result != NO_VALUE and inst.operands.len >= 2) try mblock.instrs.append(.{ .cmp = .{ .cc = .ge, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } }),
+                .eq => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
+                    const tmp = allocValue(&next_vreg);
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                    try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .eq } });
+                    break :blk;
+                },
+                .ne => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
+                    const tmp = allocValue(&next_vreg);
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                    try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .ne } });
+                    break :blk;
+                },
+                .lt => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
+                    const tmp = allocValue(&next_vreg);
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                    try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .lt } });
+                    break :blk;
+                },
+                .le => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
+                    const tmp = allocValue(&next_vreg);
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                    try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .le } });
+                    break :blk;
+                },
+                .gt => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
+                    const tmp = allocValue(&next_vreg);
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                    try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .gt } });
+                    break :blk;
+                },
+                .ge => if (result != NO_VALUE and inst.operands.len >= 2) blk: {
+                    const tmp = allocValue(&next_vreg);
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .imm = 0 } } });
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = tmp }, .src = .{ .imm = 1 } } });
+                    try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                    try mblock.instrs.append(.{ .select = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = tmp }, .cc = .ge } });
+                    break :blk;
+                },
 
                 .br => {
                     const target = inst.data.block_target;
@@ -187,26 +225,25 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
 
                 .ret => {
                     if (inst.operands.len >= 1) {
-                        try mblock.instrs.append(.{ .ret = .{ .val = .{ .vreg = inst.operands[0] } } });
+                        try mblock.instrs.append(.{ .ret = .{ .value = .{ .vreg = inst.operands[0] } } });
                     } else {
-                        try mblock.instrs.append(.{ .ret = .{ .val = .{ .imm = 0 } } });
+                        try mblock.instrs.append(.{ .ret = .void_ret });
                     }
                 },
 
                 .call => {
                     if (inst.data != .named_call or result == NO_VALUE) continue;
                     const info = inst.data.named_call;
-                    var args: [4]mir.MOperand = .{
-                        .{ .imm = 0 }, .{ .imm = 0 },
-                        .{ .imm = 0 }, .{ .imm = 0 },
-                    };
-                    const count = @min(@as(u32, @intCast(info.args.len)), 4);
+                    var args: [14]mir.MOperand = undefined;
+                    for (&args) |*a| a.* = .{ .imm = 0 };
+                    const count = @min(@as(u32, @intCast(info.args.len)), 14);
                     for (0..count) |i| args[i] = .{ .vreg = info.args[i] };
                     try mblock.instrs.append(.{ .call = .{
                         .name = try allocator.dupe(u8, info.name),
                         .args = args,
                         .arg_count = count,
                         .dst = .{ .vreg = result },
+                        .is_void = false,
                     } });
                 },
 
@@ -220,12 +257,12 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
 
                 .load => {
                     if (result == NO_VALUE or inst.operands.len < 1) continue;
-                    try mblock.instrs.append(.{ .load = .{ .dst = .{ .vreg = result }, .ptr = .{ .vreg = inst.operands[0] } } });
+                    try mblock.instrs.append(.{ .load = .{ .dst = .{ .vreg = result }, .ptr = .{ .vreg = inst.operands[0] }, .size = .u64 } });
                 },
 
                 .store => {
                     if (inst.operands.len < 2) continue;
-                    try mblock.instrs.append(.{ .store = .{ .ptr = .{ .vreg = inst.operands[0] }, .src = .{ .vreg = inst.operands[1] } } });
+                    try mblock.instrs.append(.{ .store = .{ .ptr = .{ .vreg = inst.operands[0] }, .src = .{ .vreg = inst.operands[1] }, .size = .u64 } });
                 },
 
                 else => {

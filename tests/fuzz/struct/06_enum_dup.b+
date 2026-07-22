@@ -1,0 +1,5 @@
+enum Dup { A
+A
+B
+B }
+state Main { entry { } }

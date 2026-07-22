@@ -1,0 +1,13 @@
+fn chaos(x: int) {
+  if (x > 0) {
+    return 1
+  } else {
+    return "hello"
+  }
+}
+state Main {
+  entry {
+    var r = chaos(1)
+    print(r)
+  }
+}

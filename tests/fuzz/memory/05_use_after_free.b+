@@ -1,0 +1,7 @@
+state Main {
+  entry {
+    var x = 5
+    free(x)
+    print(x)
+  }
+}

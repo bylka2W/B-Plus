@@ -1,0 +1,10 @@
+state Main {
+  var x: int = 5
+  entry {
+    if (x > 3) {
+      print(1)
+    } else {
+      print(0)
+    }
+  }
+}

@@ -1,0 +1,6 @@
+state Main {
+  entry {
+    var x = 5
+    return x
+  }
+}

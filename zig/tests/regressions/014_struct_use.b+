@@ -1,0 +1,9 @@
+struct Point {
+  x: int
+  y: int
+}
+state Main {
+  entry {
+    var p: Point
+  }
+}

@@ -1,0 +1,204 @@
+state Main {
+  var v0: int = 0
+  var v1: int = 1
+  var v2: int = 2
+  var v3: int = 3
+  var v4: int = 4
+  var v5: int = 5
+  var v6: int = 6
+  var v7: int = 7
+  var v8: int = 8
+  var v9: int = 9
+  var v10: int = 10
+  var v11: int = 11
+  var v12: int = 12
+  var v13: int = 13
+  var v14: int = 14
+  var v15: int = 15
+  var v16: int = 16
+  var v17: int = 17
+  var v18: int = 18
+  var v19: int = 19
+  var v20: int = 20
+  var v21: int = 21
+  var v22: int = 22
+  var v23: int = 23
+  var v24: int = 24
+  var v25: int = 25
+  var v26: int = 26
+  var v27: int = 27
+  var v28: int = 28
+  var v29: int = 29
+  var v30: int = 30
+  var v31: int = 31
+  var v32: int = 32
+  var v33: int = 33
+  var v34: int = 34
+  var v35: int = 35
+  var v36: int = 36
+  var v37: int = 37
+  var v38: int = 38
+  var v39: int = 39
+  var v40: int = 40
+  var v41: int = 41
+  var v42: int = 42
+  var v43: int = 43
+  var v44: int = 44
+  var v45: int = 45
+  var v46: int = 46
+  var v47: int = 47
+  var v48: int = 48
+  var v49: int = 49
+  var v50: int = 50
+  var v51: int = 51
+  var v52: int = 52
+  var v53: int = 53
+  var v54: int = 54
+  var v55: int = 55
+  var v56: int = 56
+  var v57: int = 57
+  var v58: int = 58
+  var v59: int = 59
+  var v60: int = 60
+  var v61: int = 61
+  var v62: int = 62
+  var v63: int = 63
+  var v64: int = 64
+  var v65: int = 65
+  var v66: int = 66
+  var v67: int = 67
+  var v68: int = 68
+  var v69: int = 69
+  var v70: int = 70
+  var v71: int = 71
+  var v72: int = 72
+  var v73: int = 73
+  var v74: int = 74
+  var v75: int = 75
+  var v76: int = 76
+  var v77: int = 77
+  var v78: int = 78
+  var v79: int = 79
+  var v80: int = 80
+  var v81: int = 81
+  var v82: int = 82
+  var v83: int = 83
+  var v84: int = 84
+  var v85: int = 85
+  var v86: int = 86
+  var v87: int = 87
+  var v88: int = 88
+  var v89: int = 89
+  var v90: int = 90
+  var v91: int = 91
+  var v92: int = 92
+  var v93: int = 93
+  var v94: int = 94
+  var v95: int = 95
+  var v96: int = 96
+  var v97: int = 97
+  var v98: int = 98
+  var v99: int = 99
+  entry {
+    print(v0)
+    print(v1)
+    print(v2)
+    print(v3)
+    print(v4)
+    print(v5)
+    print(v6)
+    print(v7)
+    print(v8)
+    print(v9)
+    print(v10)
+    print(v11)
+    print(v12)
+    print(v13)
+    print(v14)
+    print(v15)
+    print(v16)
+    print(v17)
+    print(v18)
+    print(v19)
+    print(v20)
+    print(v21)
+    print(v22)
+    print(v23)
+    print(v24)
+    print(v25)
+    print(v26)
+    print(v27)
+    print(v28)
+    print(v29)
+    print(v30)
+    print(v31)
+    print(v32)
+    print(v33)
+    print(v34)
+    print(v35)
+    print(v36)
+    print(v37)
+    print(v38)
+    print(v39)
+    print(v40)
+    print(v41)
+    print(v42)
+    print(v43)
+    print(v44)
+    print(v45)
+    print(v46)
+    print(v47)
+    print(v48)
+    print(v49)
+    print(v50)
+    print(v51)
+    print(v52)
+    print(v53)
+    print(v54)
+    print(v55)
+    print(v56)
+    print(v57)
+    print(v58)
+    print(v59)
+    print(v60)
+    print(v61)
+    print(v62)
+    print(v63)
+    print(v64)
+    print(v65)
+    print(v66)
+    print(v67)
+    print(v68)
+    print(v69)
+    print(v70)
+    print(v71)
+    print(v72)
+    print(v73)
+    print(v74)
+    print(v75)
+    print(v76)
+    print(v77)
+    print(v78)
+    print(v79)
+    print(v80)
+    print(v81)
+    print(v82)
+    print(v83)
+    print(v84)
+    print(v85)
+    print(v86)
+    print(v87)
+    print(v88)
+    print(v89)
+    print(v90)
+    print(v91)
+    print(v92)
+    print(v93)
+    print(v94)
+    print(v95)
+    print(v96)
+    print(v97)
+    print(v98)
+    print(v99)
+  }
+}

@@ -1,0 +1,6 @@
+state Main {
+  entry {
+    var x = mystery_func(42)
+    print(x)
+  }
+}

@@ -1,0 +1,5 @@
+state Main {
+  entry {
+    print(totally_nonexistent_var)
+  }
+}

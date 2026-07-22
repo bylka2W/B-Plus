@@ -47,7 +47,6 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                     const c = &block.instrs.items[i].cmp;
                     c.a = resolve(map, c.a);
                     c.b = resolve(map, c.b);
-                    if (c.dst == .vreg) invalidatePointers(&map, c.dst.vreg);
                     i += 1;
                 },
                 .cmp_flags => {
@@ -76,7 +75,9 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                 },
                 .ret => {
                     const r = &block.instrs.items[i].ret;
-                    r.val = resolve(map, r.val);
+                    if (r.* == .value) {
+                        r.* = .{ .value = resolve(map, r.value) };
+                    }
                     i += 1;
                 },
                 .call => {
@@ -84,7 +85,6 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                     for (0..c.arg_count) |j| {
                         c.args[j] = resolve(map, c.args[j]);
                     }
-                    if (c.dst == .vreg) invalidatePointers(&map, c.dst.vreg);
                     i += 1;
                 },
                 .jmp, .jcc, .alloca, .phi => i += 1,
@@ -126,7 +126,6 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                     const c = &block.instrs.items[i].fcmp;
                     c.a = resolve(map, c.a);
                     c.b = resolve(map, c.b);
-                    if (c.dst == .vreg) invalidatePointers(&map, c.dst.vreg);
                     i += 1;
                 },
                 .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => {
@@ -228,7 +227,7 @@ fn dstOf(inst: mir.MInst) ?u32 {
         .add => |m| vregOf(m.dst),
         .sub => |m| vregOf(m.dst),
         .imul => |m| vregOf(m.dst),
-        .idiv => |m| vregOf(m.dst),
+        .idiv => |m| vregOf(m.quotient),
         .@"and" => |m| vregOf(m.dst),
         .@"or" => |m| vregOf(m.dst),
         .xor => |m| vregOf(m.dst),
@@ -239,7 +238,6 @@ fn dstOf(inst: mir.MInst) ?u32 {
         .fcmp => |m| vregOf(m.dst),
         .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => |m| vregOf(m.dst),
         .select => |s| vregOf(s.dst),
-        .cmp => |m| vregOf(m.dst),
         .load => |m| vregOf(m.dst),
         .lea => |m| vregOf(m.dst),
         else => null,
@@ -251,7 +249,7 @@ fn replaceOpWithResolved(map: std.AutoHashMap(u32, CopyEntry), inst: *mir.MInst)
         .add => |*m| { m.src = resolve(map, m.src); },
         .sub => |*m| { m.src = resolve(map, m.src); },
         .imul => |*m| { m.src = resolve(map, m.src); },
-        .idiv => |*m| { m.src = resolve(map, m.src); },
+        .idiv => |*m| { m.divisor = resolve(map, m.divisor); },
         .@"and" => |*m| { m.src = resolve(map, m.src); },
         .@"or" => |*m| { m.src = resolve(map, m.src); },
         .xor => |*m| { m.src = resolve(map, m.src); },

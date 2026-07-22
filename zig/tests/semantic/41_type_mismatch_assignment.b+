@@ -1,0 +1,5 @@
+state Main {
+  entry {
+    var x: string = 42
+  }
+}

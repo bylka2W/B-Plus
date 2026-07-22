@@ -1,0 +1,8 @@
+state Main {
+    entry {
+        var x = 42
+        var y = x
+        y = 99
+        print(x + y)
+    }
+}

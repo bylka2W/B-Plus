@@ -1,0 +1,2 @@
+state Main { entry { var x = -9223372036854775808
+var y = x - 1 } }

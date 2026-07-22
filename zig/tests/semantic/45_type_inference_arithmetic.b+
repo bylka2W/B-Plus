@@ -1,0 +1,13 @@
+fn add(x: int, y: int) -> int {
+  var result = x + y
+  return result
+}
+state Main {
+  entry {
+    var x: int = 10
+    var y: int = 20
+    var z: int = x + y
+    var r = add(x, y)
+    print(r)
+  }
+}

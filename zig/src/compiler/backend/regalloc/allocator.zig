@@ -29,8 +29,8 @@ pub fn collectConstraints(
         for (block.instrs.items) |inst| {
             switch (inst) {
                 .idiv => |d| {
-                    if (liveness.vregOf(d.dst) != 0) {
-                        try out.append(.{ .vreg = liveness.vregOf(d.dst), .required_reg = 0 });
+                    if (liveness.vregOf(d.quotient) != 0) {
+                        try out.append(.{ .vreg = liveness.vregOf(d.quotient), .required_reg = 0 });
                     }
                 },
                 else => {},

@@ -1,0 +1,3 @@
+struct S { x: int }
+state Main { entry { var s: S
+print(s.y) } }

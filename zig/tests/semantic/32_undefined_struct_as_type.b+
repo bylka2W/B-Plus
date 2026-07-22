@@ -1,0 +1,6 @@
+state Main {
+  var x: FakeType
+  entry {
+    print(x)
+  }
+}

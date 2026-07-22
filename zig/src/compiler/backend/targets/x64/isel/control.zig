@@ -28,7 +28,7 @@ pub fn selectJcc(ctx: *Ctx, j: mir.JccInst, allocator: std.mem.Allocator) !void 
 
 pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
     const win64_args = [_]i16{ 1, 2, 8, 9 };
-    var src_regs: [4]i16 = .{ -1, -1, -1, -1 };
+    var src_regs: [14]i16 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 
     for (0..c.arg_count) |i| {
         if (regalloc.isSpilled(ctx.ra, c.args[i])) {
@@ -39,11 +39,11 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
         }
     }
 
-    for (0..c.arg_count) |i| {
+    for (0..@min(c.arg_count, 4)) |i| {
         const src = src_regs[i];
         const dst = win64_args[i];
         if (src == dst) continue;
-        for (0..c.arg_count) |j| {
+        for (0..@min(c.arg_count, 4)) |j| {
             if (j != i and src == win64_args[j]) {
                 try append2(ctx, .MOV_R64_R64, Operand.r(ctx.scratch), Operand.r(src));
                 src_regs[i] = ctx.scratch;
@@ -52,7 +52,7 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
         }
     }
 
-    for (0..c.arg_count) |i| {
+    for (0..@min(c.arg_count, 4)) |i| {
         const src = src_regs[i];
         const dst = win64_args[i];
         if (src != dst) try append2(ctx, .MOV_R64_R64, Operand.r(dst), Operand.r(src));
@@ -61,30 +61,35 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
     try ctx.call_fixups.append(ctx.mf.allocator, .{ .name = c.name, .disp_pos = 0 });
     try append2(ctx, .CALL_REL32, Operand.imm(0), .{});
 
-    const dst_spilled = regalloc.isSpilled(ctx.ra, c.dst);
-    if (dst_spilled) {
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, 0);
-    } else {
-        const dst = resolveReg(ctx.ra, c.dst);
-        if (dst != 0) try append2(ctx, .MOV_R64_R64, Operand.r(dst), Operand.r(0));
+    if (!c.is_void) {
+        const dst_spilled = regalloc.isSpilled(ctx.ra, c.dst);
+        if (dst_spilled) {
+            try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, 0);
+        } else {
+            const dst = resolveReg(ctx.ra, c.dst);
+            if (dst != 0) try append2(ctx, .MOV_R64_R64, Operand.r(dst), Operand.r(0));
+        }
     }
 }
 
 pub fn selectRet(ctx: *Ctx, r: mir.RetInst) !void {
-    if (!r.is_void) {
-        const val_spilled = regalloc.isSpilled(ctx.ra, r.val);
-        if (val_spilled) {
-            try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, r.val, 0);
-        } else {
-            const val = resolveOp(ctx.ra, r.val);
-            if (val.reg >= 0) {
-                if (val.reg != 0) {
-                    try append2(ctx, .MOV_R64_R64, Operand.r(0), val);
-                }
+    switch (r) {
+        .void_ret => {},
+        .value => |val| {
+            const val_spilled = regalloc.isSpilled(ctx.ra, val);
+            if (val_spilled) {
+                try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, val, 0);
             } else {
-                try append2(ctx, .MOV_R64_IMM64, Operand.r(0), val);
+                const val_r = resolveOp(ctx.ra, val);
+                if (val_r.reg >= 0) {
+                    if (val_r.reg != 0) {
+                        try append2(ctx, .MOV_R64_R64, Operand.r(0), val_r);
+                    }
+                } else {
+                    try append2(ctx, .MOV_R64_IMM64, Operand.r(0), val_r);
+                }
             }
-        }
+        },
     }
 }
 

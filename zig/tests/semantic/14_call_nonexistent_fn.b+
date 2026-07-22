@@ -1,0 +1,5 @@
+state Main {
+  entry {
+    nonexistent_function(1, 2)
+  }
+}

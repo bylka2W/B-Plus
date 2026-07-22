@@ -1,0 +1,6 @@
+state A {
+  on ev -> B
+}
+state B {
+  entry { print(1) }
+}

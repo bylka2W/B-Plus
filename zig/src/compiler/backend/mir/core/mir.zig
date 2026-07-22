@@ -41,6 +41,7 @@ pub const LeaInst = opcode.LeaInst;
 pub const RetInst = opcode.RetInst;
 pub const PhiIncoming = opcode.PhiIncoming;
 pub const PhiInst = opcode.PhiInst;
+pub const MemSize = opcode.MemSize;
 pub const MInst = opcode.MInst;
 pub const MInstUtils = opcode.MInstUtils;
 

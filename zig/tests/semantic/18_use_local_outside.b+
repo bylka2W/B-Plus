@@ -1,0 +1,11 @@
+state Main {
+  entry {
+    var local = 5
+  }
+  on ev -> Other
+}
+state Other {
+  entry {
+    print(local)
+  }
+}

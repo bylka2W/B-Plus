@@ -1,0 +1,9 @@
+struct Point { x: int }
+state Main {
+  entry {
+    var p: Point
+    if (p) {
+      print(1)
+    }
+  }
+}

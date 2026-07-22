@@ -188,41 +188,54 @@ pub fn selectIMul(ctx: *Ctx, m: mir.IMulInst) !void {
 }
 
 pub fn selectIDiv(ctx: *Ctx, m: mir.IDivInst) !void {
-    const dst_spilled = regalloc.isSpilled(ctx.ra, m.dst);
-    const dst_reg = if (dst_spilled) -1 else resolveReg(ctx.ra, m.dst);
-    const dst_is_rax = !dst_spilled and dst_reg == 0;
+    const quotient_spilled = regalloc.isSpilled(ctx.ra, m.quotient);
+    const quotient_reg = if (quotient_spilled) -1 else resolveReg(ctx.ra, m.quotient);
+    const quotient_is_rax = !quotient_spilled and quotient_reg == 0;
 
-    if (!dst_is_rax) {
+    if (!quotient_is_rax) {
         try append1(ctx, .PUSH_R64, Operand.r(0));
     }
     try append1(ctx, .PUSH_R64, Operand.r(2));
 
-    const raw_src = try resolveOpOrSpill(ctx, m.src);
+    const raw_src = try resolveOpOrSpill(ctx, m.divisor);
     const src_op = if (raw_src.reg >= 0 or raw_src.base_reg >= 0 or raw_src.index_reg >= 0) raw_src else blk: {
         try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), raw_src);
         break :blk Operand.r(ctx.scratch);
     };
 
-    if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, m.dst, 0);
-    } else if (!dst_is_rax) {
-        try append2(ctx, .MOV_R64_R64, Operand.r(0), Operand.r(dst_reg));
+    if (quotient_spilled) {
+        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, m.quotient, 0);
+    } else if (!quotient_is_rax) {
+        try append2(ctx, .MOV_R64_R64, Operand.r(0), Operand.r(quotient_reg));
     }
 
     try append1(ctx, .CQO, .{});
     try append1(ctx, .IDIV_R64, src_op);
 
-    if (!dst_is_rax) {
+    if (!quotient_is_rax) {
         try append2(ctx, .MOV_R64_R64, Operand.r(ctx.scratch), Operand.r(0));
     }
     try append1(ctx, .POP_R64, Operand.r(2));
-    if (!dst_is_rax) {
+    if (!quotient_is_rax) {
         try append1(ctx, .POP_R64, Operand.r(0));
-        if (dst_spilled) {
-            try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.dst, ctx.scratch);
-        } else if (dst_reg != 0) {
-            try append2(ctx, .MOV_R64_R64, Operand.r(dst_reg), Operand.r(ctx.scratch));
+        if (quotient_spilled) {
+            try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.quotient, ctx.scratch);
+        } else if (quotient_reg != 0) {
+            try append2(ctx, .MOV_R64_R64, Operand.r(quotient_reg), Operand.r(ctx.scratch));
         }
+    }
+
+    const remainder_spilled = regalloc.isSpilled(ctx.ra, m.remainder);
+    const remainder_reg = if (remainder_spilled) -1 else resolveReg(ctx.ra, m.remainder);
+    if (remainder_reg != 2) {
+        if (remainder_spilled) {
+            try append2(ctx, .MOV_R64_R64, Operand.r(ctx.scratch), Operand.r(2));
+            try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.remainder, ctx.scratch);
+        } else {
+            try append2(ctx, .MOV_R64_R64, Operand.r(remainder_reg), Operand.r(2));
+        }
+    } else if (remainder_spilled) {
+        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.remainder, 2);
     }
 }
 
@@ -397,7 +410,6 @@ pub fn selectTestFlags(ctx: *Ctx, tf: mir.TestFlagsInst) !void {
 }
 
 pub fn selectCmp(ctx: *Ctx, c: mir.CmpInst) !void {
-    const dst_spilled = regalloc.isSpilled(ctx.ra, c.dst);
     const a_spilled = regalloc.isSpilled(ctx.ra, c.a);
     const b_spilled = regalloc.isSpilled(ctx.ra, c.b);
 
@@ -417,17 +429,6 @@ pub fn selectCmp(ctx: *Ctx, c: mir.CmpInst) !void {
         const av = try resolveOpOrSpill(ctx, c.a);
         const bv = try resolveOpOrSpill(ctx, c.b);
         try append2(ctx, .CMP_R64_R64, av, bv);
-    }
-
-    try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), Operand.imm(0));
-    try append2(ctx, .SETCC_R8, Operand.r(ctx.scratch), .{ .imm64 = @intFromEnum(c.cc) });
-    if (dst_spilled) {
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, ctx.scratch);
-    } else {
-        const dst = resolveReg(ctx.ra, c.dst);
-        if (dst != ctx.scratch) {
-            try append2(ctx, .MOV_R64_R64, Operand.r(dst), Operand.r(ctx.scratch));
-        }
     }
 }
 

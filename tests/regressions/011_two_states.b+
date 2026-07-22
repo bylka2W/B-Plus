@@ -1,0 +1,11 @@
+state A {
+  entry {
+    print(1)
+  }
+  on ev -> B
+}
+state B {
+  entry {
+    print(2)
+  }
+}

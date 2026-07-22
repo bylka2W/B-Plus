@@ -42,7 +42,7 @@ fn dumpInst(inst: mir.MInst) void {
         .@"or" => |m| { std.debug.print("or ", .{}); dumpOp(m.dst); std.debug.print(", ", .{}); dumpOp(m.src); },
         .xor => |m| { std.debug.print("xor ", .{}); dumpOp(m.dst); std.debug.print(", ", .{}); dumpOp(m.src); },
         .cmp_flags => |cf| { std.debug.print("cmp_flags ", .{}); dumpOp(cf.a); std.debug.print(", ", .{}); dumpOp(cf.b); },
-        .cmp => |c| { std.debug.print("cmp {s} ", .{@tagName(c.cc)}); dumpOp(c.dst); std.debug.print(", ", .{}); dumpOp(c.a); std.debug.print(", ", .{}); dumpOp(c.b); },
+        .cmp => |c| { std.debug.print("cmp {s} ", .{@tagName(c.cc)}); dumpOp(c.a); std.debug.print(", ", .{}); dumpOp(c.b); },
         .jmp => |j| std.debug.print("jmp b{d}", .{j.target}),
         .jcc => |j| std.debug.print("jcc {s} b{d}", .{ @tagName(j.cc), j.target }),
         .lea => |l| {
@@ -51,7 +51,12 @@ fn dumpInst(inst: mir.MInst) void {
             if (l.index != .imm) { std.debug.print(" + ", .{}); dumpOp(l.index); }
             std.debug.print(" * {d} + {d}]", .{ l.scale, l.disp });
         },
-        .ret => |r| { std.debug.print("ret ", .{}); dumpOp(r.val); },
+        .ret => |r| {
+            switch (r) {
+                .void_ret => std.debug.print("ret void", .{}),
+                .value => |v| { std.debug.print("ret ", .{}); dumpOp(v); },
+            }
+        },
         .alloca => |a| { std.debug.print("alloca ", .{}); dumpOp(a.dst); },
         .load => |l| { std.debug.print("load ", .{}); dumpOp(l.dst); std.debug.print(", ", .{}); dumpOp(l.ptr); },
         .store => |s| { std.debug.print("store ", .{}); dumpOp(s.ptr); std.debug.print(", ", .{}); dumpOp(s.src); },
@@ -78,7 +83,7 @@ fn dumpInst(inst: mir.MInst) void {
         .fptosi => |c| { std.debug.print("fptosi ", .{}); dumpOp(c.dst); std.debug.print(", ", .{}); dumpOp(c.src); },
         .fpext => |c| { std.debug.print("fpext ", .{}); dumpOp(c.dst); std.debug.print(", ", .{}); dumpOp(c.src); },
         .fptrunc => |c| { std.debug.print("fptrunc ", .{}); dumpOp(c.dst); std.debug.print(", ", .{}); dumpOp(c.src); },
-        .idiv => |m| { std.debug.print("idiv ", .{}); dumpOp(m.dst); std.debug.print(", ", .{}); dumpOp(m.src); },
+        .idiv => |m| { std.debug.print("idiv ", .{}); dumpOp(m.quotient); std.debug.print(", ", .{}); dumpOp(m.divisor); },
     }
 }
 

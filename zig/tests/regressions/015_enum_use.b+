@@ -1,0 +1,11 @@
+enum Dir {
+  North
+  South
+  East
+  West
+}
+state Main {
+  entry {
+    var d: Dir
+  }
+}

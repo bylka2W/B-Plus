@@ -1,0 +1,9 @@
+state Main {
+  var counter: int = 10
+  entry {
+    my_fn()
+  }
+}
+fn my_fn() {
+  print(counter)
+}

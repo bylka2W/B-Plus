@@ -1,0 +1,2 @@
+state Main { entry { print(1) }
+entry { print(2) } }

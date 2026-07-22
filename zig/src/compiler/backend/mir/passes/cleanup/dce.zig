@@ -12,14 +12,13 @@ fn dstVreg(inst: mir.MInst) ?u32 {
         .add => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .sub => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .imul => |m| if (m.dst == .vreg) m.dst.vreg else null,
-        .idiv => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .idiv => |m| if (m.quotient == .vreg) m.quotient.vreg else null,
         .@"and" => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .@"or" => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .xor => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .shl, .shr, .sar => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .not_op, .neg_op => |m| if (m.dst == .vreg) m.dst.vreg else null,
-        .cmp => |m| if (m.dst == .vreg) m.dst.vreg else null,
-        .call => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .call => |m| if (!m.is_void and m.dst == .vreg) m.dst.vreg else null,
         .alloca => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .load => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .lea => |m| if (m.dst == .vreg) m.dst.vreg else null,
@@ -29,7 +28,7 @@ fn dstVreg(inst: mir.MInst) ?u32 {
         .fcmp => |c| if (c.dst == .vreg) c.dst.vreg else null,
         .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => |c| if (c.dst == .vreg) c.dst.vreg else null,
         .select => |s| if (s.dst == .vreg) s.dst.vreg else null,
-        .cmp_flags, .test_flags, .jmp, .jcc, .store, .ret => null,
+        .cmp_flags, .cmp, .test_flags, .jmp, .jcc, .store, .ret => null,
     };
 }
 
@@ -60,7 +59,8 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
             if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
         },
         .idiv => |m| {
-            if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
+            if (m.dividend == .vreg) { buf[n] = m.dividend.vreg; n += 1; }
+            if (m.divisor == .vreg) { buf[n] = m.divisor.vreg; n += 1; }
         },
         .@"and" => |m| {
             if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
@@ -103,7 +103,12 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
             if (m.src == .vreg) { buf[n] = m.src.vreg; n += 1; }
         },
         .ret => |m| {
-            if (m.val == .vreg) { buf[n] = m.val.vreg; n += 1; }
+            switch (m) {
+                .void_ret => {},
+                .value => |v| {
+                    if (v == .vreg) { buf[n] = v.vreg; n += 1; }
+                },
+            }
         },
         .phi => |p| {
             for (p.incoming) |inc| {

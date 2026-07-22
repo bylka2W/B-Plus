@@ -314,9 +314,10 @@ pub fn computeLiveIntervals(
                     reads[read_count] = vregOf(m.src); read_count += 1;
                 },
                 .idiv => |m| {
-                    writes[write_count] = vregOf(m.dst); write_count += 1;
-                    reads[read_count] = vregOf(m.dst); read_count += 1;
-                    reads[read_count] = vregOf(m.src); read_count += 1;
+                    writes[write_count] = vregOf(m.quotient); write_count += 1;
+                    writes[write_count] = vregOf(m.remainder); write_count += 1;
+                    reads[read_count] = vregOf(m.dividend); read_count += 1;
+                    reads[read_count] = vregOf(m.divisor); read_count += 1;
                 },
                 .@"and" => |m| {
                     writes[write_count] = vregOf(m.dst); write_count += 1;
@@ -347,7 +348,6 @@ pub fn computeLiveIntervals(
                     reads[read_count] = vregOf(tf.b); read_count += 1;
                 },
                 .cmp => |c| {
-                    writes[write_count] = vregOf(c.dst); write_count += 1;
                     reads[read_count] = vregOf(c.a); read_count += 1;
                     reads[read_count] = vregOf(c.b); read_count += 1;
                 },
@@ -381,8 +381,11 @@ pub fn computeLiveIntervals(
                         reads[read_count] = vregOf(c.args[i]); read_count += 1;
                     }
                 },
-                .ret => |r| {
-                    reads[read_count] = vregOf(r.val); read_count += 1;
+                .ret => |r| switch (r) {
+                    .void_ret => {},
+                    .value => |v| {
+                        reads[read_count] = vregOf(v); read_count += 1;
+                    },
                 },
                 .phi => {
                     writes[write_count] = vregOf(inst.phi.dst); write_count += 1;

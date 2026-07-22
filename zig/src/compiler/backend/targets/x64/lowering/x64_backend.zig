@@ -282,35 +282,30 @@ fn emitIMul(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, m: mir
 }
 
 fn emitIDiv(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, m: mir.IDivInst, scratch: i16) !void {
-    const dst_reg = isel.resolveReg(ra, m.dst);
     _ = scratch;
-    if (dst_reg != 0) {
-        try emit(code, .MOV_R64_R64, &.{ Operand.r(0), Operand.r(dst_reg) });
+    const quotient_reg = isel.resolveReg(ra, m.quotient);
+    if (quotient_reg != 0) {
+        try emit(code, .MOV_R64_R64, &.{ Operand.r(0), Operand.r(quotient_reg) });
     }
     try emit(code, .CQO, &.{});
-    const divisor = isel.resolveReg(ra, m.src);
+    const divisor = isel.resolveReg(ra, m.divisor);
     if (divisor >= 0) {
         try emit(code, .IDIV_R64, &.{ Operand.r(divisor) });
     }
-    if (dst_reg != 0) {
-        try emit(code, .MOV_R64_R64, &.{ Operand.r(dst_reg), Operand.r(0) });
+    if (quotient_reg != 0) {
+        try emit(code, .MOV_R64_R64, &.{ Operand.r(quotient_reg), Operand.r(0) });
+    }
+    const remainder_reg = isel.resolveReg(ra, m.remainder);
+    if (remainder_reg != 2 and remainder_reg != 0) {
+        try emit(code, .MOV_R64_R64, &.{ Operand.r(remainder_reg), Operand.r(2) });
     }
 }
 
 fn emitCmp(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, c: mir.CmpInst, scratch: i16) !void {
     _ = scratch;
-    const dst_reg = isel.resolveReg(ra, c.dst);
     const a_reg = isel.resolveReg(ra, c.a);
     const b_reg = isel.resolveReg(ra, c.b);
     try emit(code, .CMP_R64_R64, &.{ Operand.r(a_reg), Operand.r(b_reg) });
-    switch (c.cc) {
-        .lt => try emit(code, .SETCC_R8, &.{ Operand.r(dst_reg), Operand.immU32(0x9C) }),
-        .le => try emit(code, .SETCC_R8, &.{ Operand.r(dst_reg), Operand.immU32(0x9E) }),
-        .gt => try emit(code, .SETCC_R8, &.{ Operand.r(dst_reg), Operand.immU32(0x9F) }),
-        .ge => try emit(code, .SETCC_R8, &.{ Operand.r(dst_reg), Operand.immU32(0x9D) }),
-        .eq => try emit(code, .SETCC_R8, &.{ Operand.r(dst_reg), Operand.immU32(0x94) }),
-        .ne => try emit(code, .SETCC_R8, &.{ Operand.r(dst_reg), Operand.immU32(0x95) }),
-    }
 }
 
 fn emitCmpFlags(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, cf: mir.CmpFlagsInst, scratch: i16) !void {
@@ -357,46 +352,74 @@ fn emitLea(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, l: mir.
     try emit(code, .LEA_R64_MEM, &.{ Operand.r(dst_reg), Operand.memIdx(base_reg, index_reg, l.scale, l.disp) });
 }
 
-fn emitLoad(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, l: mir.LoadInst, scratch: i16, mfunc: *const mir.MFunction) !void {
+fn emitLoad(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, l: mir.LoadInst, scratch: i16, _: *const mir.MFunction) !void {
     const dst_reg = isel.resolveReg(ra, l.dst);
+    const load_op: enc.OpCode = switch (l.size) {
+        .u64 => .MOV_R64_MEM,
+        .f64 => .SSE_MOVSD_LD,
+        .f32 => .SSE_MOVSS_LD,
+        else => .MOV_R64_MEM,
+    };
+    const is_float = l.size == .f32 or l.size == .f64;
     if (isel.isSpilled(ra, l.ptr)) {
         try isel.loadSpilledOp(code, ra, l.ptr, scratch);
-        try emit(code, .MOV_R64_MEM, &.{ Operand.r(dst_reg), Operand.mem(scratch, 0) });
+        if (is_float) {
+            try emit(code, load_op, &.{ Operand.xmm(dst_reg), Operand.mem(scratch, 0) });
+        } else {
+            try emit(code, load_op, &.{ Operand.r(dst_reg), Operand.mem(scratch, 0) });
+        }
         return;
     }
     const ptr_reg = isel.resolveReg(ra, l.ptr);
-    _ = mfunc;
-    try emit(code, .MOV_R64_MEM, &.{ Operand.r(dst_reg), Operand.mem(ptr_reg, 0) });
+    if (is_float) {
+        try emit(code, load_op, &.{ Operand.xmm(dst_reg), Operand.mem(ptr_reg, 0) });
+    } else {
+        try emit(code, load_op, &.{ Operand.r(dst_reg), Operand.mem(ptr_reg, 0) });
+    }
 }
 
-fn emitStore(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, s: mir.StoreInst, scratch: i16, mfunc: *const mir.MFunction) !void {
+fn emitStore(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, s: mir.StoreInst, scratch: i16, _: *const mir.MFunction) !void {
+    const store_op: enc.OpCode = switch (s.size) {
+        .u64 => .MOV_MEM_R64,
+        .f64 => .SSE_MOVSD_ST,
+        .f32 => .SSE_MOVSS_ST,
+        else => .MOV_MEM_R64,
+    };
+    const is_float = s.size == .f32 or s.size == .f64;
     const src_reg = isel.prepOperand(code, ra, s.src, scratch) catch |e| {
         if (e == error.OutOfMemory) return e;
         const sreg = isel.resolveReg(ra, s.src);
         if (isel.isSpilled(ra, s.ptr)) {
             try isel.loadSpilledOp(code, ra, s.ptr, scratch);
-            try emit(code, .MOV_MEM_R64, &.{ Operand.mem(scratch, 0), Operand.r(sreg) });
+            if (is_float) {
+                try emit(code, store_op, &.{ Operand.xmm(sreg), Operand.mem(scratch, 0) });
+            } else {
+                try emit(code, store_op, &.{ Operand.mem(scratch, 0), Operand.r(sreg) });
+            }
             return;
         }
         const ptr_reg = isel.resolveReg(ra, s.ptr);
-        try emit(code, .MOV_MEM_R64, &.{ Operand.mem(ptr_reg, 0), Operand.r(sreg) });
+        if (is_float) {
+            try emit(code, store_op, &.{ Operand.xmm(sreg), Operand.mem(ptr_reg, 0) });
+        } else {
+            try emit(code, store_op, &.{ Operand.mem(ptr_reg, 0), Operand.r(sreg) });
+        }
         return;
     };
-    _ = mfunc;
+    _ = is_float;
     if (isel.isSpilled(ra, s.ptr)) {
         try isel.loadSpilledOp(code, ra, s.ptr, scratch);
-        try emit(code, .MOV_MEM_R64, &.{ Operand.mem(src_reg, 0), Operand.r(scratch) });
+        try emit(code, store_op, &.{ Operand.mem(src_reg, 0), Operand.r(scratch) });
         return;
     }
     const ptr_reg = isel.resolveReg(ra, s.ptr);
-    try emit(code, .MOV_MEM_R64, &.{ Operand.mem(ptr_reg, 0), Operand.r(src_reg) });
+    try emit(code, store_op, &.{ Operand.mem(ptr_reg, 0), Operand.r(src_reg) });
 }
 
 fn emitCall(code: *std.ArrayList(u8), call_fixups: *std.ArrayList(CallFixup), ra: *const regalloc.RegAllocResult, c: mir.CallInst, scratch: i16, fm: *const frame_mod.FrameManager) !void {
     _ = scratch;
     const win64_arg_regs = regs.WIN64_ARG_REGS;
-    for (0..c.arg_count) |i| {
-        if (i >= 4) break;
+    for (0..@min(c.arg_count, 4)) |i| {
         const arg = c.args[i];
         const arg_reg = isel.resolveReg(ra, arg);
         if (arg_reg != win64_arg_regs[i]) {
@@ -410,20 +433,25 @@ fn emitCall(code: *std.ArrayList(u8), call_fixups: *std.ArrayList(CallFixup), ra
     try call_fixups.append(.{ .name = c.name, .disp_pos = pos + 1 });
     try emit(code, .ADD_R64_IMM32, &.{ Operand.r(4), Operand.immU32(0x20) });
 
-    if (c.dst != .vreg or c.dst.vreg != 0) {
+    if (!c.is_void) {
         const dst_reg = isel.resolveReg(ra, c.dst);
         if (dst_reg != 0) {
-            // RAX contains the return value
+            try emit(code, .MOV_R64_R64, &.{ Operand.r(dst_reg), Operand.r(0) });
         }
     }
 }
 
 fn emitRet(code: *std.ArrayList(u8), ra: *const regalloc.RegAllocResult, r: mir.RetInst, _: i16, fm: *const frame_mod.FrameManager) !void {
-    if (r.val == .vreg and r.val.vreg != 0) {
-        const val_reg = isel.resolveReg(ra, r.val);
-        if (val_reg != 0) {
-            try emit(code, .MOV_R64_R64, &.{ Operand.r(0), Operand.r(val_reg) });
-        }
+    switch (r) {
+        .void_ret => {},
+        .value => |val| {
+            if (val == .vreg and val.vreg != 0) {
+                const val_reg = isel.resolveReg(ra, val);
+                if (val_reg != 0) {
+                    try emit(code, .MOV_R64_R64, &.{ Operand.r(0), Operand.r(val_reg) });
+                }
+            }
+        },
     }
     try fm.emitEpilogue(code);
 }
