@@ -4,7 +4,7 @@
 const std = @import("std");
 const ir = @import("ir/inst.zig");
 
-pub const x64enc = @import("x64enc.zig");
+pub const x64enc = @import("encoder/x64enc.zig");
 
 pub const SimdPrefix = x64enc.SimdPrefix;
 pub const OpCode = x64enc.OpCode;

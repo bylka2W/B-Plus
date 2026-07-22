@@ -1,5 +1,5 @@
 const std = @import("std");
-const x64enc = @import("../x64enc.zig");
+const x64enc = @import("../encoder/x64enc.zig");
 
 pub const OpCode = x64enc.OpCode;
 

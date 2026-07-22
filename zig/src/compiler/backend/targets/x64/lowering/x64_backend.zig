@@ -5,19 +5,19 @@
 ///   3. Instruction selection & encoding
 ///   4. Branch fixup resolution
 const std = @import("std");
-const mir = @import("../../mir/mir.zig");
-const mir_verify = @import("../../mir/passes/verify.zig");
-const mir_optimizer = @import("../../mir/passes/manager.zig");
-const mir_ssa_destroy = @import("../../mir/passes/ssa/ssa_destroy.zig");
+const mir = @import("../../../mir/mir.zig");
+const mir_verify = @import("../../../mir/passes/verify.zig");
+const mir_optimizer = @import("../../../mir/passes/manager.zig");
+const mir_ssa_destroy = @import("../../../mir/passes/ssa/ssa_destroy.zig");
 
-const encoder = @import("encoder.zig");
+const encoder = @import("../encoder.zig");
 const OpCode = encoder.OpCode;
 const Operand = encoder.Operand;
 const emit = encoder.emit;
-const regalloc = @import("../../regalloc/regalloc.zig");
-const frame_mod = @import("../../frame/frame.zig");
-const isel = @import("isel.zig");
-const regs = @import("registers.zig");
+const regalloc = @import("../../../regalloc/regalloc.zig");
+const frame_mod = @import("../../../frame/frame.zig");
+const isel = @import("../isel.zig");
+const regs = @import("../registers.zig");
 const memory = @import("memory.zig");
 const branches = @import("branches.zig");
 const debug_mod = @import("debug.zig");
