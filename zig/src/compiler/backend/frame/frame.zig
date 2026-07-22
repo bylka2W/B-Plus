@@ -93,11 +93,11 @@ pub const FrameManager = struct {
 
     pub fn xmmSpillOffset(self: *const FrameManager, index: u32) i32 {
         const layout = self.computeLayout();
-        return -@as(i32, @intCast(layout.push_area + layout.xmm_spill_area - index * 16));
+        return -@as(i32, @intCast(layout.push_area + index * 16));
     }
 
-    fn xmmSaveRspOffset(layout: FrameLayout, index: u32) i32 {
-        return @as(i32, @intCast(layout.local_area + (16 - (layout.push_area + layout.xmm_spill_area) % 16) % 16 + index * 16));
+    fn xmmSaveRspOffset(_: FrameLayout, index: u32) i32 {
+        return @as(i32, @intCast(index * 16));
     }
 
     pub fn emitPrologue(self: *const FrameManager, code: *std.ArrayList(u8)) !void {
@@ -160,45 +160,31 @@ pub const FrameManager = struct {
         try x64.emit(code, .RET, &.{});
     }
 
+    fn calcCallAlloc(self: *const FrameManager, int_arg_count: u32, float_arg_count: u32) u32 {
+        const shadow: u32 = if (self.abi == .win64) 32 else 0;
+        const stack_args: u32 = switch (self.abi) {
+            .win64 => blk: {
+                const total = int_arg_count + float_arg_count;
+                break :blk if (total > 4) (total - 4) * 8 else 0;
+            },
+            .system_v => blk: {
+                const stack_int: u32 = if (int_arg_count > 6) (int_arg_count - 6) * 8 else 0;
+                const stack_float: u32 = if (float_arg_count > 8) (float_arg_count - 8) * 8 else 0;
+                break :blk stack_int + stack_float;
+            },
+        };
+        return (shadow + stack_args + 15) & ~@as(u32, 15);
+    }
+
     pub fn emitCallSetup(self: *const FrameManager, code: *std.ArrayList(u8), int_arg_count: u32, float_arg_count: u32) !void {
-        const shadow: u32 = switch (self.abi) {
-            .win64 => 32,
-            .system_v => 0,
-        };
-        const int_regs: u32 = switch (self.abi) {
-            .win64 => 4,
-            .system_v => 6,
-        };
-        const float_regs: u32 = switch (self.abi) {
-            .win64 => 4,
-            .system_v => 8,
-        };
-        const stack_int_args: u32 = if (int_arg_count > int_regs) (int_arg_count - int_regs) * 8 else 0;
-        const stack_float_args: u32 = if (float_arg_count > float_regs) (float_arg_count - float_regs) * 8 else 0;
-        const raw_total = shadow + stack_int_args + stack_float_args;
-        const alloc = (raw_total + 15) & ~@as(u32, 15);
+        const alloc = self.calcCallAlloc(int_arg_count, float_arg_count);
         if (alloc > 0) {
             try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(alloc) });
         }
     }
 
     pub fn emitCallCleanup(self: *const FrameManager, code: *std.ArrayList(u8), int_arg_count: u32, float_arg_count: u32) !void {
-        const shadow: u32 = switch (self.abi) {
-            .win64 => 32,
-            .system_v => 0,
-        };
-        const int_regs: u32 = switch (self.abi) {
-            .win64 => 4,
-            .system_v => 6,
-        };
-        const float_regs: u32 = switch (self.abi) {
-            .win64 => 4,
-            .system_v => 8,
-        };
-        const stack_int_args: u32 = if (int_arg_count > int_regs) (int_arg_count - int_regs) * 8 else 0;
-        const stack_float_args: u32 = if (float_arg_count > float_regs) (float_arg_count - float_regs) * 8 else 0;
-        const raw_total = shadow + stack_int_args + stack_float_args;
-        const alloc = (raw_total + 15) & ~@as(u32, 15);
+        const alloc = self.calcCallAlloc(int_arg_count, float_arg_count);
         if (alloc > 0) {
             try x64.emit(code, .ADD_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(alloc) });
         }
@@ -215,9 +201,8 @@ pub const FrameManager = struct {
     }
 
     fn emitChkstk(code: *std.ArrayList(u8), frame_size: u32) !void {
-        try x64.emit(code, .MOV_R64_IMM64, &.{ enc.Operand.r(10), enc.Operand.immU32(frame_size) });
         try x64.emit(code, .MOV_R64_IMM64, &.{ enc.Operand.r(0), enc.Operand.immU32(frame_size) });
         try x64.emit(code, .CALL_REL32, &.{enc.Operand.immU32(0)});
-        try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.r(10) });
+        try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.r(0) });
     }
 };
