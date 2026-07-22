@@ -6,7 +6,7 @@ const mir_verify = @import("../../mir/passes/verify.zig");
 const mir_optimizer = @import("../../mir/passes/manager.zig");
 const x64 = @import("encoder.zig");
 const regalloc = @import("../../regalloc/regalloc.zig");
-const frame_mod = @import("frame.zig");
+const frame_mod = @import("../../frame/frame.zig");
 const isel = @import("isel.zig");
 
 const OffsetMap = isel.OffsetMap;

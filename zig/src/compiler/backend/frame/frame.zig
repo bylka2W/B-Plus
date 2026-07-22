@@ -1,5 +1,5 @@
 const std = @import("std");
-const x64 = @import("encoder.zig");
+const x64 = @import("../targets/x64/encoder.zig");
 
 pub const Abi = enum {
     win64,

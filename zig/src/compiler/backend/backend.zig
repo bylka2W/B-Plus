@@ -26,3 +26,4 @@ pub const mir_ssa_destroy = @import("mir/passes/ssa/ssa_destroy.zig");
 pub const mir_copy_prop = @import("mir/passes/cleanup/copy_prop.zig");
 pub const mir_addr_fold = @import("mir/passes/memory/addr_fold.zig");
 pub const regalloc = @import("regalloc/regalloc.zig");
+pub const frame = @import("frame/frame.zig");
