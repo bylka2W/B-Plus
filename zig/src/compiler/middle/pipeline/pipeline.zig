@@ -4,12 +4,13 @@ const ast = @import("../../frontend/ast.zig");
 const sema_mod = @import("../../frontend/sema/sema.zig");
 const hir = @import("../hir/hir.zig");
 const tir = @import("../tir/tir.zig");
+const tir_to_bir = @import("../tir/tir_to_bir.zig");
 const bir_mod = @import("../bir/bir.zig");
-const bir_bplus = @import("../bir/bir_bplus_frontend.zig");
 
 pub const PipelineError = error{
     HIRError,
     TIRError,
+    BIRError,
     OutOfMemory,
 };
 
@@ -36,10 +37,10 @@ pub fn lowerToTIR(allocator: Allocator, hir_module: *const hir.HirModule) !tir.M
     };
 }
 
-pub fn lowerToBIR(allocator: Allocator, program: *const ast.ProgramNode) !bir_mod.Module {
-    return bir_bplus.lowerProgram(allocator, program) catch |err| {
-        std.log.err("BIR lowering failed: {}", .{err});
-        return PipelineError.HIRError;
+pub fn lowerTIRtoBIR(tir_module: *const tir.Module) !bir_mod.Module {
+    return tir_to_bir.lowerModule(tir_module.allocator, tir_module) catch |err| {
+        std.log.err("TIR → BIR lowering failed: {}", .{err});
+        return PipelineError.BIRError;
     };
 }
 
@@ -50,5 +51,5 @@ pub fn runFullPipeline(allocator: Allocator, program: *const ast.ProgramNode, se
     var tir_module = try lowerToTIR(allocator, &hir_module);
     defer tir_module.deinit();
 
-    return lowerToBIR(allocator, program);
+    return lowerTIRtoBIR(&tir_module);
 }
