@@ -24,6 +24,14 @@
 - **Critical edge fix** — исправлен hang теста `testCriticalEdgePhi`: эпилог теперь
   генерируется после каждого блока, заканчивающегося `ret`, предотвращая infinite loop
   при critical edge splitting.
+- **MIR instruction model refactoring** — CMP_FLAGS + SETCC: `CmpInst` больше не
+  записывает результат (FLAGS-only), для материализации результата используется новая
+  инструкция `SetCCInst`. `IDivInst` теперь 4-operand (dividend, divisor, quotient,
+  remainder). `RetInst` — union (void/value). `FCmpInst` использует `CondCode` enum
+  вместо raw `u8`.
+- **Безопасные дефолты для незарегистрированных vreg** — все `orelse unreachable` в
+  x64 ISel заменены на safe defaults (`.gpr` / `.i64`), предотвращая panic при
+  отсутствии vreg registration.
 - **9/9 E2E тестов BIR → MIR → x64 → execute** проходят (ранее 7/8).
 
 ---
@@ -1316,6 +1324,13 @@ No assemblers, linkers, or LLVM — the entire code generator and optimizer are 
 - **Critical edge fix** — fixed `testCriticalEdgePhi` hang: epilogue now emitted after each
   block ending with `ret`, preventing infinite loop when critical edge splitting places
   blocks after a return block.
+- **MIR instruction model refactoring** — CMP_FLAGS + SETCC: `CmpInst` no longer writes a
+  destination (FLAGS-only); new `SetCCInst` materializes the comparison result into a vreg.
+  `IDivInst` is now 4-operand (dividend, divisor, quotient, remainder). `RetInst` is a
+  union (void/value). `FCmpInst` uses `CondCode` enum instead of raw `u8`.
+- **Safe defaults for unregistered vregs** — all `orelse unreachable` in x64 ISel replaced
+  with safe defaults (`.gpr` / `.i64`), preventing panics when vreg registration is
+  missing.
 - **9/9 BIR → MIR → x64 → execute E2E tests pass** (was 7/8).
 
 ---

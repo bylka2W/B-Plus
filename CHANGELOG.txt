@@ -1,4 +1,13 @@
 **v4.6.1-beta (архитектура Frontend → HIR → BIR → MIR → Targets + backend optimizer):**
+- **MIR instruction model refactoring**:
+  - `CmpInst`: `{ cc, dst, a, b }` → `{ cc, a, b }` (FLAGS-only, без dst). Для материализации результата сравнения используется новая инструкция `SetCCInst { dst, cc }`.
+  - `IDivInst`: `{ dst, src }` → `{ dividend, divisor, quotient, remainder }` — 4 операнда, каждый операнд в правильном регистре (RAX/RDX).
+  - `RetInst`: struct `{ val, is_void }` → `union(enum) { void_ret, value: MOperand }`.
+  - `FCmpInst`: `{ setcc_op: u8, dst, a, b }` → `{ cc: CondCode, dst, a, b }` — типизированный enum вместо raw u8.
+  - `SetCCInst`: новая инструкция `{ dst: MOperand, cc: CondCode }` для материализации FLAGS→vreg.
+- **Обновлены все вызывающие стороны** — `bplus.zig`, `bir_cpu.zig`, `mir_verify.zig`, `mir_copy_prop.zig`, `mir_optimizer.zig`, `mir_dce.zig`, `mir_ssa_destroy.zig`, `mir_peephole.zig`, `regalloc.zig`, `isel/integer.zig`, `isel/float.zig`, `isel/control.zig`, `isel.zig`, `test_bir_to_mir_e2e.zig` — все адаптированы под новую модель инструкций.
+- **Безопасные дефолты для незарегистрированных vreg** — все `orelse unreachable` в x64 ISel (`integer.zig`, `float.zig`, `conversions.zig`, `memory.zig`) заменены на safe defaults (`.gpr` / `.i64`). Предотвращает panic при отсутствии vreg registration.
+- **E2E тесты** — все BIR→MIR тесты проходят.
 - **Многоуровневая архитектура** — полная миграция компилятора на архитектуру в стиле LLVM/rustc. Зависимости строго однонаправленные: Frontend → HIR → BIR → MIR → Targets.
 - **Разделение frontend / middle / backend** — исходный код перемещён из плоской структуры `compiler/parser/`, `compiler/backend/bir/` в иерархию `compiler/frontend/`, `compiler/middle/bir/`, `compiler/backend/mir/`, `compiler/backend/targets/`. Все ~500+ `@import` путей переписаны.
 - **BIR core модуль** (`bir/core/`) — типизированные `Module`, `Function`, `Block`, `ValueId`, `Instruction`, `TypeSystem`, `PassManager`, `PassResult`, `PassContext`, `AnalysisManager`.
