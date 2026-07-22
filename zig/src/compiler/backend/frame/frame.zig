@@ -68,7 +68,7 @@ pub const FrameManager = struct {
 
         const combined = push_area + xmm_spill_area + local_area;
         const pad: u32 = (16 - (combined % 16)) % 16;
-        const total_frame = local_area + pad;
+        const total_frame = xmm_spill_area + local_area + pad;
 
         return .{
             .push_area = push_area,
@@ -93,7 +93,11 @@ pub const FrameManager = struct {
 
     pub fn xmmSpillOffset(self: *const FrameManager, index: u32) i32 {
         const layout = self.computeLayout();
-        return -@as(i32, @intCast(layout.push_area + index * 16 + 16));
+        return -@as(i32, @intCast(layout.push_area + layout.xmm_spill_area - index * 16));
+    }
+
+    fn xmmSaveRspOffset(layout: FrameLayout, index: u32) i32 {
+        return @as(i32, @intCast(layout.local_area + (16 - (layout.push_area + layout.xmm_spill_area) % 16) % 16 + index * 16));
     }
 
     pub fn emitPrologue(self: *const FrameManager, code: *std.ArrayList(u8)) !void {
@@ -106,11 +110,6 @@ pub const FrameManager = struct {
             try x64.emit(code, .PUSH_R64, &.{enc.Operand.r(reg)});
         }
 
-        for (self.callee_saved_xmms.items) |xmm_reg| {
-            try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(16) });
-            try x64.emit(code, .SSE_MOVUPS_ST, &.{ enc.Operand.xmm(xmm_reg), enc.Operand.mem(4, 0) });
-        }
-
         const layout = self.computeLayout();
 
         if (layout.total_frame >= self.large_frame_threshold) {
@@ -118,20 +117,35 @@ pub const FrameManager = struct {
         } else if (layout.total_frame > 0) {
             try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(layout.total_frame) });
         }
+
+        for (self.callee_saved_xmms.items, 0..) |xmm_reg, i| {
+            if (self.use_frame_pointer) {
+                const offset = self.xmmSpillOffset(@intCast(i));
+                try x64.emit(code, .SSE_MOVUPS_ST, &.{ enc.Operand.xmm(xmm_reg), enc.Operand.mem(5, offset) });
+            } else {
+                const offset = xmmSaveRspOffset(layout, @intCast(i));
+                try x64.emit(code, .SSE_MOVUPS_ST, &.{ enc.Operand.xmm(xmm_reg), enc.Operand.mem(4, offset) });
+            }
+        }
     }
 
     pub fn emitEpilogue(self: *const FrameManager, code: *std.ArrayList(u8)) !void {
         const layout = self.computeLayout();
 
-        if (layout.total_frame > 0) {
-            try x64.emit(code, .ADD_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(layout.total_frame) });
-        }
-
         var i: usize = self.callee_saved_xmms.items.len;
         while (i > 0) {
             i -= 1;
-            try x64.emit(code, .SSE_MOVUPS_LD, &.{ enc.Operand.xmm(self.callee_saved_xmms.items[i]), enc.Operand.mem(4, 0) });
-            try x64.emit(code, .ADD_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(16) });
+            if (self.use_frame_pointer) {
+                const offset = self.xmmSpillOffset(@intCast(i));
+                try x64.emit(code, .SSE_MOVUPS_LD, &.{ enc.Operand.xmm(self.callee_saved_xmms.items[i]), enc.Operand.mem(5, offset) });
+            } else {
+                const offset = xmmSaveRspOffset(layout, @intCast(i));
+                try x64.emit(code, .SSE_MOVUPS_LD, &.{ enc.Operand.xmm(self.callee_saved_xmms.items[i]), enc.Operand.mem(4, offset) });
+            }
+        }
+
+        if (layout.total_frame > 0) {
+            try x64.emit(code, .ADD_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(layout.total_frame) });
         }
 
         i = self.callee_saved_gprs.items.len;
@@ -146,34 +160,44 @@ pub const FrameManager = struct {
         try x64.emit(code, .RET, &.{});
     }
 
-    pub fn emitCallSetup(self: *const FrameManager, code: *std.ArrayList(u8), arg_count: u32) !void {
+    pub fn emitCallSetup(self: *const FrameManager, code: *std.ArrayList(u8), int_arg_count: u32, float_arg_count: u32) !void {
         const shadow: u32 = switch (self.abi) {
             .win64 => 32,
             .system_v => 0,
         };
-        const register_args: u32 = switch (self.abi) {
+        const int_regs: u32 = switch (self.abi) {
             .win64 => 4,
             .system_v => 6,
         };
-        const stack_args: u32 = if (arg_count > register_args) (arg_count - register_args) * 8 else 0;
-        const raw_total = shadow + stack_args;
+        const float_regs: u32 = switch (self.abi) {
+            .win64 => 4,
+            .system_v => 8,
+        };
+        const stack_int_args: u32 = if (int_arg_count > int_regs) (int_arg_count - int_regs) * 8 else 0;
+        const stack_float_args: u32 = if (float_arg_count > float_regs) (float_arg_count - float_regs) * 8 else 0;
+        const raw_total = shadow + stack_int_args + stack_float_args;
         const alloc = (raw_total + 15) & ~@as(u32, 15);
         if (alloc > 0) {
             try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(alloc) });
         }
     }
 
-    pub fn emitCallCleanup(self: *const FrameManager, code: *std.ArrayList(u8), arg_count: u32) !void {
+    pub fn emitCallCleanup(self: *const FrameManager, code: *std.ArrayList(u8), int_arg_count: u32, float_arg_count: u32) !void {
         const shadow: u32 = switch (self.abi) {
             .win64 => 32,
             .system_v => 0,
         };
-        const register_args: u32 = switch (self.abi) {
+        const int_regs: u32 = switch (self.abi) {
             .win64 => 4,
             .system_v => 6,
         };
-        const stack_args: u32 = if (arg_count > register_args) (arg_count - register_args) * 8 else 0;
-        const raw_total = shadow + stack_args;
+        const float_regs: u32 = switch (self.abi) {
+            .win64 => 4,
+            .system_v => 8,
+        };
+        const stack_int_args: u32 = if (int_arg_count > int_regs) (int_arg_count - int_regs) * 8 else 0;
+        const stack_float_args: u32 = if (float_arg_count > float_regs) (float_arg_count - float_regs) * 8 else 0;
+        const raw_total = shadow + stack_int_args + stack_float_args;
         const alloc = (raw_total + 15) & ~@as(u32, 15);
         if (alloc > 0) {
             try x64.emit(code, .ADD_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(alloc) });
