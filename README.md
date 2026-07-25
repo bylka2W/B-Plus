@@ -107,6 +107,23 @@ PLAN и METAL используют один синтаксис B+, но пред
 
 B+ объединяет простоту языков высокого уровня с контролем системного программирования, позволяя создавать как игровую логику, так и низкоуровневые программы.
 
+Самый простой способ проверить, что компилятор работает:
+
+1. Создайте или возьмите любой файл B+, например:
+
+```
+hello.b+
+```
+
+2. Перетащите файл **`hello.b+`** мышкой прямо на **`bpc.bat`**.
+
+3. Компилятор автоматически:
+   - скомпилирует программу;
+   - создаст рядом файл **`hello.exe`**;
+   - сразу запустит его.
+
+Если после перетаскивания появился `hello.exe` и программа выполнилась — значит компилятор установлен и работает правильно.
+
 ---
 
 ## Содержание
@@ -156,8 +173,27 @@ B+ объединяет простоту языков высокого уров�
 
 Или через консоль:
 ```bash
-bpc.exe run hello.b+
+zig\zig-out\bin\bpc.exe run hello.b+
 ```
+
+### Самый простой способ проверить, что компилятор работает
+
+1. Создайте файл `hello.b+` в папке `C:\B-Plus`:
+
+```
+state Hello {
+    entry { print("Hello World!\n") }
+}
+```
+
+2. Перетащите файл **`hello.b+`** мышкой прямо на **`bpc.bat`**.
+
+3. Компилятор автоматически:
+   - скомпилирует программу;
+   - создаст рядом файл **`hello.exe`**;
+   - сразу запустит его.
+
+Если после перетаскивания появился `hello.exe` и программа выполнилась — значит компилятор установлен и работает правильно.
 
 ---
 
@@ -1087,8 +1123,27 @@ Drag a `.b+` file onto `bpc.bat` — it compiles to `.exe` and runs it.
 
 Or from the command line:
 ```bash
-bpc.exe run hello.b+
+zig\zig-out\bin\bpc.exe run hello.b+
 ```
+
+### Quick verification that the compiler works
+
+1. Create a file `hello.b+` in the `C:\B-Plus` folder:
+
+```
+state Hello {
+    entry { print("Hello World!\n") }
+}
+```
+
+2. Drag the **`hello.b+`** file onto **`bpc.bat`**.
+
+3. The compiler will automatically:
+   - compile the program;
+   - create a **`hello.exe`** file next to it;
+   - run it immediately.
+
+If `hello.exe` appeared and the program ran — the compiler is installed and working correctly.
 
 ---
 
