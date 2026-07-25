@@ -1,38 +1,111 @@
-# B+ v4.6.1-beta — Compiled `.plan` / `.metal` Language (Frontend → HIR → BIR → MIR → Targets)
+# B+ v4.6.2-beta — Compiled `.plan` / `.metal` Language (Frontend → HIR → BIR → MIR → Targets)
 
 > [English version ↓](#b-v461-beta--compiled-plan--metal-language-frontend--hir--bir--mir--targets)
 
 **B+** компилирует `.plan` / `.metal` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор и оптимизатор написаны с нуля на Zig.
 
-### Что нового в v4.6.1-beta
+### Что нового в v4.6.2-beta
 
-- **Архитектура Frontend → HIR → BIR → MIR → Targets** — полная миграция компилятора на
-  многоуровневую архитектуру в стиле LLVM/rustc с однонаправленным потоком зависимостей.
-- **Разделение frontend / middle / backend** — исходный код компилятора перемещён из плоской
-  структуры `compiler/parser/` и `compiler/backend/bir/` в иерархию `compiler/frontend/`,
-  `compiler/middle/bir/`, `compiler/backend/mir/`, `compiler/backend/targets/`.
-- **BIR core модуль** — новый `bir/core/` с типизированными `Module`, `Function`, `Block`,
-  `Value`, `Instruction` и системой типов (`TypeSystem`).
-- **BIR optimizer framework** — `bir/optimizer/` с `PassManager` и `PassResult` для
-  построения пайплайнов оптимизаций.
-- **BIR analysis** — `bir/analysis/` с `AnalysisManager` и `cfg.zig` (CFG построение).
-- **MIR core модуль** — `mir/core/` с типизированными `MFunction`, `MBlock`, `MInst`,
-  `MOperand`, `MOpcode`, `PhiInst`, `PhiIncoming`.
-- **Targets abstraction** — `targets/common/` (общий target) и `targets/x64/` с
-  instruction selection (`isel/`), encoder (`x64enc.zig`), frame manager, register allocator.
-- **Critical edge fix** — исправлен hang теста `testCriticalEdgePhi`: эпилог теперь
-  генерируется после каждого блока, заканчивающегося `ret`, предотвращая infinite loop
-  при critical edge splitting.
-- **MIR instruction model refactoring** — CMP_FLAGS + SETCC: `CmpInst` больше не
-  записывает результат (FLAGS-only), для материализации результата используется новая
-  инструкция `SetCCInst`. `IDivInst` теперь 4-operand (dividend, divisor, quotient,
-  remainder). `RetInst` — union (void/value). `FCmpInst` использует `CondCode` enum
-  вместо raw `u8`.
-- **Безопасные дефолты для незарегистрированных vreg** — все `orelse unreachable` в
-  x64 ISel заменены на safe defaults (`.gpr` / `.i64`), предотвращая panic при
-  отсутствии vreg registration.
-- **9/9 E2E тестов BIR → MIR → x64 → execute** проходят (ранее 7/8).
+- Новая архитектура: Frontend → HIR → BIR → MIR → Targets
+- Разделение слоёв: frontend / middle(BIR) / backend(MIR) / targets
+- Новый BIR Core: типизированные Module, Function, Block, Value, Instruction, TypeSystem
+- BIR Optimizer и Analysis: PassManager, CFG, AnalysisManager
+- Новый MIR Core: MFunction, MBlock, MInst, Operand, Opcode, Phi
+- Target Backend: common + x64 (ISel, encoder, frame manager, regalloc)
+- Рефакторинг MIR: CMP/SETCC, 4-operand IDiv, новый Ret, CondCode для FCmp
+- Исправлены critical edge, Phi lowering и проблемы vreg
+- Полный pipeline: BIR → MIR → x64 → executable
+- Парсер теперь syntax-only: убран Dialect из парсера, валидация домена перенесена на этап HIR
+- AST реорганизован: `ProgramNode { common, plan, metal }` — общие конструкции, план и метал отдельно
+- Единый файл `.b+` для обоих доменов (ранее `.plan` / `.metal` отдельно)
+- Слой Frontend: парсер не знает о доменах, принимает весь синтаксис, валидация на HIR
+- Слой Middle (BIR): верификатор разбит на 7 модулей (verify/cfg, verify/ssa, verify/phi, verify/function, verify/types, verify/memory, verify/instructions), CFG строится из терминаторов на лету
+- Слой Backend (MIR): CMP_FLAGS+SETCC, 4-operand IDiv, Ret как union, CondCode для FCmp
+- Слой Targets: common + x64 (ISel, encoder, frame manager, regalloc)
+- BIR Verifier: модульная система верификации из 7 модулей (CFG, SSA, phi, функции, типы, память, инструкции)
+- Структурированная диагностика: коды ошибок, контекст инструкций, список ошибок для интеграции с тулами
+- CFG bounds checking: некорректные адреса переходов ловятся вместо panic
+- SSA verification: тесты на use-before-def и нарушение доминантности
+- Исправлены E2E тесты верификатора: правильный порядок инструкций (терминатор последний), phi incoming через alloc.dupe
+- Исправлен buildCFG: проверка границ перед доступом к блокам по индексу
+
+---
+
+## Что такое B+
+
+**B+** — это язык программирования, который превращает написанный код прямо в готовую программу для Windows (.exe или .dll).
+В отличие от многих языков, B+ не использует внешние компиляторы или линкеры — весь процесс сборки выполняет собственный компилятор.
+
+Код B+ хранится в файлах с расширением: `example.b+`
+
+В B+ есть два основных режима программирования:
+
+### PLAN — описание логики состояний
+
+PLAN нужен, когда программа должна работать как набор состояний и переключаться между ними по событиям.
+
+Например:
+- меню игры
+- состояния персонажа
+- игровые режимы
+- сетевые протоколы
+- обработчики событий
+
+```rust
+state Locked {
+    on open [key == 1] -> Opened
+    entry {
+        print("locked\n")
+    }
+}
+
+state Opened {
+    on close -> Locked
+    entry {
+        print("opened\n")
+    }
+}
+```
+
+Что здесь происходит:
+- Программа начинает в состоянии `Locked`
+- Если приходит событие `open` и есть ключ (`key == 1`) — переходит в `Opened`
+- При входе в состояние выполняется код внутри `entry`
+
+### METAL — обычное программирование
+
+METAL предназначен для создания обычного кода:
+- функций
+- алгоритмов
+- вычислений
+- работы с памятью
+- низкоуровневых систем
+
+```rust
+fn fibonacci(n: i64) -> i64 {
+    if n <= 1 {
+        return n;
+    }
+
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+```
+
+Этот код создаёт функцию вычисления чисел Фибоначчи.
+
+### Один язык — два подхода
+
+PLAN и METAL используют один синтаксис B+, но предназначены для разных задач:
+
+| Режим | Назначение |
+|-------|------------|
+| PLAN | логика состояний и событий |
+| METAL | алгоритмы и системный код |
+
+Компилятор сам определяет, к какому режиму относится код.
+
+B+ объединяет простоту языков высокого уровня с контролем системного программирования, позволяя создавать как игровую логику, так и низкоуровневые программы.
 
 ---
 
@@ -40,26 +113,19 @@
 
 1. [Быстрый старт](#1-быстрый-старт)
 2. [Команды компилятора](#2-команды-компилятора)
-3. [Синтаксис языка (.plan)](#3-синтаксис-языка)
+3. [Синтаксис языка (.b+)](#3-синтаксис-языка)
    - [3.1 Состояния](#31-состояния)
    - [3.2 Переходы (on)](#32-переходы-on)
    - [3.3 Безусловные переходы (always)](#33-безусловные-переходы-always)
-   - [3.4 Вход и выход (entry / exit)](#34-вход-и-выход-entry--exit)
+   - [3.4 Вход (entry)](#34-вход-entry)
    - [3.5 Переменные](#35-переменные)
    - [3.6 Присваивания](#36-присваивания)
    - [3.7 Печать (print)](#37-печать-print)
-   - [3.8 Сторожевые условия (guard)](#38-сторожевые-условия-guard)
-   - [3.9 Экспортируемый entry (export entry)](#39-экспортируемый-entry-export-entry)
-   - [3.10 global entry](#310-global-entry)
-   - [3.11 Контекст (context)](#311-контекст-context)
-   - [3.12 Аннотации](#312-аннотации)
-   - [3.13 Перечисления (enum)](#313-перечисления-enum)
-   - [3.14 Параллельные блоки (parallel)](#314-параллельные-блоки-parallel)
-   - [3.15 Kernel-функции (GPU)](#315-kernel-функции-gpu)
-   - [3.16 Внешние функции (extern)](#316-внешние-функции-extern)
-   - [3.17 Комментарии](#317-комментарии)
-   - [3.18 Русские ключевые слова](#318-русские-ключевые-слова)
-4. [Синтаксис .metal (новый CPU backend)](#4-синтаксис-metal-новый-cpu-backend)
+   - [3.8 Export entry](#38-export-entry)
+   - [3.9 Entry point](#39-entry-point)
+   - [3.10 Перечисления (enum)](#310-перечисления-enum)
+   - [3.11 Комментарии](#311-комментарии)
+4. [Синтаксис METAL](#4-синтаксис-metal)
    - [4.1 Типы](#41-типы)
    - [4.2 Функции](#42-функции)
    - [4.3 Внешние функции](#43-внешние-функции)
@@ -87,18 +153,10 @@
 ## 1. Быстрый старт
 
 ```bash
-bpc.exe build hello.plan
-.\hello.exe
+bpc.exe run hello.b+
 ```
 
-Первая команда компилирует `hello.plan` в `hello.exe`.
-Вторая — запускает.
-
-Можно совместить:
-
-```bash
-bpc.exe run hello.plan
-```
+Команда компилирует `hello.b+` в `hello.exe` и сразу запускает.
 
 ---
 
@@ -107,21 +165,29 @@ bpc.exe run hello.plan
 ### Синтаксис
 
 ```text
-bpc build <входной.plan>              — скомпилировать в <входной>.exe
-bpc build <входной.plan> -o <выход.exe> — скомпилировать с указанием имени
-bpc dll   <входной.plan>              — скомпилировать в DLL
-bpc run   <входной.plan>              — скомпилировать и сразу запустить
-bpc hlsl  <входной.plan>              — сгенерировать HLSL шейдер
+bpc run   <входной.b+>              — скомпилировать и сразу запустить
+bpc dll   <входной.b+>              — скомпилировать в DLL
+bpc build <входной.b+> [-o <каталог>] — сгенерировать C++ UE5 плагин (6 файлов)
+bpc hlsl  <входной.b+>              — сгенерировать HLSL шейдер
+bpc gpu   <входной.b+>              — сгенерировать DXIL
+bpc cpp   <входной.b+>              — сгенерировать C++ код
+bpc mir   <входной.b+>              — сгенерировать COFF .obj
+bpc bpl   <входной.b+>              — понизить B+ до BIR и вывести
+bpc ir    <входной.b+>              — вывести BIR pipeline
+bpc cfg   <входной.b+>              — вывести граф потока управления
+bpc dom   <входной.b+>              — вывести дерево доминирования
+bpc loops <входной.b+>              — вывести иерархию циклов
+bpc test  <тест.bpt>                — запустить тест
 ```
 
-#### `bpc dll <input.plan> [-o <output.dll>] [-exports <name1,name2,...>]`
+#### `bpc dll <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]`
 
-Компилирует `.plan` файл в DLL с таблицей экспорта. Все `export entry` или
+Компилирует `.b+` файл в DLL с таблицей экспорта. Все `export entry` или
 перечисленные в `-exports` становятся экспортируемыми функциями.
 
 | Шаг | Описание |
 |-----|----------|
-| 1 | Читает файл `.plan` целиком в память |
+| 1 | Читает файл `.b+` целиком в память |
 | 2 | Разбирает (парсит) исходный код в AST |
 | 3 | Генерирует машинный код x64 с DllMain (возвращает TRUE) |
 | 4 | Создаёт таблицу импорта (kernel32.dll + runtime) |
@@ -131,44 +197,39 @@ bpc hlsl  <входной.plan>              — сгенерировать HLSL
 
 **Примеры:**
 ```bash
-bpc dll test.plan -o test.dll -exports Init,Update
-bpc dll module.plan
+bpc dll test.b+ -o test.dll -exports Init,Update
+bpc dll module.b+
 ```
 
-#### `bpc build <input.plan> [-o <output.exe>]`
+#### `bpc build <input.b+> [-o <output_dir>]`
 
-Что делает:
+Генерирует C++ UE5 плагин из B+ файла с описанием pipeline (6 файлов).
 
 | Шаг | Описание |
 |-----|----------|
-| 1 | Читает файл `.plan` целиком в память |
-| 2 | Разбирает (парсит) исходный код в AST |
-| 3 | Проверяет, что есть хотя бы одно состояние |
-| 4 | Генерирует машинный код x64 напрямую (без ассемблера) |
-| 5 | Расставляет NOP-выравнивание для кеша |
-| 6 | Встраивает пул строк (для print) |
-| 7 | Генерирует таблицу импорта (kernel32.dll) |
-| 8 | Применяет все fixup'ы (адреса переходов) |
-| 9 | Упаковывает всё в формат PE (.exe) |
-| 10 | Записывает результат на диск |
+| 1 | Читает файл `.b+` целиком в память |
+| 2 | Разбирает описание pipeline |
+| 3 | Генерирует TSSShaders.h / TSSShaders.cpp |
+| 4 | Генерирует TSSRuntime.h / TSSRuntime.cpp |
+| 5 | Генерирует TSSViewExtension.h / TSSViewExtension.cpp |
+| 6 | Записывает 6 файлов в выходной каталог |
 
-Если `-o` не указан, имя выходного файла = имя входного с расширением `.exe`.
+Если `-o` не указан, файлы записываются в каталог исходного файла.
 
 **Примеры:**
 ```bash
-bpc build traffic.plan              → traffic.exe
-bpc build traffic.plan -o light.exe → light.exe
-bpc build source.plan               → source.exe
+bpc build pipeline.b+               → 6 C++ файлов рядом с pipeline.b+
+bpc build pipeline.b+ -o ./Plugin   → 6 C++ файлов в ./Plugin
 ```
 
-#### `bpc gpu <input.plan> [-o <output.hlsl>]` / `bpc hlsl <input.plan> [-o <output.hlsl>]`
+#### `bpc gpu <input.b+> [-o <output>]` / `bpc hlsl <input.b+> [-o <output.hlsl>]`
 
-Генерирует HLSL-код из B+ файла с новым блочным `kernel { ... }` синтаксисом
+Генерирует HLSL-код из B+ файла с блочным `kernel { ... }` синтаксисом
 или старым (legacy `@bind`/`@cbuffer`). `bpc hlsl` автодетектит синтаксис.
 
 | Шаг | Описание (новый pipeline) |
 |-----|--------------------------|
-| 1 | Читает файл `.plan` целиком в память |
+| 1 | Читает файл `.b+` целиком в память |
 | 2 | Разбирает (парсит) в GPU AST (`gpu_ast.zig`) |
 | 3 | Семантический анализ (`gpu_sema.zig`): дубликаты регистров, лимиты, numthreads |
 | 4 | Понижение до GPU IR (`gpu_lower.zig`): GPU AST → SSA IR |
@@ -197,11 +258,11 @@ HLSL-интринсики (WaveActiveSum, InterlockedAdd, mad, lerp и др.) п
 
 **Пример:**
 ```bash
-bpc hlsl fsr2_easu.plan -o fsr2_easu.hlsl
+bpc hlsl fsr2_easu.b+ -o fsr2_easu.hlsl
 dxc -T cs_6_6 -E main -Fo fsr2_easu.cso fsr2_easu.hlsl
 ```
 
-#### `bpc run <input.plan>`
+#### `bpc run <input.b+>`
 
 Что делает:
 
@@ -214,8 +275,8 @@ dxc -T cs_6_6 -E main -Fo fsr2_easu.cso fsr2_easu.hlsl
 
 **Примеры:**
 ```bash
-bpc run traffic.plan    — компилирует и сразу запускает
-bpc run hello.plan      — компилирует и сразу запускает
+bpc run traffic.b+    — компилирует и сразу запускает
+bpc run hello.b+      — компилирует и сразу запускает
 ```
 
 ### Коды возврата
@@ -228,10 +289,9 @@ bpc run hello.plan      — компилирует и сразу запуска�
 
 ### Примечания
 
-- Входной файл **обязан** иметь расширение `.plan`.
-- Если расширения нет, компилятор всё равно добавит `.exe` к базовому имени.
 - Компилятор **не использует** внешние ассемблеры, линкеры или LLVM — весь машинный код генерируется самостоятельно.
-- Выходной файл — полноценный Windows PE x64 исполняемый файл.
+- Команда `bpc run` компилирует в `.exe` и сразу запускает.
+- Команда `bpc build` генерирует C++ UE5 плагин (а не .exe).
 
 ---
 
@@ -283,18 +343,16 @@ state Init {
 }
 ```
 
-### 3.4 Вход и выход (entry / exit)
+### 3.4 Вход (entry)
 
 ```rust
 state Door {
     entry { print("entered\n") }
-    exit  { print("exited\n") }
     on open -> Opened
 }
 ```
 
-- `entry { ... }` — выполняется при входе в состояние.
-- `exit { ... }` — выполняется перед выходом из состояния (перед переходом в другое).
+`entry { ... }` — выполняется при входе в состояние.
 
 ### 3.5 Переменные
 
@@ -370,24 +428,7 @@ state Hello {
 }
 ```
 
-### 3.8 Сторожевые условия (guard)
-
-```rust
-on <событие> [<условие>] -> <ЦелевоеСостояние>
-```
-
-Переход происходит только если условие истинно. Поддерживаются операторы:
-`==`, `!=`, `>`, `<`, `>=`, `<=`
-
-```rust
-state Crosswalk {
-    var cars_waiting: bool
-    on timer [cars_waiting == 0] -> Walk
-    on timer [cars_waiting > 0]  -> Wait
-}
-```
-
-### 3.9 Экспортируемый entry (export entry)
+### 3.9 export entry
 
 ```rust
 export entry <Имя> {
@@ -397,21 +438,14 @@ export entry <Имя> {
 
 Экспортируемая точка входа — компилируется как функция, видимая извне DLL.
 Используется при сборке DLL (`bpc dll`) вместе с флагом `-exports`.
-Тело может быть пустым — достаточно объявления для экспорта.
-
-Все `export entry` в одном файле используют контекст **первого** `state` блока:
-переменные состояния доступны из любого экспорта.
-
-ENPT (Export Name Pointer Table) автоматически сортируется по алфавиту —
-требование Windows для бинарного поиска в `GetProcAddress`.
 
 ```rust
 export entry TSS_Init {
-    // будет экспортирована из DLL как TSS_Init
+    print("init\n")
 }
 ```
 
-### 3.10 global entry
+### 3.9 Entry point
 
 ```rust
 entry <Имя> {
@@ -419,7 +453,7 @@ entry <Имя> {
 }
 ```
 
-Глобальная точка входа — выполняется один раз при старте программы. Можно использовать для инициализации.
+Точка входа — выполняется один раз при старте программы.
 
 ```rust
 entry main {
@@ -427,56 +461,7 @@ entry main {
 }
 ```
 
-### 3.11 Контекст (context)
-
-```rust
-context {
-    var <имя>: <тип>
-    ...
-}
-```
-
-Контекстные переменные — глобальные для всей программы, видимы во всех состояниях.
-
-```rust
-context {
-    var global_count: int
-}
-```
-
-### 3.12 Аннотации
-
-Аннотации ставятся перед состоянием или переходом.
-
-| Аннотация | Описание |
-|-----------|----------|
-| `@hot` | Горячий код — размещается в L1 кеше |
-| `@cold` | Холодный код — не кешируется |
-| `@hot(0.9)` | Явный weight горячести |
-| `@cache(L1)` | Данные состояния в L1 |
-| `@cache(L2)` | Данные состояния в L2 |
-| `@cache(L3)` | Данные состояния в L3 |
-| `@fast_path` | Быстрый путь исполнения |
-| `@always_inline` | Всегда встраивать |
-| `@no_inline` | Не встраивать |
-| `@owned` / `@borrowed` | Владение памятью |
-
-```rust
-@hot
-@cache(L1)
-state FastPath {
-    ...
-}
-
-@cold
-state ErrorHandler {
-    ...
-}
-
-on critical @hot(0.95) -> Shutdown
-```
-
-### 3.13 Перечисления (enum)
+### 3.11 Перечисления (enum)
 
 ```rust
 enum <Имя> {
@@ -496,89 +481,7 @@ enum Color {
 }
 ```
 
-### 3.14 Параллельные блоки (parallel)
-
-```rust
-parallel <Имя> {
-    state A { ... }
-    state B { ... }
-}
-```
-
-Группировка состояний в параллельный блок (состояния не влияют друг на друга).
-
-### 3.15 Kernel-функции (GPU)
-
-Два синтаксиса:
-
-1. **Старый** (legacy, аннотации на строках):
-```rust
-kernel <имя>(<параметр>: <тип>, ...) -> <тип>
-```
-
-2. **Новый** (блочный, с `globals`, `@binding`, `@cbuffer`, `@numthreads`):
-```rust
-kernel <Имя> {
-    имя_ресурса : Тип @binding(t#)
-    имя_члена  : Тип @cbuffer(#)
-    globals {
-        float4 HelperFunc(float param) { ... }
-    }
-    @numthreads(x,y,z)
-    entry main(x:u32,y:u32) {
-        ... тело шейдера ...
-    }
-}
-```
-
-**Ключевые элементы:**
-
-| Элемент | Описание |
-|---------|----------|
-| `@binding(t#)` / `@binding(u#)` / `@binding(s#)` | Регистр привязки: `t` = SRV, `u` = UAV, `s` = Sampler |
-| `@cbuffer(#)` | Член константного буфера (все в один `cbuffer TSS_Constants : register(b#)`) |
-| `globals { ... }` | Функции и константы на глобальном уровне HLSL |
-| `@numthreads(x,y,z)` | Размер группы (Thread Group Size) |
-| `entry main(x:u32,y:u32)` | Точка входа: `x`, `y` = `SV_DispatchThreadID` |
-
-**Типы ресурсов:** `Texture2D<T>`, `RWTexture2D<T>`, `SamplerState`.  
-Типы `T`: `float`, `float2`, `float3`, `float4`, `uint`, `int`, `half`.
-
-**Пример RCAS:**
-```rust
-kernel RCAS {
-    g_InputColor  : Texture2D<float4> @binding(t0)
-    g_OutputColor : RWTexture2D<float4> @binding(u0)
-    linearClamp   : SamplerState @binding(s0)
-    sharpness     : float @cbuffer(0)
-    globals {
-        float4 RCASPass(float4 col[4][4], float sharp) { ... }
-    }
-    @numthreads(8,8,1)
-    entry main(x:u32,y:u32) {
-        uint outW, outH;
-        g_OutputColor.GetDimensions(outW, outH);
-        int2 ipos = int2(x, y);
-        if (ipos.x >= int(outW) || ipos.y >= int(outH)) return;
-        ...
-        g_OutputColor[ipos] = RCASPass(col, sharpness);
-    }
-}
-```
-
-### 3.16 Внешние функции (extern)
-
-```rust
-extern "dllname.dll" fn <имя>(<парам>: <тип>, ...) -> <тип>
-```
-
-Объявление внешней функции из DLL.
-
-```rust
-extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType: int) -> int
-```
-
-### 3.17 Комментарии
+### 3.11 Комментарии
 
 ```rust
 // однострочный комментарий
@@ -587,50 +490,9 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ---
 
-### 3.18 Русские ключевые слова
+## 4. Синтаксис METAL
 
-Все ключевые слова можно писать как по-английски, так и по-русски. Можно мешать в одном файле.
-
-| Русский | English |
-|---------|---------|
-| `состояние` | `state` |
-| `экспорт` | `export` |
-| `вход` | `entry` |
-| `ядро` | `kernel` |
-| `структура` | `struct` |
-| `перечисление` | `enum` |
-| `параллельно` | `parallel` |
-| `на` | `on` |
-| `всегда` | `always` |
-| `пер` | `var` |
-| `контекст` | `context` |
-| `внешний` | `extern` |
-| `фн` | `fn` |
-| `конвейер` | `pipeline` |
-| `импорт` | `import` |
-| `использовать` | `use` |
-| `если` | `if` |
-| `иначе` | `else` |
-| `вернуть` | `return` |
-| `запуск` | `run` |
-| `печать` | `print` |
-| `освободить` | `free` |
-| `тело` | `body` |
-| `шаг` | `step` |
-| `опубликовать` | `publish` |
-| `войти` | `enter` |
-| `выйти` | `exit` |
-| `истина` | `true` |
-| `ложь` | `false` |
-| `владение` | `owned` |
-| `заимствовано` | `borrowed` |
-
----
-
-## 4. Синтаксис `.metal` (новый CPU backend)
-
-Новый `.metal` синтаксис работает через MIR pipeline с полной SSA-архитектурой.
-Поддерживает функции, переменные, структуры, указатели, `if`/`while`/`for`, составные присваивания.
+METAL — это второй домен B+ (наряду с PLAN). Используется для функций, переменных, структур, указателей, `if`/`while`/`for`, составных присваиваний.
 
 ### 4.1 Типы
 
@@ -793,7 +655,7 @@ z *= 2;
 ### 4.13 Сообщения об ошибках
 
 ```
-error[UnknownVariable]: test_error.metal:4:1
+error[UnknownVariable]: test_error.b+:4:1
    4 |     print_i64(y);
        | ^
 ```
@@ -801,11 +663,48 @@ error[UnknownVariable]: test_error.metal:4:1
 ### 4.14 CLI
 
 ```text
-bplus build <input.metal> [-o <output.exe>]
-bplus run   <input.metal>
+bpc run   <input.b+> [-o <output.exe>]
+bpc mir   <input.b+> [-o <output.obj>]
 ```
 
-Pipeline: `.metal → парсер → BIR (SSA) → mem2reg → cfgsimplify → SCCP → InstCombine → ConstantFolding → GVN → LICM → Unroll → DCE → понижение до MIR → уничтожение SSA → addr_fold → распространение копий → DCE → пеепхол → линейный аллокатор → x64 → COFF .obj → zig build-exe → .exe`
+```
+                      B+ Source (.b+)
+                              │
+              ┌───────────────┴───────────────┐
+              │                               │
+              ▼                               ▼
+         PLAN Domain                    METAL Domain
+              │                               │
+              └───────────────┬───────────────┘
+                              ▼
+                           Parser
+                              │
+                              ▼
+                             AST
+                              │
+                              ▼
+                             HIR
+                              │
+                              ▼
+                         BIR (SSA)
+                              │
+        mem2reg → CFG → SCCP → InstCombine
+        → Constant Folding → GVN → LICM
+        → Loop Unroll → DCE
+                              │
+                              ▼
+                             MIR
+                              │
+        SSA Destroy → AddrFold → CopyProp
+        → Peephole → DCE
+                              │
+                              ▼
+                       x64 Backend
+                              │
+                 ┌────────────┴────────────┐
+                 ▼                         ▼
+         PE (.exe / .dll)            COFF (.obj)
+```
 
 ---
 
@@ -822,11 +721,7 @@ Pipeline: `.metal → парсер → BIR (SSA) → mem2reg → cfgsimplify →
 
 ## 6. Примеры
 
-Все ключевые слова можно писать как по-английски, так и по-русски (см. раздел 3.18).
-
 ### Светофор
-
-Английский синтаксис:
 
 ```rust
 state Green {
@@ -845,39 +740,14 @@ state Red {
 }
 ```
 
-Русский синтаксис:
-
-```rust
-состояние Зелёный {
-    на таймер -> Жёлтый
-    вход { печать("ЗЕЛЁНЫЙ\n") }
-}
-
-состояние Жёлтый {
-    на таймер -> Красный
-    вход { печать("ЖЁЛТЫЙ\n") }
-}
-
-состояние Красный {
-    на таймер -> Зелёный
-    вход { печать("КРАСНЫЙ\n") }
-}
-```
-
-Ввод: `таймер\n` переключает состояния.
+Ввод: `timer\n` переключает состояния.
 
 ### Счётчик
 
-Английский синтаксис:
-
 ```rust
-context {
-    var total: int
-}
-
 state Count {
     var n: int = 0
-    on inc -> Self { n += 1; total += 1 }
+    on inc -> Self { n += 1 }
     on show -> Show
 }
 
@@ -887,28 +757,7 @@ state Show {
 }
 ```
 
-Русский синтаксис:
-
-```rust
-контекст {
-    пер всего: int
-}
-
-состояние Счёт {
-    пер n: int = 0
-    на прибавить -> Self { n += 1; всего += 1 }
-    на показать -> Показ
-}
-
-состояние Показ {
-    всегда -> Счёт
-    вход { печать("n="); печать("?\n") }
-}
-```
-
 ### Охраняемый переход
-
-Английский синтаксис:
 
 ```rust
 state Door {
@@ -919,28 +768,6 @@ state Door {
 state Opened {
     on close -> Door
     entry { print("opened\n") }
-}
-
-context {
-    var key: int
-}
-```
-
-Русский синтаксис:
-
-```rust
-состояние Дверь {
-    на открыть [ключ == 1] -> Открыто
-    вход { печать("заперто\n") }
-}
-
-состояние Открыто {
-    на закрыть -> Дверь
-    вход { печать("открыто\n") }
-}
-
-контекст {
-    пер ключ: int
 }
 ```
 
@@ -992,30 +819,6 @@ BIR (SSA)  ──── MIR (Machine IR)  ──── x64 Machine Code
 
 ### Бенчмарки оптимизаций
 
-| Тест | Без опт. | С опт. | Экономия |
-|------|----------|--------|----------|
-| P1: Цепочка арифметики (mul/div pow2, mul -1) | 91 B, 14 инстр. | 51 B, 10 инстр. | **44.0%** |
-| P2: Мёртвая ветка (SCCP: if(true) → else) | 74 B, 8 инстр., 4 блока | — 4 инстр., 2 блока | ветка удалена |
-| P3: Избыточный CSE (5+3 вычисляется 3 раза) | 74 B, 8 инстр. | 26 B, 2 инстр. | **64.9%** |
-| P4: Стресс (200 vregs, цепочка add) | 2026 B, 402 инстр. | 26 B, 2 инстр. | **98.7%** |
-| P5: max/min constant folding | 107 B, 8 инстр. | 26 B, 2 инстр. | **75.7%** |
-
-### Тесты
-
-25 E2E тестов кодогенерации (BIR → MIR → x64 → execute):
-
-- Целочисленная арифметика: add, sub, mul, div, neg, not, and/or/xor
-- Ветвление: if/else, phi-ноды
-- Стресс: 200 и 500 vreg, спилы
-- Strength reduction: mul→shl, div→shr, mul -1→neg
-- SCCP: мёртвые ветки, свёртка констант
-- InstCombine: двойное neg, add/sub cancellation
-- Плавающая арифметика: f32/f64 add, mul, sub, div, neg
-- Конверсии: int↔float, sext, zext, trunc
-- min/max: CMOVcc (branchless)
-
----
-
 ## 8. Сборка из исходников
 
 Требуется [Zig](https://ziglang.org/) (master, >= 0.14).
@@ -1035,7 +838,7 @@ zig build-exe src/main.zig -femit-bin=bpc.exe
 После сборки:
 
 ```bash
-bpc.exe run example.plan
+bpc.exe run example.b+
 ```
 
 ---
@@ -1060,199 +863,6 @@ Targets (code generation)
     ▼
 Object (PE/COFF → .exe)
 ```
-
-### Дерево исходников
-
-```text
-src/
-  main.zig                — точка входа, CLI, оркестрация
-  bplus.zig               — CLI (bplus build/run)
-
-  compiler/
-    frontend/
-      ast.zig             — типы AST (TypeId, AST-структуры)
-      cppgen.zig          — C++ кодогенератор из AST
-      parser/
-        ast.zig           — re-export ../ast.zig
-        gpu_ast.zig       — re-export ../../gpu/frontend/gpu_ast.zig
-        parser.zig        — лексер + парсер .plan
-      sema/
-        ast.zig           — re-export ../ast.zig
-        scope.zig         — re-export resolver/scope.zig
-        sema.zig          — семантический анализ
-        resolver/
-          scope.zig       — разрешение scopes (SymbolKind, scope resolution)
-        symbols/
-          symbol.zig      — типы символов (SymbolKind: code, ...)
-
-    middle/
-      bir/
-        bir.zig           — публичный BIR API; re-export core/
-        bir_analysis.zig  — re-export analysis/manager.zig
-        bir_alias.zig     — анализ псевдонимов (AliasResult: NoAlias, ...)
-        bir_backend.zig   — re-export bir, bir_types, bir_cfg, bir_loops, ...
-        bir_bplus_frontend.zig — фронтенд B+ → BIR (импортирует frontend/ast)
-        bir_cfg.zig       — re-export analysis/cfg/cfg.zig
-        bir_cfgsimplify.zig — упрощение CFG
-        bir_cpu.zig       — CPU target lowering (BIR → MIR)
-        bir_dominators.zig — дерево доминаторов
-        bir_frontend.zig  — GPU фронтенд → BIR
-        bir_hlsl.zig      — BIR → HLSL
-        bir_ivopt.zig     — оптимизация индуктивных переменных
-        bir_licm.zig      — LICM (вынос инвариантов из циклов)
-        bir_loops.zig     — анализ циклов
-        bir_loop_rotate.zig — loop rotation transform
-        bir_lower.zig     — понижение BIR (импортирует pipeline_gen)
-        bir_mem2reg.zig   — продвижение памяти в регистры (SSA)
-        bir_memory_ssa.zig — построение MemorySSA
-        bir_passes.zig    — инфраструктура BIR-проходов
-        bir_sccp.zig      — SCCP (sparse conditional constant propagation)
-        bir_types.zig     — re-export core/types.zig
-        bir_unroll.zig    — развёртка циклов
-        bir_verify.zig    — верификация BIR
-        core/
-          block.zig       — базовый блок (BlockId)
-          function.zig    — представление функции
-          instruction.zig — определения BIR-инструкций
-          module.zig      — контейнер модуля
-          types.zig       — система типов BIR (TypeId)
-          value.zig       — типы значений (ValueId, BlockId, FunctionId)
-        optimizer/
-          pass_manager.zig — менеджер проходов оптимизации
-          pass_types.zig  — идентификаторы проходов/анализов (AnalysisKind bitmask)
-        analysis/
-          manager.zig     — менеджер анализов (кэш CFG, доминаторов, циклов)
-          cfg/
-            cfg.zig       — построение графа потока управления
-
-    backend/
-      backend.zig          — корневой модуль (re-export bir, mir, targets, object)
-      mir/
-        mir.zig            — публичный MIR API
-        mir_backend.zig    — re-export mir, mir_verify, mir_optimizer, ...
-        mir_addr_fold.zig  —.AddrFold (синтез LEA из адресной арифметики)
-        mir_copy_prop.zig  — распространение копий
-        mir_dce.zig        — удаление мёртвого кода
-        mir_optimizer.zig  — пайплайн MIR-оптимизаций (оркестрирует DCE, peephole, SSA destroy)
-        mir_peephole.zig   — пеепхол-оптимизации
-        mir_ssa_destroy.zig — уничтожение SSA (элиминация phi)
-        mir_verify.zig     — верификация MIR
-        mir_x64.zig        — legacy wrapper → targets/x64/lowering.zig
-        pipeline_gen.zig   — генерация рендер-пайплайна
-        sizes.zig          — утилита размеров D3D12 структур
-        core/
-          mir.zig          — MIR core: target-independent типы
-          function.zig     — представление MIR-функции
-          opcode.zig       — MIR opcodes (MovInst, и т.д.)
-          operand.zig      — типы MIR-операндов (MOperand, PhysReg, CondCode)
-          value.zig        — MIR data types (DataType enum: void, i1, i8, ...)
-
-      targets/
-        common/
-          target.zig       — target-independent типы (RegAllocResult)
-        x64/
-          x64_backend.zig  — точка входа x64 backend (MIR → x86-64 пайплайн)
-          x64enc.zig       — кодировщик инструкций x64
-          x64gen.zig       — генератор кода x64
-          abi.zig          — ABI-константы (frame_size, shadow_size)
-          branches.zig     — хелперы кодирования ветвлений
-          codebuffer.zig   — буфер кода с fixup-ами (LabelId)
-          debug.zig        — отладочные/трассировочные утилиты x64
-          encoder.zig      — re-export x64enc.zig
-          frame.zig        — раскладка стекового фрейма (Abi: win64, ...)
-          isel.zig         — оркестрация instruction selection
-          layout.zig       — раскладка слотов локальных (SlotKind enum)
-          lowering.zig     — оркестрация x64 lowering (regalloc → isel → encode)
-          memory.zig       — хелперы addressing modes (base + displacement)
-          peephole.zig     — x64-specific пеепхол
-          regalloc.zig     — аллокация регистров
-          registers.zig    — enum регистров x64 (X64Reg)
-          ir/
-            inst.zig       — типы IR-инструкций x64
-          isel/
-            context.zig    — общий контекст ISEL-подмодулей
-            control.zig    — ISEL контроля потока (branch/call/ret/select)
-            conversions.zig — ISEL конверсий типов (sext/zext/trunc/sitofp/...)
-            float.zig      — ISEL плавающей арифметики (SSE scalar)
-            integer.zig    — ISEL целочисленной арифметики
-            memory.zig     — ISEL доступа к памяти (load/store/lea/alloca)
-
-      object/
-        pe/
-          pe.zig           — генератор PE (.exe/.dll)
-        coff/
-          coff.zig         — генератор COFF-объектов
-
-    gpu/
-      dxil_backend.zig     — DXIL backend
-      dxil_bitcode.zig     — LLVM bitstream writer (формат DXIL)
-      gpu_cpp.zig          — C++ UE shader class generation из GPU IR
-      gpu_dxil.zig         — GPU IR → DXIL кодогенерация
-      gpu_hlsl.zig         — GPU IR → HLSL кодогенерация
-      gpu_ir.zig           — GPU промежуточное представление (ValueId)
-      gpu_lower.zig        — понижение GPU AST → IR
-      gpu_types.zig        — GPU runtime типы (ResourceId, DispatchGrid, ...)
-      shader_backend.zig   — диспетчер shader backend (IrModule, CompileOptions)
-      frontend/
-        ast.zig            — re-export gpu_ast.zig
-        gpu_ast.zig        — GPU AST (ResourceKind: texture2d, ...)
-        gpu_body_parser.zig — парсинг тел GPU shader (1784 строк)
-        gpu_sema.zig       — семантический анализ GPU (Severity: error, warning)
-        hlslgen.zig        — HLSL генерация из GPU AST
-
-    runtime/
-      runtime.zig          — re-export ../../runtime/runtime.zig
-
-  runtime/
-    runtime.zig            — основной runtime (Panic Runtime, Windows OS layer)
-    bplusrt.zig            — B+ runtime (kernel32, print_i64, ...)
-    cpu.zig                — определение/утилиты CPU (Windows API)
-    latency.zig            — модель задержек (HT_COST_NS, CORE_COST_NS)
-    scheduler.zig          — ядро планировщика задач (CPU/GPU)
-    scheduler_config.zig   — конфигурация планировщика
-    scheduler_state.zig    — состояние планировщика (DecisionOverride enum)
-    cost_scheduler.zig     — cost-based GPU планировщик
-    gpu_scheduler.zig      — планировщик GPU-проходов (ResolvedPass)
-    gpu_job.zig            — определение GPU-задания (GPUJob)
-    frame.zig              — управление фреймами (Stage: upsample, sharpen, temporal)
-    bench.zig              — харнесс бенчмарков
-
-  render/
-    frame_graph.zig        — FrameGraph (istorical validity per resource)
-    compiled_graph.zig     — скомпилированный граф
-    frame_graph_executor.zig — исполнитель графа
-    frame_runtime.zig      — runtime графа (D3D12 + scheduler)
-    resource_system.zig    — управление GPU-ресурсами (текстуры, буферы)
-    root_signature_builder.zig — компилятор root signatures D3D12
-    render_graph.zig       — high-level render graph
-    render_helpers.zig     — утилиты (dispatch2D grid calculation)
-    camera_jitter.zig      — Halton sequence camera jitter (TAA)
-    d3d12_bindings.zig     — D3D12 API bindings (HRESULT, GUID, ...)
-    dx12_compute.zig       — DX12 compute dispatch утилиты
-    history_manager.zig    — ring-buffer истории кадров (TAA)
-    lifetime_graph.zig     — график жизненного цикла ресурсов
-    barrier_optimizer.zig  — оптимизатор ресурс-барьеров
-    temporal_history.zig   — temporal scoring confidence кадров
-    temporal_pipeline.zig  — temporal upscaling пайплайн
-    gpu_execution.zig      — запись GPU-исполнения
-    gpu_executor.zig       — оркестрация GPU-исполнения
-    fsr3_runtime.zig       — FSR 3 frame generation runtime
-
-  platform/
-    linux/                  — (заготовка)
-    macos/                  — (заготовка)
-    shared/                 — (заготовка)
-    windows/                — (заготовка)
-
-  tools/
-    test_runner/
-      test_runner.zig       — test runner (импортирует parser, x64gen, pe)
-```
-
-### E2E тесты
-
-BIR → MIR → x64 → execute: **9/9 PASS** + 25 E2E тестов целочисленной арифметики,
-плавающей арифметики, конверсий, min/max (CMOVcc), strength reduction, стресс-тестов (200/500 vreg).
 
 ---
 
@@ -1292,20 +902,19 @@ SOFTWARE.
 - **Репозиторий**: [github.com/bylka2W/B-Plus](https://github.com/bylka2W/B-Plus)
 - **GitVerse**: [gitverse.ru/bylka2W/B-Plus](https://gitverse.ru/bylka2W/B-Plus)
 - **GitFlic**: [gitflic.ru/project/bylka2w/b-plus](https://gitflic.ru/project/bylka2w/b-plus)
+- **GitLab**: [gitlab.com/bylka2W/b-plus](https://gitlab.com/bylka2W/b-plus)
 - **Автор**: bylka2W
 
 ---
 
 ---
 
-# B+ v4.6.1-beta — Compiled `.plan` / `.metal` Language (Frontend → HIR → BIR → MIR → Targets)
+# B+ v4.6.2-beta — Compiled `.b+` Language (Frontend → HIR → BIR → MIR → Targets)
 
-> [Russian version ↑](#b-v461-beta--compiled-plan--metal-language-frontend--hir--bir--mir--targets)
-
-**B+** compiles `.plan` / `.metal` files directly to x64 machine code and packages them into Windows PE executables (.exe).
+**B+** compiles `.b+` files directly to x64 machine code and packages them into Windows PE executables (.exe/.dll).
 No assemblers, linkers, or LLVM — the entire code generator and optimizer are written from scratch in Zig.
 
-### What's new in v4.6.1-beta
+### What's new in v4.6.2-beta
 
 - **Frontend → HIR → BIR → MIR → Targets architecture** — full compiler migration to a
   multi-level architecture inspired by LLVM/rustc with strictly one-way dependency flow.
@@ -1332,6 +941,101 @@ No assemblers, linkers, or LLVM — the entire code generator and optimizer are 
   with safe defaults (`.gpr` / `.i64`), preventing panics when vreg registration is
   missing.
 - **9/9 BIR → MIR → x64 → execute E2E tests pass** (was 7/8).
+- **BIR Verifier overhaul** — modular verification system with 7 specialized verifier modules
+  (CFG correctness, SSA form, phi nodes, function invariants, type checking, memory safety,
+  instruction validity).
+- **Structured diagnostics** — error codes, per-instruction context, structured error lists
+  for tooling integration.
+- **CFG bounds checking** — out-of-range branch targets are now caught and reported instead
+  of panicking.
+- **SSA verification** — tests for use-before-def detection and dominance violation detection.
+- **Verifier E2E test fixes** — correct instruction ordering (terminator must be last), phi
+  incoming slices use `alloc.dupe`, return values use phi.
+- **buildCFG bounds check** — CFG construction validates block indices before access.
+- **Parser is now syntax-only** — `Dialect` removed from parser; domain validation moved to HIR lowering stage.
+- **AST restructured** — `ProgramNode { common, plan, metal }` separating shared constructs from domain-specific ones.
+- **Unified `.b+` extension** for both domains (previously separate `.plan` / `.metal`).
+- **Frontend layer** — parser is domain-agnostic, accepts all syntax, validation happens at HIR.
+- **Middle layer (BIR)** — verifier split into 7 modules under `verify/` directory (cfg, ssa, phi, function, types, memory, instructions); CFG built on-demand from terminators.
+- **Backend layer (MIR)** — CMP_FLAGS+SETCC, 4-operand IDiv, Ret as union, CondCode for FCmp.
+- **Targets layer** — common + x64 (ISel, encoder, frame manager, regalloc).
+
+---
+
+## What is B+
+
+**B+** is a programming language that turns written code directly into a ready Windows program (.exe or .dll).
+Unlike many languages, B+ doesn't use external compilers or linkers — the entire build process is handled by its own compiler.
+
+B+ code is stored in files with the extension: `example.b+`
+
+B+ has two main programming modes:
+
+### PLAN — state logic description
+
+PLAN is used when a program should work as a set of states and switch between them by events.
+
+For example:
+- game menus
+- character states
+- game modes
+- network protocols
+- event handlers
+
+```rust
+state Locked {
+    on open [key == 1] -> Opened
+    entry {
+        print("locked\n")
+    }
+}
+
+state Opened {
+    on close -> Locked
+    entry {
+        print("opened\n")
+    }
+}
+```
+
+What happens here:
+- The program starts in state `Locked`
+- If event `open` arrives and there is a key (`key == 1`) — transitions to `Opened`
+- When entering a state, the code inside `entry` is executed
+
+### METAL — regular programming
+
+METAL is designed for writing regular code:
+- functions
+- algorithms
+- computations
+- memory management
+- low-level systems
+
+```rust
+fn fibonacci(n: i64) -> i64 {
+    if n <= 1 {
+        return n;
+    }
+
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+```
+
+This code creates a Fibonacci number calculation function.
+
+### One language — two approaches
+
+PLAN and METAL use the same B+ syntax but are designed for different tasks:
+
+| Mode | Purpose |
+|------|---------|
+| PLAN | state and event logic |
+| METAL | algorithms and systems code |
+
+The compiler determines automatically which mode the code belongs to.
+
+B+ combines the simplicity of high-level languages with the control of systems programming, allowing you to create both game logic and low-level programs.
 
 ---
 
@@ -1343,20 +1047,15 @@ No assemblers, linkers, or LLVM — the entire code generator and optimizer are 
    - [3.1 States](#31-states)
    - [3.2 Transitions (on)](#32-transitions-on)
    - [3.3 Unconditional Transitions (always)](#33-unconditional-transitions-always)
-   - [3.4 Entry and Exit (entry / exit)](#34-entry-and-exit-entry--exit)
+   - [3.4 Entry (entry)](#34-entry-entry)
    - [3.5 Variables](#35-variables)
    - [3.6 Assignments](#36-assignments)
    - [3.7 Print (print)](#37-print-print)
-   - [3.8 Guard Conditions (guard)](#38-guard-conditions-guard)
-   - [3.9 global entry](#39-global-entry)
-   - [3.10 Context (context)](#310-context-context)
-   - [3.11 Annotations](#311-annotations)
-   - [3.12 Enums (enum)](#312-enums-enum)
-   - [3.13 Parallel Blocks (parallel)](#313-parallel-blocks)
-   - [3.14 Kernel Functions](#314-kernel-functions)
-   - [3.15 External Functions (extern)](#315-external-functions-extern)
-   - [3.16 Comments](#316-comments)
-4. [`.metal` Syntax (New CPU Backend)](#4-metal-syntax-new-cpu-backend)
+   - [3.8 Export entry](#38-export-entry)
+   - [3.9 Entry point](#39-entry-point)
+   - [3.10 Enums (enum)](#310-enums-enum)
+   - [3.11 Comments](#311-comments)
+4. [METAL Syntax (New CPU Backend)](#4-metal-syntax-new-cpu-backend)
    - [4.1 Types](#41-types)
    - [4.2 Functions](#42-functions)
    - [4.3 Extern Functions](#43-extern-functions)
@@ -1384,18 +1083,10 @@ No assemblers, linkers, or LLVM — the entire code generator and optimizer are 
 ## 1. Quick Start
 
 ```bash
-bpc.exe build hello.plan
-.\hello.exe
+bpc.exe run hello.b+
 ```
 
-The first command compiles `hello.plan` into `hello.exe`.
-The second runs it.
-
-Or combine both:
-
-```bash
-bpc.exe run hello.plan
-```
+The command compiles `hello.b+` into `hello.exe` and runs it immediately.
 
 ---
 
@@ -1404,47 +1095,50 @@ bpc.exe run hello.plan
 ### Syntax
 
 ```text
-bpc build <input.plan>              — compile to <input>.exe
-bpc build <input.plan> -o <out.exe> — compile with custom output name
-bpc dll   <input.plan>              — compile to DLL
-bpc run   <input.plan>              — compile and run immediately
-bpc hlsl  <input.plan>              — generate HLSL shader code
+bpc run   <input.b+>              — compile and run immediately
+bpc dll   <input.b+>              — compile to DLL
+bpc build <input.b+> [-o <dir>]   — generate C++ UE5 plugin (6 files)
+bpc hlsl  <input.b+>              — generate HLSL shader code
+bpc gpu   <input.b+>              — generate DXIL
+bpc cpp   <input.b+>              — generate C++ code
+bpc mir   <input.b+>              — generate COFF .obj
+bpc bpl   <input.b+>              — lower B+ to BIR and dump
+bpc ir    <input.b+>              — dump BIR pipeline
+bpc cfg   <input.b+>              — dump control flow graph
+bpc dom   <input.b+>              — dump dominator tree
+bpc loops <input.b+>              — dump loop hierarchy
+bpc test  <test.bpt>              — run test
 ```
 
-#### `bpc build <input.plan> [-o <output.exe>]`
+#### `bpc build <input.b+> [-o <output_dir>]`
 
-What it does:
+Generates a C++ UE5 plugin from a B+ file with pipeline description (6 files).
 
 | Step | Description |
 |------|-------------|
-| 1 | Reads the entire `.plan` file into memory |
-| 2 | Parses source code into an AST |
-| 3 | Verifies at least one state exists |
-| 4 | Generates raw x64 machine code (no assembler) |
-| 5 | Inserts NOP padding for cache alignment |
-| 6 | Embeds string pool (for print) |
-| 7 | Generates import table (kernel32.dll) |
-| 8 | Applies all jump/call fixups |
-| 9 | Wraps everything into a PE (.exe) file |
-| 10 | Writes the result to disk |
+| 1 | Reads the entire `.b+` file into memory |
+| 2 | Parses pipeline description |
+| 3 | Generates TSSShaders.h / TSSShaders.cpp |
+| 4 | Generates TSSRuntime.h / TSSRuntime.cpp |
+| 5 | Generates TSSViewExtension.h / TSSViewExtension.cpp |
+| 6 | Writes 6 files to output directory |
 
-If `-o` is omitted, the output name = input name with `.exe` extension.
+If `-o` is omitted, files are written next to the input file.
 
 **Examples:**
 ```bash
-bpc build traffic.plan              → traffic.exe
-bpc build traffic.plan -o light.exe → light.exe
-bpc build source.plan               → source.exe
+bpc build pipeline.b+               → 6 C++ files next to pipeline.b+
+bpc build pipeline.b+ -o ./Plugin   → 6 C++ files in ./Plugin
 ```
 
-#### `bpc hlsl <input.plan> [-o <output.hlsl>]`
+#### `bpc gpu <input.b+> [-o <output>]` / `bpc hlsl <input.b+> [-o <output.hlsl>]`
 
 Generates HLSL shader code from a B+ file using `@bind`, `@cbuffer`, `@groupshared` annotations.
 Designed for authoring GPU compute shaders in B+ and compiling them via DXC or FXC.
 
 | Step | Description |
 |------|-------------|
-| 1 | Reads the entire `.plan` file |
+| 1 | Reads the entire `.b+` file |
 | 2 | Parses source into AST |
 | 3 | Parses `@bind(kind, reg, format)` annotations |
 | 4 | Parses `@cbuffer(var, cbName, reg, type)` annotations |
@@ -1474,11 +1168,11 @@ HLSL intrinsics (WaveActiveSum, InterlockedAdd, mad, lerp, etc.) pass through ve
 
 **Example:**
 ```bash
-bpc hlsl fsr2_easu.plan -o fsr2_easu.hlsl
+bpc hlsl fsr2_easu.b+ -o fsr2_easu.hlsl
 dxc -T cs_6_6 -E main -Fo fsr2_easu.cso fsr2_easu.hlsl
 ```
 
-#### `bpc run <input.plan>`
+#### `bpc run <input.b+>`
 
 What it does:
 
@@ -1491,8 +1185,8 @@ What it does:
 
 **Examples:**
 ```bash
-bpc run traffic.plan    — compiles and runs immediately
-bpc run hello.plan      — compiles and runs immediately
+bpc run traffic.b+    — compiles and runs immediately
+bpc run hello.b+      — compiles and runs immediately
 ```
 
 ### Exit Codes
@@ -1505,10 +1199,9 @@ bpc run hello.plan      — compiles and runs immediately
 
 ### Notes
 
-- The input file **must** have a `.plan` extension.
-- If the extension is missing, the compiler still adds `.exe` to the base name.
 - The compiler does **not** use external assemblers, linkers, or LLVM — all machine code is self-generated.
-- The output is a fully valid Windows PE x64 executable.
+- `bpc run` compiles to `.exe` and runs it immediately.
+- `bpc build` generates a C++ UE5 plugin (not an .exe).
 
 ---
 
@@ -1560,18 +1253,16 @@ state Init {
 }
 ```
 
-### 3.4 Entry and Exit (entry / exit)
+### 3.4 Entry (entry)
 
 ```rust
 state Door {
     entry { print("entered\n") }
-    exit  { print("exited\n") }
     on open -> Opened
 }
 ```
 
-- `entry { ... }` — executed when entering the state.
-- `exit { ... }` — executed before leaving the state (before transitioning to another state).
+`entry { ... }` — executed when entering the state.
 
 ### 3.5 Variables
 
@@ -1647,24 +1338,24 @@ state Hello {
 }
 ```
 
-### 3.8 Guard Conditions (guard)
+### 3.8 Export entry
 
 ```rust
-on <event> [<condition>] -> <TargetState>
-```
-
-The transition only occurs if the condition is true. Supported operators:
-`==`, `!=`, `>`, `<`, `>=`, `<=`
-
-```rust
-state Crosswalk {
-    var cars_waiting: bool
-    on timer [cars_waiting == 0] -> Walk
-    on timer [cars_waiting > 0]  -> Wait
+export entry <Name> {
+    ...
 }
 ```
 
-### 3.9 global entry
+An exported entry point — compiled as a function visible from outside the DLL.
+Used when building DLLs (`bpc dll`) with the `-exports` flag.
+
+```rust
+export entry TSS_Init {
+    print("init\n")
+}
+```
+
+### 3.9 Entry point
 
 ```rust
 entry <Name> {
@@ -1672,7 +1363,7 @@ entry <Name> {
 }
 ```
 
-A global entry point — executed once at program startup. Can be used for initialization.
+An entry point — executed once at program startup.
 
 ```rust
 entry main {
@@ -1680,56 +1371,7 @@ entry main {
 }
 ```
 
-### 3.10 Context (context)
-
-```rust
-context {
-    var <name>: <type>
-    ...
-}
-```
-
-Context variables are global across the entire program, visible in all states.
-
-```rust
-context {
-    var global_count: int
-}
-```
-
-### 3.11 Annotations
-
-Annotations are placed before a state or transition.
-
-| Annotation | Description |
-|-----------|-------------|
-| `@hot` | Hot code — placed in L1 cache |
-| `@cold` | Cold code — not cached |
-| `@hot(0.9)` | Explicit hotness weight |
-| `@cache(L1)` | State data in L1 |
-| `@cache(L2)` | State data in L2 |
-| `@cache(L3)` | State data in L3 |
-| `@fast_path` | Fast execution path |
-| `@always_inline` | Always inline |
-| `@no_inline` | Do not inline |
-| `@owned` / `@borrowed` | Memory ownership |
-
-```rust
-@hot
-@cache(L1)
-state FastPath {
-    ...
-}
-
-@cold
-state ErrorHandler {
-    ...
-}
-
-on critical @hot(0.95) -> Shutdown
-```
-
-### 3.12 Enums (enum)
+### 3.10 Enums (enum)
 
 ```rust
 enum <Name> {
@@ -1749,42 +1391,7 @@ enum Color {
 }
 ```
 
-### 3.13 Parallel Blocks (parallel)
-
-```rust
-parallel <Name> {
-    state A { ... }
-    state B { ... }
-}
-```
-
-Groups states into a parallel block (states don't affect each other).
-
-### 3.14 Kernel Functions
-
-```rust
-kernel <name>(<param>: <type>, ...) -> <type>
-```
-
-Declares a kernel function (for GPU/metal code generation).
-
-```rust
-kernel matrixMul(a: int, b: int) -> int
-```
-
-### 3.15 External Functions (extern)
-
-```rust
-extern "dllname.dll" fn <name>(<param>: <type>, ...) -> <type>
-```
-
-Declares an external function from a DLL.
-
-```rust
-extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType: int) -> int
-```
-
-### 3.16 Comments
+### 3.11 Comments
 
 ```rust
 // single-line comment
@@ -1793,10 +1400,9 @@ extern "user32.dll" fn MessageBoxA(hWnd: int, lpText: int, lpCaption: int, uType
 
 ---
 
-## 4. `.metal` Syntax (New CPU Backend)
+## 4. METAL Syntax
 
-The new `.metal` syntax uses a direct MIR pipeline (no BIR, no state machine).
-Supports functions, variables, structs, pointers, `if`/`while`/`for`, compound assignment.
+METAL is the second B+ domain (alongside PLAN). Used for functions, variables, structs, pointers, `if`/`while`/`for`, compound assignment.
 
 ### 4.1 Types
 
@@ -1959,7 +1565,7 @@ z *= 2;
 ### 4.13 Error Messages
 
 ```
-error[UnknownVariable]: test_error.metal:4:1
+error[UnknownVariable]: test_error.b+:4:1
    4 |     print_i64(y);
        | ^
 ```
@@ -1967,11 +1573,48 @@ error[UnknownVariable]: test_error.metal:4:1
 ### 4.14 CLI
 
 ```text
-bplus build <input.metal> [-o <output.exe>]
-bplus run   <input.metal>
+bpc run   <input.b+> [-o <output.exe>]
+bpc mir   <input.b+> [-o <output.obj>]
 ```
 
-Pipeline: `.metal → parser → BIR (SSA) → mem2reg → cfgsimplify → SCCP → InstCombine → ConstantFolding → GVN → LICM → Unroll → DCE → lower to MIR → SSA destruction → addr_fold → copy propagation → DCE → peephole → linear scan RA → x64 → COFF .obj → zig build-exe → .exe`
+```
+                      B+ Source (.b+)
+                              │
+              ┌───────────────┴───────────────┐
+              │                               │
+              ▼                               ▼
+         PLAN Domain                    METAL Domain
+              │                               │
+              └───────────────┬───────────────┘
+                              ▼
+                           Parser
+                              │
+                              ▼
+                             AST
+                              │
+                              ▼
+                             HIR
+                              │
+                              ▼
+                         BIR (SSA)
+                              │
+        mem2reg → CFG → SCCP → InstCombine
+        → Constant Folding → GVN → LICM
+        → Loop Unroll → DCE
+                              │
+                              ▼
+                             MIR
+                              │
+        SSA Destroy → AddrFold → CopyProp
+        → Peephole → DCE
+                              │
+                              ▼
+                       x64 Backend
+                              │
+                 ┌────────────┴────────────┐
+                 ▼                         ▼
+         PE (.exe / .dll)            COFF (.obj)
+```
 
 ---
 
@@ -2012,13 +1655,9 @@ Input: `timer\n` cycles through states.
 ### Counter
 
 ```rust
-context {
-    var total: int
-}
-
 state Count {
     var n: int = 0
-    on inc -> Self { n += 1; total += 1 }
+    on inc -> Self { n += 1 }
     on show -> Show
 }
 
@@ -2039,10 +1678,6 @@ state Door {
 state Opened {
     on close -> Door
     entry { print("opened\n") }
-}
-
-context {
-    var key: int
 }
 ```
 
@@ -2137,7 +1772,7 @@ zig build-exe src/main.zig -femit-bin=bpc.exe
 After building:
 
 ```bash
-bpc.exe run example.plan
+bpc.exe run example.b+
 ```
 
 ---
@@ -2165,196 +1800,12 @@ Object (PE/COFF → .exe)
 
 ### Source Tree
 
-```text
-src/
-  main.zig                — entry point, CLI, orchestration
-  bplus.zig               — CLI tool (bplus build/run)
+The compiler source is organized into four layers:
 
-  compiler/
-    frontend/
-      ast.zig             — AST node types (TypeId, AST structs)
-      cppgen.zig          — C++ code generation from AST
-      parser/
-        ast.zig           — re-export ../ast.zig
-        gpu_ast.zig       — re-export ../../gpu/frontend/gpu_ast.zig
-        parser.zig        — lexer + parser for .plan
-      sema/
-        ast.zig           — re-export ../ast.zig
-        scope.zig         — re-export resolver/scope.zig
-        sema.zig          — semantic analysis
-        resolver/
-          scope.zig       — scope resolution (SymbolKind, scope resolution)
-        symbols/
-          symbol.zig      — symbol types (SymbolKind: code, ...)
-
-    middle/
-      bir/
-        bir.zig           — public BIR API; re-export core/
-        bir_analysis.zig  — re-export analysis/manager.zig
-        bir_alias.zig     — alias analysis (AliasResult: NoAlias, ...)
-        bir_backend.zig   — re-export bir, bir_types, bir_cfg, bir_loops, ...
-        bir_bplus_frontend.zig — B+ language frontend to BIR (imports frontend/ast)
-        bir_cfg.zig       — re-export analysis/cfg/cfg.zig
-        bir_cfgsimplify.zig — CFG simplification pass
-        bir_cpu.zig       — CPU target lowering (BIR → MIR)
-        bir_dominators.zig — dominator tree computation
-        bir_frontend.zig  — GPU frontend to BIR
-        bir_hlsl.zig      — BIR to HLSL
-        bir_ivopt.zig     — induction variable optimization
-        bir_licm.zig      — loop-invariant code motion
-        bir_loops.zig     — loop analysis
-        bir_loop_rotate.zig — loop rotation transform
-        bir_lower.zig     — BIR lowering (imports pipeline_gen)
-        bir_mem2reg.zig   — memory to register promotion (SSA)
-        bir_memory_ssa.zig — Memory SSA construction
-        bir_passes.zig    — BIR pass infrastructure
-        bir_sccp.zig      — SCCP (sparse conditional constant propagation)
-        bir_types.zig     — re-export core/types.zig
-        bir_unroll.zig    — loop unrolling
-        bir_verify.zig    — BIR verification/validation
-        core/
-          block.zig       — basic block definition (BlockId)
-          function.zig    — function representation
-          instruction.zig — BIR instruction definitions
-          module.zig      — module container
-          types.zig       — BIR type system (TypeId)
-          value.zig       — value types (ValueId, BlockId, FunctionId)
-        optimizer/
-          pass_manager.zig — optimization pass manager
-          pass_types.zig  — pass/analysis identifiers (AnalysisKind bitmask)
-        analysis/
-          manager.zig     — analysis manager (caches CFG, dominators, loops)
-          cfg/
-            cfg.zig       — control-flow graph construction
-
-    backend/
-      backend.zig          — backend module root (re-export bir, mir, targets, object)
-      mir/
-        mir.zig            — public MIR API
-        mir_backend.zig    — re-export mir, mir_verify, mir_optimizer, ...
-        mir_addr_fold.zig  — AddrFold (LEA synthesis from address arithmetic)
-        mir_copy_prop.zig  — copy propagation pass
-        mir_dce.zig        — dead code elimination
-        mir_optimizer.zig  — MIR optimization pipeline (orchestrates DCE, peephole, SSA destroy)
-        mir_peephole.zig   — peephole optimizations
-        mir_ssa_destroy.zig — SSA destruction (phi elimination)
-        mir_verify.zig     — MIR verification
-        mir_x64.zig        — legacy wrapper → targets/x64/lowering.zig
-        pipeline_gen.zig   — render pipeline generation
-        sizes.zig          — D3D12 struct size utility
-        core/
-          mir.zig          — MIR core: target-independent types
-          function.zig     — MIR function representation
-          opcode.zig       — MIR opcodes (MovInst, etc.)
-          operand.zig      — MIR operand types (MOperand, PhysReg, CondCode)
-          value.zig        — MIR data types (DataType enum: void, i1, i8, ...)
-
-      targets/
-        common/
-          target.zig       — target-independent types (RegAllocResult)
-        x64/
-          x64_backend.zig  — x64 backend entry point (MIR → x86-64 pipeline)
-          x64enc.zig       — x64 instruction encoding
-          x64gen.zig       — x64 code generator
-          abi.zig          — ABI constants (frame_size, shadow_size)
-          branches.zig     — branch encoding helpers
-          codebuffer.zig   — code buffer with label fixups (LabelId)
-          debug.zig        — debug/trace utilities for x64
-          encoder.zig      — re-export x64enc.zig
-          frame.zig        — stack frame layout (Abi: win64, ...)
-          isel.zig         — instruction selection orchestration
-          layout.zig       — slot layout for locals (SlotKind enum)
-          lowering.zig     — x64 lowering orchestrator (regalloc → isel → encode)
-          memory.zig       — addressing mode helpers (base + displacement)
-          peephole.zig     — x64-specific peephole optimizations
-          regalloc.zig     — register allocation
-          registers.zig    — x64 register enum (X64Reg)
-          ir/
-            inst.zig       — x64 IR instruction types
-          isel/
-            context.zig    — shared context for ISEL sub-modules
-            control.zig    — control-flow ISEL (branch/call/ret/select)
-            conversions.zig — type conversion ISEL (sext/zext/trunc/sitofp/...)
-            float.zig      — floating-point ISEL (SSE scalar)
-            integer.zig    — integer arithmetic ISEL
-            memory.zig     — memory access ISEL (load/store/lea/alloca)
-
-      object/
-        pe/
-          pe.zig           — PE (.exe/.dll) generator
-        coff/
-          coff.zig         — COFF object file writer
-
-    gpu/
-      dxil_backend.zig     — DXIL backend
-      dxil_bitcode.zig     — LLVM bitstream writer (DXIL format)
-      gpu_cpp.zig          — C++ UE shader class generation from GPU IR
-      gpu_dxil.zig         — GPU IR → DXIL code generation
-      gpu_hlsl.zig         — GPU IR → HLSL code generation
-      gpu_ir.zig           — GPU intermediate representation (ValueId)
-      gpu_lower.zig        — GPU AST → IR lowering
-      gpu_types.zig        — GPU runtime types (ResourceId, DispatchGrid, ...)
-      shader_backend.zig   — shader backend dispatcher (IrModule, CompileOptions)
-      frontend/
-        ast.zig            — re-export gpu_ast.zig
-        gpu_ast.zig        — GPU AST (ResourceKind: texture2d, ...)
-        gpu_body_parser.zig — GPU shader body parser (1784 lines)
-        gpu_sema.zig       — GPU semantic analysis (Severity: error, warning)
-        hlslgen.zig        — HLSL code generation from GPU AST
-
-    runtime/
-      runtime.zig          — re-export ../../runtime/runtime.zig
-
-  runtime/
-    runtime.zig            — main runtime (Panic Runtime, Windows OS layer)
-    bplusrt.zig            — B+ runtime (kernel32, print_i64, ...)
-    cpu.zig                — CPU detection/utilities (Windows API)
-    latency.zig            — latency modeling (HT_COST_NS, CORE_COST_NS)
-    scheduler.zig          — core task scheduler (CPU/GPU)
-    scheduler_config.zig   — scheduler configuration
-    scheduler_state.zig    — scheduler state (DecisionOverride enum)
-    cost_scheduler.zig     — cost-based GPU scheduler
-    gpu_scheduler.zig      — GPU pass scheduler (ResolvedPass)
-    gpu_job.zig            — GPU job definition (GPUJob)
-    frame.zig              — frame management (Stage: upsample, sharpen, temporal)
-    bench.zig              — benchmarking harness
-
-  render/
-    frame_graph.zig        — FrameGraph (per-resource history validity)
-    compiled_graph.zig     — compiled render graph
-    frame_graph_executor.zig — frame graph execution engine
-    frame_runtime.zig      — frame runtime (D3D12 + scheduler)
-    resource_system.zig    — GPU resource management (textures, buffers)
-    root_signature_builder.zig — D3D12 root signature builder
-    render_graph.zig       — high-level render graph
-    render_helpers.zig     — utility: dispatch2D grid calculation
-    camera_jitter.zig      — Halton sequence camera jitter (TAA)
-    d3d12_bindings.zig     — D3D12 API bindings (HRESULT, GUID, ...)
-    dx12_compute.zig       — DX12 compute dispatch utilities
-    history_manager.zig    — ring-buffer frame history (TAA)
-    lifetime_graph.zig     — resource lifetime graph
-    barrier_optimizer.zig  — resource barrier optimizer
-    temporal_history.zig   — temporal frame confidence scoring
-    temporal_pipeline.zig  — temporal upscaling pipeline
-    gpu_execution.zig      — GPU execution recording
-    gpu_executor.zig       — GPU executor orchestration
-    fsr3_runtime.zig       — FSR 3 frame generation runtime
-
-  platform/
-    linux/                  — (stub)
-    macos/                  — (stub)
-    shared/                 — (stub)
-    windows/                — (stub)
-
-  tools/
-    test_runner/
-      test_runner.zig       — test runner (imports parser, x64gen, pe)
-```
-
-### E2E Tests
-
-BIR → MIR → x64 → execute: **9/9 PASS** + 25 E2E tests covering integer arithmetic,
-floating-point arithmetic, conversions, min/max (CMOVcc), strength reduction, stress tests (200/500 vreg).
+- **Frontend** (`compiler/frontend/`) — parser, AST, semantic analysis
+- **Middle** (`compiler/middle/bir/`) — BIR core, optimizer, analysis, verification
+- **Backend** (`compiler/backend/mir/`, `targets/`) — MIR optimization, x64 code generation
+- **GPU** (`compiler/gpu/`) — GPU shader compilation (HLSL, DXIL)
 
 ---
 
@@ -2394,4 +1845,5 @@ SOFTWARE.
 - **Repository**: [github.com/bylka2W/B-Plus](https://github.com/bylka2W/B-Plus)
 - **GitVerse**: [gitverse.ru/bylka2W/B-Plus](https://gitverse.ru/bylka2W/B-Plus)
 - **GitFlic**: [gitflic.ru/project/bylka2w/b-plus](https://gitflic.ru/project/bylka2w/b-plus)
+- **GitLab**: [gitlab.com/bylka2W/b-plus](https://gitlab.com/bylka2W/b-plus)
 - **Author**: bylka2W

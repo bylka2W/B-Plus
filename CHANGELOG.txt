@@ -1,3 +1,16 @@
+**v4.6.2-beta (единый парсер + чистка README + GPU удалён из frontend):**
+
+- **Единый парсер без диалектов**: убран `dialect` из `ParserState`, `ParseContext` и всех точек вызова. Парсер теперь один — синтаксис общий для PLAN и METAL. Доменная валидация перенесена на уровень HIR/lowering.
+- **Расширен `ProgramNode`**: добавлены `plan: ProgramPlan` и `metal: ProgramMetal` (наряду с `common: ProgramCommon`). AST стал единым деревом для обоих доменов.
+- **Metal HIR ноды** (`hir/metal_nodes.zig`): `MetalFnDecl`, `MetalFnCall`, `MetalReturn`, `MetalBlock`, `MetalVariable`, `MetalAssign`, `MetalIf`, `MetalWhile`, `MetalFor`, `MetalStructDecl`, `MetalExternFn`, `MetalBinaryOp`, `MetalUnaryOp`, `MetalFieldAccess`, `MetalDeref`, `MetalAddrOf`, `MetalCast`, `MetalSubscript`, `MetalSizeof`, `MetalAlignof`.
+- **Metal AST→HIR lowering** (`hir/lower_metal.zig`): полный обход `ProgramMetal.functions`, `structs`, `global_stmts`, привязка типов и имён через `SemaContext`.
+- **Удалён GPU frontend из парсера**: `parseGpuKernelBlock()` и `parseGpuParams()` удалены из `parser.zig`. GPU kernel теперь парсится через отдельный GPU frontend (`gpu/frontend/`).
+- **Расширена семантика**: `TypeRegistry` теперь знает про PLAN и METAL типы — `state_type`, `event_type`, `void_type`, `bool_type`, `i8..i64`, `u8..u64`, `f32`, `f64`, `string_type`.
+- **BIR Verifier overhaul** (7 модулей): `ssa.zig` (SSA form + dominance), `types.zig` (type consistency), `cfg.zig` (CFG well-formedness), `terminators.zig` (terminator rules), `memory.zig` (memory safety), `diagnostics.zig` (ErrorCode enum, DiagnosticList, formatter), `verify.zig` (orchestrator).
+- **9/9 BIR→MIR E2E тестов** проходят.
+- **README.md v4.6.2-beta**: обновлена версия, исправлены `.plan` → `.b+`, `bpc build` теперь генерирует C++ UE5 плагин (не .exe), добавлена ASCII-диаграмма пайплайна в §4.14, удалена поддержка русского синтаксиса из документации, удалены нерабочие секции (exit, context, annotations, parallel, kernel, extern в §3), перенумерованы §3 (11 секций вместо 17), добавлена GitLab ссылка в контакты.
+- **GitLab зеркало**: создано зеркало на `gitlab.com/bylka2W/b-plus`.
+
 **v4.6.1-beta (архитектура Frontend → HIR → BIR → MIR → Targets + backend optimizer):**
 - **MIR instruction model refactoring**:
   - `CmpInst`: `{ cc, dst, a, b }` → `{ cc, a, b }` (FLAGS-only, без dst). Для материализации результата сравнения используется новая инструкция `SetCCInst { dst, cc }`.
