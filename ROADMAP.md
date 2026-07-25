@@ -1,6 +1,24 @@
-# B+ Compiler Roadmap — Technical Fellow Level
+# B+ Compiler Roadmap — CPU First, Distinguished Engineer Level
 
-## Current State
+## Philosophy
+
+CPU compiler first. GPU later. Distinguished Engineer is evaluated on:
+- language correctness
+- type system
+- IR design
+- optimizer
+- ABI
+- machine code generation
+- debugging
+- profiling
+- stability
+
+LLVM became powerful as CPU IR/Backend first, then expanded.
+Rust did the same: LLVM backend → many platforms → GPU projects later.
+
+---
+
+## Current Pipeline
 
 ```
 Source → Lexer → Green Tree → Red Tree → AST → Resolver → Type Engine → HIR → BIR (SSA) → MIR → x64 → PE
@@ -10,123 +28,198 @@ Source → Lexer → Green Tree → Red Tree → AST → Resolver → Type Engin
 
 ---
 
-## Phase 1. Freeze Frontend
+## Phase 1 — Frontend Freeze ✅
 
 ```
-Lexer → Green Tree → Red Tree → AST → Resolver → Type Engine → HIR
+Lexer → Parser → AST → Diagnostics → Symbol → Resolver
 ```
 
-After this, language changes happen below HIR only.
+Almost done. Language changes happen below HIR only from now on.
 
-## Phase 2. Real HIR
+## Phase 2 — Unified HIR
 
+Problem: two HIR modules exist (`frontend/hir/`, `middle/hir/`).
+
+Target:
 ```
-HIR Module → HIR Item → HIR Body → HIR BasicBlock → HIR Expr → HIR Pattern → HIR Type → HIR Lifetime
-```
-
-## Phase 3. THIR (not exists yet)
-
-```
-HIR → THIR
-```
-
-THIR handles: coercion, overload resolution, implicit deref, auto borrow, pattern lowering, exhaustive match.
-
-## Phase 4. Real MIR (Rust-style)
-
-```
-THIR → MIR Builder → Basic Blocks → Places → Operands → Statements → Terminators
+HIR/
+  nodes/
+  types/
+  lowering/
+  ids/
 ```
 
-## Phase 5. BIR (SSA)
+AST never goes beyond this point.
+
+## Phase 3 — THIR (Typed HIR)
 
 ```
-MIR → SSA Builder → Phi → CFG → BIR → Optimizations
+HIR → THIR → BIR
 ```
 
-## Phase 6. Analysis Framework
+THIR handles:
+- all types resolved
+- calls resolved
+- generics expanded
+- casts inserted
+- overload selected
+- coercion
+- implicit deref
+- pattern lowering
+- exhaustive match
 
-- Alias Analysis
-- Escape Analysis
-- Loop Analysis
-- Dominators / Post Dominators
-- Control Dependence
-- Memory Dependence
-- Data Flow
-- Constant Propagation
-- Range Analysis
-- Scalar Evolution
-- Value Numbering
-- Region Analysis
-- Profile Analysis
-- Inline Cost
-- Lifetime Analysis
-- Effect Analysis
-- Borrow Analysis
-- Object Lifetime
+After THIR, the language is fully understood.
 
-## Phase 7. Pass Manager (LLVM-style)
+## Phase 4 — BIR to LLVM Level
 
+Already strong:
+✅ SSA, ✅ mem2reg, ✅ SCCP, ✅ GVN, ✅ DCE, ✅ CFG simplify, ✅ verifier
+
+Add:
 ```
-Pipeline → Analysis Manager → Pass Manager → Preserved Analyses → Invalidation → Scheduling → Dependency Graph
-```
+BIR/analysis/
+  alias analysis
+  escape analysis
+  range analysis
+  value numbering
 
-## Phase 8. Real Backend
-
-```
-BIR → Instruction Selection → Target DAG → Machine IR → Register Allocation → Stack Coloring → Frame Layout → Scheduling → Peephole → Machine Verification → Emission
-```
-
-## Phase 9. GPU Backend
-
-```
-BIR → GPU MIR → DXIL / SPIR-V / MSL / WGSL
+BIR/optimizer/
+  LICM
+  loop rotate
+  loop unroll
+  inlining
+  vectorization
 ```
 
-## Phase 10. Driver
+## Phase 5 — Production MIR (Rust-style)
+
+This is the main gap now.
 
 ```
-Driver → Job Graph → Compilation Database → Dependency Scanner → Cache → Incremental → LSP → IDE → Diagnostics → Code Completion
+MIR/
+  Function
+  Block
+  Instruction
+  Virtual Registers
+  Physical Registers
+  Frame Objects
+  Calling Convention
 ```
 
-## Phase 11. Runtime
-
+Pipeline:
 ```
-PLAN Runtime | METAL Runtime | GC | Allocator | Scheduler | Thread Pool | Reflection | Metadata
-```
-
-## Phase 12. Incremental Compilation
-
-```
-File Graph → Module Graph → Dependency Graph → Fingerprint → Incremental HIR → Incremental THIR → Incremental MIR → Incremental BIR
+BIR → SSA Builder → Phi → CFG → MIR → Optimizations
 ```
 
-## Phase 13. Multithreading
-
-All stages become independent. Each stage works in parallel across modules.
-
-## Phase 14. LTO
-
+Example:
 ```
-Module → ThinLTO → Whole Program Analysis → Cross Module Inline → Global DCE → Final Binary
+BIR:  add i64
+MIR:  vreg1 = ADD vreg2, vreg3
+x64:  mov rax, rcx / add rax, rdx
 ```
 
-## Phase 15. PGO
+## Phase 6 — CPU Backend
+
+### x64
+```
+Instruction Selection → Register Allocation → Stack Frame
+→ Prolog/Epilog → Calling Convention → Encoding → Relocations
+```
+
+### ARM64 (later)
+```
+Same pipeline, different target
+```
+
+### ABI Support
+```
+Windows: Win64 ABI, PE, COFF, DLL exports
+Linux:   System V ABI, ELF
+```
+
+## Phase 7 — Runtime
 
 ```
-Instrumentation → Profile → Hot Blocks → Reordering → Inlining → Branch Prediction
+runtime/
+  memory/
+  allocator/
+  thread/
+  sync/
+  exception/
+  ffi/
+  startup/
 ```
 
-## Phase 16. Full Modularity
+## Phase 8 — Debugger Support
 
 ```
-frontend/ middle/ backend/ runtime/ driver/ lsp/ gpu/ tools/ tests/ docs/ stdlib/
+DWARF / PDB / source maps / stack traces
+
+b+ code → debugger → breakpoint
+```
+
+## Phase 9 — Toolchain
+
+```
+bpc build    — compile
+bpc run      — compile + execute
+bpc test     — run tests
+bpc fmt      — format
+bpc check    — type check only
+bpc doc      — generate docs
+bpc lsp      — language server
+bpc profile  — profiling
 ```
 
 ---
 
-## Full Pipeline (Target Architecture)
+## After CPU is Stable — GPU
 
 ```
-Source → Lexer → Green Tree → Red Tree → AST → Resolver → Type Engine → HIR → THIR → MIR → SSA Builder → BIR → Analysis Framework → Optimization Pipeline → Instruction Selection → Machine IR → Register Allocation → Frame Layout → Instruction Scheduling → Code Emission → PE / ELF / Mach-O
+METAL → GPU IR → DXIL / SPIR-V / MSL / WGSL
 ```
+
+METAL becomes: CPU target + GPU target + SIMD target — one computation model.
+
+---
+
+## After GPU — Advanced
+
+- Incremental Compilation
+- Multithreading (parallel stages)
+- LTO (ThinLTO)
+- PGO (Profile-Guided Optimization)
+- Pass Manager (LLVM-style with Analysis Manager)
+
+---
+
+## Full Target Pipeline
+
+```
+Source → Lexer → Green Tree → Red Tree → AST → Resolver → Type Engine
+  → HIR → THIR → MIR → SSA Builder → BIR
+  → Analysis Framework → Optimization Pipeline
+  → Instruction Selection → Machine IR → Register Allocation
+  → Frame Layout → Instruction Scheduling → Code Emission
+  → PE / ELF / Mach-O
+```
+
+---
+
+## Priority Order
+
+1. ✅ Frontend Freeze
+2. Unified HIR
+3. THIR
+4. BIR to LLVM level
+5. Production MIR
+6. x64 backend (ABI level)
+7. ARM64 backend
+8. Runtime
+9. Debugger support
+10. Toolchain
+11. GPU (METAL)
+12. Incremental
+13. Multithreading
+14. LTO
+15. PGO
