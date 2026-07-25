@@ -158,6 +158,8 @@ bpc.exe run hello.b+
 
 Команда компилирует `hello.b+` в `hello.exe` и сразу запускает.
 
+**Drag & Drop:** перетащи `.b+` файл на `bpc.bat` — скомпилирует и запустит автоматически.
+
 ---
 
 ## 2. Команды компилятора
@@ -1087,6 +1089,8 @@ bpc.exe run hello.b+
 ```
 
 The command compiles `hello.b+` into `hello.exe` and runs it immediately.
+
+**Drag & Drop:** drag a `.b+` file onto `bpc.bat` — it compiles and runs automatically.
 
 ---
 

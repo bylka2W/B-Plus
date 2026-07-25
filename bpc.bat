@@ -1,4 +1,9 @@
 @echo off
 cd /d "%~dp0"
-bpc.exe %*
+if "%~1"=="" (
+    echo Usage: drag a .b+ file onto this bat, or: bpc run hello.b+
+    pause
+    exit /b 1
+)
+"zig\zig-out\bin\bpc.exe" run %*
 if errorlevel 1 pause
