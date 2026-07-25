@@ -152,13 +152,12 @@ B+ объединяет простоту языков высокого уров�
 
 ## 1. Быстрый старт
 
+Перетащи файл `.b+` на `bpc.bat` — скомпилирует в `.exe` и запустит.
+
+Или через консоль:
 ```bash
 bpc.exe run hello.b+
 ```
-
-Команда компилирует `hello.b+` в `hello.exe` и сразу запускает.
-
-**Drag & Drop:** перетащи `.b+` файл на `bpc.bat` — скомпилирует и запустит автоматически.
 
 ---
 
@@ -1084,13 +1083,12 @@ B+ combines the simplicity of high-level languages with the control of systems p
 
 ## 1. Quick Start
 
+Drag a `.b+` file onto `bpc.bat` — it compiles to `.exe` and runs it.
+
+Or from the command line:
 ```bash
 bpc.exe run hello.b+
 ```
-
-The command compiles `hello.b+` into `hello.exe` and runs it immediately.
-
-**Drag & Drop:** drag a `.b+` file onto `bpc.bat` — it compiles and runs automatically.
 
 ---
 
