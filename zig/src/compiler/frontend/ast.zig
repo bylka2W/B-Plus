@@ -182,67 +182,86 @@ pub const ForwardDecl = struct {
     target_dll: []const u8,
 };
 
-pub const ProgramNode = struct {
-    allocator: Allocator,
+pub const ProgramCommon = struct {
     imports: std.ArrayList(ImportNode),
-    states: std.ArrayList(StateDefNode),
-    entries: std.ArrayList(EntryDecl),
-    kernels: std.ArrayList(KernelDecl),
     enums: std.ArrayList(EnumDecl),
-    parallel_blocks: std.ArrayList(ParallelBlock),
-    forwarders: std.ArrayList(ForwardDecl),
-    memory: ?MemoryDirective,
-    directives: std.ArrayList([]const u8),
-    metal: ?ContextDecl,
-    extern_cpp_fns: std.ArrayList(ExternCppFn),
     struct_defs: std.StringHashMap(StructDef),
     func_defs: std.ArrayList(EntryDecl),
+    forwarders: std.ArrayList(ForwardDecl),
+    extern_cpp_fns: std.ArrayList(ExternCppFn),
+    directives: std.ArrayList([]const u8),
+};
+
+pub const ProgramPlan = struct {
+    states: std.ArrayList(StateDefNode),
+    parallel_blocks: std.ArrayList(ParallelBlock),
+    memory: ?MemoryDirective,
+};
+
+pub const ProgramMetal = struct {
+    entries: std.ArrayList(EntryDecl),
+    kernels: std.ArrayList(KernelDecl),
+    context: ?ContextDecl,
+};
+
+pub const ProgramNode = struct {
+    allocator: Allocator,
+    common: ProgramCommon,
+    plan: ProgramPlan,
+    metal: ProgramMetal,
 
     pub fn deinit(self: *ProgramNode) void {
-        for (self.imports.items) |*imp| self.allocator.free(imp.path);
-        self.imports.deinit();
-        for (self.states.items) |*s| {
-            s.variables.deinit();
-            s.transitions.deinit();
-            if (s.enter_body) |b| self.allocator.free(b);
-            if (s.exit_body) |b| self.allocator.free(b);
-            if (s.cache_policy) |cp| self.allocator.free(cp);
+        const a = self.allocator;
+
+        // Common
+        for (self.common.imports.items) |*imp| a.free(imp.path);
+        self.common.imports.deinit();
+        for (self.common.enums.items) |*e| e.members.deinit();
+        self.common.enums.deinit();
+        {
+            var it = self.common.struct_defs.iterator();
+            while (it.next()) |entry| {
+                a.free(entry.key_ptr.*);
+                entry.value_ptr.fields.deinit();
+            }
+            self.common.struct_defs.deinit();
         }
-        self.states.deinit();
-        for (self.entries.items) |*e| {
-            for (e.body_lines.items) |line| self.allocator.free(line);
-            e.body_lines.deinit();
-            e.params.deinit();
-        }
-        self.entries.deinit();
-        for (self.kernels.items) |*k| {
-            k.params.deinit();
-            k.annotations.deinit();
-        }
-        self.kernels.deinit();
-        for (self.enums.items) |*e| e.members.deinit();
-        self.enums.deinit();
-        for (self.parallel_blocks.items) |*p| p.states.deinit();
-        self.parallel_blocks.deinit();
-        self.forwarders.deinit();
-        if (self.metal) |*ctx| ctx.variables.deinit();
-        self.directives.deinit();
-        self.extern_cpp_fns.deinit();
-        for (self.func_defs.items) |*f| {
-            self.allocator.free(f.name);
-            for (f.body_lines.items) |line| self.allocator.free(line);
+        for (self.common.func_defs.items) |*f| {
+            a.free(f.name);
+            for (f.body_lines.items) |line| a.free(line);
             f.body_lines.deinit();
             f.params.deinit();
         }
-        self.func_defs.deinit();
-        {
-            var it = self.struct_defs.iterator();
-            while (it.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                entry.value_ptr.fields.deinit();
-            }
-            self.struct_defs.deinit();
+        self.common.func_defs.deinit();
+        self.common.forwarders.deinit();
+        self.common.extern_cpp_fns.deinit();
+        self.common.directives.deinit();
+
+        // Plan
+        for (self.plan.states.items) |*s| {
+            s.variables.deinit();
+            s.transitions.deinit();
+            if (s.enter_body) |b| a.free(b);
+            if (s.exit_body) |b| a.free(b);
+            if (s.cache_policy) |cp| a.free(cp);
         }
+        self.plan.states.deinit();
+        for (self.plan.parallel_blocks.items) |*p| p.states.deinit();
+        self.plan.parallel_blocks.deinit();
+
+        // Metal
+        for (self.metal.entries.items) |*e| {
+            for (e.body_lines.items) |line| a.free(line);
+            e.body_lines.deinit();
+            e.params.deinit();
+        }
+        self.metal.entries.deinit();
+        for (self.metal.kernels.items) |*k| {
+            k.params.deinit();
+            k.annotations.deinit();
+        }
+        self.metal.kernels.deinit();
+        if (self.metal.context) |*ctx| ctx.variables.deinit();
     }
 };
 

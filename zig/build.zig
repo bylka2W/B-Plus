@@ -18,15 +18,22 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run bpc");
     run_step.dependOn(&run_cmd.step);
 
-    const test_exe = b.addExecutable(.{
-        .name = "test_bir_frontend",
-        .root_source_file = b.path("tests/unit/test_bir_frontend.zig"),
+    const test_exe = b.addTest(.{
+        .root_source_file = b.path("src/compiler/frontend/frontend_test.zig"),
         .target = target,
         .optimize = optimize,
     });
     const test_run = b.addRunArtifact(test_exe);
-    const test_step = b.step("test", "Run tests");
+    const test_step = b.step("test", "Run frontend + HIR lower tests");
     test_step.dependOn(&test_run.step);
+
+    const test_hir_lower_exe = b.addTest(.{
+        .root_source_file = b.path("src/compiler/hir_lower_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const test_hir_lower_run = b.addRunArtifact(test_hir_lower_exe);
+    test_step.dependOn(&test_hir_lower_run.step);
 
     const test_cpu_exe = b.addExecutable(.{
         .name = "test_cpu",

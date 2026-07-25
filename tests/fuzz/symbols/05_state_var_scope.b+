@@ -1,3 +1,0 @@
-state Main { var x: int = 1
-entry { print(x) } }
-state Other { entry { print(x) } }

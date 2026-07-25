@@ -6,13 +6,7 @@ const pe = @import("compiler/backend/object/pe/pe.zig");
 const coff = @import("compiler/backend/object/coff/coff.zig");
 const test_runner = @import("tools/test_runner/test_runner.zig");
 const sema_mod = @import("compiler/frontend/sema/sema.zig");
-const hlslgen = @import("compiler/gpu/frontend/hlslgen.zig");
-const gpu_ast = @import("compiler/gpu/frontend/gpu_ast.zig");
 const gpu_ir = @import("compiler/gpu/gpu_ir.zig");
-const gpu_sema = @import("compiler/gpu/frontend/gpu_sema.zig");
-const gpu_lower = @import("compiler/gpu/gpu_lower.zig");
-const gpu_dxil = @import("compiler/gpu/gpu_dxil.zig");
-const gpu_cpp = @import("compiler/gpu/gpu_cpp.zig");
 const bir = @import("compiler/middle/bir/bir.zig");
 const bir_frontend = @import("compiler/middle/bir/bir_frontend.zig");
 const bir_passes = @import("compiler/middle/bir/passes/manager.zig");
@@ -153,19 +147,10 @@ pub fn main() !void {
         {
             const pipeline_gen_m = @import("compiler/backend/mir/pipeline_gen.zig");
             const pipeline = pipeline_gen_m.parsePipeline(arena_alloc, src) catch {
-                // Fallback to old HLSLgen
-                var p2 = parser.Parser.init(arena_alloc, src, input_path);
-                const prog = try p2.parse();
-                const output = try hlslgen.generate(arena_alloc, prog, src);
-                const out_path = output_path orelse blk: {
-                    const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
-                    const base = input_path[0..ext_idx];
-                    break :blk try std.fmt.allocPrint(arena_alloc, "{s}.hlsl", .{base});
-                };
-                try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = output.text });
-                const stdout = std.io.getStdOut().writer();
-                try stdout.print("HLSL written to {s}\n", .{out_path});
-                return;
+                // Old hlslgen fallback removed — use BIR pipeline
+                const stderr = std.io.getStdErr().writer();
+                try stderr.writeAll("Pipeline parse failed and legacy HLSLgen is removed. Use BIR pipeline.\n");
+                std.process.exit(1);
             };
         var module = try bir_lower.lowerPipeline(arena_alloc, &pipeline);
         var am = bir.AnalysisManager.init(arena_alloc, &module);
@@ -444,7 +429,7 @@ pub fn main() !void {
             var it = std.mem.splitScalar(u8, names, ',');
             while (it.next()) |name| {
                 const trimmed = std.mem.trim(u8, name, " \t");
-                for (program.entries.items) |*e| {
+                for (program.metal.entries.items) |*e| {
                     if (std.mem.eql(u8, e.name, trimmed)) {
                         e.is_export = true;
                     }
@@ -507,20 +492,11 @@ fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_pat
         std.process.exit(1);
     };
 
-    var gpu_mod = gpu_ast.GpuModule{
+    var gpu_mod = gpu_ir.GpuModule{
         .allocator = arena_alloc,
-        .kernels = std.ArrayList(gpu_ast.GpuKernel).init(arena_alloc),
+        .kernels = std.ArrayList(gpu_ir.GpuKernel).init(arena_alloc),
     };
     try gpu_mod.kernels.append(kernel);
-
-    var sema = gpu_sema.GpuSema.init(arena_alloc);
-    sema.analyze(&gpu_mod);
-    if (sema.hasErrors()) {
-        const stderr = std.io.getStdErr().writer();
-        try stderr.writeAll("Semantic errors:\n");
-        try sema.printDiagnostics(stderr);
-        std.process.exit(1);
-    }
 
     // BIR path for HLSL
     if (target == .hlsl) {
@@ -549,29 +525,8 @@ fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_pat
         return;
     }
 
-    // Fallback: old gpu_ir path for DXIL/C++
-    const ir = try gpu_lower.lowerModule(arena_alloc, &gpu_mod);
-
-    const compile_opts = gpu_ir.CompileOptions{ .target = target, .entry = "main" };
-    var result = switch (target) {
-        .dxil => try gpu_dxil.backend.compile(arena_alloc, &ir, compile_opts),
-        .cpp => try gpu_cpp.backend.compile(arena_alloc, &ir, compile_opts),
-        else => unreachable,
-    };
-    defer result.deinit();
-
-    const ext = switch (target) {
-        .dxil => "dxil",
-        .cpp => "cpp",
-        else => unreachable,
-    };
-    const out_path = output_path_arg orelse blk: {
-        const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
-        const base = input_path[0..ext_idx];
-        break :blk try std.fmt.allocPrint(arena_alloc, "{s}.{s}", .{ base, ext });
-    };
-    try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = result.bytecode });
-    const stdout = std.io.getStdOut().writer();
-    const name = if (target == .dxil) "DXIL" else "C++";
-    try stdout.print("{s} written to {s}\n", .{ name, out_path });
+    // DXIL/C++ backends — TODO: rewrite without gpu_lower
+    const stderr = std.io.getStdErr().writer();
+    try stderr.writeAll("DXIL/C++ backends not yet ported to unified pipeline.\n");
+    std.process.exit(1);
 }

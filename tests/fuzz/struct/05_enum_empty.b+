@@ -1,2 +1,0 @@
-enum Empty {}
-state Main { entry { } }

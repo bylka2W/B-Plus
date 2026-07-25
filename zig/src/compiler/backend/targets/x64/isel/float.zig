@@ -14,7 +14,7 @@ const moveGprToXmm = ctx_mod.moveGprToXmm;
 
 pub fn selectFBinOp(ctx: *Ctx, f: mir.FloatBinOp, ss_op: OpCode, sd_op: OpCode) !void {
     const dst_vreg = switch (f.dst) { .vreg => |v| v, else => 0 };
-    const dtype = ctx.mfunc.getVRegType(dst_vreg);
+    const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
     const sse_op: OpCode = if (dtype == .f64) sd_op else ss_op;
     const xs = xmmScratch();
     const dst_spilled = regalloc.isSpilled(ctx.ra, f.dst);
@@ -44,7 +44,7 @@ pub fn selectFBinOp(ctx: *Ctx, f: mir.FloatBinOp, ss_op: OpCode, sd_op: OpCode) 
 pub fn selectFNeg(ctx: *Ctx, n: mir.UnaryInst) !void {
     const dst_spilled = regalloc.isSpilled(ctx.ra, n.dst);
     const dst_vreg = switch (n.dst) { .vreg => |v| v, else => 0 };
-    const dtype = ctx.mfunc.getVRegType(dst_vreg);
+    const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
     const xs = xmmScratch();
 
     if (dst_spilled) {
@@ -74,7 +74,7 @@ pub fn selectFNeg(ctx: *Ctx, n: mir.UnaryInst) !void {
 pub fn selectFSqrt(ctx: *Ctx, s: mir.UnaryInst) !void {
     const dst_spilled = regalloc.isSpilled(ctx.ra, s.dst);
     const dst_vreg = switch (s.dst) { .vreg => |v| v, else => 0 };
-    const dtype = ctx.mfunc.getVRegType(dst_vreg);
+    const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
 
     if (dst_spilled) {
         try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
@@ -92,7 +92,7 @@ pub fn selectFCmp(ctx: *Ctx, c: mir.FCmpInst) !void {
     const a_spilled = regalloc.isSpilled(ctx.ra, c.a);
     const b_spilled = regalloc.isSpilled(ctx.ra, c.b);
     const a_vreg = switch (c.a) { .vreg => |v| v, else => 0 };
-    const dtype = ctx.mfunc.getVRegType(a_vreg);
+    const dtype = ctx.mfunc.getVRegType(a_vreg) orelse .i64;
     const ucomi_op: OpCode = if (dtype == .f64) .SSE_UCOMISD else .SSE_UCOMISS;
 
     if (a_spilled) {

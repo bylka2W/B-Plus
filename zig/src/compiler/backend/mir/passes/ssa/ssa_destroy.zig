@@ -92,7 +92,7 @@ fn splitCriticalEdges(mfunc: *mir.MFunction, next_vreg: u32) !void {
             .label = new_label,
             .instrs = std.ArrayList(mir.MInst).init(mfunc.allocator),
         };
-        try new_block.instrs.append(.{ .jmp = .{ .target = sp.succ_idx } });
+        try new_block.instrs.append(.{ .jmp = .{ .target = @intCast(sp.succ_idx) } });
 
         try mfunc.blocks.append(new_block);
 
@@ -100,13 +100,13 @@ fn splitCriticalEdges(mfunc: *mir.MFunction, next_vreg: u32) !void {
         for (pred.instrs.items) |*inst| {
             switch (inst.*) {
                 .jmp => |*j| {
-                    if (j.target == sp.succ_idx) {
-                        j.target = sp.new_block_idx;
+                    if (j.target == @as(u32, @intCast(sp.succ_idx))) {
+                        j.target = @intCast(sp.new_block_idx);
                     }
                 },
                 .jcc => |*j| {
-                    if (j.target == sp.succ_idx) {
-                        j.target = sp.new_block_idx;
+                    if (j.target == @as(u32, @intCast(sp.succ_idx))) {
+                        j.target = @intCast(sp.new_block_idx);
                     }
                 },
                 else => {},
@@ -119,8 +119,8 @@ fn splitCriticalEdges(mfunc: *mir.MFunction, next_vreg: u32) !void {
             switch (inst.*) {
                 .jcc => |*j| {
                     for (splits.items) |sp| {
-                        if (j.target == sp.succ_idx and sp.pred_idx == findBlockIndex(mfunc, block)) {
-                            j.target = sp.new_block_idx;
+                        if (j.target == @as(u32, @intCast(sp.succ_idx)) and sp.pred_idx == findBlockIndex(mfunc, block)) {
+                            j.target = @intCast(sp.new_block_idx);
                         }
                     }
                 },

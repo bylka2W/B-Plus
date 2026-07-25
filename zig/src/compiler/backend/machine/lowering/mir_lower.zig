@@ -100,7 +100,7 @@ fn lowerInst(mir_func: *const mir.MFunction, mir_inst: mir.MInst) !machine.MInst
 
 fn lowerOp(mir_func: *const mir.MFunction, op: mir.MOperand) machine.MOperand {
     return switch (op) {
-        .vreg => |v| .{ .vreg = .{ .id = v, .class = mir_func.getVRegClass(v) } },
+        .vreg => |v| .{ .vreg = .{ .id = v, .class = mir_func.getVRegClass(v) orelse .gpr } },
         .phys => |r| .{ .phys = r },
         .imm => |v| .{ .imm = v },
         .mem => |m| .{ .mem = .{ .base = m.base, .offset = m.offset, .size = m.size, .index = m.index, .scale = m.scale } },

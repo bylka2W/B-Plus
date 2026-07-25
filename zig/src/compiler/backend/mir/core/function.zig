@@ -58,13 +58,13 @@ pub const MFunction = struct {
         try self.vreg_info.put(vreg, VRegInfo.init(ty));
     }
 
-    pub fn getVRegClass(self: *const MFunction, vreg: u32) VRegClass {
+    pub fn getVRegClass(self: *const MFunction, vreg: u32) ?VRegClass {
         if (self.vreg_info.get(vreg)) |info| return info.class;
-        return .gpr;
+        return null;
     }
 
-    pub fn getVRegType(self: *const MFunction, vreg: u32) DataType {
+    pub fn getVRegType(self: *const MFunction, vreg: u32) ?DataType {
         if (self.vreg_info.get(vreg)) |info| return info.ty;
-        return .i64;
+        return null;
     }
 };

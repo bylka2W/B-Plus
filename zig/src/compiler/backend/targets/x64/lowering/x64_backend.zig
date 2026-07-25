@@ -31,7 +31,7 @@ pub const EmitResult = struct {
 
 const Fixup = struct {
     disp_pos: usize,
-    target: usize,
+    target: u32,
 };
 
 const CallFixup = struct {

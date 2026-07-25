@@ -12,8 +12,8 @@ const resolveReg = ctx_mod.resolveReg;
 pub fn selectConv(ctx: *Ctx, c: mir.ConvInst, ss32_op: OpCode, sd32_op: OpCode, ss64_op: OpCode, sd64_op: OpCode) !void {
     const dst_vreg = switch (c.dst) { .vreg => |v| v, else => 0 };
     const src_vreg = switch (c.src) { .vreg => |v| v, else => 0 };
-    const dst_dtype = ctx.mfunc.getVRegType(dst_vreg);
-    const src_dtype = ctx.mfunc.getVRegType(src_vreg);
+    const dst_dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
+    const src_dtype = ctx.mfunc.getVRegType(src_vreg) orelse .i64;
     const is_single_float = (src_dtype == .f32) or (dst_dtype == .f32);
     const is_64bit_int = (src_dtype == .i64) or (dst_dtype == .i64);
 

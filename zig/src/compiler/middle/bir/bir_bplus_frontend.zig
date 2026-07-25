@@ -68,10 +68,10 @@ fn mapType(module: *bir.Module, type_name: []const u8) !TypeId {
 pub fn lowerProgram(allocator: Allocator, program: *const ast.ProgramNode) !bir.Module {
     var module = bir.Module.init(allocator);
     errdefer module.deinit();
-    for (program.func_defs.items) |func| {
+    for (program.common.func_defs.items) |func| {
         try lowerFunction(allocator, &module, func);
     }
-    for (program.states.items) |state| {
+    for (program.plan.states.items) |state| {
         try lowerState(allocator, &module, state);
     }
     return module;

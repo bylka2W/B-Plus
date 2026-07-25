@@ -1,9 +1,0 @@
-state Main {
-  var i: int = 0
-  entry {
-    while (i < 10) {
-      i = i + 1
-      print(i)
-    }
-  }
-}

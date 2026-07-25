@@ -323,7 +323,7 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         .state_base_reg = Reg.RBP,
         .pending_ret = null,
         .symbols = sym.SymbolTable.init(allocator),
-        .struct_defs = program.struct_defs,
+        .struct_defs = program.common.struct_defs,
         .enum_defs = std.StringHashMap(i64).init(allocator),
         .enum_keys = std.ArrayList([]const u8).init(allocator),
         .func_defs = std.StringHashMap(ast.EntryDecl).init(allocator),
@@ -333,35 +333,35 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         .value_uses = std.ArrayList(u32).init(allocator),
         .value_cache = std.AutoHashMap(usize, i16).init(allocator),
     };
-    for (program.states.items) |s| try p.state_names.append(s.name);
-    for (program.states.items, 0..) |s, i| try p.state_index_map.put(s.name, i);
-    for (program.states.items) |s| {
+    for (program.plan.states.items) |s| try p.state_names.append(s.name);
+    for (program.plan.states.items, 0..) |s, i| try p.state_index_map.put(s.name, i);
+    for (program.plan.states.items) |s| {
         if (s.hot_weight) |hw| { if (hw >= 0.8) { p.has_hot_states = true; break; } }
     }
-    p.dp_id = try allocator.alloc(u32, program.states.items.len);
-    p.en_id = try allocator.alloc(u32, program.states.items.len);
-    for (0..program.states.items.len) |i| {
+    p.dp_id = try allocator.alloc(u32, program.plan.states.items.len);
+    p.en_id = try allocator.alloc(u32, program.plan.states.items.len);
+    for (0..program.plan.states.items.len) |i| {
         p.dp_id[i] = try allocLabelId(&p, "dp_{d}", .{i});
         p.en_id[i] = try allocLabelId(&p, "en_{d}", .{i});
     }
-    if (program.metal) |metal| {
+    if (program.metal.context) |metal| {
         for (metal.variables.items) |v| try p.ctx_vars.append(.{
             .name = v.name, .type_name = v.type_name, .default_value = v.default_value orelse "0",
         });
     }
     p.state_base_reg = Reg.R14;
     computeArenaSizes(&p, program);
-    for (program.states.items) |s| p.total_transitions += @intCast(s.transitions.items.len);
+    for (program.plan.states.items) |s| p.total_transitions += @intCast(s.transitions.items.len);
     try computeStackLayout(&p, program);
     try computeStateLayout(&p, program);
-    for (program.enums.items) |ed| {
+    for (program.common.enums.items) |ed| {
         for (ed.members.items, 0..) |member, i| {
             const key = try std.fmt.allocPrint(p.allocator, "{s}.{s}", .{ ed.name, member });
             try p.enum_keys.append(key);
             try p.enum_defs.put(key, @intCast(i));
         }
     }
-    for (program.func_defs.items) |*fd| {
+    for (program.common.func_defs.items) |*fd| {
         try p.func_defs.put(fd.name, fd.*);
     }
     try emitPrologueAndInit(&p, program);
@@ -376,15 +376,15 @@ pub fn generateEx(allocator: Allocator, program: ast.ProgramNode, is_dll: bool, 
         }
     }.lessThan);
     {
-        var indegree = try allocator.alloc(usize, program.states.items.len);
+        var indegree = try allocator.alloc(usize, program.plan.states.items.len);
         defer allocator.free(indegree);
         @memset(indegree, 0);
-        for (program.states.items) |s| {
+        for (program.plan.states.items) |s| {
             for (s.transitions.items) |t| {
                 if (p.state_index_map.get(t.target)) |ti| indegree[ti] += 1;
             }
         }
-        var ie = try allocator.alloc(bool, program.states.items.len);
+        var ie = try allocator.alloc(bool, program.plan.states.items.len);
         for (0..ie.len) |i| ie[i] = false;
         for (traces.items) |trace| {
             if (trace.len <= 1) continue;
@@ -592,7 +592,7 @@ fn computeArenaSizes(p: *PendingOutput, program: ast.ProgramNode) void {
     const MIGRATION_BUDGET: u32 = 4;
     const MIN_ARENA: u32 = 256;
     var max_data_size: u32 = 16;
-    for (program.states.items) |state| {
+    for (program.plan.states.items) |state| {
         for (state.variables.items) |v| {
             const sz = getTypeSize(v.type_name);
             if (sz > max_data_size) max_data_size = sz;
@@ -680,7 +680,7 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     p.off_ctx_var_start = off;
     for (p.ctx_vars.items) |_| off -= 8;
     // Allocate stack slots for entry body variables
-    for (program.entries.items) |entry| {
+    for (program.metal.entries.items) |entry| {
         for (entry.body_lines.items) |line| {
             const t = std.mem.trim(u8, line, " \t");
             if (std.mem.startsWith(u8, t, "var ")) {
@@ -715,7 +715,7 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     p.state_layout_sizes.clearRetainingCapacity();
     var shared = std.StringHashMap(i32).init(p.allocator);
     defer shared.deinit();
-    for (program.states.items) |state| {
+    for (program.plan.states.items) |state| {
         const isL1 = if (state.cache_policy) |cp| std.mem.eql(u8, cp, "L1") else false;
         if (!isL1) continue;
         var sv = std.ArrayList(StateVarInfo).init(p.allocator);
@@ -727,7 +727,7 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
         }
         try p.state_vars.put(state.name, sv);
     }
-    for (program.states.items) |state| {
+    for (program.plan.states.items) |state| {
         const isL1 = if (state.cache_policy) |cp| std.mem.eql(u8, cp, "L1") else false;
         if (isL1) continue;
         var sv = std.ArrayList(StateVarInfo).init(p.allocator);
@@ -741,7 +741,7 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
     }
     p.off_state_data_base = off;
 
-    p.off_state_hits = off - @as(i32, @intCast(program.states.items.len * 8)); off -= @as(i32, @intCast(program.states.items.len * 8));
+    p.off_state_hits = off - @as(i32, @intCast(program.plan.states.items.len * 8)); off -= @as(i32, @intCast(program.plan.states.items.len * 8));
     p.off_trans_hits = off - @as(i32, @intCast(p.total_transitions * 8)); off -= @as(i32, @intCast(p.total_transitions * 8));
     p.off_exit_code = off; off -= 8;
     p.off_buf = off - 256; off -= 256;
@@ -768,7 +768,7 @@ fn computeStackLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
 }
 
 fn computeStateLayout(p: *PendingOutput, program: ast.ProgramNode) !void {
-    for (program.states.items) |state| {
+    for (program.plan.states.items) |state| {
         const sv_list = p.state_vars.get(state.name) orelse continue;
         for (sv_list.items) |*sv| {
             sv.layout_offset = @as(u32, @intCast(sv.stack_offset - p.off_state_data_base));
@@ -807,7 +807,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
         try p.cbuf.bytes.append(0xC3); // ret
         // --- ATTACH ---
         try setLabel(p, dll_main_attach);
-        for (program.states.items, 0..) |state, si| {
+        for (program.plan.states.items, 0..) |state, si| {
             const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{si});
             const state_ptr_label = try allocLabelId(p, "state_ptr_{d}", .{si});
             // Allocate TLS index
@@ -835,7 +835,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
         try p.cbuf.bytes.append(0xC3); // ret
         // --- DETACH ---
         try setLabel(p, dll_main_detach);
-        for (0..program.states.items.len) |si| {
+        for (0..program.plan.states.items.len) |si| {
             const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{si});
             // TlsGetValue(tls_idx) → block pointer
             try emitRipRelativeLoad32(p, Reg.RCX, tls_idx_label);
@@ -861,14 +861,14 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     }
 
     // Process forwarders
-    for (program.forwarders.items) |fwd| {
+    for (program.common.forwarders.items) |fwd| {
         const forward_str = try std.fmt.allocPrint(p.allocator, "{s}.{s}", .{ fwd.target_dll, fwd.export_name });
         try p.symbols.addForward(fwd.export_name, forward_str);
         p.allocator.free(forward_str);
     }
     // Auto-generate bpc_get_state export for test introspection
-    if (program.states.items.len > 0) {
-        const state_name = program.states.items[0].name;
+    if (program.plan.states.items.len > 0) {
+        const state_name = program.plan.states.items[0].name;
         const sv_list = p.state_vars.get(state_name) orelse return error.NoStateVars;
 
         // --- bpc_get_state: returns state base pointer ---
@@ -1078,8 +1078,8 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
         try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_hstdout), x64.Operand.r(Reg.RAX) });
         try emitAffinityInit(p);
     }
-    if (!p.is_dll and program.entries.items.len > 0 and !program.entries.items[0].is_export) {
-        const entry = &program.entries.items[0];
+    if (!p.is_dll and program.metal.entries.items.len > 0 and !program.metal.entries.items[0].is_export) {
+        const entry = &program.metal.entries.items[0];
         if (entry.body_lines.items.len > 0) {
             var buf = std.ArrayList(u8).init(p.allocator);
             for (entry.body_lines.items, 0..) |line, i| {
@@ -1108,7 +1108,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                 if (i > 0) try buf.append(';');
                 try buf.appendSlice(t);
             }
-            const state_ctx = if (program.states.items.len > 0) program.states.items[0].name else "";
+            const state_ctx = if (program.plan.states.items.len > 0) program.plan.states.items[0].name else "";
             try pushDeferScope(p);
             try emitAction(p, buf.items, state_ctx);
             try popDeferScope(p);
@@ -1116,7 +1116,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
         }
     }
 
-    if (program.states.items.len > 0) {
+    if (program.plan.states.items.len > 0) {
         try emitMovRegImm32(p, Reg.RAX, 1024);
         try x64.emit(&p.cbuf.bytes, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_abudget), x64.Operand.r(Reg.RAX) });
         try emitCallToLabel(p, p.en_id[0]); try emitLongJmp(p, try allocLabelId(p, "always_entry", .{}));
@@ -1128,7 +1128,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     // so the PE/ELF entry point points to the main function, not
     // to an export stub).
     // ============================================================
-    for (program.entries.items) |*entry| {
+    for (program.metal.entries.items) |*entry| {
         if (entry.is_export) {
             const label_id = try allocLabelId(p, "exp_{s}", .{entry.name});
             try setLabel(p, label_id);
@@ -1141,7 +1141,7 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
                 try emitPushR64(p, Reg.R13); try emitPushR64(p, Reg.R14); try emitPushR64(p, Reg.R15);
                 try x64.emit(&p.cbuf.bytes, .SUB_R64_IMM32, &.{ x64.Operand.r(Reg.RSP), x64.Operand.immU32(p.stack_frame_size) });
                 // Load state block
-                const state_ctx = if (program.states.items.len > 0) program.states.items[0].name else entry.name;
+                const state_ctx = if (program.plan.states.items.len > 0) program.plan.states.items[0].name else entry.name;
                 if (p.is_dll) {
                     const state_idx = p.state_index_map.get(state_ctx) orelse 0;
                     const tls_idx_label = try allocLabelId(p, "tls_idx_{d}", .{state_idx});
@@ -1871,7 +1871,7 @@ fn emitStateEnterBodyContent(p: *PendingOutput, state: *const ast.StateDefNode, 
 fn emitStateEnterFuncs(p: *PendingOutput, program: ast.ProgramNode) !void {
     var sorted = std.ArrayList(SortedEntry).init(p.allocator);
     defer sorted.deinit();
-    for (program.states.items, 0..) |s, i| try sorted.append(.{ .idx = i, .hw = s.hot_weight orelse 0.5 });
+    for (program.plan.states.items, 0..) |s, i| try sorted.append(.{ .idx = i, .hw = s.hot_weight orelse 0.5 });
     std.mem.sort(SortedEntry, sorted.items, {}, struct {
         fn lessThan(_: void, a: SortedEntry, b: SortedEntry) bool {
             const ag: u32 = if (a.hw >= 0.8) 2 else if (a.hw <= 0.3) 0 else 1;
@@ -1881,7 +1881,7 @@ fn emitStateEnterFuncs(p: *PendingOutput, program: ast.ProgramNode) !void {
         }
     }.lessThan);
     for (sorted.items) |item| {
-        const state = program.states.items[item.idx];
+        const state = program.plan.states.items[item.idx];
         if ((state.hot_weight orelse 0) >= 0.8) {
             const av = state.cache_align orelse 64;
             if (av == 64) { try alignTo64(p); } else if (av >= 16) { while (p.cbuf.bytes.items.len % @as(usize, @intCast(av)) != 0) try p.cbuf.bytes.append(0x90); }
@@ -1901,7 +1901,7 @@ fn emitStateEnterFuncs(p: *PendingOutput, program: ast.ProgramNode) !void {
         for (0..pc) |ti| {
             const t = lv.items[ti];
             const ti_idx = p.state_index_map.get(t.target) orelse return error.UndefinedStateTarget;
-            const ts = program.states.items[ti_idx];
+            const ts = program.plan.states.items[ti_idx];
             const level: i32 = if (ts.cache_policy) |cp| blk: { if (std.mem.eql(u8, cp, "L2")) break :blk 2; if (std.mem.eql(u8, cp, "L3")) break :blk 3; break :blk 1; } else 1;
             if (p.state_vars.get(t.target)) |vars| { for (vars.items) |sv| try emitPrefetchData(p, @as(i32, @intCast(sv.layout_offset)), level, p.state_base_reg); }
             if (level <= 1) try emitPrefetch(p, p.en_id[ti_idx]);
@@ -1941,10 +1941,10 @@ fn padForCacheAssociativity(p: *PendingOutput, program: ast.ProgramNode) !void {
 fn analyzeTraces(program: ast.ProgramNode, state_index_map: std.StringHashMap(usize)) !std.ArrayList(Trace) {
     var traces = std.ArrayList(Trace).init(state_index_map.allocator);
     var si: usize = 0;
-    while (si < program.states.items.len) {
+    while (si < program.plan.states.items.len) {
         var chain_len: usize = 1;
-        while (si + chain_len < program.states.items.len) {
-            const prev = program.states.items[si + chain_len - 1];
+        while (si + chain_len < program.plan.states.items.len) {
+            const prev = program.plan.states.items[si + chain_len - 1];
             const has_always = prev.transitions.items.len == 1 and prev.transitions.items[0].is_always and (prev.transitions.items[0].event_name == null or prev.transitions.items[0].event_name.?.len == 0);
             if (!has_always) break;
             const prev_ti = state_index_map.get(prev.transitions.items[0].target) orelse return error.UndefinedStateTarget;
@@ -1956,9 +1956,9 @@ fn analyzeTraces(program: ast.ProgramNode, state_index_map: std.StringHashMap(us
         var total_hw: f64 = 0;
         var total_trans_hw: f64 = 0;
         for (si..si + chain_len) |i| {
-            total_hw += program.states.items[i].hot_weight orelse 0.5;
+            total_hw += program.plan.states.items[i].hot_weight orelse 0.5;
             if (i + 1 < si + chain_len) {
-                const t_hw = program.states.items[i].transitions.items[0].hot_weight orelse program.states.items[i].hot_weight orelse 0.5;
+                const t_hw = program.plan.states.items[i].transitions.items[0].hot_weight orelse program.plan.states.items[i].hot_weight orelse 0.5;
                 total_trans_hw += t_hw;
             }
         }
@@ -2059,7 +2059,7 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode, traces: std.ArrayL
     for (traces.items) |trace| {
         for (trace.start_state..trace.start_state + trace.len) |block_si| {
             const is_last = block_si == trace.start_state + trace.len - 1;
-            const bs = program.states.items[block_si];
+            const bs = program.plan.states.items[block_si];
             try setLabel(p, p.dp_id[block_si]);
             // Profiling: increment state hit counter
             const hit_off = p.off_state_hits + @as(i32, @intCast(block_si)) * 8;
@@ -2156,7 +2156,7 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode, traces: std.ArrayL
     try setLabel(p, try allocLabelId(p, "sth_start", .{}));
     // RSI = &state_hits[0], R12 = state count (loop counter)
     try x64.emit(&p.cbuf.bytes, .LEA_R64_MEM, &.{ x64.Operand.r(Reg.RSI), x64.Operand.mem(Reg.RBP, p.off_state_hits) });
-    try emitMovRegImm32(p, Reg.R12, @intCast(program.states.items.len));
+    try emitMovRegImm32(p, Reg.R12, @intCast(program.plan.states.items.len));
     try x64.emit(&p.cbuf.bytes, .CMP_R32_IMM32, &.{ x64.Operand.r(Reg.R12), x64.Operand.immU32(0) });
     try emitCondLongJmp(p, .JE_REL32, try allocLabelId(p, "sth_done", .{}));
     try setLabel(p, try allocLabelId(p, "sth_loop", .{}));
@@ -2308,7 +2308,7 @@ fn emitEventLoop(p: *PendingOutput, program: ast.ProgramNode, traces: std.ArrayL
 
 fn emitStateDispatch(p: *PendingOutput, state: *const ast.StateDefNode, si: usize, program: ast.ProgramNode, fuse: bool, inline_enter: bool) !void {
     var state_trans_start: u32 = 0;
-    for (0..si) |i| state_trans_start += @intCast(program.states.items[i].transitions.items.len);
+    for (0..si) |i| state_trans_start += @intCast(program.plan.states.items[i].transitions.items.len);
     for (state.transitions.items, 0..) |t, ti_| {
         if ((t.event_name != null and t.event_name.?.len > 0) or !t.is_always) continue;
         if (t.is_always and (t.event_name == null or t.event_name.?.len == 0)) {
@@ -2506,7 +2506,7 @@ fn emitCompiledEventMatch(p: *PendingOutput, en: []const u8, done_label: u32, ws
 fn changeToState(p: *PendingOutput, target: []const u8, current_si: usize, program: ast.ProgramNode, jump_to_scheduler: bool, fuse: bool, inline_enter: bool) !void {
     const ti = p.state_index_map.get(target) orelse return error.UndefinedStateTarget;
     if (!fuse) try emitIntrinsicCall(p, rt.Intrinsic.arena_l1_reset);
-    const cur_state = program.states.items[current_si];
+    const cur_state = program.plan.states.items[current_si];
     if (cur_state.exit_body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, cur_state.name); }
     for (cur_state.transitions.items) |act| {
         if (act.body) |body| { const tb = std.mem.trim(u8, body, " \t\r\n"); if (tb.len > 0) try emitAction(p, tb, cur_state.name); }
@@ -2514,7 +2514,7 @@ fn changeToState(p: *PendingOutput, target: []const u8, current_si: usize, progr
     try emitMovRegImm32(p, Reg.RAX, @intCast(ti));
     try x64.emit(&p.cbuf.bytes, .MOV_MEM_R64, &.{ x64.Operand.mem(Reg.RBP, p.off_cur_state), x64.Operand.r(Reg.RAX) });
     if (inline_enter) {
-        try emitStateEnterBodyContent(p, &program.states.items[ti], ti);
+        try emitStateEnterBodyContent(p, &program.plan.states.items[ti], ti);
     } else {
         try emitCallToLabel(p, p.en_id[ti]);
     }

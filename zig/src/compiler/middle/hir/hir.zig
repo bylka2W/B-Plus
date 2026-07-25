@@ -13,6 +13,10 @@ pub const Stmt = node.Stmt;
 pub const HirBlock = node.HirBlock;
 pub const HirFunction = node.HirFunction;
 pub const HirState = node.HirState;
+pub const HirKernel = node.HirKernel;
+pub const HirEntry = node.HirEntry;
+pub const HirBinding = node.HirBinding;
+pub const HirAttr = node.HirAttr;
 pub const HirModule = node.HirModule;
 
 pub const SemaContext = lower.SemaContext;

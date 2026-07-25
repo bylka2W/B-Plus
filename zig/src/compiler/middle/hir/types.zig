@@ -25,21 +25,21 @@ pub const TypeId = enum(u32) {
     enum_type,
     _,
 
-    pub fn fromName(name: []const u8) TypeId {
-        if (std.mem.eql(u8, name, "void")) return .void;
-        if (std.mem.eql(u8, name, "bool")) return .bool_type;
-        if (std.mem.eql(u8, name, "i8")) return .i8_type;
-        if (std.mem.eql(u8, name, "i16")) return .i16_type;
-        if (std.mem.eql(u8, name, "i32")) return .i32_type;
-        if (std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "int")) return .i64_type;
-        if (std.mem.eql(u8, name, "u8")) return .u8_type;
-        if (std.mem.eql(u8, name, "u16")) return .u16_type;
-        if (std.mem.eql(u8, name, "u32")) return .u32_type;
-        if (std.mem.eql(u8, name, "u64")) return .u64_type;
-        if (std.mem.eql(u8, name, "f32")) return .f32_type;
-        if (std.mem.eql(u8, name, "f64")) return .f64_type;
-        if (std.mem.eql(u8, name, "string")) return .string_type;
-        if (std.mem.eql(u8, name, "ptr")) return .ptr_type;
+    pub fn fromName(type_name: []const u8) TypeId {
+        if (std.mem.eql(u8, type_name, "void")) return .void;
+        if (std.mem.eql(u8, type_name, "bool")) return .bool_type;
+        if (std.mem.eql(u8, type_name, "i8")) return .i8_type;
+        if (std.mem.eql(u8, type_name, "i16")) return .i16_type;
+        if (std.mem.eql(u8, type_name, "i32")) return .i32_type;
+        if (std.mem.eql(u8, type_name, "i64") or std.mem.eql(u8, type_name, "int")) return .i64_type;
+        if (std.mem.eql(u8, type_name, "u8")) return .u8_type;
+        if (std.mem.eql(u8, type_name, "u16")) return .u16_type;
+        if (std.mem.eql(u8, type_name, "u32")) return .u32_type;
+        if (std.mem.eql(u8, type_name, "u64")) return .u64_type;
+        if (std.mem.eql(u8, type_name, "f32")) return .f32_type;
+        if (std.mem.eql(u8, type_name, "f64")) return .f64_type;
+        if (std.mem.eql(u8, type_name, "string")) return .string_type;
+        if (std.mem.eql(u8, type_name, "ptr")) return .ptr_type;
         return .invalid;
     }
 

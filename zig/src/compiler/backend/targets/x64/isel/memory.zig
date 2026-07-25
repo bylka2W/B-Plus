@@ -51,7 +51,7 @@ pub fn selectLoad(ctx: *Ctx, l: mir.LoadInst) !void {
     const dst_spilled = regalloc.isSpilled(ctx.ra, l.dst);
     const ptr_spilled = regalloc.isSpilled(ctx.ra, l.ptr);
     const dst_vreg = switch (l.dst) { .vreg => |v| v, else => 0 };
-    const dtype = ctx.mfunc.getVRegType(dst_vreg);
+    const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
     const is_float = dtype == .f32 or dtype == .f64;
 
     if (ptr_spilled) {
@@ -97,7 +97,7 @@ pub fn selectStore(ctx: *Ctx, s: mir.StoreInst) !void {
     const ptr_spilled = regalloc.isSpilled(ctx.ra, s.ptr);
     const src_spilled = regalloc.isSpilled(ctx.ra, s.src);
     const src_vreg = switch (s.src) { .vreg => |v| v, else => 0 };
-    const dtype = ctx.mfunc.getVRegType(src_vreg);
+    const dtype = ctx.mfunc.getVRegType(src_vreg) orelse .i64;
     const is_float = dtype == .f32 or dtype == .f64;
 
     if (ptr_spilled) {

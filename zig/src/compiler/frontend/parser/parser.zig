@@ -1,82 +1,16 @@
 const std = @import("std");
 const ast = @import("ast.zig");
-const gpu_ast = @import("gpu_ast.zig");
+const gpu_ir = @import("../../gpu/gpu_ir.zig");
 const Allocator = std.mem.Allocator;
+const token_kind_mod = @import("../syntax/token/token_kind.zig");
+const keyword_mod = @import("../syntax/token/keyword.zig");
+
+const TokenKind = token_kind_mod.TokenKind;
 
 const Token = struct {
-    kind: Kind,
+    kind: TokenKind,
     start: usize,
     end: usize,
-
-    const Kind = enum {
-        keyword_state,
-        keyword_struct,
-        keyword_entry,
-        keyword_kernel,
-        keyword_enum,
-        keyword_parallel,
-        keyword_on,
-        keyword_always,
-        keyword_var,
-        keyword_metal,
-        keyword_extern,
-        keyword_fn,
-        keyword_pipeline,
-        keyword_import,
-        keyword_use,
-        keyword_cxx,
-        keyword_if,
-        keyword_else,
-        keyword_return,
-        keyword_while,
-        keyword_run,
-        keyword_print,
-        keyword_free,
-        keyword_body,
-        keyword_step,
-        keyword_publish,
-        keyword_enter,
-        keyword_exit,
-        keyword_true,
-        keyword_false,
-        keyword_owned,
-        keyword_borrowed,
-        keyword_export,
-        keyword_forward,
-        annotation,
-        ident,
-        number,
-        string,
-        char_lit,
-        arrow,
-        lbrace,
-        rbrace,
-        lparen,
-        rparen,
-        lbracket,
-        rbracket,
-        colon,
-        semicolon,
-        comma,
-        dot,
-        plus,
-        minus,
-        star,
-        slash,
-        eq,
-        eq_eq,
-        lt,
-        gt,
-        lte,
-        gte,
-        not_eq,
-        plus_eq,
-        minus_eq,
-        hash,
-        newline,
-        eof,
-        invalid,
-    };
 };
 
 const Lexer = struct {
@@ -108,7 +42,6 @@ const Lexer = struct {
             return self.token(.newline);
         }
 
-        // Comments
         if (self.char == '/' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '/') {
             while (self.char != '\n' and self.char != 0) self.advance();
             self.tok_start = self.pos;
@@ -122,37 +55,32 @@ const Lexer = struct {
             return self.token(.eof);
         }
 
-        // Annotations: @ident or @ident(...)
         if (self.char == '@') {
             self.advance();
             while (isIdentChar(self.char)) self.advance();
-            return self.token(.annotation);
+            return self.token(.at);
         }
 
-        // Identifiers and keywords
         if (isIdentStart(self.char)) {
             while (isIdentChar(self.char)) self.advance();
             const word = self.src[self.tok_start..self.pos];
-            const kind = keywordMap.get(word) orelse .ident;
-            return self.token(kind);
+            return self.token(keyword_mod.lookupKeyword(word) orelse .identifier);
         }
 
-        // Numbers
         if (isDigit(self.char) or (self.char == '-' and self.pos + 1 < self.src.len and isDigit(self.src[self.pos + 1]))) {
             if (self.char == '-') self.advance();
             while (isDigit(self.char)) self.advance();
-            if (self.char == '.') { self.advance(); while (isDigit(self.char)) self.advance(); }
-            return self.token(.number);
+            var is_float = false;
+            if (self.char == '.') { is_float = true; self.advance(); while (isDigit(self.char)) self.advance(); }
+            return self.token(if (is_float) .float_literal else .int_literal);
         }
 
-        // Hex
         if (self.char == '0' and self.pos + 1 < self.src.len and (self.src[self.pos + 1] == 'x' or self.src[self.pos + 1] == 'X')) {
             self.advance(); self.advance();
             while (isHexDigit(self.char)) self.advance();
-            return self.token(.number);
+            return self.token(.int_literal);
         }
 
-        // Strings
         if (self.char == '"') {
             self.advance();
             while (self.char != '"' and self.char != '\n' and self.char != 0) {
@@ -160,19 +88,17 @@ const Lexer = struct {
                 self.advance();
             }
             if (self.char == '"') self.advance();
-            return self.token(.string);
+            return self.token(.string_literal);
         }
 
-        // Char literals
         if (self.char == '\'') {
             self.advance();
             if (self.char == '\\') self.advance();
             if (self.char != 0) self.advance();
             if (self.char == '\'') self.advance();
-            return self.token(.char_lit);
+            return self.token(.char_literal);
         }
 
-        // Multi-char operators
         if (self.char == '-' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '>') {
             self.advance(); self.advance();
             return self.token(.arrow);
@@ -191,18 +117,17 @@ const Lexer = struct {
         }
         if (self.char == '!' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '=') {
             self.advance(); self.advance();
-            return self.token(.not_eq);
+            return self.token(.bang_eq);
         }
         if (self.char == '<' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '=') {
             self.advance(); self.advance();
-            return self.token(.lte);
+            return self.token(.less_eq);
         }
         if (self.char == '>' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '=') {
             self.advance(); self.advance();
-            return self.token(.gte);
+            return self.token(.greater_eq);
         }
 
-        // Single char
         const c = self.char; self.advance();
         return switch (c) {
             '{' => self.token(.lbrace), '}' => self.token(.rbrace),
@@ -212,13 +137,13 @@ const Lexer = struct {
             ',' => self.token(.comma), '.' => self.token(.dot),
             '+' => self.token(.plus), '-' => self.token(.minus),
             '*' => self.token(.star), '/' => self.token(.slash),
-            '=' => self.token(.eq), '<' => self.token(.lt), '>' => self.token(.gt),
+            '=' => self.token(.eq), '<' => self.token(.less), '>' => self.token(.greater),
             '#' => self.token(.hash),
-            else => self.token(.invalid),
+            else => self.token(.error_token),
         };
     }
 
-    fn token(self: *Lexer, kind: Token.Kind) Token {
+    fn token(self: *Lexer, kind: TokenKind) Token {
         return .{ .kind = kind, .start = self.tok_start, .end = self.pos };
     }
 
@@ -226,75 +151,6 @@ const Lexer = struct {
     fn isIdentChar(c: u8) bool { return std.ascii.isAlphanumeric(c) or c == '_' or c == '?' or c == '<' or c == '>' or c >= 0x80; }
     fn isDigit(c: u8) bool { return std.ascii.isDigit(c); }
     fn isHexDigit(c: u8) bool { return std.ascii.isDigit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F'); }
-
-    const keywordMap = std.StaticStringMap(Token.Kind).initComptime(.{
-        .{ "state", .keyword_state },
-        .{ "export", .keyword_export },
-        .{ "forward", .keyword_forward },
-        .{ "entry", .keyword_entry },
-        .{ "kernel", .keyword_kernel },
-        .{ "struct", .keyword_struct },
-        .{ "enum", .keyword_enum },
-        .{ "parallel", .keyword_parallel },
-        .{ "on", .keyword_on },
-        .{ "always", .keyword_always },
-        .{ "var", .keyword_var },
-        .{ "metal", .keyword_metal },
-        .{ "extern", .keyword_extern },
-        .{ "fn", .keyword_fn },
-        .{ "pipeline", .keyword_pipeline },
-        .{ "import", .keyword_import },
-        .{ "use", .keyword_use },
-        .{ "cxx", .keyword_cxx },
-        .{ "if", .keyword_if },
-        .{ "else", .keyword_else },
-        .{ "return", .keyword_return },
-        .{ "while", .keyword_while },
-        .{ "run", .keyword_run },
-        .{ "print", .keyword_print },
-        .{ "free", .keyword_free },
-        .{ "body", .keyword_body },
-        .{ "step", .keyword_step },
-        .{ "publish", .keyword_publish },
-        .{ "enter", .keyword_enter },
-        .{ "exit", .keyword_exit },
-        .{ "true", .keyword_true },
-        .{ "false", .keyword_false },
-        .{ "owned", .keyword_owned },
-        .{ "borrowed", .keyword_borrowed },
-        // Russian keyword aliases
-        .{ "состояние", .keyword_state },
-        .{ "экспорт", .keyword_export },
-        .{ "вход", .keyword_entry },
-        .{ "ядро", .keyword_kernel },
-        .{ "структура", .keyword_struct },
-        .{ "перечисление", .keyword_enum },
-        .{ "параллельно", .keyword_parallel },
-        .{ "на", .keyword_on },
-        .{ "всегда", .keyword_always },
-        .{ "пер", .keyword_var },
-        .{ "метал", .keyword_metal },
-        .{ "внешний", .keyword_extern },
-        .{ "фн", .keyword_fn },
-        .{ "конвейер", .keyword_pipeline },
-        .{ "импорт", .keyword_import },
-        .{ "использовать", .keyword_use },
-        .{ "если", .keyword_if },
-        .{ "иначе", .keyword_else },
-        .{ "вернуть", .keyword_return },
-        .{ "запуск", .keyword_run },
-        .{ "печать", .keyword_print },
-        .{ "освободить", .keyword_free },
-        .{ "тело", .keyword_body },
-        .{ "шаг", .keyword_step },
-        .{ "опубликовать", .keyword_publish },
-        .{ "войти", .keyword_enter },
-        .{ "выйти", .keyword_exit },
-        .{ "истина", .keyword_true },
-        .{ "ложь", .keyword_false },
-        .{ "владение", .keyword_owned },
-        .{ "заимствовано", .keyword_borrowed },
-    });
 };
 
 pub const Parser = struct {
@@ -325,8 +181,8 @@ pub const Parser = struct {
         p.cur_tok = p.lexer.next();
     }
 
-    fn peek(p: *Parser, kind: Token.Kind) bool { return p.cur_tok.kind == kind; }
-    fn expect(p: *Parser, kind: Token.Kind) !void {
+    fn peek(p: *Parser, kind: TokenKind) bool { return p.cur_tok.kind == kind; }
+    fn expect(p: *Parser, kind: TokenKind) !void {
         if (p.cur_tok.kind != kind) {
             const found = p.src[p.cur_tok.start..p.cur_tok.end];
             std.debug.print("error: expected '{s}', got '{s}' ({s})\n", .{ @tagName(kind), std.mem.trimRight(u8, found, "\x00\x0d\x0a"), @tagName(p.cur_tok.kind) });
@@ -337,6 +193,10 @@ pub const Parser = struct {
 
     fn consumeNewlines(p: *Parser) void {
         while (p.peek(.newline)) p.advance();
+    }
+
+    fn isNumeric(p: *Parser) bool {
+        return p.cur_tok.kind == .int_literal or p.cur_tok.kind == .float_literal;
     }
 
     fn identText(p: *Parser) []const u8 {
@@ -369,19 +229,25 @@ pub const Parser = struct {
     pub fn parse(p: *Parser) !ast.ProgramNode {
         var program = ast.ProgramNode{
             .allocator = p.allocator,
-            .imports = std.ArrayList(ast.ImportNode).init(p.allocator),
-            .states = std.ArrayList(ast.StateDefNode).init(p.allocator),
-            .entries = std.ArrayList(ast.EntryDecl).init(p.allocator),
-            .kernels = std.ArrayList(ast.KernelDecl).init(p.allocator),
-            .enums = std.ArrayList(ast.EnumDecl).init(p.allocator),
-            .parallel_blocks = std.ArrayList(ast.ParallelBlock).init(p.allocator),
-            .forwarders = std.ArrayList(ast.ForwardDecl).init(p.allocator),
-            .memory = null,
-            .directives = std.ArrayList([]const u8).init(p.allocator),
-            .metal = null,
-            .extern_cpp_fns = std.ArrayList(ast.ExternCppFn).init(p.allocator),
-            .struct_defs = std.StringHashMap(ast.StructDef).init(p.allocator),
-            .func_defs = std.ArrayList(ast.EntryDecl).init(p.allocator),
+            .common = .{
+                .imports = std.ArrayList(ast.ImportNode).init(p.allocator),
+                .enums = std.ArrayList(ast.EnumDecl).init(p.allocator),
+                .struct_defs = std.StringHashMap(ast.StructDef).init(p.allocator),
+                .func_defs = std.ArrayList(ast.EntryDecl).init(p.allocator),
+                .forwarders = std.ArrayList(ast.ForwardDecl).init(p.allocator),
+                .extern_cpp_fns = std.ArrayList(ast.ExternCppFn).init(p.allocator),
+                .directives = std.ArrayList([]const u8).init(p.allocator),
+            },
+            .plan = .{
+                .states = std.ArrayList(ast.StateDefNode).init(p.allocator),
+                .parallel_blocks = std.ArrayList(ast.ParallelBlock).init(p.allocator),
+                .memory = null,
+            },
+            .metal = .{
+                .entries = std.ArrayList(ast.EntryDecl).init(p.allocator),
+                .kernels = std.ArrayList(ast.KernelDecl).init(p.allocator),
+                .context = null,
+            },
         };
         errdefer program.deinit();
 
@@ -393,68 +259,68 @@ pub const Parser = struct {
                 const start = p.lexer.pos;
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 const dir = p.src[start..p.lexer.pos];
-                try program.directives.append(std.mem.trim(u8, dir, " \t\r"));
+                try program.common.directives.append(std.mem.trim(u8, dir, " \t\r"));
                 if (p.peek(.newline)) p.advance();
-            } else if (p.peek(.keyword_state)) {
+            } else if (p.peek(.kw_state)) {
                 const s = try p.parseStateDef();
                 errdefer { s.variables.deinit(); s.transitions.deinit(); }
-                try program.states.append(s);
-            } else if (p.peek(.keyword_export)) {
+                try program.plan.states.append(s);
+            } else if (p.peek(.kw_export)) {
                 p.advance();
-                if (p.peek(.keyword_entry)) {
+                if (p.peek(.kw_entry)) {
                     var e = try p.parseEntry();
                     e.is_export = true;
                     errdefer e.body_lines.deinit();
-                    try program.entries.append(e);
-                } else if (p.peek(.keyword_forward)) {
-                    try program.forwarders.append(try p.parseForward());
+                    try program.metal.entries.append(e);
+                } else if (p.peek(.kw_forward)) {
+                    try program.common.forwarders.append(try p.parseForward());
                 } else {
                     return error.ExpectedEntryOrForwardAfterExport;
                 }
-            } else if (p.peek(.keyword_forward)) {
-                try program.forwarders.append(try p.parseForward());
-            } else if (p.peek(.keyword_entry)) {
+            } else if (p.peek(.kw_forward)) {
+                try program.common.forwarders.append(try p.parseForward());
+            } else if (p.peek(.kw_entry)) {
                 const e = try p.parseEntry();
                 errdefer e.body_lines.deinit();
-                try program.entries.append(e);
-            } else if (p.peek(.keyword_kernel)) {
+                try program.metal.entries.append(e);
+            } else if (p.peek(.kw_kernel)) {
                 if (p.isNewGpuKernelSyntax()) {
                     try p.skipGpuKernelBlock();
                 } else {
                     const k = try p.parseKernel();
                     errdefer { k.params.deinit(); k.annotations.deinit(); }
-                    try program.kernels.append(k);
+                    try program.metal.kernels.append(k);
                 }
-            } else if (p.peek(.keyword_struct)) {
+            } else if (p.peek(.kw_struct)) {
                 const s = try p.parseStructDef();
                 errdefer s.fields.deinit();
-                if (program.struct_defs.get(s.name)) |_| {
+                if (program.common.struct_defs.get(s.name)) |_| {
                     std.debug.print("error: duplicate struct definition '{s}'\n", .{s.name});
                     return error.DuplicateStruct;
                 }
-                try program.struct_defs.put(try p.allocator.dupe(u8, s.name), s);
-            } else if (p.peek(.keyword_enum)) {
+                try program.common.struct_defs.put(try p.allocator.dupe(u8, s.name), s);
+            } else if (p.peek(.kw_enum)) {
                 const e = try p.parseEnum();
                 errdefer e.members.deinit();
-                try program.enums.append(e);
-            } else if (p.peek(.keyword_parallel)) {
+                try program.common.enums.append(e);
+            } else if (p.peek(.kw_parallel)) {
                 const pb = try p.parseParallel();
                 errdefer {
                     for (pb.states.items) |*s| { s.variables.deinit(); s.transitions.deinit(); }
                     pb.states.deinit();
                 }
-                try program.parallel_blocks.append(pb);
-            } else if (p.peek(.keyword_metal)) {
+                try program.plan.parallel_blocks.append(pb);
+            } else if (p.peek(.kw_metal)) {
                 p.advance();
                 try p.expect(.lbrace);
                 const metal_vars = try p.parseVariables();
                 p.consumeNewlines();
                 try p.expect(.rbrace);
-                program.metal = ast.ContextDecl{ .variables = metal_vars };
-            } else if (p.peek(.keyword_extern)) {
+                program.metal.context = ast.ContextDecl{ .variables = metal_vars };
+            } else if (p.peek(.kw_extern)) {
                 p.advance();
                 _ = p.parseString();
-                try p.expect(.keyword_fn);
+                try p.expect(.kw_fn);
                 const fn_name = p.identText();
                 p.advance();
                 try p.expect(.lparen);
@@ -470,32 +336,32 @@ pub const Parser = struct {
                 try p.expect(.rparen);
                 var ret: ?[]const u8 = null;
                 if (p.peek(.arrow)) { p.advance(); ret = p.identText(); p.advance(); }
-                try program.extern_cpp_fns.append(.{ .name = fn_name, .parameters = params, .return_type = ret });
+                try program.common.extern_cpp_fns.append(.{ .name = fn_name, .parameters = params, .return_type = ret });
                 try p.expect(.semicolon);
-            } else if (p.peek(.keyword_import)) {
+            } else if (p.peek(.kw_import)) {
                 const imp = try p.parseImport();
-                try program.imports.append(imp);
-            } else if (p.peek(.keyword_fn)) {
+                try program.common.imports.append(imp);
+            } else if (p.peek(.kw_fn)) {
                 p.advance(); // consume 'fn'
                 if (try p.tryParseFunction()) |fn_decl| {
-                    try program.func_defs.append(fn_decl);
+                    try program.common.func_defs.append(fn_decl);
                 } else {
                     std.debug.print("warning: fn keyword without valid function definition\n", .{});
                 }
-            } else if (p.peek(.ident)) {
+            } else if (p.peek(.identifier)) {
                 // Try to parse as function definition: name(params): rettype { body }
                 if (try p.tryParseFunction()) |fn_decl| {
-                    try program.entries.append(fn_decl);
+                    try program.metal.entries.append(fn_decl);
                 } else {
                     // Skip stray ident at top level
                     while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                     if (p.peek(.newline)) p.advance();
                 }
-            } else if (p.peek(.annotation) or p.peek(.keyword_if) or p.peek(.keyword_return) or p.peek(.keyword_print) or p.peek(.keyword_free)) {
+            } else if (p.peek(.at) or p.peek(.kw_if) or p.peek(.kw_return) or p.peek(.kw_print) or p.peek(.kw_free)) {
                 // Skip stray statements at top level
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 if (p.peek(.newline)) p.advance();
-            } else if (p.peek(.string) or p.peek(.number) or p.peek(.char_lit) or p.peek(.arrow) or p.peek(.minus) or p.peek(.plus) or p.peek(.star) or p.peek(.slash) or p.peek(.lparen) or p.peek(.rparen) or p.peek(.lbracket) or p.peek(.rbracket) or p.peek(.colon) or p.peek(.semicolon) or p.peek(.comma) or p.peek(.hash) or p.peek(.invalid)) {
+            } else if (p.peek(.string_literal) or p.isNumeric() or p.peek(.char_literal) or p.peek(.arrow) or p.peek(.minus) or p.peek(.plus) or p.peek(.star) or p.peek(.slash) or p.peek(.lparen) or p.peek(.rparen) or p.peek(.lbracket) or p.peek(.rbracket) or p.peek(.colon) or p.peek(.semicolon) or p.peek(.comma) or p.peek(.hash) or p.peek(.error_token)) {
                 const found = p.src[p.cur_tok.start..p.cur_tok.end];
                 std.debug.print("error: unexpected token '{s}' ({s}) at top level\n", .{ std.mem.trimRight(u8, found, "\x00\x0d\x0a"), @tagName(p.cur_tok.kind) });
                 return error.UnexpectedToken;
@@ -509,7 +375,7 @@ pub const Parser = struct {
     }
 
     fn parseStateDef(p: *Parser) !ast.StateDefNode {
-        try p.expect(.keyword_state);
+        try p.expect(.kw_state);
 
         const stateName = p.identText();
         p.advance();
@@ -532,7 +398,7 @@ pub const Parser = struct {
         var ownership: ast.OwnershipHint = .default;
 
         // Parse annotations before opening brace
-        while (p.peek(.annotation)) {
+        while (p.peek(.at)) {
             const full_a = p.readAnnotationFull();
             if (std.mem.eql(u8, full_a, "hot")) { hot_weight = 0.9; }
             else if (std.mem.eql(u8, full_a, "cold")) { hot_weight = 0.1; }
@@ -566,31 +432,31 @@ pub const Parser = struct {
             p.consumeNewlines();
             if (p.peek(.rbrace)) break;
 
-            if (p.peek(.keyword_var)) {
+            if (p.peek(.kw_var)) {
                 const vars = try p.parseVarDecls();
                 try variables.appendSlice(vars.items);
                 vars.deinit();
-            } else if (p.peek(.keyword_on) or p.peek(.keyword_always)) {
+            } else if (p.peek(.kw_on) or p.peek(.kw_always)) {
                 try transitions.append(try p.parseTransition());
-            } else if (p.peek(.keyword_enter) or p.peek(.keyword_entry)) {
+            } else if (p.peek(.kw_enter) or p.peek(.kw_entry)) {
                 p.advance();
                 p.consumeNewlines();
                 state_enter_body = try p.parseBraceBody();
                 if (state_enter_body != null) p.advance();
-            } else if (p.peek(.keyword_exit)) {
+            } else if (p.peek(.kw_exit)) {
                 p.advance();
                 p.consumeNewlines();
                 state_exit_body = try p.parseBraceBody();
                 if (state_exit_body != null) p.advance();
-            } else if (p.peek(.annotation)) {
+            } else if (p.peek(.at)) {
                 _ = p.readAnnotationFull();
                 p.consumeNewlines();
-            } else if (p.peek(.keyword_state)) {
+            } else if (p.peek(.kw_state)) {
                 // Nested state - skip
                 const s = try p.parseStateDef();
                 s.variables.deinit();
                 s.transitions.deinit();
-            } else if (p.peek(.ident)) {
+            } else if (p.peek(.identifier)) {
                 const name = p.identText();
                 p.advance();
                 var var_type: []const u8 = "i64";
@@ -602,7 +468,7 @@ pub const Parser = struct {
                 var default: ?[]const u8 = null;
                 if (p.peek(.eq)) {
                     p.advance();
-                    if (p.peek(.number) or p.peek(.string)) {
+                    if (p.isNumeric() or p.peek(.string_literal)) {
                         default = p.src[p.cur_tok.start..p.cur_tok.end];
                         p.advance();
                     }
@@ -619,7 +485,7 @@ pub const Parser = struct {
                 while (p.peek(.comma)) {
                     p.advance();
                     p.consumeNewlines();
-                    if (!p.peek(.ident)) break;
+                    if (!p.peek(.identifier)) break;
                     const n = p.identText();
                     p.advance();
                     var t: []const u8 = "i64";
@@ -631,7 +497,7 @@ pub const Parser = struct {
                     var d: ?[]const u8 = null;
                     if (p.peek(.eq)) {
                         p.advance();
-                        if (p.peek(.number) or p.peek(.string)) {
+                        if (p.isNumeric() or p.peek(.string_literal)) {
                             d = p.src[p.cur_tok.start..p.cur_tok.end];
                             p.advance();
                         }
@@ -645,7 +511,7 @@ pub const Parser = struct {
                         .cache_align = null,
                     });
                 }
-            } else if (p.peek(.string) or p.peek(.number) or p.peek(.char_lit) or p.peek(.minus) or p.peek(.plus) or p.peek(.star) or p.peek(.slash) or p.peek(.semicolon) or p.peek(.invalid)) {
+            } else if (p.peek(.string_literal) or p.isNumeric() or p.peek(.char_literal) or p.peek(.minus) or p.peek(.plus) or p.peek(.star) or p.peek(.slash) or p.peek(.semicolon) or p.peek(.error_token)) {
                 const found = p.src[p.cur_tok.start..p.cur_tok.end];
                 std.debug.print("error: unexpected token '{s}' ({s}) in state body\n", .{ std.mem.trimRight(u8, found, "\x00\x0d\x0a"), @tagName(p.cur_tok.kind) });
                 return error.UnexpectedToken;
@@ -677,7 +543,7 @@ pub const Parser = struct {
 
     fn parseVarDecls(p: *Parser) !std.ArrayList(ast.VariableNode) {
         var vars = std.ArrayList(ast.VariableNode).init(p.allocator);
-        try p.expect(.keyword_var);
+        try p.expect(.kw_var);
 
         const is_fast_path = false;
 
@@ -690,7 +556,7 @@ pub const Parser = struct {
         var default: ?[]const u8 = null;
         if (p.peek(.eq)) {
             p.advance();
-            if (p.peek(.number) or p.peek(.string)) {
+            if (p.isNumeric() or p.peek(.string_literal)) {
                 default = p.src[p.cur_tok.start..p.cur_tok.end];
                 p.advance();
             }
@@ -731,7 +597,7 @@ pub const Parser = struct {
     }
 
     fn parseVarCacheAnnotation(p: *Parser) ?[]const u8 {
-        if (!p.peek(.annotation)) return null;
+        if (!p.peek(.at)) return null;
         const full_a = p.readAnnotationFull();
         if (std.mem.startsWith(u8, full_a, "Cache(")) {
             const pol = full_a["Cache(".len..];
@@ -746,7 +612,7 @@ pub const Parser = struct {
         var guard: ?[]const u8 = null;
         var hot_weight: ?f64 = null;
 
-        if (p.peek(.keyword_always)) {
+        if (p.peek(.kw_always)) {
             is_always = true;
             p.advance();
 
@@ -759,7 +625,7 @@ pub const Parser = struct {
                 if (p.peek(.rbracket)) p.advance();
             }
         } else {
-            try p.expect(.keyword_on);
+            try p.expect(.kw_on);
             event = p.identText();
             p.advance();
 
@@ -773,7 +639,7 @@ pub const Parser = struct {
             }
 
             // Annotations
-            while (p.peek(.annotation)) {
+            while (p.peek(.at)) {
                 const full_a = p.readAnnotationFull();
                 if (std.mem.eql(u8, full_a, "hot")) { hot_weight = 0.9; }
                 else if (std.mem.startsWith(u8, full_a, "hot(")) {
@@ -917,7 +783,7 @@ pub const Parser = struct {
     }
 
     fn parseEntry(p: *Parser) !ast.EntryDecl {
-        try p.expect(.keyword_entry);
+        try p.expect(.kw_entry);
 
         const is_unnamed = p.peek(.lbrace);
         const name = if (is_unnamed) "" else p.identText();
@@ -988,7 +854,7 @@ pub const Parser = struct {
             p.lexer.char = if (scan_pos - 1 < p.src.len) p.src[scan_pos - 1] else 0;
             p.cur_tok = p.lexer.next();
         } else {
-            while (p.cur_tok.kind != .eof and !p.peek(.keyword_state) and !p.peek(.keyword_kernel) and !p.peek(.keyword_entry) and !p.peek(.keyword_enum) and !p.peek(.keyword_parallel) and !p.peek(.keyword_export) and !p.peek(.keyword_forward)) {
+            while (p.cur_tok.kind != .eof and !p.peek(.kw_state) and !p.peek(.kw_kernel) and !p.peek(.kw_entry) and !p.peek(.kw_enum) and !p.peek(.kw_parallel) and !p.peek(.kw_export) and !p.peek(.kw_forward)) {
                 const start = p.lexer.tok_start;
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 const line = std.mem.trim(u8, p.src[start..p.lexer.pos], " \t");
@@ -1002,7 +868,7 @@ pub const Parser = struct {
     }
 
     fn parseForward(p: *Parser) !ast.ForwardDecl {
-        try p.expect(.keyword_forward);
+        try p.expect(.kw_forward);
         const name = p.identText();
         p.advance();
         p.consumeNewlines();
@@ -1015,10 +881,10 @@ pub const Parser = struct {
     }
 
     fn parseKernel(p: *Parser) !ast.KernelDecl {
-        try p.expect(.keyword_kernel);
+        try p.expect(.kw_kernel);
         var annotations = std.ArrayList(ast.Annotation).init(p.allocator);
         errdefer annotations.deinit();
-        while (p.peek(.annotation)) {
+        while (p.peek(.at)) {
             const full_a = p.readAnnotationFull();
             try annotations.append(.{ .name = full_a, .value = null });
         }
@@ -1050,6 +916,7 @@ pub const Parser = struct {
     }
 
     fn skipGpuKernelBlock(p: *Parser) !void {
+        p.advance(); // skip 'kernel' keyword
         p.advance(); // skip kernel name
         p.consumeNewlines();
         try p.expect(.lbrace);
@@ -1062,18 +929,18 @@ pub const Parser = struct {
         }
     }
 
-    pub fn parseGpuKernelBlock(p: *Parser) !gpu_ast.GpuKernel {
-        try p.expect(.keyword_kernel);
+    pub fn parseGpuKernelBlock(p: *Parser) !gpu_ir.GpuKernel {
+        try p.expect(.kw_kernel);
         const kname = try p.allocator.dupe(u8, p.identText());
         p.advance();
         p.consumeNewlines();
         try p.expect(.lbrace);
 
-        var resources = std.ArrayList(gpu_ast.ResourceDecl).init(p.allocator);
+        var resources = std.ArrayList(gpu_ir.ResourceDecl).init(p.allocator);
         errdefer resources.deinit();
-        var cbuffer_members = std.ArrayList(gpu_ast.CbufferMember).init(p.allocator);
+        var cbuffer_members = std.ArrayList(gpu_ir.CbufferMember).init(p.allocator);
         errdefer cbuffer_members.deinit();
-        var entries = std.ArrayList(gpu_ast.EntryDecl).init(p.allocator);
+        var entries = std.ArrayList(gpu_ir.EntryDecl).init(p.allocator);
         var globals_lines = std.ArrayList([]const u8).init(p.allocator);
         errdefer globals_lines.deinit();
 
@@ -1086,7 +953,7 @@ pub const Parser = struct {
             if (p.peek(.rbrace)) break;
 
             // @numthreads(x,y,z)
-            if (p.peek(.annotation)) {
+            if (p.peek(.at)) {
                 const ann_full = p.readAnnotationFull();
                 if (std.mem.startsWith(u8, ann_full, "numthreads(")) {
                     const nrest = ann_full["numthreads(".len..ann_full.len -| 1];
@@ -1099,7 +966,7 @@ pub const Parser = struct {
             }
 
             // entry main(x:u32,y:u32) { ... }
-            if (p.peek(.keyword_entry)) {
+            if (p.peek(.kw_entry)) {
                 p.advance();
                 const ename = try p.allocator.dupe(u8, p.identText());
                 p.advance();
@@ -1149,7 +1016,7 @@ pub const Parser = struct {
                 p.lexer.char = if (scan_pos + 1 < p.src.len) p.src[scan_pos + 1] else 0;
                 p.cur_tok = p.lexer.next();
 
-                try entries.append(gpu_ast.EntryDecl{
+                try entries.append(gpu_ir.EntryDecl{
                     .name = ename, .x_param = xp, .y_param = yp,
                     .body_lines = body,
                     .numthreads = .{ .x = nt_x, .y = nt_y, .z = nt_z },
@@ -1199,7 +1066,7 @@ pub const Parser = struct {
             const type_text = p.identText();
             p.advance();
 
-            if (p.peek(.annotation)) {
+            if (p.peek(.at)) {
                 const ann = p.readAnnotationFull();
                 if (std.mem.startsWith(u8, ann, "binding(")) {
                     const reg_str = ann["binding(".len .. ann.len -| 1];
@@ -1217,11 +1084,11 @@ pub const Parser = struct {
 
         try p.expect(.rbrace);
 
-        return gpu_ast.GpuKernel{ .name = kname, .resources = resources, .cbuffer_members = cbuffer_members, .entries = entries, .globals_lines = globals_lines };
+        return gpu_ir.GpuKernel{ .name = kname, .resources = resources, .cbuffer_members = cbuffer_members, .entries = entries, .globals_lines = globals_lines };
     }
 
     fn parseStructDef(p: *Parser) !ast.StructDef {
-        try p.expect(.keyword_struct);
+        try p.expect(.kw_struct);
         const name = p.identText(); p.advance();
         p.consumeNewlines();
         try p.expect(.lbrace);
@@ -1241,7 +1108,7 @@ pub const Parser = struct {
     }
 
     fn parseEnum(p: *Parser) !ast.EnumDecl {
-        try p.expect(.keyword_enum);
+        try p.expect(.kw_enum);
         const name = p.identText(); p.advance();
         try p.expect(.lbrace);
         var members = std.ArrayList([]const u8).init(p.allocator);
@@ -1256,7 +1123,7 @@ pub const Parser = struct {
     }
 
     fn parseParallel(p: *Parser) !ast.ParallelBlock {
-        try p.expect(.keyword_parallel);
+        try p.expect(.kw_parallel);
         const name = p.identText(); p.advance();
         try p.expect(.lbrace);
         var states = std.ArrayList(ast.StateDefNode).init(p.allocator);
@@ -1266,7 +1133,7 @@ pub const Parser = struct {
         }
         while (!p.peek(.rbrace)) {
             p.consumeNewlines();
-            if (p.peek(.keyword_state)) {
+            if (p.peek(.kw_state)) {
                 try states.append(try p.parseStateDef());
             } else break;
         }
@@ -1278,7 +1145,7 @@ pub const Parser = struct {
         var vars = std.ArrayList(ast.VariableNode).init(p.allocator);
         errdefer vars.deinit();
         p.consumeNewlines();
-        while (p.peek(.keyword_var)) {
+        while (p.peek(.kw_var)) {
             const v = try p.parseVarDecls();
             try vars.appendSlice(v.items);
             v.deinit();
@@ -1336,14 +1203,14 @@ pub const Parser = struct {
     }
 
     fn parseImport(p: *Parser) !ast.ImportNode {
-        try p.expect(.keyword_import);
+        try p.expect(.kw_import);
         const path = try p.parseStringLiteral();
         if (p.peek(.semicolon)) p.advance();
         return ast.ImportNode{ .path = try p.allocator.dupe(u8, path) };
     }
 
     fn parseString(p: *Parser) ?[]const u8 {
-        if (p.peek(.string)) {
+        if (p.peek(.string_literal)) {
             const s = p.src[p.cur_tok.start..p.cur_tok.end];
             p.advance();
             return s;
@@ -1352,9 +1219,9 @@ pub const Parser = struct {
     }
 };
 
-fn gpuParseFormatWidth(inner: []const u8) struct { format: gpu_ast.ScalarType, width: gpu_ast.VectorWidth } {
+fn gpuParseFormatWidth(inner: []const u8) struct { format: gpu_ir.ScalarType, width: gpu_ir.VectorWidth } {
     const format = gpuParseScalarType(inner);
-    var width: gpu_ast.VectorWidth = .one;
+    var width: gpu_ir.VectorWidth = .one;
     if (std.mem.endsWith(u8, inner, "2")) width = .two;
     if (std.mem.endsWith(u8, inner, "3")) width = .three;
     if (std.mem.endsWith(u8, inner, "4")) width = .four;
@@ -1362,7 +1229,7 @@ fn gpuParseFormatWidth(inner: []const u8) struct { format: gpu_ast.ScalarType, w
 }
 
 // GPU type helpers (file scope)
-fn gpuParseType(type_str: []const u8) !gpu_ast.GpuType {
+fn gpuParseType(type_str: []const u8) !gpu_ir.GpuType {
     if (std.mem.startsWith(u8, type_str, "Texture2D<")) {
         const inner = type_str["Texture2D<".len .. type_str.len - 1];
         const fw = gpuParseFormatWidth(inner);
@@ -1376,7 +1243,7 @@ fn gpuParseType(type_str: []const u8) !gpu_ast.GpuType {
     if (std.mem.eql(u8, type_str, "SamplerState")) {
         return .{ .kind = .{ .resource = .sampler_state } };
     }
-    return gpu_ast.GpuType{ .kind = .{ .resource = .texture2d } };
+    return gpu_ir.GpuType{ .kind = .{ .resource = .texture2d } };
 }
 
 fn gpuParseBindingReg(s: []const u8) u32 {
@@ -1387,16 +1254,16 @@ fn gpuParseBindingReg(s: []const u8) u32 {
     return 0;
 }
 
-fn gpuParseCbufferType(s: []const u8) struct { scalar: gpu_ast.ScalarType, width: gpu_ast.VectorWidth } {
+fn gpuParseCbufferType(s: []const u8) struct { scalar: gpu_ir.ScalarType, width: gpu_ir.VectorWidth } {
     const scalar = gpuParseScalarType(s);
-    var width: gpu_ast.VectorWidth = .one;
+    var width: gpu_ir.VectorWidth = .one;
     if (std.mem.endsWith(u8, s, "2")) width = .two;
     if (std.mem.endsWith(u8, s, "3")) width = .three;
     if (std.mem.endsWith(u8, s, "4")) width = .four;
     return .{ .scalar = scalar, .width = width };
 }
 
-fn gpuParseScalarType(s: []const u8) gpu_ast.ScalarType {
+fn gpuParseScalarType(s: []const u8) gpu_ir.ScalarType {
     if (std.mem.eql(u8, s, "float4") or std.mem.eql(u8, s, "float") or std.mem.eql(u8, s, "float3") or std.mem.eql(u8, s, "float2") or std.mem.eql(u8, s, "f32")) return .f32;
     if (std.mem.eql(u8, s, "int") or std.mem.eql(u8, s, "i32") or std.mem.eql(u8, s, "int2") or std.mem.eql(u8, s, "int3") or std.mem.eql(u8, s, "int4")) return .i32;
     if (std.mem.eql(u8, s, "uint") or std.mem.eql(u8, s, "u32") or std.mem.eql(u8, s, "uint2") or std.mem.eql(u8, s, "uint3") or std.mem.eql(u8, s, "uint4")) return .u32;

@@ -9,7 +9,7 @@ const bir_licm = @import("scalar/licm.zig");
 const bir_unroll = @import("scalar/unroll.zig");
 const bir_loop_rotate = @import("scalar/loop_rotate.zig");
 const bir_ivopt = @import("scalar/ivopt.zig");
-const bir_verify = @import("../verify/verify.zig");
+const bir_verify = @import("../verify/verifier.zig");
 const bir_mem2reg = @import("ssa/mem2reg.zig");
 const bir_cfgsimplify = @import("cleanup/cfgsimplify.zig");
 const bir_sccp = @import("scalar/sccp.zig");
@@ -1196,15 +1196,14 @@ pub const VerifyPass = bir.Pass{
 
 fn runVerify(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
     const module = ctx.module;
-    const allocator = ctx.allocator;
-    var result = try bir_verify.verifyModule(module, allocator);
+    var result = bir_verify.verify(module, .{});
     defer result.deinit();
-    if (result.errors.len > 0) {
+    if (!result.isValid()) {
         if (@import("builtin").mode == .Debug) {
-            for (result.errors) |e| {
-                std.debug.print("VERIFY: [{s}] func={d} block={?} inst={?} val={?}: {s}\n", .{
-                    @tagName(e.code), e.func_id, e.block, e.inst_idx, e.val, e.msg,
-                });
+            for (result.diagnostics.list.items) |d| {
+                const code_str = @tagName(d.code);
+                const msg = if (d.message) |m| m else "";
+                std.debug.print("VERIFY: [{s}] {s}\n", .{ code_str, msg });
             }
         }
         return error.VerificationFailed;

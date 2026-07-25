@@ -2,8 +2,6 @@ const operand = @import("operand.zig");
 const MOperand = operand.MOperand;
 const CondCode = operand.CondCode;
 
-pub const MemSize = @import("../../machine/core/instruction.zig").MemSize;
-
 pub const MovInst = struct { dst: MOperand, src: MOperand };
 pub const AddInst = struct { dst: MOperand, src: MOperand };
 pub const SubInst = struct { dst: MOperand, src: MOperand };
@@ -22,8 +20,8 @@ pub const TestFlagsInst = struct { a: MOperand, b: MOperand };
 pub const SetCCInst = struct { dst: MOperand, cc: CondCode };
 pub const CmpInst = struct { cc: CondCode, a: MOperand, b: MOperand };
 pub const CmpFlagsInst = struct { a: MOperand, b: MOperand };
-pub const JmpInst = struct { target: usize };
-pub const JccInst = struct { cc: CondCode, target: usize };
+pub const JmpInst = struct { target: u32 };
+pub const JccInst = struct { cc: CondCode, target: u32 };
 pub const CallInst = struct {
     name: []const u8,
     args: [14]MOperand,
@@ -32,6 +30,8 @@ pub const CallInst = struct {
     is_void: bool = false,
 };
 pub const AllocaInst = struct { size: u32, dst: MOperand };
+pub const MemSize = enum { u8, u16, u32, u64, f32, f64, xmm128 };
+
 pub const LoadInst = struct { dst: MOperand, ptr: MOperand, size: MemSize };
 pub const StoreInst = struct { ptr: MOperand, src: MOperand, size: MemSize };
 pub const LeaInst = struct {
@@ -48,7 +48,7 @@ pub const RetInst = union(enum) {
 
 pub const PhiIncoming = struct {
     src: MOperand,
-    pred_block: usize,
+    pred_block: u32,
 };
 
 pub const PhiInst = struct {
@@ -103,7 +103,7 @@ pub const MInst = union(enum) {
 pub const MInstUtils = struct {
     pub fn hasDst(inst: MInst) bool {
         return switch (inst) {
-            .mov, .add, .sub, .imul, .idiv,
+            .mov, .add, .sub, .imul,
             .@"and", .@"or", .xor,
             .shl, .shr, .sar,
             .not_op, .neg_op,
@@ -116,6 +116,7 @@ pub const MInstUtils = struct {
             .select,
             .setcc,
             => true,
+            .idiv => true,
             .call => |c| !c.is_void,
             else => false,
         };

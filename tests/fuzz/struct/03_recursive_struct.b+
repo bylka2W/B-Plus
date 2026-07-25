@@ -1,3 +1,0 @@
-struct Node { val: int
-next: Node }
-state Main { entry { var n: Node } }

@@ -1,10 +1,10 @@
 ﻿const std = @import("std");
 const Allocator = std.mem.Allocator;
-const gpu_ast = @import("../gpu/frontend/gpu_ast.zig");
+const gpu_ir = @import("gpu_ir.zig");
 const gpu_ir = @import("gpu_ir.zig");
 
 /// Generate HLSL directly from GPU AST (legacy path)
-pub fn generateHlsl(allocator: Allocator, module: *const gpu_ast.GpuModule) ![]const u8 {
+pub fn generateHlsl(allocator: Allocator, module: *const gpu_ir.GpuModule) ![]const u8 {
     var buf = std.ArrayList(u8).init(allocator);
     const w = buf.writer();
 
@@ -659,7 +659,7 @@ fn compileHlslFromIr(allocator: Allocator, ir: *const gpu_ir.IrModule, options: 
     };
 }
 
-fn emitResourceDecl(w: anytype, res: *const gpu_ast.ResourceDecl) !void {
+fn emitResourceDecl(w: anytype, res: *const gpu_ir.ResourceDecl) !void {
     switch (res.gpu_type.kind) {
         .resource_typed => |rt| {
             const fmt = switch (rt.format) { .f32 => "float", .i32 => "int", .u32 => "uint", .f16 => "half", .boolean => "bool" };
@@ -686,7 +686,7 @@ fn emitResourceDecl(w: anytype, res: *const gpu_ast.ResourceDecl) !void {
     }
 }
 
-fn emitCbufferDecl(w: anytype, members: []const gpu_ast.CbufferMember) !void {
+fn emitCbufferDecl(w: anytype, members: []const gpu_ir.CbufferMember) !void {
     try w.print("cbuffer TSS_Constants : register(b{}) {{\n", .{ members[0].slot.reg });
     for (members) |mem| {
         const type_str = switch (mem.scalar_type) {

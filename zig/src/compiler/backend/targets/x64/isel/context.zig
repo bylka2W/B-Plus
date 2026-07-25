@@ -11,7 +11,7 @@ pub const OffsetMap = std.AutoHashMap(u32, i32);
 
 pub const BlockFixup = struct {
     disp_pos: usize,
-    target: usize,
+    target: u32,
 };
 
 pub const CallFixup = struct {

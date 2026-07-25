@@ -1,9 +1,0 @@
-fn is_even(n: int) {
-  if (n == 0) { return 1 }
-  return is_odd(n - 1)
-}
-fn is_odd(n: int) {
-  if (n == 0) { return 0 }
-  return is_even(n - 1)
-}
-state Main { entry { is_even(100) } }

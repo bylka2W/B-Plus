@@ -582,9 +582,9 @@ fn compileBlockStmts(ctx: *CompilerContext, mfunc: *mir.MFunction, block_idx: *u
             try block.instrs.append(.{ .ret = .void_ret });
             has_explicit_ret.* = true;
         } else if (std.mem.eql(u8, bline, "break")) {
-            try block.instrs.append(.{ .jmp = .{ .target = break_target orelse return error.BreakOutsideLoop } });
+            try block.instrs.append(.{ .jmp = .{ .target = @intCast(break_target orelse return error.BreakOutsideLoop) } });
         } else if (std.mem.eql(u8, bline, "continue")) {
-            try block.instrs.append(.{ .jmp = .{ .target = continue_target orelse return error.ContinueOutsideLoop } });
+            try block.instrs.append(.{ .jmp = .{ .target = @intCast(continue_target orelse return error.ContinueOutsideLoop) } });
         } else if (std.mem.startsWith(u8, bline, "var ")) {
             if (std.mem.indexOf(u8, bline, " {") != null and std.mem.indexOfScalar(u8, bline, '}') == null) {
                 var joined = std.ArrayList(u8).init(ctx.allocator);
@@ -697,7 +697,7 @@ fn compileIf(ctx: *CompilerContext, mfunc: *mir.MFunction, var_stack: *VarStack,
 
     {
         const cc = try compileCond(ctx, &mfunc.blocks.items[current_idx], var_stack, next_vreg, cond_str);
-        try mfunc.blocks.items[current_idx].instrs.append(.{ .jcc = .{ .cc = cc, .target = then_idx } });
+        try mfunc.blocks.items[current_idx].instrs.append(.{ .jcc = .{ .cc = cc, .target = @intCast(then_idx) } });
     }
 
     var brace_depth: usize = 1;
@@ -761,7 +761,7 @@ fn compileIf(ctx: *CompilerContext, mfunc: *mir.MFunction, var_stack: *VarStack,
         .instrs = std.ArrayList(mir.MInst).init(ctx.allocator),
     });
 
-    try mfunc.blocks.items[current_idx].instrs.append(.{ .jmp = .{ .target = else_idx orelse merge_idx } });
+    try mfunc.blocks.items[current_idx].instrs.append(.{ .jmp = .{ .target = @intCast(else_idx orelse merge_idx) } });
 
     {
         var body_block_idx = then_idx;
@@ -771,7 +771,7 @@ fn compileIf(ctx: *CompilerContext, mfunc: *mir.MFunction, var_stack: *VarStack,
             try compileBlockStmts(ctx, mfunc, &body_block_idx, var_stack, next_vreg, body, body_line_indices, then_start, then_end, break_target, continue_target, &dummy_ret, &dummy_last);
         }
     }
-    try mfunc.blocks.items[then_idx].instrs.append(.{ .jmp = .{ .target = merge_idx } });
+    try mfunc.blocks.items[then_idx].instrs.append(.{ .jmp = .{ .target = @intCast(merge_idx) } });
 
     if (has_else) {
         {
@@ -780,7 +780,7 @@ fn compileIf(ctx: *CompilerContext, mfunc: *mir.MFunction, var_stack: *VarStack,
             var dummy_last: ?u32 = null;
             try compileBlockStmts(ctx, mfunc, &body_block_idx, var_stack, next_vreg, body, body_line_indices, else_start, else_end, break_target, continue_target, &dummy_ret, &dummy_last);
         }
-        try mfunc.blocks.items[else_idx.?].instrs.append(.{ .jmp = .{ .target = merge_idx } });
+        try mfunc.blocks.items[else_idx.?].instrs.append(.{ .jmp = .{ .target = @intCast(merge_idx) } });
     }
 
     return close_idx;
@@ -847,12 +847,12 @@ fn compileWhile(ctx: *CompilerContext, mfunc: *mir.MFunction, var_stack: *VarSta
         .instrs = std.ArrayList(mir.MInst).init(ctx.allocator),
     });
 
-    try mfunc.blocks.items[before_header_idx].instrs.append(.{ .jmp = .{ .target = header_idx } });
+    try mfunc.blocks.items[before_header_idx].instrs.append(.{ .jmp = .{ .target = @intCast(header_idx) } });
 
     {
         const cc = try compileCond(ctx, &mfunc.blocks.items[header_idx], var_stack, next_vreg, cond_str);
-        try mfunc.blocks.items[header_idx].instrs.append(.{ .jcc = .{ .cc = cc, .target = body_idx } });
-        try mfunc.blocks.items[header_idx].instrs.append(.{ .jmp = .{ .target = exit_idx } });
+        try mfunc.blocks.items[header_idx].instrs.append(.{ .jcc = .{ .cc = cc, .target = @intCast(body_idx) } });
+        try mfunc.blocks.items[header_idx].instrs.append(.{ .jmp = .{ .target = @intCast(exit_idx) } });
     }
 
     {
@@ -860,7 +860,7 @@ fn compileWhile(ctx: *CompilerContext, mfunc: *mir.MFunction, var_stack: *VarSta
         var dummy_ret = false;
         var dummy_last: ?u32 = null;
         try compileBlockStmts(ctx, mfunc, &body_block_idx, var_stack, next_vreg, body, body_line_indices, body_start, body_end, exit_idx, header_idx, &dummy_ret, &dummy_last);
-        try mfunc.blocks.items[body_block_idx].instrs.append(.{ .jmp = .{ .target = header_idx } });
+        try mfunc.blocks.items[body_block_idx].instrs.append(.{ .jmp = .{ .target = @intCast(header_idx) } });
     }
 
     return .{ .close_idx = i, .exit_idx = exit_idx };
@@ -931,7 +931,7 @@ fn compileFor(ctx: *CompilerContext, mfunc: *mir.MFunction, var_stack: *VarStack
     try first_block.instrs.append(.{ .store = .{ .ptr = .{ .vreg = start_vreg }, .src = .{ .vreg = start_val }, .size = .u64 } });
     try var_stack.put(var_name, start_vreg, Type{ .kind = .i64 });
 
-    try first_block.instrs.append(.{ .jmp = .{ .target = header_idx } });
+    try first_block.instrs.append(.{ .jmp = .{ .target = @intCast(header_idx) } });
 
     {
         const header_block = &mfunc.blocks.items[header_idx];
@@ -940,8 +940,8 @@ fn compileFor(ctx: *CompilerContext, mfunc: *mir.MFunction, var_stack: *VarStack
         try header_block.instrs.append(.{ .load = .{ .dst = .{ .vreg = ivreg }, .ptr = .{ .vreg = start_vreg }, .size = .u64 } });
         const end_vreg = try compileExpr(ctx, header_block, var_stack, next_vreg, end_str);
         try header_block.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = ivreg }, .b = .{ .vreg = end_vreg } } });
-        try header_block.instrs.append(.{ .jcc = .{ .cc = .lt, .target = body_idx } });
-        try header_block.instrs.append(.{ .jmp = .{ .target = exit_idx } });
+        try header_block.instrs.append(.{ .jcc = .{ .cc = .lt, .target = @intCast(body_idx) } });
+        try header_block.instrs.append(.{ .jmp = .{ .target = @intCast(exit_idx) } });
     }
 
     {
@@ -959,7 +959,7 @@ fn compileFor(ctx: *CompilerContext, mfunc: *mir.MFunction, var_stack: *VarStack
         try mfunc.blocks.items[body_block_idx].instrs.append(.{ .add = .{ .dst = .{ .vreg = ivreg }, .src = .{ .vreg = one_vreg } } });
         try mfunc.blocks.items[body_block_idx].instrs.append(.{ .store = .{ .ptr = .{ .vreg = start_vreg }, .src = .{ .vreg = ivreg }, .size = .u64 } });
 
-        try mfunc.blocks.items[body_block_idx].instrs.append(.{ .jmp = .{ .target = header_idx } });
+        try mfunc.blocks.items[body_block_idx].instrs.append(.{ .jmp = .{ .target = @intCast(header_idx) } });
     }
 
     return .{ .close_idx = i, .exit_idx = exit_idx };

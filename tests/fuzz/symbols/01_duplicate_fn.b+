@@ -1,3 +1,0 @@
-fn foo() { print(1) }
-fn foo() { print(2) }
-state Main { entry { foo() } }

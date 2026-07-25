@@ -1,5 +1,0 @@
-state Main {
-  entry {
-    print(42)
-  }
-}

@@ -1,4 +1,0 @@
-fn build(n: int) {
-  if (n > 0) { build(n - 1) }
-}
-state Main { entry { build(1000) } }

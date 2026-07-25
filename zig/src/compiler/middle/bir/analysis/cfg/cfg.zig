@@ -33,16 +33,22 @@ pub fn buildCFG(allocator: Allocator, func: *bir.Function) !CFG {
         switch (terminator.op) {
             .br => {
                 const target = terminator.data.block_target;
-                try block.succs.append(target);
-                try func.blocks.items[target].preds.append(bid);
+                if (target < func.blocks.items.len) {
+                    try block.succs.append(target);
+                    try func.blocks.items[target].preds.append(bid);
+                }
             },
             .cond_br => {
                 const then_b = terminator.data.cond_branch.then_block;
                 const else_b = terminator.data.cond_branch.else_block;
-                try block.succs.append(then_b);
-                try block.succs.append(else_b);
-                try func.blocks.items[then_b].preds.append(bid);
-                try func.blocks.items[else_b].preds.append(bid);
+                if (then_b < func.blocks.items.len) {
+                    try block.succs.append(then_b);
+                    try func.blocks.items[then_b].preds.append(bid);
+                }
+                if (else_b < func.blocks.items.len) {
+                    try block.succs.append(else_b);
+                    try func.blocks.items[else_b].preds.append(bid);
+                }
             },
             .ret, .unreachable_op => {},
             else => {},

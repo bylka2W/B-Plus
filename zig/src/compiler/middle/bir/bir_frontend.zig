@@ -2,8 +2,6 @@
 const Allocator = std.mem.Allocator;
 const bir = @import("bir.zig");
 const gpu_ir = @import("../../gpu/gpu_ir.zig");
-const gpu_ast = @import("../../gpu/frontend/gpu_ast.zig");
-const gpu_body_parser = @import("../../gpu/frontend/gpu_body_parser.zig");
 const types_mod = @import("bir_types.zig");
 const TypeId = types_mod.TypeId;
 
@@ -13,7 +11,7 @@ const BlockId = bir.BlockId;
 const INVALID_ID = bir.INVALID_ID;
 const NO_VALUE = bir.NO_VALUE;
 
-pub fn lowerToBir(allocator: Allocator, module: *const gpu_ast.GpuModule) !bir.Module {
+pub fn lowerToBir(allocator: Allocator, module: *const gpu_ir.GpuModule) !bir.Module {
     var bir_mod = bir.Module.init(allocator);
     errdefer bir_mod.deinit();
 
@@ -66,27 +64,8 @@ pub fn lowerToBir(allocator: Allocator, module: *const gpu_ast.GpuModule) !bir.M
                 }
             }
 
-            const ir_func = try gpu_body_parser.parseBody(
-                allocator,
-                filtered_body.items,
-                ir_resources.items,
-                ir_cbuffer.items,
-                func_types,
-            );
-            errdefer cleanupIrFunc(allocator, &ir_func);
-
-            const void_ty = type_map.get(.void) orelse return error.TypeNotRegistered;
-            const func_id = try bir_mod.addFunction(entry.name, void_ty, .compute);
-
-            bir_mod.getFunctionMut(func_id).numthreads = .{
-                .x = entry.numthreads.x,
-                .y = entry.numthreads.y,
-                .z = entry.numthreads.z,
-            };
-
-            try convertIrFunction(allocator, &bir_mod, func_id, &ir_func, &type_map);
-
-            cleanupIrFunc(allocator, &ir_func);
+            // TODO: Reimplement body parsing without gpu_body_parser (deleted in GPU cleanup)
+            return error.BodyParserNotYetPorted;
         }
     }
 
@@ -411,7 +390,7 @@ fn remapValues(allocator: Allocator, old_operands: []const gpu_ir.ValueId, value
     return new_ops;
 }
 
-fn gpuResourceToIr(res: *const gpu_ast.ResourceDecl) struct { gpu_ir.TypeRef, u8 } {
+fn gpuResourceToIr(res: *const gpu_ir.ResourceDecl) struct { gpu_ir.TypeRef, u8 } {
     return switch (res.gpu_type.kind) {
         .resource_typed => |rt| switch (rt.kind) {
             .texture2d => .{ .texture2d, 't' },
@@ -426,7 +405,7 @@ fn gpuResourceToIr(res: *const gpu_ast.ResourceDecl) struct { gpu_ir.TypeRef, u8
     };
 }
 
-fn gpuResourceFormatToIr(res: *const gpu_ast.ResourceDecl) gpu_ir.TypeRef {
+fn gpuResourceFormatToIr(res: *const gpu_ir.ResourceDecl) gpu_ir.TypeRef {
     return switch (res.gpu_type.kind) {
         .resource_typed => |rt| gpu_ir.scalarTypeToTypeRefWithWidth(rt.format, rt.width),
         else => .f32,

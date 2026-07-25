@@ -1,3 +1,0 @@
-var x = 1
-fn foo(x: int) { print(x) }
-state Main { entry { foo(2) } }
