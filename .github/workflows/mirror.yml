@@ -12,6 +12,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Push to GitLab
+        env:
+          GITLAB_USER: ${{ secrets.GITLAB_USER }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          git remote add gitlab https://${GITLAB_USER}:${GITLAB_TOKEN}@gitlab.com/bylka2W/b-plus.git 2>/dev/null || \
+            git remote set-url gitlab https://${GITLAB_USER}:${GITLAB_TOKEN}@gitlab.com/bylka2W/b-plus.git
+          git push gitlab main --force
+          git push gitlab --tags
+
       - name: Push to GitVerse
         env:
           GITVERSE_USER: ${{ secrets.GITVERSE_USER }}
