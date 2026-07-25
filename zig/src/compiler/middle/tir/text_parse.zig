@@ -1,73 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ast = @import("../../../frontend/ast.zig");
-const hir = @import("../node.zig");
-const types = @import("../types.zig");
-const TypeId = types.TypeId;
-
-pub const SemaContext = struct {
-    result: ?*const @import("../../../frontend/sema/sema.zig").SemaResult,
-
-    pub fn empty() SemaContext {
-        return .{ .result = null };
-    }
-
-    pub fn fromResult(result: *const @import("../../../frontend/sema/sema.zig").SemaResult) SemaContext {
-        return .{ .result = result };
-    }
-
-    pub fn resolveType(self: SemaContext, name: []const u8) TypeId {
-        if (self.result) |sr| {
-            for (sr.typed_vars.items) |v| {
-                if (v.type_name) |tn| {
-                    if (std.mem.eql(u8, tn, name)) return TypeId.fromName(name);
-                }
-            }
-        }
-        return TypeId.fromName(name);
-    }
-
-    pub fn lookupVarType(self: SemaContext, name: []const u8) ?TypeId {
-        if (self.result) |sr| {
-            return sr.lookupVarType(name);
-        }
-        return null;
-    }
-};
-
-pub fn lowerFunction(allocator: Allocator, func: ast.EntryDecl, sema_ctx: SemaContext) !hir.HirFunction {
-    var params = std.ArrayList(types.FuncParam).init(allocator);
-    for (func.params.items) |p| {
-        const resolved_ty = sema_ctx.resolveType(p.type_name);
-        try params.append(.{
-            .name = try allocator.dupe(u8, p.name),
-            .ty = if (resolved_ty != .invalid) resolved_ty else TypeId.fromName(p.type_name),
-        });
-    }
-
-    const ret_type = if (func.return_type) |rt| TypeId.fromName(rt) else .void;
-
-    var body = hir.HirBlock{
-        .label = try allocator.dupe(u8, "entry"),
-        .stmts = std.ArrayList(hir.Stmt).init(allocator),
-    };
-
-    for (func.body_lines.items) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r\n");
-        if (trimmed.len == 0) continue;
-        if (parseStmt(allocator, trimmed)) |stmt| {
-            try body.stmts.append(stmt);
-        }
-    }
-
-    return .{
-        .name = try allocator.dupe(u8, func.name),
-        .params = params,
-        .body = body,
-        .return_type = ret_type,
-        .linkage = if (func.is_export) .@"export" else .internal,
-    };
-}
+const hir = @import("hir_view.zig");
 
 pub fn parseStmt(allocator: Allocator, line: []const u8) ?hir.Stmt {
     if (std.mem.startsWith(u8, line, "return")) {
@@ -82,9 +15,9 @@ pub fn parseStmt(allocator: Allocator, line: []const u8) ?hir.Stmt {
         const name = extractName(rest);
         if (name.len == 0) return null;
 
-        var var_type: TypeId = .i64_type;
+        var var_type: hir.TypeId = .i64_type;
         if (extractVarType(rest)) |vt| {
-            var_type = TypeId.fromName(vt);
+            var_type = hir.TypeId.fromName(vt);
         }
 
         const init = if (std.mem.indexOfScalar(u8, rest, '=')) |eq|
@@ -369,26 +302,4 @@ pub fn findParenEnd(line: []const u8, open: usize) ?usize {
         i += 1;
     }
     return null;
-}
-
-pub fn parseBodyForState(allocator: Allocator, body: []const u8) !hir.HirBlock {
-    var block = hir.HirBlock{
-        .label = try allocator.dupe(u8, "enter"),
-        .stmts = std.ArrayList(hir.Stmt).init(allocator),
-    };
-    var pos: usize = 0;
-    while (pos < body.len) {
-        while (pos < body.len and (body[pos] == ' ' or body[pos] == '\t' or body[pos] == '\n' or body[pos] == '\r')) : (pos += 1) {}
-        if (pos >= body.len) break;
-        var end = pos;
-        while (end < body.len and body[end] != ';') : (end += 1) {}
-        const stmt_str = std.mem.trim(u8, body[pos..end], " \t\r\n");
-        if (stmt_str.len > 0) {
-            if (parseStmt(allocator, stmt_str)) |stmt| {
-                try block.stmts.append(stmt);
-            }
-        }
-        pos = end + 1;
-    }
-    return block;
 }

@@ -22,6 +22,8 @@ pub const HirItem = struct {
         const_item: ConstItem,
         type_alias: TypeAliasItem,
         extern_fn: ExternFnItem,
+        state_item: StateItem,
+        kernel_item: KernelItem,
         missing: MissingItem,
 
         pub const FnItem = struct {
@@ -81,6 +83,80 @@ pub const HirItem = struct {
             params: []const Param,
             return_type: TypeId,
             visibility: Visibility,
+        };
+
+        pub const HirAttr = struct {
+            name: SymbolId,
+            value: ?ExprId,
+        };
+
+        pub const StateItem = struct {
+            name: SymbolId,
+            def_id: DefId,
+            attrs: []const HirAttr,
+            fields: []const StateVar,
+            entry: ?BodyId,
+            exit: ?BodyId,
+            transitions: []const Transition,
+            parent: ?DefId,
+            visibility: Visibility,
+        };
+
+        pub const StateVar = struct {
+            name: SymbolId,
+            ty: TypeId,
+            default: ?ExprId,
+        };
+
+        pub const Transition = struct {
+            event: ?SymbolId,
+            target: DefId,
+            guard: ?ExprId,
+            priority: u32,
+            attrs: []const HirAttr,
+        };
+
+        pub const KernelItem = struct {
+            name: SymbolId,
+            def_id: DefId,
+            attrs: []const HirAttr,
+            entries: []const KernelEntry,
+            bindings: []const KernelBinding,
+            dispatch: DispatchSize,
+            visibility: Visibility,
+        };
+
+        pub const DispatchSize = struct {
+            x: u32,
+            y: u32,
+            z: u32,
+        };
+
+        pub const KernelEntry = struct {
+            name: SymbolId,
+            params: []const Param,
+            body: BodyId,
+            return_type: TypeId,
+            context_vars: []const KernelContextVar,
+        };
+
+        pub const KernelBinding = struct {
+            name: SymbolId,
+            slot: u32,
+            binding_type: KernelBindingType,
+        };
+
+        pub const KernelBindingType = enum {
+            texture2d,
+            rw_texture2d,
+            sampler,
+            structured_buffer,
+            constant_buffer,
+        };
+
+        pub const KernelContextVar = struct {
+            name: SymbolId,
+            ty: TypeId,
         };
 
         pub const MissingItem = struct {};

@@ -44,6 +44,24 @@ fn verifyItem(arena: *const HirArena, item: arena_mod.HirItem) VerifyError!void 
                 }
             }
         },
+        .state_item => |st| {
+            if (st.entry) |body_id| {
+                const body = arena.getBody(body_id) orelse return error.InvalidBodyId;
+                try verifyBody(arena, body);
+            }
+            if (st.exit) |body_id| {
+                const body = arena.getBody(body_id) orelse return error.InvalidBodyId;
+                try verifyBody(arena, body);
+            }
+        },
+        .kernel_item => |k| {
+            for (k.entries) |e| {
+                if (e.body.isValid()) {
+                    const body = arena.getBody(e.body) orelse return error.InvalidBodyId;
+                    try verifyBody(arena, body);
+                }
+            }
+        },
         else => {},
     }
 }

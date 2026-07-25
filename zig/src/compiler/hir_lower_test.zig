@@ -1,6 +1,7 @@
 const std = @import("std");
 const parser_mod = @import("frontend/parser/parser.zig");
-const lower = @import("middle/hir/lower.zig");
+const hir_view = @import("middle/tir/hir_view.zig");
+const hir_arena_mod = @import("frontend/hir/arena.zig");
 
 test "HIR lowering: PLAN state → HirState" {
     const src =
@@ -16,7 +17,9 @@ test "HIR lowering: PLAN state → HirState" {
         prog.deinit();
     }
 
-    var module = try lower.lowerProgram(std.testing.allocator, &program, lower.SemaContext.empty());
+    var arena = hir_arena_mod.HirArena.init(std.testing.allocator);
+    defer arena.deinit();
+    var module = try hir_view.buildModule(std.testing.allocator, &arena, &program, hir_view.SemaContext.empty());
     defer module.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), module.states.items.len);
@@ -38,7 +41,9 @@ test "HIR lowering: METAL kernel → HirKernel" {
         prog.deinit();
     }
 
-    var module = try lower.lowerProgram(std.testing.allocator, &program, lower.SemaContext.empty());
+    var arena = hir_arena_mod.HirArena.init(std.testing.allocator);
+    defer arena.deinit();
+    var module = try hir_view.buildModule(std.testing.allocator, &arena, &program, hir_view.SemaContext.empty());
     defer module.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), module.kernels.items.len);
@@ -59,7 +64,9 @@ test "HIR lowering: mixed PLAN + METAL in one file" {
         prog.deinit();
     }
 
-    var module = try lower.lowerProgram(std.testing.allocator, &program, lower.SemaContext.empty());
+    var arena = hir_arena_mod.HirArena.init(std.testing.allocator);
+    defer arena.deinit();
+    var module = try hir_view.buildModule(std.testing.allocator, &arena, &program, hir_view.SemaContext.empty());
     defer module.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), module.states.items.len);
@@ -80,7 +87,9 @@ test "HIR lowering: struct + function preserved" {
         prog.deinit();
     }
 
-    var module = try lower.lowerProgram(std.testing.allocator, &program, lower.SemaContext.empty());
+    var arena = hir_arena_mod.HirArena.init(std.testing.allocator);
+    defer arena.deinit();
+    var module = try hir_view.buildModule(std.testing.allocator, &arena, &program, hir_view.SemaContext.empty());
     defer module.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), module.functions.items.len);

@@ -29,6 +29,7 @@
 - SSA verification: тесты на use-before-def и нарушение доминантности
 - Исправлены E2E тесты верификатора: правильный порядок инструкций (терминатор последний), phi incoming через alloc.dupe
 - Исправлен buildCFG: проверка границ перед доступом к блокам по индексу
+- **HIR Unification**: удалён `middle/hir/` (дублирующий tree-based HIR). `StateItem`, `KernelItem`, `HirAttr`, `DispatchSize` перенесены в единый `frontend/hir/item.zig`. Pipeline: `AST → Unified HIR → TIR → BIR → MIR → x64`
 
 ---
 
@@ -981,6 +982,9 @@ No assemblers, linkers, or LLVM — the entire code generator and optimizer are 
 - **BIR Verifier overhaul** — modular verification system with 7 specialized verifier modules
   (CFG correctness, SSA form, phi nodes, function invariants, type checking, memory safety,
   instruction validity).
+- **HIR Unification**: removed `middle/hir/` (duplicate tree-based HIR). `StateItem`,
+  `KernelItem`, `HirAttr`, `DispatchSize` moved into unified `frontend/hir/item.zig`.
+  Pipeline: `AST → Unified HIR → TIR → BIR → MIR → x64`
 - **Structured diagnostics** — error codes, per-instruction context, structured error lists
   for tooling integration.
 - **CFG bounds checking** — out-of-range branch targets are now caught and reported instead

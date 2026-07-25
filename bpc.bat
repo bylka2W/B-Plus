@@ -6,4 +6,5 @@ if "%~1"=="" (
     exit /b 1
 )
 "zig\zig-out\bin\bpc.exe" run %*
-if errorlevel 1 pause
+echo.
+pause

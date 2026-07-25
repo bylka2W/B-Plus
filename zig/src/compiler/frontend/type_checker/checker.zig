@@ -80,7 +80,7 @@ pub const TypeChecker = struct {
     pub fn checkItem(self: *TypeChecker, item: HirItem) TypeCheckError!void {
         switch (item.kind) {
             .fn_decl => |f| try self.checkFnItem(f),
-            .struct_item, .enum_item, .trait_item, .impl_item, .const_item, .type_alias, .extern_fn, .missing => {},
+            .state_item, .kernel_item, .struct_item, .enum_item, .trait_item, .impl_item, .const_item, .type_alias, .extern_fn, .missing => {},
         }
     }
 

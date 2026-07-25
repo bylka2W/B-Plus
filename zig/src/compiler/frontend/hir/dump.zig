@@ -49,6 +49,31 @@ fn dumpItem(_: *const HirArena, item: arena_mod.HirItem, writer: anytype, indent
         .extern_fn => |ef| {
             try writer.print("{s}extern fn {d}()\n", .{ pad[0..indent * 2], ef.name.index });
         },
+        .state_item => |st| {
+            try writer.print("{s}state {d}\n", .{ pad[0..indent * 2], st.name.index });
+            for (st.fields) |v| {
+                try writer.print("{s}  field {d}: type({d})\n", .{ pad[0..indent * 2], v.name.index, v.ty.index });
+            }
+            if (st.entry) |b| {
+                try writer.print("{s}  entry: BodyId({d})\n", .{ pad[0..indent * 2], b.index });
+            }
+            if (st.exit) |b| {
+                try writer.print("{s}  exit: BodyId({d})\n", .{ pad[0..indent * 2], b.index });
+            }
+            for (st.transitions) |tr| {
+                try writer.print("{s}  -> DefId({d})\n", .{ pad[0..indent * 2], tr.target.index });
+            }
+        },
+        .kernel_item => |k| {
+            try writer.print("{s}kernel {d}\n", .{ pad[0..indent * 2], k.name.index });
+            try writer.print("{s}  dispatch ({d},{d},{d})\n", .{ pad[0..indent * 2], k.dispatch.x, k.dispatch.y, k.dispatch.z });
+            for (k.entries) |e| {
+                try writer.print("{s}  entry {d}()\n", .{ pad[0..indent * 2], e.name.index });
+            }
+            for (k.bindings) |b| {
+                try writer.print("{s}  binding {d} slot={d}\n", .{ pad[0..indent * 2], b.name.index, b.slot });
+            }
+        },
         .missing => {
             try writer.print("{s}<<missing>>\n", .{pad[0..indent * 2]});
         },

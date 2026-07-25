@@ -1,5 +1,6 @@
 pub const types = @import("types.zig");
 pub const lower = @import("lower.zig");
+pub const hir_view = @import("hir_view.zig");
 
 pub const TypeId = types.TypeId;
 pub const ValueId = types.ValueId;
@@ -15,3 +16,4 @@ pub const Module = types.Module;
 pub const Instruction = types.Instruction;
 
 pub const lowerModule = lower.lowerModule;
+pub const buildModule = hir_view.buildModule;

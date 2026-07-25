@@ -134,6 +134,8 @@ pub const HirToBir = struct {
             .impl_item => {}, // TODO
             .type_alias => {}, // TODO
             .extern_fn => {}, // TODO
+            .state_item => {}, // TODO
+            .kernel_item => {}, // TODO
             .missing => {},
         }
     }

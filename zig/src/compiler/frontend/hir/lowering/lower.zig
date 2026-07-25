@@ -232,6 +232,8 @@ pub const HirLowering = struct {
     pub usingnamespace @import("item/trait.zig");
     pub usingnamespace @import("item/impl.zig");
     pub usingnamespace @import("item/module.zig");
+    pub usingnamespace @import("item/state.zig");
+    pub usingnamespace @import("item/kernel.zig");
     pub usingnamespace @import("stmt/local.zig");
     pub usingnamespace @import("stmt/block.zig");
     pub usingnamespace @import("stmt/loops.zig");

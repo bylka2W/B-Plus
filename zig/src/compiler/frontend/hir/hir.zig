@@ -22,3 +22,13 @@ pub const HirLiteral = literal.HirLiteral;
 pub const BinOp = expr.BinOp;
 pub const UnaryOp = expr.UnaryOp;
 pub const LocalKind = stmt.LocalKind;
+
+pub const HirAttr = item.HirItem.HirItemKind.HirAttr;
+pub const StateItem = item.HirItem.HirItemKind.StateItem;
+pub const StateVar = item.HirItem.HirItemKind.StateVar;
+pub const Transition = item.HirItem.HirItemKind.Transition;
+pub const KernelItem = item.HirItem.HirItemKind.KernelItem;
+pub const KernelEntry = item.HirItem.HirItemKind.KernelEntry;
+pub const KernelBinding = item.HirItem.HirItemKind.KernelBinding;
+pub const KernelContextVar = item.HirItem.HirItemKind.KernelContextVar;
+pub const DispatchSize = item.HirItem.HirItemKind.DispatchSize;
