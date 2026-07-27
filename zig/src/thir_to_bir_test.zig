@@ -406,3 +406,71 @@ test "THIR->BIR: while loop creates blocks" {
     const func = bir_mod.getFunctionMut(0);
     try testing.expect(func.blocks.items.len >= 3);
 }
+
+// ═══════════════════════════════════════════════════
+// Test 8: Phi insertion at merge block
+// ═══════════════════════════════════════════════════
+
+test "THIR->BIR: phi inserted at merge block" {
+    const allocator = testing.allocator;
+    var engine = TypeEngine.init(allocator);
+    defer engine.deinit();
+    engine.initInference();
+
+    var thir_mod = ThirModule.init(allocator);
+    defer thir_mod.deinit();
+
+    const i32_ty = makeI32Ty(&engine);
+
+    // Values: 0=cond(true), 1=literal 10, 2=literal 20, 3=x (stack)
+    const values = [_]ValueDef{
+        .{ .ty = i32_ty, .storage = .local_reg, .expr = ExprId.new(0) },
+        .{ .ty = i32_ty, .storage = .local_reg, .expr = ExprId.new(1) },
+        .{ .ty = i32_ty, .storage = .local_reg, .expr = ExprId.new(2) },
+        .{ .ty = i32_ty, .storage = .stack, .expr = ExprId.new(3) },
+    };
+    const exprs = [_]ThirExpr{
+        .{ .span = .{}, .ty = i32_ty, .kind = .{ .literal = .{ .int = 1 } } },
+        .{ .span = .{}, .ty = i32_ty, .kind = .{ .literal = .{ .int = 10 } } },
+        .{ .span = .{}, .ty = i32_ty, .kind = .{ .literal = .{ .int = 20 } } },
+        .{ .span = .{}, .ty = i32_ty, .kind = .{ .none = {} } },
+    };
+
+    const then_stmts = [_]thir.ThirStmt{
+        .{ .span = .{}, .kind = .{ .let = .{ .place = ValueId.new(3), .init = ValueId.new(1), .storage = .stack } } },
+    };
+    const else_stmts = [_]thir.ThirStmt{
+        .{ .span = .{}, .kind = .{ .let = .{ .place = ValueId.new(3), .init = ValueId.new(2), .storage = .stack } } },
+    };
+
+    const blocks = [_]BasicBlock{
+        .{ .label = "entry", .stmts = &.{.{ .span = .{}, .kind = .{ .if_stmt = .{ .cond = ValueId.new(0), .then_block = BlockId.new(1), .else_block = BlockId.new(2) } } }}, .terminator = .{ .diverge = {} } },
+        .{ .label = "then", .stmts = &then_stmts, .terminator = .{ .br = BlockId.new(3) } },
+        .{ .label = "else", .stmts = &else_stmts, .terminator = .{ .br = BlockId.new(3) } },
+        .{ .label = "merge", .stmts = &.{}, .terminator = .{ .return_ret = .{ .value = null } } },
+    };
+
+    _ = try thir_mod.addFunction(.{
+        .name = .{ .index = 0 },
+        .def_id = .{ .index = 0 },
+        .params = &.{},
+        .return_type = i32_ty,
+        .body = .{ .blocks = &blocks, .entry = BlockId.new(0), .values = &values, .exprs = &exprs, .places = &.{} },
+        .linkage = .internal,
+    });
+
+    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &engine);
+    defer lowerer.deinit();
+    var bir_mod = try lowerer.lower();
+    defer bir_mod.deinit();
+
+    const func = bir_mod.getFunctionMut(0);
+    try testing.expect(func.blocks.items.len >= 4);
+
+    const merge_blk = func.getBlock(3);
+    var has_phi = false;
+    for (merge_blk.instrs.items) |inst| {
+        if (inst.op == .phi) has_phi = true;
+    }
+    try testing.expect(has_phi);
+}
