@@ -1,0 +1,22 @@
+const machine = @import("machine.zig");
+
+pub const PlanMachine = machine.PlanMachine;
+pub const MachineFlags = machine.MachineFlags;
+pub const MachineConfig = machine.MachineConfig;
+pub const DispatchResult = machine.DispatchResult;
+pub const PlanFunctionTable = machine.PlanFunctionTable;
+pub const GuardFn = machine.GuardFn;
+pub const ActionFn = machine.ActionFn;
+pub const LifecycleHook = machine.LifecycleHook;
+pub const LifecycleHooks = machine.LifecycleHooks;
+pub const PlanContext = machine.PlanContext;
+pub const PlanHandle = machine.PlanHandle;
+pub const PLAN_HANDLE_INVALID = machine.PLAN_HANDLE_INVALID;
+pub const HandleTable = machine.HandleTable;
+pub const HandleSlot = machine.HandleSlot;
+pub const MachineAllocator = machine.MachineAllocator;
+pub const registerMachine = machine.registerMachine;
+pub const lookupMachine = machine.lookupMachine;
+pub const unregisterMachine = machine.unregisterMachine;
+pub const CliAdapter = @import("cli_adapter.zig").CliAdapter;
+pub const EventEntry = @import("cli_adapter.zig").EventEntry;

@@ -30,6 +30,9 @@
 - Исправлены E2E тесты верификатора: правильный порядок инструкций (терминатор последний), phi incoming через alloc.dupe
 - Исправлен buildCFG: проверка границ перед доступом к блокам по индексу
 - **HIR Unification**: удалён `middle/hir/` (дублирующий tree-based HIR). `StateItem`, `KernelItem`, `HirAttr`, `DispatchSize` перенесены в единый `frontend/hir/item.zig`. Pipeline: `AST → Unified HIR → TIR → BIR → MIR → x64`
+- **THIR (Typed HIR)** — новый слой между HIR и BIR. Статически типизированная IR: `ValueDef` (ty, storage, expr), `ThirExpr` (18 вариантов), `ThirStmt` (9 вариантов), `Terminator` (6 вариантов), `CastKind` (16 вариантов). Pipeline расширен: `AST → Unified HIR → THIR → BIR → MIR → x64`
+- **HIR → THIR lowering**: `LowerContext` с привязкой `ValueId → ExprId`, `classifyCast()` для определения kind кастов, трансляция state/event declarations
+- **THIR → BIR lowering**: модель `ValueBinding` (ssa/stack_slot/address) для корректного SSA. Indirection `ValueId → ExprId → Expr` вместо прямого индекса. `emitPhi`, `param_map`, проекции Place с отслеживанием типов
 
 ---
 

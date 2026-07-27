@@ -58,3 +58,10 @@ pub const PathId = typedId(struct {});
 pub const DeclId = typedId(struct {});
 pub const PatId = typedId(struct {});
 pub const TypeRefId = typedId(struct {});
+pub const PlanStateId = typedId(struct {});
+pub const PlanEventId = typedId(struct {});
+pub const PlanTransitionId = typedId(struct {});
+
+pub const ThirValueId = typedId(struct {});
+pub const ThirBlockId = typedId(struct {});
+pub const ThirPlaceId = typedId(struct {});

@@ -1,0 +1,14 @@
+state Green {
+    entry { print("GREEN\n") }
+    on timer -> Yellow
+}
+
+state Yellow {
+    entry { print("YELLOW\n") }
+    on timer -> Red
+}
+
+state Red {
+    entry { print("RED\n") }
+    on timer -> Green
+}

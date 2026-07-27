@@ -35,9 +35,9 @@ pub const Position = struct {
 pub const FileId = u32;
 
 pub const SourceSpan = struct {
-    file_id: FileId,
-    start: u32,
-    end: u32,
+    file_id: FileId = 0,
+    start: u32 = 0,
+    end: u32 = 0,
 
     pub fn len(self: SourceSpan) u32 {
         return self.end - self.start;

@@ -1,0 +1,332 @@
+[
+  {
+    "name": "01_undefined_var_in_print.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\01_undefined_var_in_print.b+:3: error: undefined variable 'totally_nonexistent_var'\nerror: semantic analysis failed: error.UndefinedVariable"
+  },
+  {
+    "name": "02_undefined_var_arithmetic.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\02_undefined_var_arithmetic.b+:3: error: undefined variable 'undefined_a'\nerror: semantic analysis failed: error.UndefinedVariable"
+  },
+  {
+    "name": "03_undefined_var_as_condition.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\03_undefined_var_as_condition.b+:3: error: undefined variable 'ghost_variable'\nerror: semantic analysis failed: error.UndefinedVariable"
+  },
+  {
+    "name": "04_undefined_var_in_assignment.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\04_undefined_var_in_assignment.b+:3: error: undefined variable 'undefined_target'\nerror: semantic analysis failed: error.UndefinedVariable"
+  },
+  {
+    "name": "05_undefined_var_in_while.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\05_undefined_var_in_while.b+:3: error: undefined variable 'nonexistent'\nerror: semantic analysis failed: error.UndefinedVariable"
+  },
+  {
+    "name": "06_number_as_if_condition.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "07_string_as_condition.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "08_struct_as_condition.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "09_bare_number.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "10_bare_string.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "11_self_ref_init.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: unexpected token '+' (plus) in state body\nerror: UnexpectedToken\nC:\\B-Plus\\zig\\src\\compiler\\parser\\parser.zig:651:17: 0x7ff60b8fdd51 in parseStateDef (bpc.exe.obj)\n                return error.UnexpectedToken;\r\n                ^\nC:\\B-Plus\\zig\\src\\compiler\\parser\\parser.zig:399:27: 0x7ff60b903"
+  },
+  {
+    "name": "12_too_many_args.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\12_too_many_args.b+:6: error: function 'adder' expects 1 arguments but got 3\nerror: semantic analysis failed: error.ArityMismatch"
+  },
+  {
+    "name": "13_too_few_args.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\13_too_few_args.b+:7: error: function 'adder' expects 2 arguments but got 1\nerror: semantic analysis failed: error.ArityMismatch"
+  },
+  {
+    "name": "14_call_nonexistent_fn.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\14_call_nonexistent_fn.b+:3: error: undefined function 'nonexistent_function'\nerror: semantic analysis failed: error.UndefinedFunction"
+  },
+  {
+    "name": "15_call_undefined_with_args.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\15_call_undefined_with_args.b+:3: error: undefined function 'mystery_func'\nerror: semantic analysis failed: error.UndefinedFunction"
+  },
+  {
+    "name": "16_return_inconsistency.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\16_return_inconsistency.b+:1: error: function 'chaos' has return statements but declares no return type\nerror: semantic analysis failed: error.ReturnTypeMismatch"
+  },
+  {
+    "name": "17_return_value_vs_no_return.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\17_return_value_vs_no_return.b+:1: error: function 'weird' has return statements but declares no return type\nerror: semantic analysis failed: error.ReturnTypeMismatch"
+  },
+  {
+    "name": "18_use_local_outside.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\18_use_local_outside.b+:9: error: undefined variable 'local'\nerror: semantic analysis failed: error.UndefinedVariable"
+  },
+  {
+    "name": "19_entry_var_in_fn.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\19_entry_var_in_fn.b+:8: error: undefined variable 'counter'\nerror: semantic analysis failed: error.UndefinedVariable"
+  },
+  {
+    "name": "20_break_outside_loop.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\20_break_outside_loop.b+:3: error: 'break' outside loop in state 'Main'\nerror: semantic analysis failed: error.BreakOutsideLoop"
+  },
+  {
+    "name": "21_continue_outside_loop.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\21_continue_outside_loop.b+:3: error: 'continue' outside loop in state 'Main'\nerror: semantic analysis failed: error.ContinueOutsideLoop"
+  },
+  {
+    "name": "22_return_in_entry.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "23_import_nonexistent.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\23_import_nonexistent.b+:1: error: import file not found 'this_file_does_not_exist_ever.b+'\nerror: semantic analysis failed: error.ImportNotFound"
+  },
+  {
+    "name": "24_empty_state.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "25_state_no_entry.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "26_always_to_self.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "27_enum_value_as_state_var.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "28_struct_field_access.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "29_nested_struct_init.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "30_negative_array_index.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\30_negative_array_index.b+:4: error: negative array index is not supported\nerror: semantic analysis failed: error.NegativeArrayIndex"
+  },
+  {
+    "name": "31_undefined_state_transition.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\31_undefined_state_transition.b+:1: error: undefined state 'NonexistentState' in transition from state 'A'\nerror: semantic analysis failed: error.UndefinedState"
+  },
+  {
+    "name": "32_undefined_struct_as_type.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\32_undefined_struct_as_type.b+:2: error: undefined type 'FakeType'\nerror: semantic analysis failed: error.UndefinedStruct"
+  },
+  {
+    "name": "33_invalid_enum_value.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\33_invalid_enum_value.b+:6: error: enum 'Color' has no value 'Purple'\nerror: semantic analysis failed: error.InvalidEnumValue"
+  },
+  {
+    "name": "34_invalid_struct_field.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\34_invalid_struct_field.b+:6: error: struct 'Point' has no field 'z'\nerror: semantic analysis failed: error.InvalidStructField"
+  },
+  {
+    "name": "35_return_type_no_return.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\35_return_type_no_return.b+:1: error: function 'adder' declares return type 'int' but has no return statement\nerror: semantic analysis failed: error.ReturnTypeMismatch"
+  },
+  {
+    "name": "36_return_without_type.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\36_return_without_type.b+:1: error: function 'no_return_type' has return statements but declares no return type\nerror: semantic analysis failed: error.ReturnTypeMismatch"
+  },
+  {
+    "name": "37_valid_state_transition.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "38_valid_struct_field.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "39_valid_enum_value.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "40_valid_return_type.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "41_type_mismatch_assignment.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\41_type_mismatch_assignment.b+:3: error: type mismatch: cannot assign 'i64' to variable of type 'string'\nerror: semantic analysis failed: error.TypeError"
+  },
+  {
+    "name": "42_type_match_assignment.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "43_type_match_float.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "44_type_match_string.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "45_type_inference_arithmetic.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "46_type_mismatch_bool.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\46_type_mismatch_bool.b+:3: error: type mismatch: cannot assign 'i64' to variable of type 'bool'\nerror: semantic analysis failed: error.TypeError"
+  },
+  {
+    "name": "47_binary_type_mismatch.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\47_binary_type_mismatch.b+:3: error: binary op '+' cannot apply to 'string' and 'i64'\nerror: semantic analysis failed: error.BinaryTypeMismatch"
+  },
+  {
+    "name": "48_func_arg_type_mismatch.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\48_func_arg_type_mismatch.b+:1: error: function 'add' argument 1: expected 'i64' but got 'string'\nerror: semantic analysis failed: error.ArgTypeMismatch"
+  },
+  {
+    "name": "49_func_arg_type_mismatch2.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\49_func_arg_type_mismatch2.b+:1: error: function 'greet' argument 1: expected 'string' but got 'i64'\nerror: semantic analysis failed: error.ArgTypeMismatch"
+  },
+  {
+    "name": "50_func_arg_type_valid.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "51_binary_type_valid.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "52_binary_type_string_concat.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "53_scope_param_lookup.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "54_scope_global_func.b+",
+    "exit_code": 0,
+    "actual": "accepted",
+    "output": ""
+  },
+  {
+    "name": "55_reassign_type_mismatch.b+",
+    "exit_code": 1,
+    "actual": "rejected",
+    "output": "error: C:\\B-Plus\\zig\\tests\\semantic\\55_reassign_type_mismatch.b+:4: error: type mismatch: cannot assign 'string' to variable of type 'i64'\nerror: semantic analysis failed: error.TypeError"
+  }
+]
