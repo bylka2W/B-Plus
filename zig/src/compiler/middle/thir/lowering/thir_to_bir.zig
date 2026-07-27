@@ -20,6 +20,7 @@ const DefId = thir.DefId;
 const SymbolId = thir.SymbolId;
 const bir = @import("../../bir/bir.zig");
 const bir_types = bir.types;
+const Mem2RegPass = @import("../../bir/passes/ssa/mem2reg.zig").Mem2RegPass;
 const BIRTypeId = bir_types.TypeId;
 const ScalarKind = bir_types.ScalarKind;
 const BIRValueId = bir.ValueId;
@@ -53,14 +54,33 @@ pub const ThirToBir = struct {
         self.module.deinit();
     }
 
-    pub fn lower(self: *ThirToBir) LowerError!bir.Module {
+    pub fn lower(self: *ThirToBir) anyerror!bir.Module {
         try self.ensureBuiltinTypes();
         for (self.thir_mod.functions.items) |*func| {
             try self.lowerFunction(func);
         }
+
+        try self.runMem2Reg();
+
         const m = self.module;
         self.module = bir.Module.init(self.allocator);
         return m;
+    }
+
+    fn runMem2Reg(self: *ThirToBir) !void {
+        var pm = bir.PassManager.init(self.allocator);
+        defer pm.deinit();
+        try pm.addPass(Mem2RegPass);
+
+        var am = bir.AnalysisManager.init(self.allocator, &self.module);
+        defer am.deinit();
+
+        var ctx = bir.PassContext{
+            .module = &self.module,
+            .analysis = &am,
+            .allocator = self.allocator,
+        };
+        try pm.run(&ctx);
     }
 
     fn ensureBuiltinTypes(self: *ThirToBir) !void {
@@ -200,9 +220,7 @@ pub const ThirToBir = struct {
             .value_map = &value_map,
             .value_ty_map = &value_ty_map,
             .ret_type = ret_ty,
-            .store_log = std.ArrayList(Builder.StoreEntry).init(self.allocator),
         };
-        defer builder.store_log.deinit();
 
         for (body.blocks, 0..) |*blk, i| {
             const bir_blk_id = block_map.get(ThirBlockId.new(@intCast(i))) orelse continue;
@@ -215,96 +233,6 @@ pub const ThirToBir = struct {
 
             if (!builder.terminated()) {
                 try builder.lowerTerminator(blk.terminator);
-            }
-        }
-
-        try self.insertPhisAtMergeBlocks(&builder, func_id);
-    }
-
-    fn insertPhisAtMergeBlocks(self: *ThirToBir, builder: *Builder, func_id: bir.FunctionId) !void {
-        var pred_map = std.AutoHashMap(BIRBlockId, std.ArrayList(BIRBlockId)).init(self.allocator);
-        defer {
-            var vit = pred_map.valueIterator();
-            while (vit.next()) |list| list.deinit();
-            pred_map.deinit();
-        }
-
-        {
-            const func = self.module.getFunction(func_id);
-            for (func.blocks.items, 0..) |blk, i| {
-                if (blk.instrs.items.len == 0) continue;
-                const blk_id: BIRBlockId = @intCast(i);
-                const last = blk.instrs.items[blk.instrs.items.len - 1];
-                switch (last.op) {
-                    .br => {
-                        if (last.data == .block_target) {
-                            const target = last.data.block_target;
-                            const gop = try pred_map.getOrPut(target);
-                            if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(BIRBlockId).init(self.allocator);
-                            try gop.value_ptr.append(blk_id);
-                        }
-                    },
-                    .cond_br => {
-                        if (last.data == .cond_branch) {
-                            const cb = last.data.cond_branch;
-                            for ([_]BIRBlockId{ cb.then_block, cb.else_block }) |target| {
-                                const gop = try pred_map.getOrPut(target);
-                                if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(BIRBlockId).init(self.allocator);
-                                try gop.value_ptr.append(blk_id);
-                            }
-                        }
-                    },
-                    else => {},
-                }
-            }
-        }
-
-        const blocks_list = self.module.getFunctionMut(func_id).blocks;
-        for (blocks_list.items, 0..) |_, blk_idx| {
-            const blk_id: BIRBlockId = @intCast(blk_idx);
-            const preds = pred_map.get(blk_id) orelse continue;
-            if (preds.items.len <= 1) continue;
-
-            var slot_to_entries = std.AutoHashMap(BIRValueId, std.ArrayList(Builder.StoreEntry)).init(self.allocator);
-            defer {
-                var sit = slot_to_entries.valueIterator();
-                while (sit.next()) |list| list.deinit();
-                slot_to_entries.deinit();
-            }
-
-            for (builder.store_log.items) |entry| {
-                for (preds.items) |pred| {
-                    if (entry.block == pred) {
-                        const gop = try slot_to_entries.getOrPut(entry.slot);
-                        if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(Builder.StoreEntry).init(self.allocator);
-                        try gop.value_ptr.append(entry);
-                        break;
-                    }
-                }
-            }
-
-            var slot_iter = slot_to_entries.iterator();
-            while (slot_iter.next()) |kv| {
-                if (kv.value_ptr.items.len < preds.items.len) continue;
-
-                const slot = kv.key_ptr.*;
-                const entries = kv.value_ptr.items;
-                const ty = entries[0].ty;
-
-                const incoming = try self.allocator.alloc(PhiIncoming, entries.len);
-                for (entries, 0..) |entry, i| {
-                    incoming[i] = .{ .block = entry.block, .value = entry.stored_value };
-                }
-
-                const phi_val = try self.module.addPhi(func_id, blk_id, ty, incoming);
-
-                var vm_iter = builder.value_map.iterator();
-                while (vm_iter.next()) |vm_kv| {
-                    if (vm_kv.value_ptr.value == slot and vm_kv.value_ptr.kind == .stack_slot) {
-                        vm_kv.value_ptr.* = .{ .value = phi_val, .kind = .ssa };
-                        break;
-                    }
-                }
             }
         }
     }
@@ -331,8 +259,6 @@ const Builder = struct {
     value_ty_map: *std.AutoHashMap(ThirValueId, BIRTypeId),
     ret_type: BIRTypeId,
 
-    store_log: std.ArrayList(StoreEntry),
-
     pub const ValueBinding = struct {
         value: BIRValueId,
         kind: Kind,
@@ -342,13 +268,6 @@ const Builder = struct {
             address,
             stack_slot,
         };
-    };
-
-    pub const StoreEntry = struct {
-        block: BIRBlockId,
-        slot: BIRValueId,
-        stored_value: BIRValueId,
-        ty: BIRTypeId,
     };
 
     fn isTerminator(op: Op) bool {
@@ -423,12 +342,6 @@ const Builder = struct {
 
     fn storeSlot(self: *Builder, slot: BIRValueId, val: BIRValueId, ty: BIRTypeId) !void {
         _ = try self.emitOp(.store, ty, &.{ slot, val }, .{ .none = {} });
-        try self.store_log.append(.{
-            .block = self.blk,
-            .slot = slot,
-            .stored_value = val,
-            .ty = ty,
-        });
     }
 
     fn loadFromSlot(self: *Builder, slot: BIRValueId, ty: BIRTypeId) !BIRValueId {

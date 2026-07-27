@@ -60,8 +60,6 @@ pub fn verifySSA(
         const block_id = @as(BlockId, @intCast(bid));
 
         for (block.instrs.items) |inst| {
-            if (inst.result != NO_VALUE) continue;
-
             var operands = std.ArrayList(ValueId).init(errs.allocator);
             defer operands.deinit();
 
@@ -315,9 +313,6 @@ pub fn verifyPhis(
 fn collectDataRefs(inst: bir.Inst, result: *std.ArrayList(ValueId)) !void {
     switch (inst.data) {
         .cond_branch => |cb| try result.append(cb.cond),
-        .phi_incoming => |incoming| {
-            for (incoming) |inc| try result.append(inc.value);
-        },
         .gep_info => |gep| {
             try result.append(gep.ptr);
             for (gep.indices) |idx| try result.append(idx);

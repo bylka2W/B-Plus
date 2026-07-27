@@ -231,12 +231,15 @@ test "THIR->BIR: let binding creates store" {
 
     var has_store = false;
     var has_alloca = false;
+    var has_const42 = false;
     for (entry.instrs.items) |inst| {
         if (inst.op == .store) has_store = true;
         if (inst.op == .alloca) has_alloca = true;
+        if (inst.op == .@"const" and inst.data.const_data == .int and inst.data.const_data.int == 42) has_const42 = true;
     }
-    try testing.expect(has_alloca);
-    try testing.expect(has_store);
+    try testing.expect(!has_alloca);
+    try testing.expect(!has_store);
+    try testing.expect(has_const42);
 }
 
 // ═══════════════════════════════════════════════════

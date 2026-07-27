@@ -236,6 +236,7 @@ fn renameBlock(
                     for (old_inc, 0..) |inc, i| {
                         new_inc[i] = inc;
                     }
+                    if (old_inc.len > 0) func.allocator.free(old_inc);
                     new_inc[old_inc.len] = .{ .value = current_version, .block = bid };
                     inst.data.phi_incoming = new_inc;
                 }
