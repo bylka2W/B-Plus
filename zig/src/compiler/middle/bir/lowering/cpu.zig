@@ -5,6 +5,22 @@ const Op = bir.Op;
 
 const CmpDef = struct { op0: u32, op1: u32, cc: mir.CondCode };
 
+fn birTypeToDataType(types: *const bir.types.TypeTable, ty: bir.types.TypeId) mir.DataType {
+    const t = types.get(ty);
+    return switch (t.kind) {
+        .scalar => |sk| switch (sk) {
+            .i1, .i8, .i16, .i32, .i64 => .i64,
+            .u8, .u16, .u32, .u64 => .i64,
+            .f16, .f32 => .f32,
+            .f64 => .f64,
+            .bf16 => .f32,
+        },
+        .pointer => .i64,
+        .void => .void,
+        else => .i64,
+    };
+}
+
 fn findCmpDef(bir_func: *const bir.Function, val: u32) ?CmpDef {
     if (val == bir.NO_VALUE or val == 0) return null;
     if (val - 1 >= bir_func.value_info.items.len) return null;
@@ -239,6 +255,88 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                 .store => {
                     if (inst.operands.len < 2) continue;
                     try mblock.instrs.append(.{ .store = .{ .ptr = .{ .vreg = inst.operands[0] }, .src = .{ .vreg = inst.operands[1] }, .size = .u64 } });
+                },
+
+                .fadd => {
+                    if (result == NO_VALUE or inst.operands.len < 2) continue;
+                    try mblock.instrs.append(.{ .fadd = .{ .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .fsub => {
+                    if (result == NO_VALUE or inst.operands.len < 2) continue;
+                    try mblock.instrs.append(.{ .fsub = .{ .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .fmul => {
+                    if (result == NO_VALUE or inst.operands.len < 2) continue;
+                    try mblock.instrs.append(.{ .fmul = .{ .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .fdiv => {
+                    if (result == NO_VALUE or inst.operands.len < 2) continue;
+                    try mblock.instrs.append(.{ .fdiv = .{ .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .fneg => {
+                    if (result == NO_VALUE or inst.operands.len < 1) continue;
+                    try mblock.instrs.append(.{ .fneg_op = .{ .dst = .{ .vreg = result } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .sitofp => {
+                    if (result == NO_VALUE or inst.operands.len < 1) continue;
+                    try mblock.instrs.append(.{ .sitofp = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = inst.operands[0] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .fptosi => {
+                    if (result == NO_VALUE or inst.operands.len < 1) continue;
+                    try mblock.instrs.append(.{ .fptosi = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = inst.operands[0] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .fpext => {
+                    if (result == NO_VALUE or inst.operands.len < 1) continue;
+                    try mblock.instrs.append(.{ .fpext = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = inst.operands[0] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .fptrunc => {
+                    if (result == NO_VALUE or inst.operands.len < 1) continue;
+                    try mblock.instrs.append(.{ .fptrunc = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = inst.operands[0] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .feq => if (result != NO_VALUE and inst.operands.len >= 2) {
+                    try mblock.instrs.append(.{ .fcmp = .{ .cc = .eq, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                },
+                .fne => if (result != NO_VALUE and inst.operands.len >= 2) {
+                    try mblock.instrs.append(.{ .fcmp = .{ .cc = .ne, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                },
+                .flt => if (result != NO_VALUE and inst.operands.len >= 2) {
+                    try mblock.instrs.append(.{ .fcmp = .{ .cc = .lt, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                },
+                .fle => if (result != NO_VALUE and inst.operands.len >= 2) {
+                    try mblock.instrs.append(.{ .fcmp = .{ .cc = .le, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                },
+                .fgt => if (result != NO_VALUE and inst.operands.len >= 2) {
+                    try mblock.instrs.append(.{ .fcmp = .{ .cc = .gt, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                },
+                .fge => if (result != NO_VALUE and inst.operands.len >= 2) {
+                    try mblock.instrs.append(.{ .fcmp = .{ .cc = .ge, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
                 },
 
                 else => {

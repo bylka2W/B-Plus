@@ -27,47 +27,151 @@ pub fn selectJcc(ctx: *Ctx, j: mir.JccInst, allocator: std.mem.Allocator) !void 
 }
 
 pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
-    const win64_args = [_]i16{ 1, 2, 8, 9 };
-    var src_regs: [14]i16 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    const int_arg_regs = [_]i16{ 1, 2, 8, 9 }; // RCX, RDX, R8, R9
+    const float_arg_regs = [_]i16{ 16, 17, 18, 19 }; // XMM0-XMM3
+
+    // Classify each argument as integer or float.
+    var int_idx: usize = 0;
+    var float_idx: usize = 0;
+    var gpr_src: [14]i16 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    var xmm_src: [14]i16 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    var gpr_dst: [14]i16 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    var xmm_dst: [14]i16 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    var arg_count: usize = 0;
 
     for (0..c.arg_count) |i| {
-        if (regalloc.isSpilled(ctx.ra, c.args[i])) {
-            try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, c.args[i], ctx.scratch);
-            src_regs[i] = ctx.scratch;
+        const arg = c.args[i];
+        const arg_vreg = switch (arg) { .vreg => |v| v, else => 0 };
+        const dtype = ctx.mfunc.getVRegType(arg_vreg) orelse .i64;
+        const is_float = dtype.isFloat();
+
+        // Load spilled args.
+        if (regalloc.isSpilled(ctx.ra, arg)) {
+            try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, arg, ctx.scratch);
+            if (is_float) {
+                xmm_src[arg_count] = ctx.scratch;
+                // Actually we need to move from GPR scratch to XMM.
+                const xs: i16 = 14; // temp XMM, avoid xmm15 (xmmScratch)
+                if (dtype == .f64) {
+                    try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
+                } else {
+                    try append2(ctx, .SSE_MOVD_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
+                }
+                xmm_src[arg_count] = xs;
+            } else {
+                gpr_src[arg_count] = ctx.scratch;
+            }
         } else {
-            src_regs[i] = resolveReg(ctx.ra, c.args[i]);
+            const reg = resolveReg(ctx.ra, arg);
+            if (is_float) {
+                xmm_src[arg_count] = reg;
+            } else {
+                gpr_src[arg_count] = reg;
+            }
         }
+
+        if (is_float) {
+            if (float_idx < float_arg_regs.len) {
+                xmm_dst[arg_count] = float_arg_regs[float_idx];
+                float_idx += 1;
+            }
+        } else {
+            if (int_idx < int_arg_regs.len) {
+                gpr_dst[arg_count] = int_arg_regs[int_idx];
+                int_idx += 1;
+            }
+        }
+
+        arg_count += 1;
     }
 
-    for (0..@min(c.arg_count, 4)) |i| {
-        const src = src_regs[i];
-        const dst = win64_args[i];
-        if (src == dst) continue;
-        for (0..@min(c.arg_count, 4)) |j| {
-            if (j != i and src == win64_args[j]) {
+    // Now move GPR args to their destination registers.
+    // Handle conflicts: if src of arg[i] is the same as dst of arg[j], resolve via scratch.
+    for (0..arg_count) |i| {
+        if (gpr_src[i] == -1) continue;
+        const src = gpr_src[i];
+        const dst = gpr_dst[i];
+        if (dst == -1 or src == dst) continue;
+        // Check if any later arg reads from this dst as source.
+        for (i + 1..arg_count) |j| {
+            if (gpr_src[j] == dst) {
+                // Conflict: move current src via scratch.
                 try append2(ctx, .MOV_R64_R64, Operand.r(ctx.scratch), Operand.r(src));
-                src_regs[i] = ctx.scratch;
+                gpr_src[i] = ctx.scratch;
                 break;
             }
         }
     }
-
-    for (0..@min(c.arg_count, 4)) |i| {
-        const src = src_regs[i];
-        const dst = win64_args[i];
-        if (src != dst) try append2(ctx, .MOV_R64_R64, Operand.r(dst), Operand.r(src));
+    for (0..arg_count) |i| {
+        if (gpr_src[i] == -1) continue;
+        const src = gpr_src[i];
+        const dst = gpr_dst[i];
+        if (dst == -1 or src == dst) continue;
+        try append2(ctx, .MOV_R64_R64, Operand.r(dst), Operand.r(src));
     }
 
+    // Move XMM args to their destination registers.
+    // Use scratch XMM (xmm15) for conflicts.
+    for (0..arg_count) |i| {
+        if (xmm_src[i] == -1) continue;
+        const src = xmm_src[i];
+        const dst = xmm_dst[i];
+        if (dst == -1 or src == dst) continue;
+        // Check conflict.
+        for (i + 1..arg_count) |j| {
+            if (xmm_src[j] == dst) {
+                const xs: i16 = 15; // xmmScratch
+                try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(xs), Operand.xmm(src));
+                xmm_src[i] = xs;
+                break;
+            }
+        }
+    }
+    for (0..arg_count) |i| {
+        if (xmm_src[i] == -1) continue;
+        const src = xmm_src[i];
+        const dst = xmm_dst[i];
+        if (dst == -1 or src == dst) continue;
+        try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(dst), Operand.xmm(src));
+    }
+
+    // Emit the CALL.
     try ctx.call_fixups.append(ctx.mf.allocator, .{ .name = c.name, .disp_pos = 0 });
     try append2(ctx, .CALL_REL32, Operand.imm(0), .{});
 
+    // Collect the return value.
     if (!c.is_void) {
         const dst_spilled = regalloc.isSpilled(ctx.ra, c.dst);
-        if (dst_spilled) {
-            try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, 0);
+        const dst_vreg = switch (c.dst) { .vreg => |v| v, else => 0 };
+        const ret_dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
+        if (ret_dtype.isFloat()) {
+            // Float return is in xmm0 (reg 16).
+            if (dst_spilled) {
+                // Convert xmm0 bits to GPR scratch, then use storeSpilledOp.
+                if (ret_dtype == .f64) {
+                    try append2(ctx, .SSE_MOVQ_ST, Operand.r(ctx.scratch), Operand.xmm(16));
+                } else {
+                    try append2(ctx, .SSE_MOVD_ST, Operand.r(ctx.scratch), Operand.xmm(16));
+                }
+                try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, ctx.scratch);
+            } else {
+                const dst = resolveReg(ctx.ra, c.dst);
+                if (dst != 16) {
+                    if (ret_dtype == .f64) {
+                        try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(dst), Operand.xmm(16));
+                    } else {
+                        try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(dst), Operand.xmm(16));
+                    }
+                }
+            }
         } else {
-            const dst = resolveReg(ctx.ra, c.dst);
-            if (dst != 0) try append2(ctx, .MOV_R64_R64, Operand.r(dst), Operand.r(0));
+            // Integer return is in rax (reg 0).
+            if (dst_spilled) {
+                try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, 0);
+            } else {
+                const dst = resolveReg(ctx.ra, c.dst);
+                if (dst != 0) try append2(ctx, .MOV_R64_R64, Operand.r(dst), Operand.r(0));
+            }
         }
     }
 }
@@ -76,17 +180,52 @@ pub fn selectRet(ctx: *Ctx, r: mir.RetInst) !void {
     switch (r) {
         .void_ret => {},
         .value => |val| {
-            const val_spilled = regalloc.isSpilled(ctx.ra, val);
-            if (val_spilled) {
-                try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, val, 0);
-            } else {
-                const val_r = resolveOp(ctx.ra, val);
-                if (val_r.reg >= 0) {
-                    if (val_r.reg != 0) {
-                        try append2(ctx, .MOV_R64_R64, Operand.r(0), val_r);
+            // Determine the return register based on the value's type.
+            const val_vreg = switch (val) { .vreg => |v| v, else => 0 };
+            const dtype = ctx.mfunc.getVRegType(val_vreg) orelse .i64;
+
+            if (dtype.isFloat()) {
+                // Float return: move to xmm0.
+                const val_spilled = regalloc.isSpilled(ctx.ra, val);
+                if (val_spilled) {
+                    try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, val, ctx.scratch);
+                    const xs: i16 = if (ctx.scratch == 15) 14 else 15; // avoid scratch conflict
+                    if (dtype == .f64) {
+                        try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
+                    } else {
+                        try append2(ctx, .SSE_MOVD_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
+                    }
+                    if (xs != 16) {
+                        if (dtype == .f64) {
+                            try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(16), Operand.xmm(xs));
+                        } else {
+                            try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(16), Operand.xmm(xs));
+                        }
                     }
                 } else {
-                    try append2(ctx, .MOV_R64_IMM64, Operand.r(0), val_r);
+                    const val_r = resolveReg(ctx.ra, val);
+                    if (val_r != 16) {
+                        if (dtype == .f64) {
+                            try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(16), Operand.xmm(val_r));
+                        } else {
+                            try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(16), Operand.xmm(val_r));
+                        }
+                    }
+                }
+            } else {
+                // Integer return: move to rax.
+                const val_spilled = regalloc.isSpilled(ctx.ra, val);
+                if (val_spilled) {
+                    try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, val, 0);
+                } else {
+                    const val_r = resolveOp(ctx.ra, val);
+                    if (val_r.reg >= 0) {
+                        if (val_r.reg != 0) {
+                            try append2(ctx, .MOV_R64_R64, Operand.r(0), val_r);
+                        }
+                    } else {
+                        try append2(ctx, .MOV_R64_IMM64, Operand.r(0), val_r);
+                    }
                 }
             }
         },

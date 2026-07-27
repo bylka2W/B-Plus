@@ -68,3 +68,26 @@ pub const MFunction = struct {
         return null;
     }
 };
+
+pub const MModule = struct {
+    functions: std.ArrayList(MFunction),
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) MModule {
+        return .{
+            .functions = std.ArrayList(MFunction).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *MModule) void {
+        for (self.functions.items) |*f| f.deinit();
+        self.functions.deinit();
+    }
+
+    pub fn addFunction(self: *MModule, name: []const u8) !*MFunction {
+        const func = MFunction.init(self.allocator, name);
+        try self.functions.append(func);
+        return &self.functions.items[self.functions.items.len - 1];
+    }
+};

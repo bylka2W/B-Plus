@@ -48,3 +48,4 @@ pub const MInstUtils = opcode.MInstUtils;
 
 pub const MBlock = function.MBlock;
 pub const MFunction = function.MFunction;
+pub const MModule = function.MModule;

@@ -22,6 +22,8 @@ pub fn main() !void {
     try testLoopWithPhi(alloc, stdout);
     try testCriticalEdgePhi(alloc, stdout);
     try testOptComparison(alloc, stdout);
+    try testFloatArithmetic(alloc, stdout);
+    try testFloatMulDiv(alloc, stdout);
 
     try stdout.print("\n=== ALL BIR→MIR E2E TESTS PASSED ===\n", .{});
 }
@@ -989,5 +991,168 @@ fn testOptComparison(alloc: std.mem.Allocator, stdout: anytype) !void {
     const actual = executeCode(result.code);
     try stdout.print("  execute() returned: {d} (expected 100)\n", .{actual});
     try std.testing.expectEqual(@as(i64, 100), actual);
+    try stdout.print("  PASS\n\n", .{});
+}
+
+// ─── Test: Float arithmetic (sitofp → fadd → fptosi) ───
+// BIR: fn main() -> i64 {
+//   entry:
+//     c5 = const 5
+//     c3 = const 3
+//     f5 = sitofp(c5) as f64
+//     f3 = sitofp(c3) as f64
+//     f8 = fadd(f5, f3) as f64
+//     result = fptosi(f8) as i64
+//     ret result
+// }
+// Expected: 5 + 3 = 8
+fn testFloatArithmetic(alloc: std.mem.Allocator, stdout: anytype) !void {
+    try stdout.writeAll("--- testFloatArithmetic ---\n");
+
+    var mod = bir.Module.init(alloc);
+    defer mod.deinit();
+
+    const i64_ty = try mod.types.scalarType(.i64);
+    const f64_ty = try mod.types.scalarType(.f64);
+    const func_id = try mod.addFunction("main", i64_ty, .entry);
+    const b0 = try mod.addBlock(func_id, "entry");
+
+    // const 5
+    const c5 = try mod.addInst(func_id, b0, .{
+        .op = .@"const", .ty = i64_ty, .result = bir.NO_VALUE,
+        .operands = &.{}, .data = .{ .const_data = .{ .int = 5 } },
+    });
+    // const 3
+    const c3 = try mod.addInst(func_id, b0, .{
+        .op = .@"const", .ty = i64_ty, .result = bir.NO_VALUE,
+        .operands = &.{}, .data = .{ .const_data = .{ .int = 3 } },
+    });
+    // sitofp(5) -> f64
+    const f5 = try mod.addInst(func_id, b0, .{
+        .op = .sitofp, .ty = f64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{c5}),
+        .data = .{ .cast_info = .{ .kind = .i2f, .from = i64_ty, .to = f64_ty } },
+    });
+    // sitofp(3) -> f64
+    const f3 = try mod.addInst(func_id, b0, .{
+        .op = .sitofp, .ty = f64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{c3}),
+        .data = .{ .cast_info = .{ .kind = .i2f, .from = i64_ty, .to = f64_ty } },
+    });
+    // fadd(f5, f3)
+    const f8 = try mod.addInst(func_id, b0, .{
+        .op = .fadd, .ty = f64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{ f5, f3 }),
+        .data = .{ .none = {} },
+    });
+    // fptosi(f8) -> i64
+    const result = try mod.addInst(func_id, b0, .{
+        .op = .fptosi, .ty = i64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{f8}),
+        .data = .{ .cast_info = .{ .kind = .f2i, .from = f64_ty, .to = i64_ty } },
+    });
+    // ret result
+    _ = try mod.addInst(func_id, b0, .{
+        .op = .ret, .ty = i64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{result}),
+        .data = .{ .none = {} },
+    });
+
+    var result_pipe = try runPipeline(alloc, &mod);
+    defer result_pipe.deinit(alloc);
+
+    try stdout.print("  MIR: {d} blocks, code: {d} bytes\n", .{
+        result_pipe.mfuncs[0].blocks.items.len,
+        result_pipe.code.len,
+    });
+    try dumpMIRInsts(stdout, &result_pipe.mfuncs[0]);
+
+    try std.testing.expect(result_pipe.code.len > 0);
+
+    const actual = executeCode(result_pipe.code);
+    try stdout.print("  execute() returned: {d} (expected 8)\n", .{actual});
+    try std.testing.expectEqual(@as(i64, 8), actual);
+    try stdout.print("  PASS\n\n", .{});
+}
+
+// ─── Test: Float multiply and divide ───
+// BIR: fn main() -> i64 {
+//   entry:
+//     c6 = const 6
+//     c2 = const 2
+//     f6 = sitofp(c6) as f64
+//     f2 = sitofp(c2) as f64
+//     f12 = fmul(f6, f2) as f64
+//     f6div = fdiv(f12, f2) as f64
+//     result = fptosi(f6div) as i64
+//     ret result
+// }
+// Expected: 6 * 2 / 2 = 6
+fn testFloatMulDiv(alloc: std.mem.Allocator, stdout: anytype) !void {
+    try stdout.writeAll("--- testFloatMulDiv ---\n");
+
+    var mod = bir.Module.init(alloc);
+    defer mod.deinit();
+
+    const i64_ty = try mod.types.scalarType(.i64);
+    const f64_ty = try mod.types.scalarType(.f64);
+    const func_id = try mod.addFunction("main", i64_ty, .entry);
+    const b0 = try mod.addBlock(func_id, "entry");
+
+    const c6 = try mod.addInst(func_id, b0, .{
+        .op = .@"const", .ty = i64_ty, .result = bir.NO_VALUE,
+        .operands = &.{}, .data = .{ .const_data = .{ .int = 6 } },
+    });
+    const c2 = try mod.addInst(func_id, b0, .{
+        .op = .@"const", .ty = i64_ty, .result = bir.NO_VALUE,
+        .operands = &.{}, .data = .{ .const_data = .{ .int = 2 } },
+    });
+    const f6 = try mod.addInst(func_id, b0, .{
+        .op = .sitofp, .ty = f64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{c6}),
+        .data = .{ .cast_info = .{ .kind = .i2f, .from = i64_ty, .to = f64_ty } },
+    });
+    const f2 = try mod.addInst(func_id, b0, .{
+        .op = .sitofp, .ty = f64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{c2}),
+        .data = .{ .cast_info = .{ .kind = .i2f, .from = i64_ty, .to = f64_ty } },
+    });
+    // fmul(6.0, 2.0) = 12.0
+    const f12 = try mod.addInst(func_id, b0, .{
+        .op = .fmul, .ty = f64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{ f6, f2 }),
+        .data = .{ .none = {} },
+    });
+    // fdiv(12.0, 2.0) = 6.0
+    const f6div = try mod.addInst(func_id, b0, .{
+        .op = .fdiv, .ty = f64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{ f12, f2 }),
+        .data = .{ .none = {} },
+    });
+    const result = try mod.addInst(func_id, b0, .{
+        .op = .fptosi, .ty = i64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{f6div}),
+        .data = .{ .cast_info = .{ .kind = .f2i, .from = f64_ty, .to = i64_ty } },
+    });
+    _ = try mod.addInst(func_id, b0, .{
+        .op = .ret, .ty = i64_ty, .result = bir.NO_VALUE,
+        .operands = try alloc.dupe(bir.ValueId, &.{result}),
+        .data = .{ .none = {} },
+    });
+
+    var result_pipe = try runPipeline(alloc, &mod);
+    defer result_pipe.deinit(alloc);
+
+    try stdout.print("  MIR: {d} blocks, code: {d} bytes\n", .{
+        result_pipe.mfuncs[0].blocks.items.len,
+        result_pipe.code.len,
+    });
+    try dumpMIRInsts(stdout, &result_pipe.mfuncs[0]);
+
+    try std.testing.expect(result_pipe.code.len > 0);
+
+    const actual = executeCode(result_pipe.code);
+    try stdout.print("  execute() returned: {d} (expected 6)\n", .{actual});
+    try std.testing.expectEqual(@as(i64, 6), actual);
     try stdout.print("  PASS\n\n", .{});
 }

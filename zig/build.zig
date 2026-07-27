@@ -96,6 +96,16 @@ pub fn build(b: *std.Build) void {
     const test_thir_to_bir_step = b.step("test-thir-to-bir", "Run THIR→BIR lowering tests");
     test_thir_to_bir_step.dependOn(&test_thir_to_bir_run.step);
 
+    const test_mir_to_machine_exe = b.addExecutable(.{
+        .name = "test_mir_to_machine",
+        .root_source_file = b.path("test_mir_machine_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const test_mir_to_machine_run = b.addRunArtifact(test_mir_to_machine_exe);
+    const test_mir_to_machine_step = b.step("test-mir-machine", "Run MIR→Machine IR lowering tests");
+    test_mir_to_machine_step.dependOn(&test_mir_to_machine_run.step);
+
     const bplus_exe = b.addExecutable(.{
         .name = "bplus",
         .root_source_file = b.path("src/bplus.zig"),

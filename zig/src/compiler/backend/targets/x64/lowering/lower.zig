@@ -119,14 +119,35 @@ pub fn emitSingleFunction(
     // Emit prologue.
     try fm.emitPrologue(code);
 
-    // Move arguments from win64 arg regs.
-    const win64_arg_regs = [_]i16{ 1, 2, 8, 9 };
-    for (mfunc.params, 0..) |p, i| {
-        if (i >= 4) break;
+    // Move arguments from win64 arg regs (integer and float).
+    const win64_int_arg_regs = [_]i16{ 1, 2, 8, 9 }; // RCX, RDX, R8, R9
+    const win64_float_arg_regs = [_]i16{ 16, 17, 18, 19 }; // XMM0-XMM3
+    var int_arg_idx: usize = 0;
+    var float_arg_idx: usize = 0;
+    for (mfunc.params) |p| {
         const vreg = switch (p) { .vreg => |v| v, else => continue };
+        const dtype = mfunc.getVRegType(vreg) orelse .i64;
         const dst = ra.regs.get(vreg) orelse continue;
-        if (dst != win64_arg_regs[i]) {
-            try x64.emit(code, .MOV_R64_R64, &.{ .{ .reg = dst }, .{ .reg = win64_arg_regs[i] } });
+        if (dtype.isFloat()) {
+            if (float_arg_idx < win64_float_arg_regs.len) {
+                const src_xmm = win64_float_arg_regs[float_arg_idx];
+                float_arg_idx += 1;
+                if (dst != src_xmm) {
+                    if (dtype == .f64) {
+                        try x64.emit(code, .SSE_MOVSD_LD, &.{ .{ .reg = dst, .is_xmm = true }, .{ .reg = src_xmm, .is_xmm = true } });
+                    } else {
+                        try x64.emit(code, .SSE_MOVSS_LD, &.{ .{ .reg = dst, .is_xmm = true }, .{ .reg = src_xmm, .is_xmm = true } });
+                    }
+                }
+            }
+        } else {
+            if (int_arg_idx < win64_int_arg_regs.len) {
+                const src_gpr = win64_int_arg_regs[int_arg_idx];
+                int_arg_idx += 1;
+                if (dst != src_gpr) {
+                    try x64.emit(code, .MOV_R64_R64, &.{ .{ .reg = dst }, .{ .reg = src_gpr } });
+                }
+            }
         }
     }
 

@@ -53,6 +53,7 @@ pub const MInstUtils = core.MInstUtils;
 
 pub const MBlock = core.MBlock;
 pub const MFunction = core.MFunction;
+pub const MModule = core.MModule;
 
 /// ─── Passes ───
 pub const passes = struct {

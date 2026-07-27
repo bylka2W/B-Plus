@@ -29,6 +29,7 @@ pub const SelectInst = struct { dst: MOperand, src: MOperand, cc: CondCode };
 pub const TestFlagsInst = struct { a: MOperand, b: MOperand };
 pub const CmpInst = struct { cc: CondCode, a: MOperand, b: MOperand };
 pub const CmpFlagsInst = struct { a: MOperand, b: MOperand };
+pub const SetCCInst = struct { dst: MOperand, cc: CondCode };
 pub const JmpInst = struct { target: u32 };
 pub const JccInst = struct { cc: CondCode, target: u32 };
 pub const CallInst = struct {
@@ -70,6 +71,7 @@ pub const MInst = union(enum) {
     test_flags: TestFlagsInst,
     cmp: CmpInst,
     cmp_flags: CmpFlagsInst,
+    setcc: SetCCInst,
     jmp: JmpInst,
     jcc: JccInst,
     call: CallInst,
@@ -107,7 +109,7 @@ pub fn hasDst(inst: MInst) bool {
         .fcmp,
         .sitofp, .fptosi, .fpext, .fptrunc,
         .sext_op, .zext_op, .trunc_op,
-        .select,
+        .select, .setcc,
         => true,
         .call => |c| !c.is_void,
         else => false,
@@ -136,6 +138,7 @@ pub fn dstVReg(inst: MInst) ?u32 {
         .sitofp, .fptosi, .fpext, .fptrunc => |c| vregOf(c.dst),
         .sext_op, .zext_op, .trunc_op => |c| vregOf(c.dst),
         .select => |s| vregOf(s.dst),
+        .setcc => |s| vregOf(s.dst),
         else => null,
     };
 }

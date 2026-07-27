@@ -15,11 +15,16 @@ pub fn lowerModule(mir_mod: *const mir.MModule, allocator: std.mem.Allocator) !m
 }
 
 fn lowerFunction(mir_func: *const mir.MFunction) !machine.MFunction {
+    const params = try mir_func.allocator.alloc(machine.MOperand, mir_func.params.len);
+    for (mir_func.params, 0..) |p, i| {
+        params[i] = lowerOp(mir_func, p);
+    }
+
     var mfunc = machine.MFunction{
         .name = mir_func.name,
         .blocks = std.ArrayList(machine.MBlock).init(mir_func.allocator),
         .vreg_info = std.AutoHashMap(u32, machine.VRegInfo).init(mir_func.allocator),
-        .params = mir_func.params,
+        .params = params,
         .allocator = mir_func.allocator,
     };
 
@@ -30,7 +35,7 @@ fn lowerFunction(mir_func: *const mir.MFunction) !machine.MFunction {
 
     for (mir_func.blocks.items) |*mir_blk| {
         var blk = machine.MBlock{
-            .name = mir_blk.name,
+            .name = mir_blk.label,
             .instrs = std.ArrayList(machine.MInst).init(mir_func.allocator),
         };
 
@@ -61,10 +66,11 @@ fn lowerInst(mir_func: *const mir.MFunction, mir_inst: mir.MInst) !machine.MInst
         .not_op => |m| .{ .not_op = .{ .dst = lowerOp(mir_func, m.dst) } },
         .neg_op => |m| .{ .neg_op = .{ .dst = lowerOp(mir_func, m.dst) } },
         .test_flags => |m| .{ .test_flags = .{ .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
-        .cmp => |m| .{ .cmp = .{ .cc = m.cc, .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
+        .cmp => |m| .{ .cmp = .{ .cc = convertCC(m.cc), .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
         .cmp_flags => |m| .{ .cmp_flags = .{ .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
+        .setcc => |m| .{ .setcc = .{ .dst = lowerOp(mir_func, m.dst), .cc = convertCC(m.cc) } },
         .jmp => |m| .{ .jmp = .{ .target = @intCast(m.target) } },
-        .jcc => |m| .{ .jcc = .{ .cc = m.cc, .target = @intCast(m.target) } },
+        .jcc => |m| .{ .jcc = .{ .cc = convertCC(m.cc), .target = @intCast(m.target) } },
         .call => |m| blk: {
             var args: [14]machine.MOperand = undefined;
             for (&args) |*a| a.* = .{ .imm = 0 };
@@ -72,8 +78,8 @@ fn lowerInst(mir_func: *const mir.MFunction, mir_inst: mir.MInst) !machine.MInst
             break :blk .{ .call = .{ .name = m.name, .args = args, .arg_count = m.arg_count, .dst = lowerOp(mir_func, m.dst), .is_void = m.is_void } };
         },
         .alloca => |m| .{ .alloca = .{ .size = m.size, .dst = lowerOp(mir_func, m.dst) } },
-        .load => |m| .{ .load = .{ .dst = lowerOp(mir_func, m.dst), .ptr = lowerOp(mir_func, m.ptr), .size = m.size } },
-        .store => |m| .{ .store = .{ .ptr = lowerOp(mir_func, m.ptr), .src = lowerOp(mir_func, m.src), .size = m.size } },
+        .load => |m| .{ .load = .{ .dst = lowerOp(mir_func, m.dst), .ptr = lowerOp(mir_func, m.ptr), .size = convertMemSize(m.size) } },
+        .store => |m| .{ .store = .{ .ptr = lowerOp(mir_func, m.ptr), .src = lowerOp(mir_func, m.src), .size = convertMemSize(m.size) } },
         .lea => |m| .{ .lea = .{ .dst = lowerOp(mir_func, m.dst), .base = lowerOp(mir_func, m.base), .index = lowerOp(mir_func, m.index), .scale = m.scale, .disp = m.disp } },
         .ret => |m| switch (m) {
             .void_ret => .{ .ret = .void_ret },
@@ -86,7 +92,7 @@ fn lowerInst(mir_func: *const mir.MFunction, mir_inst: mir.MInst) !machine.MInst
         .fdiv => |m| .{ .fdiv = .{ .dst = lowerOp(mir_func, m.dst), .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
         .fneg_op => |m| .{ .fneg_op = .{ .dst = lowerOp(mir_func, m.dst) } },
         .fsqrt_op => |m| .{ .fsqrt_op = .{ .dst = lowerOp(mir_func, m.dst) } },
-        .fcmp => |m| .{ .fcmp = .{ .cc = m.cc, .dst = lowerOp(mir_func, m.dst), .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
+        .fcmp => |m| .{ .fcmp = .{ .cc = convertCC(m.cc), .dst = lowerOp(mir_func, m.dst), .a = lowerOp(mir_func, m.a), .b = lowerOp(mir_func, m.b) } },
         .sitofp => |m| .{ .sitofp = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
         .fptosi => |m| .{ .fptosi = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
         .fpext => |m| .{ .fpext = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
@@ -94,15 +100,33 @@ fn lowerInst(mir_func: *const mir.MFunction, mir_inst: mir.MInst) !machine.MInst
         .sext_op => |m| .{ .sext_op = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
         .zext_op => |m| .{ .zext_op = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
         .trunc_op => |m| .{ .trunc_op = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
-        .select => |m| .{ .select = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src), .cc = m.cc } },
+        .select => |m| .{ .select = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src), .cc = convertCC(m.cc) } },
     };
 }
 
 fn lowerOp(mir_func: *const mir.MFunction, op: mir.MOperand) machine.MOperand {
     return switch (op) {
-        .vreg => |v| .{ .vreg = .{ .id = v, .class = mir_func.getVRegClass(v) orelse .gpr } },
+        .vreg => |v| .{ .vreg = .{ .id = v, .class = convertClass(mir_func.getVRegClass(v)) } },
         .phys => |r| .{ .phys = r },
         .imm => |v| .{ .imm = v },
         .mem => |m| .{ .mem = .{ .base = m.base, .offset = m.offset, .size = m.size, .index = m.index, .scale = m.scale } },
     };
+}
+
+fn convertClass(cls: ?mir.VRegClass) machine.RegClass {
+    if (cls) |c| {
+        return switch (c) {
+            .gpr => .gpr,
+            .xmm => .xmm,
+        };
+    }
+    return .gpr;
+}
+
+fn convertCC(cc: mir.CondCode) machine.CondCode {
+    return @enumFromInt(@intFromEnum(cc));
+}
+
+fn convertMemSize(ms: mir.MemSize) machine.instruction.MemSize {
+    return @enumFromInt(@intFromEnum(ms));
 }

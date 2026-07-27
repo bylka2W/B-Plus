@@ -2,6 +2,7 @@ const std = @import("std");
 const block = @import("block.zig");
 const MBlock = block.MBlock;
 const value = @import("value.zig");
+const operand = @import("operand.zig");
 const RegClass = value.RegClass;
 const DataType = value.DataType;
 
@@ -18,7 +19,7 @@ pub const MFunction = struct {
     name: []const u8,
     blocks: std.ArrayList(MBlock),
     vreg_info: std.AutoHashMap(u32, VRegInfo),
-    params: []const u32,
+    params: []const operand.MOperand,
     allocator: std.mem.Allocator,
 
     pub fn putVReg(self: *MFunction, id: u32, ty: DataType) void {
@@ -47,6 +48,7 @@ pub const MModule = struct {
             for (f.blocks.items) |*b| b.deinit();
             f.blocks.deinit();
             f.vreg_info.deinit();
+            if (f.params.len > 0) self.allocator.free(f.params);
         }
         self.functions.deinit();
     }

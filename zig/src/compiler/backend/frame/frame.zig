@@ -204,8 +204,23 @@ pub const FrameManager = struct {
     }
 
     fn emitChkstk(code: *std.ArrayList(u8), frame_size: u32) !void {
-        try x64.emit(code, .MOV_R64_IMM64, &.{ enc.Operand.r(0), enc.Operand.immU32(frame_size) });
-        try x64.emit(code, .CALL_REL32, &.{enc.Operand.immU32(0)});
-        try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(frame_size) });
+        // Inline stack probe: walk downward through each 4096-byte page,
+        // performing a store to trigger guard-page expansion.
+        // Uses r10 as scratch (caller-saved, not used for integer arg passing).
+        const probe_pages = (frame_size + 0xFFF) / 0x1000;
+        var remaining = frame_size;
+        var i: u32 = 0;
+        while (i + 1 < probe_pages) : (i += 1) {
+            // sub rsp, 0x1000
+            try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(0x1000) });
+            // mov [rsp], rax  (touch the page via store; clobbers rax low 32)
+            try x64.emit(code, .MOV_MEM_R64, &.{ enc.Operand.mem(4, 0), enc.Operand.r(0) });
+            remaining -|= 0x1000;
+        }
+        // Subtract the final partial page.
+        if (remaining > 0) {
+            try x64.emit(code, .SUB_R64_IMM32, &.{ enc.Operand.r(4), enc.Operand.immU32(remaining) });
+            try x64.emit(code, .MOV_MEM_R64, &.{ enc.Operand.mem(4, 0), enc.Operand.r(0) });
+        }
     }
 };
