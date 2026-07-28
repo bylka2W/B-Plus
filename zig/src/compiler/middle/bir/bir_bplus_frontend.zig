@@ -71,8 +71,8 @@ pub fn lowerProgram(allocator: Allocator, program: *const ast.ProgramNode) !bir.
     for (program.common.func_defs.items) |func| {
         try lowerFunction(allocator, &module, func);
     }
-    for (program.plan.states.items) |state| {
-        try lowerState(allocator, &module, state);
+    if (program.plan.states.items.len > 0) {
+        try lowerStateMachine(allocator, &module, program.plan.states.items);
     }
     return module;
 }
@@ -139,11 +139,90 @@ fn lowerFunction(
     if (!b.terminated()) try b.retVoid();
 }
 
-fn lowerState(
+fn lowerStateMachine(
+    allocator: Allocator,
+    module: *bir.Module,
+    states: []const ast.StateDefNode,
+) !void {
+    try ensureTypes(module);
+
+    var sm = try module.addStateMachine("plan", @intCast(states.len));
+
+    for (states, 0..) |state, si| {
+        const entry_fn = try lowerStateEntry(allocator, module, state);
+        const exit_fn = try lowerStateExit(allocator, module, state);
+        try sm.states.append(.{
+            .name = try allocator.dupe(u8, state.name),
+            .entry_fn = entry_fn,
+            .exit_fn = exit_fn,
+            .variables_count = @intCast(state.variables.items.len),
+        });
+        for (state.transitions.items) |t| {
+            const target_idx = blk: {
+                for (states, 0..) |s, ti| {
+                    if (std.mem.eql(u8, s.name, t.target)) break :blk @as(u32, @intCast(ti));
+                }
+                break :blk 0;
+            };
+
+            var event_id: u32 = 0;
+            if (t.is_always) {
+                event_id = 0;
+            } else if (t.event_name) |ename| {
+                if (sm.event_id_map.get(ename)) |existing| {
+                    event_id = existing;
+                } else {
+                    event_id = @intCast(sm.event_names.items.len);
+                    try sm.event_names.append(try allocator.dupe(u8, ename));
+                    try sm.event_id_map.put(sm.event_names.items[event_id], event_id);
+                }
+            }
+
+            const guard_fn: ?bir.FunctionId = null;
+            var guard_expr_owned: ?[]const u8 = null;
+            if (t.guard) |guard_expr| {
+                guard_expr_owned = try allocator.dupe(u8, guard_expr);
+            }
+
+            var action_fn: ?bir.FunctionId = null;
+            if (t.body) |action_body| {
+                const act_name = try std.fmt.allocPrint(allocator, "action_{s}_{s}", .{ state.name, t.target });
+                defer allocator.free(act_name);
+                const afid = try module.addFunction(act_name, t_void, .internal);
+                const aeid = try module.addBlock(afid, "entry");
+                var ab = Builder{
+                    .alloc = allocator,
+                    .mod = module,
+                    .fid = afid,
+                    .blk = aeid,
+                    .vars = std.StringHashMap(VarInfo).init(allocator),
+                    .ret_type = t_void,
+                    .func_return_types = std.StringHashMap(TypeId).init(allocator),
+                };
+                defer ab.vars.deinit();
+                defer ab.func_return_types.deinit();
+                try lowerBodyStr(&ab, action_body, ';');
+                if (!ab.terminated()) try ab.retVoid();
+                action_fn = afid;
+            }
+
+            try sm.transitions.append(.{
+                .event_id = event_id,
+                .from_state_idx = @intCast(si),
+                .to_state_idx = target_idx,
+                .guard_fn = guard_fn,
+                .action_fn = action_fn,
+                .guard_expr = guard_expr_owned,
+            });
+        }
+    }
+}
+
+fn lowerStateEntry(
     allocator: Allocator,
     module: *bir.Module,
     state: ast.StateDefNode,
-) !void {
+) !bir.FunctionId {
     try ensureTypes(module);
     const nm = try std.fmt.allocPrint(allocator, "state_{s}_entry", .{state.name});
     defer allocator.free(nm);
@@ -174,6 +253,37 @@ fn lowerState(
         try lowerBodyStr(&b, body, ';');
     }
     if (!b.terminated()) try b.retVoid();
+    return fid;
+}
+
+fn lowerStateExit(
+    allocator: Allocator,
+    module: *bir.Module,
+    state: ast.StateDefNode,
+) !?bir.FunctionId {
+    try ensureTypes(module);
+    const body = state.exit_body orelse return null;
+    const tb = std.mem.trim(u8, body, " \t\r\n");
+    if (tb.len == 0) return null;
+
+    const nm = try std.fmt.allocPrint(allocator, "state_{s}_exit", .{state.name});
+    defer allocator.free(nm);
+    const fid = try module.addFunction(nm, t_void, .internal);
+    const eid = try module.addBlock(fid, "entry");
+    var b = Builder{
+        .alloc = allocator,
+        .mod = module,
+        .fid = fid,
+        .blk = eid,
+        .vars = std.StringHashMap(VarInfo).init(allocator),
+        .ret_type = t_void,
+        .func_return_types = std.StringHashMap(TypeId).init(allocator),
+    };
+    defer b.vars.deinit();
+    defer b.func_return_types.deinit();
+    try lowerBodyStr(&b, tb, ';');
+    if (!b.terminated()) try b.retVoid();
+    return fid;
 }
 
 const Builder = struct {

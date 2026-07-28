@@ -1,0 +1,19 @@
+state Locked {
+ entry {
+    print("locked\n")
+ }
+
+ on open -> Opened
+}
+
+state Opened {
+ entry {
+    print("opened\n")
+ }
+}
+
+machine Door {
+ initial Locked
+}
+
+fire open

@@ -82,6 +82,8 @@ pub const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "on", .kw_on },
     .{ "always", .kw_always },
     .{ "parallel", .kw_parallel },
+    .{ "fire", .kw_fire },
+    .{ "machine", .kw_machine },
 
     // GPU / compute
     .{ "kernel", .kw_kernel },
@@ -113,6 +115,8 @@ pub const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "на", .kw_on },
     .{ "всегда", .kw_always },
     .{ "параллельно", .kw_parallel },
+    .{ "пуск", .kw_fire },
+    .{ "автомат", .kw_machine },
 
     // Russian aliases — GPU / compute
     .{ "ядро", .kw_kernel },

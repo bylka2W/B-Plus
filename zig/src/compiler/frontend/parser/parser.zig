@@ -242,6 +242,8 @@ pub const Parser = struct {
                 .states = std.ArrayList(ast.StateDefNode).init(p.allocator),
                 .parallel_blocks = std.ArrayList(ast.ParallelBlock).init(p.allocator),
                 .memory = null,
+                .fire_events = std.ArrayList([]const u8).init(p.allocator),
+                .initial_state = null,
             },
             .metal = .{
                 .entries = std.ArrayList(ast.EntryDecl).init(p.allocator),
@@ -359,6 +361,42 @@ pub const Parser = struct {
                 }
             } else if (p.peek(.at) or p.peek(.kw_if) or p.peek(.kw_return) or p.peek(.kw_print) or p.peek(.kw_free)) {
                 // Skip stray statements at top level
+                while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
+                if (p.peek(.newline)) p.advance();
+            } else if (p.peek(.kw_fire)) {
+                p.advance();
+                if (p.peek(.identifier)) {
+                    const event_name = p.identText();
+                    try program.plan.fire_events.append(try p.allocator.dupe(u8, event_name));
+                    p.advance();
+                }
+                while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
+                if (p.peek(.newline)) p.advance();
+            } else if (p.peek(.kw_machine)) {
+                p.advance();
+                if (p.peek(.identifier)) {
+                    p.advance(); // skip machine name
+                }
+                p.consumeNewlines();
+                if (p.peek(.lbrace)) {
+                    p.advance();
+                    p.nesting_depth += 1;
+                    while (p.cur_tok.kind != .rbrace and p.cur_tok.kind != .eof) {
+                        p.consumeNewlines();
+                        if (p.peek(.rbrace)) break;
+                        if (std.mem.eql(u8, p.identText(), "initial")) {
+                            p.advance();
+                            if (p.peek(.identifier)) {
+                                program.plan.initial_state = try p.allocator.dupe(u8, p.identText());
+                                p.advance();
+                            }
+                        } else {
+                            while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
+                        }
+                    }
+                    p.nesting_depth -= 1;
+                    if (p.peek(.rbrace)) p.advance();
+                }
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 if (p.peek(.newline)) p.advance();
             } else if (p.peek(.string_literal) or p.isNumeric() or p.peek(.char_literal) or p.peek(.arrow) or p.peek(.minus) or p.peek(.plus) or p.peek(.star) or p.peek(.slash) or p.peek(.lparen) or p.peek(.rparen) or p.peek(.lbracket) or p.peek(.rbracket) or p.peek(.colon) or p.peek(.semicolon) or p.peek(.comma) or p.peek(.hash) or p.peek(.error_token)) {

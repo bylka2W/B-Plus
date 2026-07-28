@@ -196,6 +196,8 @@ pub const ProgramPlan = struct {
     states: std.ArrayList(StateDefNode),
     parallel_blocks: std.ArrayList(ParallelBlock),
     memory: ?MemoryDirective,
+    fire_events: std.ArrayList([]const u8),
+    initial_state: ?[]const u8,
 };
 
 pub const ProgramMetal = struct {
@@ -248,6 +250,9 @@ pub const ProgramNode = struct {
         self.plan.states.deinit();
         for (self.plan.parallel_blocks.items) |*p| p.states.deinit();
         self.plan.parallel_blocks.deinit();
+        for (self.plan.fire_events.items) |fe| a.free(fe);
+        self.plan.fire_events.deinit();
+        if (self.plan.initial_state) |is| a.free(is);
 
         // Metal
         for (self.metal.entries.items) |*e| {

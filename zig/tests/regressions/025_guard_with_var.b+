@@ -1,0 +1,15 @@
+state Locked {
+    var key: int = 1
+
+    on open [key == 1] -> Opened
+    entry {
+        print("locked\n")
+    }
+}
+
+state Opened {
+    on close -> Locked
+    entry {
+        print("opened\n")
+    }
+}

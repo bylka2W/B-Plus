@@ -46,6 +46,9 @@ pub const ir = struct {
 
     pub const MemRegion = module.MemRegion;
     pub const ResourceDecl = module.ResourceDecl;
+    pub const SmTransition = module.SmTransition;
+    pub const SmState = module.SmState;
+    pub const StateMachine = module.StateMachine;
     pub const Module = module.Module;
 };
 
@@ -90,6 +93,9 @@ pub const unregisterDataUses = function.unregisterDataUses;
 
 pub const MemRegion = ir.MemRegion;
 pub const ResourceDecl = ir.ResourceDecl;
+pub const SmTransition = ir.SmTransition;
+pub const SmState = ir.SmState;
+pub const StateMachine = ir.StateMachine;
 pub const Module = ir.Module;
 
 // ─── Analysis infrastructure ───

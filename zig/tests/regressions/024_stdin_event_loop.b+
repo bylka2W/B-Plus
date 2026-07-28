@@ -1,0 +1,21 @@
+state Locked {
+ entry {
+    print("locked\n")
+ }
+
+ exit {
+    print("unlock\n")
+ }
+
+ on open [1 == 1] -> Opened
+}
+
+state Opened {
+ entry {
+    print("opened\n")
+ }
+}
+
+machine Door {
+ initial Locked
+}

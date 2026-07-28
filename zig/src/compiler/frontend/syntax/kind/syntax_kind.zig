@@ -126,6 +126,8 @@ pub const SyntaxKind = enum(u16) {
     kw_inline = 360,
     kw_noinline = 361,
     kw_deref = 362,
+    kw_fire = 363,
+    kw_machine = 364,
 
     // Whitespace & Trivia
     whitespace = 100,
@@ -657,6 +659,8 @@ pub fn tokenKindToSyntaxKind(kind: TokenKind) SyntaxKind {
         .kw_use => .kw_use,
         .kw_metal => .kw_metal,
         .kw_cxx => .kw_cxx,
+        .kw_fire => .kw_fire,
+        .kw_machine => .kw_machine,
 
         .lparen => .lparen,
         .rparen => .rparen,

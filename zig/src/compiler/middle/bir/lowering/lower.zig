@@ -238,4 +238,41 @@ pub fn dumpModule(module: *const bir.Module, writer: anytype) !void {
         }
         try writer.writeAll("\n");
     }
+
+    for (module.state_machines.items) |sm| {
+        try writer.print("\n; State Machine: {s}\n", .{sm.name});
+        try writer.print(";   States ({d}):\n", .{sm.states.items.len});
+        for (sm.states.items, 0..) |state, si| {
+            try writer.print(";     [{d}] {s} entry=@{s}", .{ si, state.name, "" });
+            const entry_fn = module.getFunction(state.entry_fn);
+            try writer.print("@{s}", .{entry_fn.name});
+            if (state.exit_fn) |efn| {
+                const exit_fn = module.getFunction(efn);
+                try writer.print(" exit=@{s}", .{exit_fn.name});
+            }
+            try writer.writeAll("\n");
+        }
+        try writer.print(";   Events ({d}):\n", .{sm.event_names.items.len});
+        for (sm.event_names.items, 0..) |ename, ei| {
+            try writer.print(";     [{d}] \"{s}\"\n", .{ ei, ename });
+        }
+        try writer.print(";   Transitions ({d}):\n", .{sm.transitions.items.len});
+        for (sm.transitions.items) |t| {
+            const from = sm.states.items[t.from_state_idx].name;
+            const to = sm.states.items[t.to_state_idx].name;
+            try writer.print(";     {s} -> {s} (event={d}", .{ from, to, t.event_id });
+            if (t.guard_fn) |gf| {
+                const gfn = module.getFunction(gf);
+                try writer.print(" guard=@{s}", .{gfn.name});
+            }
+            if (t.guard_expr) |ge| {
+                try writer.print(" guard_expr=\"{s}\"", .{ge});
+            }
+            if (t.action_fn) |af| {
+                const afn = module.getFunction(af);
+                try writer.print(" action=@{s}", .{afn.name});
+            }
+            try writer.writeAll(")\n");
+        }
+    }
 }

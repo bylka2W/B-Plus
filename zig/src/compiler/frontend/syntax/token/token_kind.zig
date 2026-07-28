@@ -103,6 +103,8 @@ pub const TokenKind = enum(u16) {
     // Transitions
     kw_on,
     kw_always,
+    kw_fire,
+    kw_machine,
 
     // Runtime
     kw_run,

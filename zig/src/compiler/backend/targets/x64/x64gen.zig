@@ -1119,7 +1119,29 @@ fn emitPrologueAndInit(p: *PendingOutput, program: ast.ProgramNode) !void {
     if (program.plan.states.items.len > 0) {
         try emitMovRegImm32(p, Reg.RAX, 1024);
         try x64.emit(&p.cbuf.bytes, .MOV_MEM_R32, &.{ x64.Operand.mem(Reg.RBP, p.off_abudget), x64.Operand.r(Reg.RAX) });
-        try emitCallToLabel(p, p.en_id[0]); try emitLongJmp(p, try allocLabelId(p, "always_entry", .{}));
+        try emitCallToLabel(p, p.en_id[0]);
+        // Process top-level fire events
+        if (program.plan.fire_events.items.len > 0) {
+            const initial_si: usize = 0;
+            for (program.plan.fire_events.items) |event_name| {
+                const si = initial_si;
+                const state_def = program.plan.states.items[si];
+                for (state_def.transitions.items, 0..) |*t, ti| {
+                    if (t.event_name) |en| {
+                        if (std.mem.eql(u8, en, event_name)) {
+                            if (t.guard) |g| {
+                                if (g.len > 0) {
+                                    try emitGuardSkip(p, g, si, ti);
+                                }
+                            }
+                            try changeToState(p, t.target, si, program, false, false, false);
+                            try setLabel(p, try allocLabelId(p, "sk_{d}_{d}", .{si, ti}));
+                        }
+                    }
+                }
+            }
+        }
+        try emitLongJmp(p, try allocLabelId(p, "always_entry", .{}));
     } else {
         try emitLongJmp(p, try allocLabelId(p, "exit_process", .{}));
     }
@@ -2433,14 +2455,15 @@ fn emitGuardSkip(p: *PendingOutput, guard: []const u8, si: usize, ti: usize) !vo
         }
     }
     if (op.len == 0) return;
-    if (!try tryLoadVarToReg(p, Reg.RAX, lhs, "")) {
+    const state_name = p.state_names.items[si];
+    if (!try tryLoadVarToReg(p, Reg.RAX, lhs, state_name)) {
         if (parseNumber(lhs) != 0 or (lhs.len > 0 and (std.ascii.isDigit(lhs[0]) or lhs[0] == '-'))) {
             try emitLoadImm(p, Reg.RAX, parseNumber(lhs));
         } else {
             try emitXorReg(p, Reg.RAX);
         }
     }
-    if (!try tryLoadVarToReg(p, Reg.RBX, rhs, "")) {
+    if (!try tryLoadVarToReg(p, Reg.RBX, rhs, state_name)) {
         const rn = parseNumber(rhs);
         if (rn != 0 or (rhs.len > 0 and (std.ascii.isDigit(rhs[0]) or rhs[0] == '-'))) {
             try emitLoadImm(p, Reg.RBX, rn);
@@ -3609,6 +3632,11 @@ fn emitAction(p: *PendingOutput, body: []const u8, current_state: []const u8) an
 fn emitSingleAction(p: *PendingOutput, body: []const u8, current_state: []const u8) anyerror!void {
     if (body.len == 0) return;
     const trimmed_body = std.mem.trimLeft(u8, body, " \t\r\n");
+
+    // fire <event> — handled at top-level only (see generate entry point)
+    if (std.mem.startsWith(u8, trimmed_body, "fire ") or std.mem.eql(u8, trimmed_body, "fire")) {
+        return;
+    }
 
     // break
     if (std.mem.eql(u8, trimmed_body, "break")) {

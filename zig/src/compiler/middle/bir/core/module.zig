@@ -35,12 +35,55 @@ pub const ResourceDecl = struct {
     space: u32,
 };
 
+pub const SmTransition = struct {
+    event_id: u32,
+    from_state_idx: u32,
+    to_state_idx: u32,
+    guard_fn: ?FunctionId,
+    action_fn: ?FunctionId,
+    guard_expr: ?[]const u8,
+};
+
+pub const SmState = struct {
+    name: []const u8,
+    entry_fn: FunctionId,
+    exit_fn: ?FunctionId,
+    variables_count: u32,
+};
+
+pub const StateMachine = struct {
+    name: []const u8,
+    states: std.ArrayList(SmState),
+    transitions: std.ArrayList(SmTransition),
+    event_names: std.ArrayList([]const u8),
+    event_id_map: std.StringHashMap(u32),
+    initial_state_idx: u32,
+
+    pub fn deinit(self: *StateMachine, allocator: std.mem.Allocator) void {
+        for (self.states.items) |s| allocator.free(s.name);
+        self.states.deinit();
+        for (self.transitions.items) |t| {
+            if (t.guard_expr) |ge| allocator.free(ge);
+        }
+        self.transitions.deinit();
+        for (self.event_names.items) |n| allocator.free(n);
+        self.event_names.deinit();
+        self.event_id_map.deinit();
+        allocator.free(self.name);
+    }
+
+    pub fn getEventId(self: *StateMachine, name: []const u8) u32 {
+        return self.event_id_map.get(name) orelse 0;
+    }
+};
+
 pub const Module = struct {
     allocator: std.mem.Allocator,
     types: TypeTable,
     functions: std.ArrayList(Function),
     resources: std.ArrayList(ResourceDecl),
     memory_regions: std.ArrayList(MemRegion),
+    state_machines: std.ArrayList(StateMachine),
     entry_point: ?FunctionId,
     next_function_id: FunctionId,
     metadata: std.StringHashMap([]const u8),
@@ -52,6 +95,7 @@ pub const Module = struct {
             .functions = std.ArrayList(Function).init(allocator),
             .resources = std.ArrayList(ResourceDecl).init(allocator),
             .memory_regions = std.ArrayList(MemRegion).init(allocator),
+            .state_machines = std.ArrayList(StateMachine).init(allocator),
             .entry_point = null,
             .next_function_id = 0,
             .metadata = std.StringHashMap([]const u8).init(allocator),
@@ -69,6 +113,8 @@ pub const Module = struct {
             self.allocator.free(mr.name);
         }
         self.memory_regions.deinit();
+        for (self.state_machines.items) |*sm| sm.deinit(self.allocator);
+        self.state_machines.deinit();
         self.types.deinit();
         {
             var it = self.metadata.iterator();
@@ -78,6 +124,21 @@ pub const Module = struct {
             }
             self.metadata.deinit();
         }
+    }
+
+    pub fn addStateMachine(self: *Module, name: []const u8, num_states: u32) !*StateMachine {
+        const idx = self.state_machines.items.len;
+        var sm = StateMachine{
+            .name = try self.allocator.dupe(u8, name),
+            .states = std.ArrayList(SmState).init(self.allocator),
+            .transitions = std.ArrayList(SmTransition).init(self.allocator),
+            .event_names = std.ArrayList([]const u8).init(self.allocator),
+            .event_id_map = std.StringHashMap(u32).init(self.allocator),
+            .initial_state_idx = 0,
+        };
+        try sm.states.ensureTotalCapacity(num_states);
+        try self.state_machines.append(sm);
+        return &self.state_machines.items[idx];
     }
 
     pub fn addFunction(self: *Module, name: []const u8, ret_ty: TypeId, cc: CallingConvention) !FunctionId {
