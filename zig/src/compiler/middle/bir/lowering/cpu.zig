@@ -5,6 +5,16 @@ const Op = bir.Op;
 
 const CmpDef = struct { op0: u32, op1: u32, cc: mir.CondCode };
 
+fn sizeToMemSize(size: u32) mir.MemSize {
+    return switch (size) {
+        1 => .u8,
+        2 => .u16,
+        4 => .u32,
+        8 => .u64,
+        else => .u64,
+    };
+}
+
 fn birTypeToDataType(types: *const bir.types.TypeTable, ty: bir.types.TypeId) mir.DataType {
     const t = types.get(ty);
     return switch (t.kind) {
@@ -51,7 +61,88 @@ pub fn lowerModuleToMir(allocator: std.mem.Allocator, mod: *const bir.Module) ![
         const mf = try lowerToMir(allocator, &mod.types, func);
         try mfuncs.append(mf);
     }
+    for (mod.state_machines.items) |*sm| {
+        const mf = try lowerStateMachine(allocator, mod, sm);
+        try mfuncs.append(mf);
+    }
     return mfuncs.toOwnedSlice();
+}
+
+fn allocVreg(next: *u32) u32 {
+    const v = next.*;
+    next.* += 1;
+    return v;
+}
+
+pub fn lowerStateMachine(allocator: std.mem.Allocator, mod: *const bir.Module, sm: *const bir.StateMachine) !mir.MFunction {
+    var mfunc = mir.MFunction.init(allocator, sm.name);
+    errdefer mfunc.deinit();
+    var next_vreg: u32 = 1;
+
+    const state_slot = allocVreg(&next_vreg);  // vreg 1 = state slot
+
+    const init_st = &sm.states.items[sm.initial_state_idx];
+
+    // Block 0: entry — state_init, enter initial state, call entry function
+    {
+        var block = mir.MBlock{ .label = try allocator.dupe(u8, "entry"), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+        errdefer { allocator.free(block.label); block.instrs.deinit(); }
+
+        try block.instrs.append(.{ .alloca = .{ .size = 8, .dst = .{ .vreg = state_slot } } });
+        try block.instrs.append(.{ .state_init = .{ .initial_state = .{ .imm = @as(i64, @intCast(sm.initial_state_idx)) } } });
+        try block.instrs.append(.{ .state_enter = .{ .state_id = .{ .imm = @as(i64, @intCast(sm.initial_state_idx)) } } });
+
+        const entry_name = try std.fmt.allocPrint(allocator, "state_{s}_entry", .{init_st.name});
+        const cargs: [14]mir.MOperand = @splat(.{ .imm = 0 });
+        try block.instrs.append(.{ .call = .{ .name = entry_name, .args = cargs, .arg_count = 0, .dst = .{ .imm = 0 }, .is_void = true } });
+
+        try block.instrs.append(.{ .jmp = .{ .target = 1 } });
+        try mfunc.blocks.append(block);
+    }
+
+    // Block 1: event_loop — dispatch event, check transitions via cmp+jcc
+    {
+        var block = mir.MBlock{ .label = try allocator.dupe(u8, "event_loop"), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+        errdefer { allocator.free(block.label); block.instrs.deinit(); }
+
+        const event_val = allocVreg(&next_vreg);
+        const buf_val = allocVreg(&next_vreg);
+        const size_val = allocVreg(&next_vreg);
+        try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = buf_val }, .src = .{ .imm = 0 } } });
+        try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = size_val }, .src = .{ .imm = 0 } } });
+        try block.instrs.append(.{ .event_dispatch = .{ .dst = .{ .vreg = event_val }, .buf = .{ .vreg = buf_val }, .size = .{ .vreg = size_val } } });
+
+        // For each transition: cmp event, event_id → jcc to transition block
+        for (sm.transitions.items, 0..) |t, ti| {
+            const block_idx: u32 = @as(u32, @intCast(2 + ti));
+            _ = try allocator.dupe(u8, "");  // keep errdefer happy — no free needed
+            try block.instrs.append(.{ .cmp = .{ .cc = .eq, .a = .{ .vreg = event_val }, .b = .{ .imm = @as(i64, @intCast(t.event_id)) } } });
+            try block.instrs.append(.{ .jcc = .{ .cc = .eq, .target = block_idx } });
+        }
+
+        try block.instrs.append(.{ .jmp = .{ .target = 1 } });
+        try mfunc.blocks.append(block);
+    }
+
+    // Blocks 2+: transition blocks — state_exit, state_enter, call action, jmp back
+    for (sm.transitions.items, 0..) |t, ti| {
+        var block = mir.MBlock{ .label = try std.fmt.allocPrint(allocator, "trans_{d}", .{ti}), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+        errdefer { allocator.free(block.label); block.instrs.deinit(); }
+
+        try block.instrs.append(.{ .state_exit = .{ .state_id = .{ .imm = @as(i64, @intCast(t.from_state_idx)) } } });
+        try block.instrs.append(.{ .state_enter = .{ .state_id = .{ .imm = @as(i64, @intCast(t.to_state_idx)) } } });
+
+        if (t.action_fn) |af| {
+            const act_name = try allocator.dupe(u8, mod.functions.items[af].name);
+            const aargs: [14]mir.MOperand = @splat(.{ .imm = 0 });
+            try block.instrs.append(.{ .call = .{ .name = act_name, .args = aargs, .arg_count = 0, .dst = .{ .imm = 0 }, .is_void = true } });
+        }
+
+        try block.instrs.append(.{ .jmp = .{ .target = 1 } });
+        try mfunc.blocks.append(block);
+    }
+
+    return mfunc;
 }
 
 fn allocValue(next_vreg: *u32) u32 {
@@ -241,20 +332,21 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
 
                 .alloca => {
                     if (result == NO_VALUE) continue;
-                    const ty = types.get(inst.ty);
-                    const elem_ty = ty.kind.pointer.elem;
-                    const size = types.sizeOf(elem_ty);
+                    const size = types.sizeOf(inst.ty);
                     try mblock.instrs.append(.{ .alloca = .{ .size = size, .dst = .{ .vreg = result } } });
                 },
 
                 .load => {
                     if (result == NO_VALUE or inst.operands.len < 1) continue;
-                    try mblock.instrs.append(.{ .load = .{ .dst = .{ .vreg = result }, .ptr = .{ .vreg = inst.operands[0] }, .size = .u64 } });
+                    const load_size = sizeToMemSize(types.sizeOf(inst.ty));
+                    try mblock.instrs.append(.{ .load = .{ .dst = .{ .vreg = result }, .ptr = .{ .vreg = inst.operands[0] }, .size = load_size } });
                 },
 
                 .store => {
                     if (inst.operands.len < 2) continue;
-                    try mblock.instrs.append(.{ .store = .{ .ptr = .{ .vreg = inst.operands[0] }, .src = .{ .vreg = inst.operands[1] }, .size = .u64 } });
+                    const val_ty = inst.ty;
+                    const store_size = sizeToMemSize(types.sizeOf(val_ty));
+                    try mblock.instrs.append(.{ .store = .{ .ptr = .{ .vreg = inst.operands[0] }, .src = .{ .vreg = inst.operands[1] }, .size = store_size } });
                 },
 
                 .fadd => {

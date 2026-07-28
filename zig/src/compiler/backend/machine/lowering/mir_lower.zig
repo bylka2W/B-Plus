@@ -101,6 +101,12 @@ fn lowerInst(mir_func: *const mir.MFunction, mir_inst: mir.MInst) !machine.MInst
         .zext_op => |m| .{ .zext_op = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
         .trunc_op => |m| .{ .trunc_op = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src) } },
         .select => |m| .{ .select = .{ .dst = lowerOp(mir_func, m.dst), .src = lowerOp(mir_func, m.src), .cc = convertCC(m.cc) } },
+        .state_init => |m| .{ .state_init = .{ .initial_state = lowerOp(mir_func, m.initial_state) } },
+        .state_enter => |m| .{ .state_enter = .{ .state_id = lowerOp(mir_func, m.state_id) } },
+        .state_exit => |m| .{ .state_exit = .{ .state_id = lowerOp(mir_func, m.state_id) } },
+        .event_dispatch => |m| .{ .event_dispatch = .{ .dst = lowerOp(mir_func, m.dst), .buf = lowerOp(mir_func, m.buf), .size = lowerOp(mir_func, m.size) } },
+        .transition_check => |m| .{ .transition_check = .{ .result = lowerOp(mir_func, m.result), .event = lowerOp(mir_func, m.event), .event_id = m.event_id } },
+        .guard_eval => |m| .{ .guard_eval = .{ .result = lowerOp(mir_func, m.result), .lhs = lowerOp(mir_func, m.lhs), .rhs = lowerOp(mir_func, m.rhs), .cc = convertCC(m.cc) } },
     };
 }
 

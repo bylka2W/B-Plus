@@ -85,6 +85,12 @@ fn dumpInst(inst: mir.MInst) void {
         .fpext => |c| { std.debug.print("fpext ", .{}); dumpOp(c.dst); std.debug.print(", ", .{}); dumpOp(c.src); },
         .fptrunc => |c| { std.debug.print("fptrunc ", .{}); dumpOp(c.dst); std.debug.print(", ", .{}); dumpOp(c.src); },
         .idiv => |m| { std.debug.print("idiv ", .{}); dumpOp(m.quotient); std.debug.print(", ", .{}); dumpOp(m.divisor); },
+        .state_init => |m| { std.debug.print("state_init ", .{}); dumpOp(m.initial_state); },
+        .state_enter => |m| { std.debug.print("state_enter ", .{}); dumpOp(m.state_id); },
+        .state_exit => |m| { std.debug.print("state_exit ", .{}); dumpOp(m.state_id); },
+        .event_dispatch => |m| { std.debug.print("event_dispatch ", .{}); dumpOp(m.dst); std.debug.print(", ", .{}); dumpOp(m.buf); std.debug.print(", ", .{}); dumpOp(m.size); },
+        .transition_check => |m| { std.debug.print("transition_check ", .{}); dumpOp(m.event); std.debug.print(" ev={d}", .{m.event_id}); },
+        .guard_eval => |m| { std.debug.print("guard_eval ", .{}); dumpOp(m.lhs); std.debug.print(", ", .{}); dumpOp(m.rhs); std.debug.print(" cc={s}", .{@tagName(m.cc)}); },
     }
 }
 

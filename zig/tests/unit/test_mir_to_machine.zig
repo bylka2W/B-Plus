@@ -15,6 +15,7 @@ pub fn main() !void {
     try testComparison();
     try testCall();
     try testRegallocSimple();
+    try testPlanStateMachine();
 
     const stdout = std.io.getStdOut().writer();
     try stdout.writeAll("\n=== ALL MIR→Machine IR TESTS PASSED ===\n");
@@ -457,6 +458,64 @@ fn testRegallocSimple() !void {
     while (it.next()) |kv| {
         try stdout.print("    v{d} -> reg {d}\n", .{ kv.key_ptr.*, kv.value_ptr.* });
     }
+
+    try stdout.writeAll("  PASS\n\n");
+}
+
+fn testPlanStateMachine() !void {
+    const stdout = std.io.getStdOut().writer();
+    try stdout.writeAll("--- testPlanStateMachine ---\n");
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var mmod = mir.MModule.init(alloc);
+    defer mmod.deinit();
+
+    const func = try mmod.addFunction("test_sm");
+    try func.putVReg(0, .i64);
+    try func.putVReg(1, .i64);
+    try func.putVReg(2, .i64);
+    try func.putVReg(3, .i64);
+
+    const blk0 = try addBlock(alloc, func, "entry");
+    try blk0.instrs.append(.{ .state_init = .{ .initial_state = .{ .imm = 0 } } });
+    try blk0.instrs.append(.{ .state_enter = .{ .state_id = .{ .imm = 0 } } });
+    const cargs: [14]mir.MOperand = @splat(.{ .imm = 0 });
+    try blk0.instrs.append(.{ .call = .{ .name = try alloc.dupe(u8, "state_A_entry"), .args = cargs, .arg_count = 0, .dst = .{ .imm = 0 }, .is_void = true } });
+    try blk0.instrs.append(.{ .jmp = .{ .target = 1 } });
+
+    const blk1 = try addBlock(alloc, func, "event_loop");
+    try blk1.instrs.append(.{ .event_dispatch = .{ .dst = .{ .vreg = 1 }, .buf = .{ .vreg = 2 }, .size = .{ .vreg = 3 } } });
+    try blk1.instrs.append(.{ .transition_check = .{ .result = .{ .vreg = 0 }, .event = .{ .vreg = 1 }, .event_id = 1 } });
+    try blk1.instrs.append(.{ .guard_eval = .{ .result = .{ .vreg = 1 }, .lhs = .{ .imm = 0 }, .rhs = .{ .imm = 1 }, .cc = .eq } });
+    try blk1.instrs.append(.{ .state_exit = .{ .state_id = .{ .imm = 0 } } });
+    try blk1.instrs.append(.{ .jmp = .{ .target = 1 } });
+
+    var mmod_out = try mir_lower.lowerModule(&mmod, alloc);
+    defer mmod_out.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), mmod_out.functions.items.len);
+    const out_func = &mmod_out.functions.items[0];
+
+    try std.testing.expectEqual(@as(usize, 2), out_func.blocks.items.len);
+
+    const out_blk0 = &out_func.blocks.items[0];
+    try std.testing.expectEqual(@as(usize, 4), out_blk0.instrs.items.len);
+    try std.testing.expect(out_blk0.instrs.items[0] == .state_init);
+    try std.testing.expect(out_blk0.instrs.items[0].state_init.initial_state == .imm);
+    try std.testing.expectEqual(@as(i64, 0), out_blk0.instrs.items[0].state_init.initial_state.imm);
+    try std.testing.expect(out_blk0.instrs.items[1] == .state_enter);
+    try std.testing.expectEqual(@as(i64, 0), out_blk0.instrs.items[1].state_enter.state_id.imm);
+
+    const out_blk1 = &out_func.blocks.items[1];
+    try std.testing.expect(out_blk1.instrs.items[0] == .event_dispatch);
+    try std.testing.expect(out_blk1.instrs.items[1] == .transition_check);
+    try std.testing.expect(out_blk1.instrs.items[1].transition_check.event_id == 1);
+    try std.testing.expect(out_blk1.instrs.items[2] == .guard_eval);
+    try std.testing.expect(out_blk1.instrs.items[2].guard_eval.cc == .eq);
+    try std.testing.expect(out_blk1.instrs.items[3] == .state_exit);
 
     try stdout.writeAll("  PASS\n\n");
 }

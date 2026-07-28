@@ -9,6 +9,7 @@ const float_sel = @import("isel/float.zig");
 const memory = @import("isel/memory.zig");
 const control = @import("isel/control.zig");
 const conversions = @import("isel/conversions.zig");
+const plan = @import("isel/plan.zig");
 
 pub const OffsetMap = ctx_mod.OffsetMap;
 pub const BlockFixup = ctx_mod.BlockFixup;
@@ -39,6 +40,7 @@ pub fn selectFunction(mfunc: *const mir.MFunction, ra: *const regalloc.RegAllocR
             .ra = ra,
             .scratch = scratch,
             .mfunc = mfunc,
+            .alloca_offsets = &alloca_offsets,
             .block_fixups = &block_fixups,
             .call_fixups = &call_fixups,
             .code_dummy = &code_dummy,
@@ -87,6 +89,12 @@ pub fn selectFunction(mfunc: *const mir.MFunction, ra: *const regalloc.RegAllocR
                 .zext_op => |c| try conversions.selectZext(&ctx, c),
                 .trunc_op => |c| try conversions.selectTrunc(&ctx, c),
                 .select => |s| try control.selectSelect(&ctx, s),
+                .state_init => |m| try plan.selectStateInit(&ctx, m),
+                .state_enter => |m| try plan.selectStateEnter(&ctx, m),
+                .state_exit => |m| try plan.selectStateExit(&ctx, m),
+                .event_dispatch => |m| try plan.selectEventDispatch(&ctx, m),
+                .transition_check => |m| try plan.selectTransitionCheck(&ctx, m),
+                .guard_eval => |m| try plan.selectGuardEval(&ctx, m),
             }
         }
     }

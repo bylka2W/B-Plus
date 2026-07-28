@@ -49,6 +49,13 @@ pub const LeaInst = struct {
     scale: u8 = 1,
     disp: i32 = 0,
 };
+pub const StateInitInst = struct { initial_state: MOperand };
+pub const StateEnterInst = struct { state_id: MOperand };
+pub const StateExitInst = struct { state_id: MOperand };
+pub const EventDispatchInst = struct { dst: MOperand, buf: MOperand, size: MOperand };
+pub const TransitionCheckInst = struct { result: MOperand, event: MOperand, event_id: u32 };
+pub const GuardEvalInst = struct { result: MOperand, lhs: MOperand, rhs: MOperand, cc: CondCode };
+
 pub const RetInst = union(enum) {
     void_ret,
     value: MOperand,
@@ -95,6 +102,12 @@ pub const MInst = union(enum) {
     zext_op: ConvInst,
     trunc_op: ConvInst,
     select: SelectInst,
+    state_init: StateInitInst,
+    state_enter: StateEnterInst,
+    state_exit: StateExitInst,
+    event_dispatch: EventDispatchInst,
+    transition_check: TransitionCheckInst,
+    guard_eval: GuardEvalInst,
 };
 
 pub fn hasDst(inst: MInst) bool {
@@ -110,6 +123,9 @@ pub fn hasDst(inst: MInst) bool {
         .sitofp, .fptosi, .fpext, .fptrunc,
         .sext_op, .zext_op, .trunc_op,
         .select, .setcc,
+        .event_dispatch,
+        .transition_check,
+        .guard_eval,
         => true,
         .call => |c| !c.is_void,
         else => false,
@@ -139,6 +155,9 @@ pub fn dstVReg(inst: MInst) ?u32 {
         .sext_op, .zext_op, .trunc_op => |c| vregOf(c.dst),
         .select => |s| vregOf(s.dst),
         .setcc => |s| vregOf(s.dst),
+        .event_dispatch => |m| vregOf(m.dst),
+        .transition_check => |m| vregOf(m.result),
+        .guard_eval => |m| vregOf(m.result),
         else => null,
     };
 }

@@ -61,6 +61,19 @@ pub fn optimize(mfunc: *mir.MFunction) !void {
                     if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
                     i += 1;
                 },
+                .state_init, .state_enter, .state_exit => i += 1,
+                .event_dispatch => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
+                .transition_check => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
+                .guard_eval => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
             }
         }
     }

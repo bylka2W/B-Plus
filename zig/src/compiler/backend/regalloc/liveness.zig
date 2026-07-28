@@ -416,6 +416,29 @@ pub fn computeLiveIntervals(
                 .setcc => |s| {
                     writes[write_count] = vregOf(s.dst); write_count += 1;
                 },
+                .state_init => |m| {
+                    reads[read_count] = vregOf(m.initial_state); read_count += 1;
+                },
+                .state_enter => |m| {
+                    reads[read_count] = vregOf(m.state_id); read_count += 1;
+                },
+                .state_exit => |m| {
+                    reads[read_count] = vregOf(m.state_id); read_count += 1;
+                },
+                .event_dispatch => |m| {
+                    writes[write_count] = vregOf(m.dst); write_count += 1;
+                    reads[read_count] = vregOf(m.buf); read_count += 1;
+                    reads[read_count] = vregOf(m.size); read_count += 1;
+                },
+                .transition_check => |m| {
+                    writes[write_count] = vregOf(m.result); write_count += 1;
+                    reads[read_count] = vregOf(m.event); read_count += 1;
+                },
+                .guard_eval => |m| {
+                    writes[write_count] = vregOf(m.result); write_count += 1;
+                    reads[read_count] = vregOf(m.lhs); read_count += 1;
+                    reads[read_count] = vregOf(m.rhs); read_count += 1;
+                },
             }
 
             for (reads[0..read_count]) |vreg| {

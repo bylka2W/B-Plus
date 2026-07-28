@@ -55,6 +55,9 @@ fn collectDefinedVRegs(mfunc: *const mir.MFunction) std.AutoHashMap(u32, void) {
                 .zext_op => |c| c.dst,
                 .trunc_op => |c| c.dst,
                 .select => |s| s.dst,
+                .event_dispatch => |m| m.dst,
+                .transition_check => |m| m.result,
+                .guard_eval => |m| m.result,
                 else => continue,
             };
             if (dst == .vreg) defs.put(dst.vreg, {}) catch {};
@@ -146,6 +149,17 @@ fn checkUsedVRegs(inst: mir.MInst, defs: *std.AutoHashMap(u32, void)) !void {
         .select => |s| {
             try checkDefined(defs, s.dst);
             try checkDefined(defs, s.src);
+        },
+        .event_dispatch => |m| {
+            try checkDefined(defs, m.buf);
+            try checkDefined(defs, m.size);
+        },
+        .transition_check => |m| {
+            try checkDefined(defs, m.event);
+        },
+        .guard_eval => |m| {
+            try checkDefined(defs, m.lhs);
+            try checkDefined(defs, m.rhs);
         },
         else => {},
     }

@@ -154,6 +154,27 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                     if (s.dst == .vreg) invalidatePointers(&map, s.dst.vreg);
                     i += 1;
                 },
+                .state_init, .state_enter, .state_exit => i += 1,
+                .event_dispatch => {
+                    const ed = &block.instrs.items[i].event_dispatch;
+                    ed.buf = resolve(map, ed.buf);
+                    ed.size = resolve(map, ed.size);
+                    if (ed.dst == .vreg) invalidatePointers(&map, ed.dst.vreg);
+                    i += 1;
+                },
+                .transition_check => {
+                    const tc = &block.instrs.items[i].transition_check;
+                    tc.event = resolve(map, tc.event);
+                    if (tc.result == .vreg) invalidatePointers(&map, tc.result.vreg);
+                    i += 1;
+                },
+                .guard_eval => {
+                    const ge = &block.instrs.items[i].guard_eval;
+                    ge.lhs = resolve(map, ge.lhs);
+                    ge.rhs = resolve(map, ge.rhs);
+                    if (ge.result == .vreg) invalidatePointers(&map, ge.result.vreg);
+                    i += 1;
+                },
             }
         }
     }

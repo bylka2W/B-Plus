@@ -1,0 +1,8 @@
+state Door {
+  entry { print("init") }
+  on open -> Opened
+}
+state Opened {
+  entry { print("open") }
+  on close -> Door
+}

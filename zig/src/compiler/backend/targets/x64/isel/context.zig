@@ -37,6 +37,7 @@ pub const Ctx = struct {
     ra: *const regalloc.RegAllocResult,
     scratch: i16,
     mfunc: *const mir.MFunction,
+    alloca_offsets: *const OffsetMap,
     block_fixups: *std.ArrayListUnmanaged(BlockFixup),
     call_fixups: *std.ArrayListUnmanaged(CallFixup),
     code_dummy: *std.ArrayList(u8),

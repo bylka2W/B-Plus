@@ -210,6 +210,8 @@ pub fn emitSingleFunction(
                 .zext_op => |c| try emitZext(code, &ra, c, scratch),
                 .trunc_op => |c| try emitTrunc(code, &ra, c, scratch),
                 .select => |s| try emitSelect(code, &ra, s, scratch),
+                .state_init, .state_enter, .state_exit => return error.UnsupportedStateMachineOp,
+                .event_dispatch, .transition_check, .guard_eval => return error.UnsupportedStateMachineOp,
             }
         }
     }

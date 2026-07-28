@@ -19,6 +19,9 @@ const bir_hlsl = @import("compiler/middle/bir/bir_hlsl.zig");
 const bir_bplus_frontend = @import("compiler/middle/bir/bir_bplus_frontend.zig");
 const bir_cpu = @import("compiler/middle/bir/lowering/cpu.zig");
 const bir_lower_dump = @import("compiler/middle/bir/lowering/lower.zig");
+const mir = @import("compiler/backend/mir/mir.zig");
+const machine = @import("compiler/backend/machine/machine.zig");
+const mir_lower = machine.mir_lower;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -309,6 +312,26 @@ pub fn main() !void {
 
         const bir_module = try bir_bplus_frontend.lowerProgram(arena_alloc, &program);
         const mfuncs = try bir_cpu.lowerModuleToMir(arena_alloc, &bir_module);
+
+        // Wrap in MIR module for Machine IR lowering
+        var mir_funcs_list = std.ArrayList(mir.MFunction).init(arena_alloc);
+        try mir_funcs_list.appendSlice(mfuncs);
+        var mir_mod = mir.MModule{ .functions = mir_funcs_list, .allocator = arena_alloc };
+        const mach_mod = try mir_lower.lowerModule(&mir_mod, arena_alloc);
+
+        // Dump Machine IR
+        {
+            const stdout = std.io.getStdOut().writer();
+            for (mach_mod.functions.items) |mach_func| {
+                try stdout.print("; Machine IR: {s}\n", .{mach_func.name});
+                for (mach_func.blocks.items) |blk| {
+                    try stdout.print("  {s}:\n", .{blk.name});
+                    for (blk.instrs.items) |inst| {
+                        try stdout.print("    {s}\n", .{@tagName(inst)});
+                    }
+                }
+            }
+        }
 
         const coff_result = try coff.emitCoff(mfuncs);
         defer coff_result.bytes.deinit();

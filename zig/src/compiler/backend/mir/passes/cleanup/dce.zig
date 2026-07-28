@@ -29,17 +29,22 @@ fn dstVreg(inst: mir.MInst) ?u32 {
         .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => |c| if (c.dst == .vreg) c.dst.vreg else null,
         .select => |s| if (s.dst == .vreg) s.dst.vreg else null,
         .setcc => |s| if (s.dst == .vreg) s.dst.vreg else null,
-        .cmp_flags, .cmp, .test_flags, .jmp, .jcc, .store, .ret => null,
+        .event_dispatch => |m| if (m.dst == .vreg) m.dst.vreg else null,
+        .transition_check => |m| if (m.result == .vreg) m.result.vreg else null,
+        .guard_eval => |m| if (m.result == .vreg) m.result.vreg else null,
+        .state_init, .state_enter, .state_exit, .cmp_flags, .cmp, .test_flags, .jmp, .jcc, .store, .ret => null,
     };
 }
 
 fn isSideEffecting(inst: mir.MInst) bool {
     return switch (inst) {
-        .call, .store, .ret, .jmp, .jcc, .cmp_flags, .test_flags => true,
-        .add, .sub, .imul, .idiv, .@"and", .@"or", .xor, .shl, .shr, .sar, .not_op, .neg_op, .cmp, .alloca, .load, .lea, .phi => false,
+        .call, .store, .ret, .jmp, .jcc, .cmp, .cmp_flags, .test_flags => true,
+        .add, .sub, .imul, .idiv, .@"and", .@"or", .xor, .shl, .shr, .sar, .not_op, .neg_op, .alloca, .load, .lea, .phi => false,
         .fadd, .fsub, .fmul, .fdiv, .fneg_op, .fsqrt_op, .fcmp => false,
         .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => false,
         .select, .setcc => false,
+        .state_init, .state_enter, .state_exit, .event_dispatch => true,
+        .transition_check, .guard_eval => false,
         .mov => |m| m.dst != .vreg,
     };
 }
@@ -140,6 +145,29 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
             if (s.src == .vreg) { buf[n] = s.src.vreg; n += 1; }
         },
         .setcc => {},
+        .state_init => |m| {
+            if (m.initial_state == .vreg) { buf[n] = m.initial_state.vreg; n += 1; }
+        },
+        .state_enter => |m| {
+            if (m.state_id == .vreg) { buf[n] = m.state_id.vreg; n += 1; }
+        },
+        .state_exit => |m| {
+            if (m.state_id == .vreg) { buf[n] = m.state_id.vreg; n += 1; }
+        },
+        .event_dispatch => |m| {
+            if (m.dst == .vreg) { buf[n] = m.dst.vreg; n += 1; }
+            if (m.buf == .vreg) { buf[n] = m.buf.vreg; n += 1; }
+            if (m.size == .vreg) { buf[n] = m.size.vreg; n += 1; }
+        },
+        .transition_check => |m| {
+            if (m.result == .vreg) { buf[n] = m.result.vreg; n += 1; }
+            if (m.event == .vreg) { buf[n] = m.event.vreg; n += 1; }
+        },
+        .guard_eval => |m| {
+            if (m.result == .vreg) { buf[n] = m.result.vreg; n += 1; }
+            if (m.lhs == .vreg) { buf[n] = m.lhs.vreg; n += 1; }
+            if (m.rhs == .vreg) { buf[n] = m.rhs.vreg; n += 1; }
+        },
     }
     return n;
 }

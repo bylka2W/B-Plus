@@ -69,6 +69,20 @@ pub fn emitCode(mfuncs: []const mir.MFunction) !EmitCodeResult {
         try emitSingleFunction(&code, &all_call_fixups, mf);
     }
 
+    // Emit the PLAN runtime event dispatch function.
+    // __plan_event_dispatch: returns event ID in RAX.
+    // For now, returns 0 (no event) — stub for testing.
+    if (true) {
+        const rt_start = code.items.len;
+        try name_to_offset.put("__plan_event_dispatch", rt_start);
+        // xor eax, eax  (48 31 C0)
+        try code.append(0x48);
+        try code.append(0x31);
+        try code.append(0xC0);
+        // ret  (C3)
+        try code.append(0xC3);
+    }
+
     return .{
         .code = code,
         .name_to_offset = name_to_offset,

@@ -51,6 +51,13 @@ pub const MemSize = core.MemSize;
 pub const MInst = core.MInst;
 pub const MInstUtils = core.MInstUtils;
 
+pub const StateInitInst = core.StateInitInst;
+pub const StateEnterInst = core.StateEnterInst;
+pub const StateExitInst = core.StateExitInst;
+pub const EventDispatchInst = core.EventDispatchInst;
+pub const TransitionCheckInst = core.TransitionCheckInst;
+pub const GuardEvalInst = core.GuardEvalInst;
+
 pub const MBlock = core.MBlock;
 pub const MFunction = core.MFunction;
 pub const MModule = core.MModule;
