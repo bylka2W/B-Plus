@@ -44,6 +44,8 @@ pub fn main() !void {
         try stderr.writeAll("       bpc dom   <pipeline.b+>\n");
         try stderr.writeAll("       bpc loops <pipeline.b+>\n");
         try stderr.writeAll("       bpc bpl   <input.b+>\n");
+        try stderr.writeAll("       bpc mir   <input.b+>        B+ source to COFF .obj\n");
+        try stderr.writeAll("       bpc link  <input.obj> -o <output.exe>\n");
         std.process.exit(1);
     }
 
@@ -345,6 +347,27 @@ pub fn main() !void {
         const stdout = std.io.getStdOut().writer();
         try stdout.print("COFF object written to {s}\n", .{out_path});
         try stdout.print("  functions: {d}\n", .{mfuncs.len});
+        return;
+    }
+
+    // LINK mode: link a COFF object file into an executable
+    if (std.mem.eql(u8, command, "link")) {
+        const linker = @import("linker/linker.zig");
+
+        const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
+        const base = input_path[0..ext_idx];
+        const out_path = output_path orelse try std.fmt.allocPrint(allocator, "{s}.exe", .{base});
+
+        try linker.link(allocator, .{
+            .obj_path = input_path,
+            .output_path = out_path,
+            .entry = "plan",
+            .subsystem = "console",
+            .libs = &.{"kernel32.lib"},
+        });
+
+        const stdout = std.io.getStdOut().writer();
+        try stdout.print("Linked: {s} -> {s}\n", .{ input_path, out_path });
         return;
     }
 

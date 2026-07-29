@@ -29,7 +29,7 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     var sym_map = std.StringHashMap(u32).init(allocator);
     defer sym_map.deinit();
 
-    // Add function symbols
+    // Add function symbols from func_starts (MIR functions)
     for (emit.func_starts.items, 0..) |offset, i| {
         const name = mfuncs[i].name;
         try sym_map.put(name, @intCast(symbols.items.len));
@@ -39,6 +39,30 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
             .section_number = 1, // .text
             .storage_class = 0x02, // IMAGE_SYM_CLASS_EXTERNAL
         });
+    }
+
+    // Also emit symbols for runtime stubs that are in name_to_offset
+    // but not in func_starts (e.g. __plan_event_dispatch).
+    {
+        var iter = emit.name_to_offset.iterator();
+        while (iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const offset = entry.value_ptr.*;
+            if (!sym_map.contains(name)) {
+                const is_func_start = for (emit.func_starts.items) |fs| {
+                    if (fs == offset) break true;
+                } else false;
+                if (!is_func_start) {
+                    try sym_map.put(name, @intCast(symbols.items.len));
+                    try symbols.append(.{
+                        .name = name,
+                        .offset = offset,
+                        .section_number = 1,
+                        .storage_class = 0x02,
+                    });
+                }
+            }
+        }
     }
 
     // Convert call fixups to relocations
