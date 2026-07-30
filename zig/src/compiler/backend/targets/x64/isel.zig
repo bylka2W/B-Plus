@@ -3,6 +3,8 @@
 const std = @import("std");
 const mir = @import("../../mir/mir.zig");
 const regalloc = @import("../../regalloc/regalloc.zig");
+const enc = @import("encoder.zig");
+const Operand = enc.Operand;
 const ctx_mod = @import("isel/context.zig");
 const integer = @import("isel/integer.zig");
 const float_sel = @import("isel/float.zig");
@@ -10,11 +12,14 @@ const memory = @import("isel/memory.zig");
 const control = @import("isel/control.zig");
 const conversions = @import("isel/conversions.zig");
 const plan = @import("isel/plan.zig");
+const spill = @import("isel/spill.zig");
 
 pub const OffsetMap = ctx_mod.OffsetMap;
 pub const BlockFixup = ctx_mod.BlockFixup;
 pub const CallFixup = ctx_mod.CallFixup;
+pub const StringConstFixup = ctx_mod.StringConstFixup;
 pub const SelectResult = ctx_mod.SelectResult;
+const append2 = ctx_mod.append2;
 pub const Ctx = ctx_mod.Ctx;
 
 pub fn selectFunction(mfunc: *const mir.MFunction, ra: *const regalloc.RegAllocResult, alloca_offsets: OffsetMap) !SelectResult {
@@ -26,9 +31,8 @@ pub fn selectFunction(mfunc: *const mir.MFunction, ra: *const regalloc.RegAllocR
     errdefer block_fixups.deinit(allocator);
     var call_fixups: std.ArrayListUnmanaged(CallFixup) = .{};
     errdefer call_fixups.deinit(allocator);
-
-    var code_dummy = std.ArrayList(u8).init(allocator);
-    defer code_dummy.deinit();
+    var string_fixups: std.ArrayListUnmanaged(StringConstFixup) = .{};
+    errdefer string_fixups.deinit(allocator);
 
     const scratch: i16 = 11;
 
@@ -43,7 +47,7 @@ pub fn selectFunction(mfunc: *const mir.MFunction, ra: *const regalloc.RegAllocR
             .alloca_offsets = &alloca_offsets,
             .block_fixups = &block_fixups,
             .call_fixups = &call_fixups,
-            .code_dummy = &code_dummy,
+            .string_fixups = &string_fixups,
         };
 
         for (block.instrs.items) |inst| {
@@ -95,6 +99,15 @@ pub fn selectFunction(mfunc: *const mir.MFunction, ra: *const regalloc.RegAllocR
                 .event_dispatch => |m| try plan.selectEventDispatch(&ctx, m),
                 .transition_check => |m| try plan.selectTransitionCheck(&ctx, m),
                 .guard_eval => |m| try plan.selectGuardEval(&ctx, m),
+                .string_const => |s| {
+                    const dst_spilled = regalloc.isSpilled(ctx.ra, s.dst);
+                    const dst = if (dst_spilled) ctx.scratch else resolveReg(ctx.ra, s.dst);
+                    try append2(&ctx, .LEA_R64_MEM, Operand.r(dst), .{ .base_reg = 255, .disp = 0 });
+                    if (dst_spilled) {
+                        try spill.storeSpilledOp(&ctx, s.dst, ctx.scratch);
+                    }
+                    try ctx.string_fixups.append(ctx.mf.allocator, .{ .data = s.data });
+                },
             }
         }
     }
@@ -103,6 +116,7 @@ pub fn selectFunction(mfunc: *const mir.MFunction, ra: *const regalloc.RegAllocR
         .mf = mf,
         .block_fixups = block_fixups,
         .call_fixups = call_fixups,
+        .string_fixups = string_fixups,
     };
 }
 

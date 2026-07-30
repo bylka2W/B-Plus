@@ -157,6 +157,7 @@ pub const Module = struct {
             .locals_count = 0,
             .value_info = std.ArrayList(ValueInfo).init(self.allocator),
             .attributes = std.StringHashMap(void).init(self.allocator),
+            .value_debug_names = std.AutoHashMap(ValueId, []const u8).init(self.allocator),
         });
         return id;
     }

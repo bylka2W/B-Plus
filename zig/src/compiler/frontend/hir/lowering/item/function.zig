@@ -26,6 +26,7 @@ pub fn lowerFnItem(self: *HirLowering, decl_id: AstDeclId, f: @import("../lower.
         .span = f.span,
         .kind = .{ .fn_decl = .{
             .name = f.name,
+            .name_bytes = "",
             .def_id = def,
             .params = params.toOwnedSlice() catch return error.OutOfMemory,
             .return_type = ret_ty,

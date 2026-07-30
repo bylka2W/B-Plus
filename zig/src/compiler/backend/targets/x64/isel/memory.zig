@@ -4,6 +4,7 @@ const enc = @import("../encoder.zig");
 const OpCode = enc.OpCode;
 const Operand = enc.Operand;
 const regalloc = @import("../../../regalloc/regalloc.zig");
+const spill = @import("spill.zig");
 const ctx_mod = @import("context.zig");
 const Ctx = ctx_mod.Ctx;
 const OffsetMap = ctx_mod.OffsetMap;
@@ -18,7 +19,7 @@ pub fn selectAlloca(ctx: *Ctx, a: mir.AllocaInst, alloca_offsets: OffsetMap) !vo
 
     if (dst_spilled) {
         try append2(ctx, .LEA_R64_MEM, Operand.r(ctx.scratch), .{ .base_reg = 5, .disp = off });
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, a.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, a.dst, ctx.scratch);
     } else {
         const dst = resolveReg(ctx.ra, a.dst);
         try append2(ctx, .LEA_R64_MEM, Operand.r(dst), .{ .base_reg = 5, .disp = off });
@@ -40,7 +41,7 @@ pub fn selectLea(ctx: *Ctx, l: mir.LeaInst) !void {
     };
     if (dst_spilled) {
         try append2(ctx, .LEA_R64_MEM, Operand.r(ctx.scratch), addr_op);
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, l.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
     } else {
         const dst = resolveReg(ctx.ra, l.dst);
         try append2(ctx, .LEA_R64_MEM, Operand.r(dst), addr_op);
@@ -55,18 +56,18 @@ pub fn selectLoad(ctx: *Ctx, l: mir.LoadInst) !void {
     const is_float = dtype == .f32 or dtype == .f64;
 
     if (ptr_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, l.ptr, ctx.scratch);
+        try spill.loadSpilledOp(ctx, l.ptr, ctx.scratch);
         if (is_float) {
             const load_op: OpCode = if (dtype == .f64) .SSE_MOVSD_LD else .SSE_MOVSS_LD;
             const dst_xmm: i16 = if (dst_spilled) ctx.scratch else resolveReg(ctx.ra, l.dst);
             try append2(ctx, load_op, Operand.xmm(dst_xmm), .{ .base_reg = ctx.scratch, .disp = 0 });
             if (dst_spilled) {
-                try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, l.dst, ctx.scratch);
+                try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
             }
         } else {
             if (dst_spilled) {
                 try append2(ctx, .MOV_R64_MEM, Operand.r(ctx.scratch), .{ .base_reg = ctx.scratch, .disp = 0 });
-                try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, l.dst, ctx.scratch);
+                try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
             } else {
                 const dst = resolveReg(ctx.ra, l.dst);
                 try append2(ctx, .MOV_R64_MEM, Operand.r(dst), .{ .base_reg = ctx.scratch, .disp = 0 });
@@ -79,12 +80,12 @@ pub fn selectLoad(ctx: *Ctx, l: mir.LoadInst) !void {
             const dst_xmm: i16 = if (dst_spilled) ctx.scratch else resolveReg(ctx.ra, l.dst);
             try append2(ctx, load_op, Operand.xmm(dst_xmm), .{ .base_reg = ptr_reg, .disp = 0 });
             if (dst_spilled) {
-                try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, l.dst, ctx.scratch);
+                try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
             }
         } else {
             if (dst_spilled) {
                 try append2(ctx, .MOV_R64_MEM, Operand.r(ctx.scratch), .{ .base_reg = ptr_reg, .disp = 0 });
-                try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, l.dst, ctx.scratch);
+                try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
             } else {
                 const dst = resolveReg(ctx.ra, l.dst);
                 try append2(ctx, .MOV_R64_MEM, Operand.r(dst), .{ .base_reg = ptr_reg, .disp = 0 });
@@ -101,17 +102,22 @@ pub fn selectStore(ctx: *Ctx, s: mir.StoreInst) !void {
     const is_float = dtype == .f32 or dtype == .f64;
 
     if (ptr_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, s.ptr, ctx.scratch);
+        try spill.loadSpilledOp(ctx, s.ptr, ctx.scratch);
         if (is_float) {
             const store_op: OpCode = if (dtype == .f64) .SSE_MOVSD_ST else .SSE_MOVSS_ST;
             const src_xmm: i16 = if (src_spilled) ctx.scratch else resolveReg(ctx.ra, s.src);
             try append2(ctx, store_op, Operand.xmm(src_xmm), .{ .base_reg = ctx.scratch, .disp = 0 });
         } else {
-            const src_val = try resolveOpOrSpill(ctx, s.src);
-            try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ctx.scratch, .disp = 0 }, src_val);
+            if (s.src == .imm) {
+                try append2(ctx, .MOV_R64_IMM64, Operand.r(regalloc.SCRATCH_REG_2), .{ .imm64 = @bitCast(s.src.imm) });
+                try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ctx.scratch, .disp = 0 }, Operand.r(regalloc.SCRATCH_REG_2));
+            } else {
+                const src_reg = resolveReg(ctx.ra, s.src);
+                try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ctx.scratch, .disp = 0 }, Operand.r(src_reg));
+            }
         }
     } else if (src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, s.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, s.src, ctx.scratch);
         const ptr_reg = resolveReg(ctx.ra, s.ptr);
         if (is_float) {
             const store_op: OpCode = if (dtype == .f64) .SSE_MOVSD_ST else .SSE_MOVSS_ST;
@@ -126,8 +132,13 @@ pub fn selectStore(ctx: *Ctx, s: mir.StoreInst) !void {
             const src_xmm: i16 = resolveReg(ctx.ra, s.src);
             try append2(ctx, store_op, Operand.xmm(src_xmm), .{ .base_reg = ptr_reg, .disp = 0 });
         } else {
-            const src_val = resolveOp(ctx.ra, s.src);
-            try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ptr_reg, .disp = 0 }, src_val);
+            if (s.src == .imm) {
+                try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), .{ .imm64 = @bitCast(s.src.imm) });
+                try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ptr_reg, .disp = 0 }, Operand.r(ctx.scratch));
+            } else {
+                const src_reg = resolveReg(ctx.ra, s.src);
+                try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ptr_reg, .disp = 0 }, Operand.r(src_reg));
+            }
         }
     }
 }

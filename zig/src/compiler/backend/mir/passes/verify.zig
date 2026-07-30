@@ -14,7 +14,7 @@ fn checkDefined(defs: *std.AutoHashMap(u32, void), op: mir.MOperand) !void {
 }
 
 fn collectDefinedVRegs(mfunc: *const mir.MFunction) std.AutoHashMap(u32, void) {
-    var defs = std.AutoHashMap(u32, void).init(mfunc.allocator);
+    var defs = std.AutoHashMap(u32, void).init(std.heap.page_allocator);
     for (mfunc.params) |p| {
         if (p == .vreg) defs.put(p.vreg, {}) catch {};
     }
@@ -58,6 +58,7 @@ fn collectDefinedVRegs(mfunc: *const mir.MFunction) std.AutoHashMap(u32, void) {
                 .event_dispatch => |m| m.dst,
                 .transition_check => |m| m.result,
                 .guard_eval => |m| m.result,
+                .string_const => |s| s.dst,
                 else => continue,
             };
             if (dst == .vreg) defs.put(dst.vreg, {}) catch {};
@@ -207,9 +208,9 @@ pub fn verifyMir(mfunc: *const mir.MFunction) !void {
         }
     }
 
-    var visited = std.AutoHashMap(usize, void).init(mfunc.allocator);
+    var visited = std.AutoHashMap(usize, void).init(std.heap.page_allocator);
     defer visited.deinit();
-    var queue = std.ArrayList(usize).init(mfunc.allocator);
+    var queue = std.ArrayList(usize).init(std.heap.page_allocator);
     defer queue.deinit();
     try queue.append(0);
 

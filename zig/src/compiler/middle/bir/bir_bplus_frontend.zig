@@ -126,7 +126,13 @@ fn lowerFunction(
 
     for (func.params.items, 0..) |param, i| {
         const param_ty = try mapType(module, param.type_name);
-        try b.vars.put(param.name, .{ .value = module.getFunction(func_id).param_values[i], .type_id = param_ty });
+        const pval = module.getFunction(func_id).param_values[i];
+        try b.vars.put(param.name, .{ .value = pval, .type_id = param_ty });
+        {
+            const fn_mut = module.getFunctionMut(func_id);
+            const owned_name = try allocator.dupe(u8, param.name);
+            try fn_mut.value_debug_names.put(pval, owned_name);
+        }
     }
 
     var body_joined = std.ArrayList(u8).init(allocator);
@@ -474,6 +480,11 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
 
         const slot = try b.emitAlloca(var_type);
         try b.vars.put(name, .{ .value = slot, .type_id = var_type });
+        {
+            const fn_mut = b.mod.getFunctionMut(b.fid);
+            const owned_name = try b.alloc.dupe(u8, name);
+            try fn_mut.value_debug_names.put(slot, owned_name);
+        }
 
         if (std.mem.indexOfScalar(u8, rest, '=')) |eq| {
             const expr_str = std.mem.trim(u8, rest[eq + 1 ..], " \t\r\n");
@@ -578,6 +589,12 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
 }
 
 fn lowerCallExpr(b: *Builder, name: []const u8, args_str: []const u8) anyerror!ValueId {
+    // Handle print built-in: dispatch to print_i64 (int) or print_str (string)
+    const callee_name = if (std.mem.eql(u8, name, "print")) blk: {
+        const trimmed = std.mem.trim(u8, args_str, " \t\r\n");
+        break :blk if (trimmed.len > 0 and trimmed[0] == '"') "print_str" else "print_i64";
+    } else name;
+
     var args = std.ArrayList(ValueId).init(b.alloc);
     defer args.deinit();
     if (args_str.len > 0) {
@@ -604,7 +621,7 @@ fn lowerCallExpr(b: *Builder, name: []const u8, args_str: []const u8) anyerror!V
             if (v != NO_VALUE) try args.append(v);
         }
     }
-    return b.emitCall(name, args.items);
+    return b.emitCall(callee_name, args.items);
 }
 
 fn lowerIf(b: *Builder, line: []const u8) anyerror!void {
@@ -668,7 +685,7 @@ fn lowerBodyStr(b: *Builder, body: []const u8, sep: u8) anyerror!void {
 
         var depth: i32 = 0;
         var in_str = false;
-        const start = pos;
+        var start = pos;
         while (pos < body.len) {
             const c = body[pos];
             if (c == '"') in_str = !in_str;
@@ -687,14 +704,17 @@ fn lowerBodyStr(b: *Builder, body: []const u8, sep: u8) anyerror!void {
             if (c == sep and depth == 0) {
                 const stmt = std.mem.trim(u8, body[start..pos], " \t\r\n");
                 pos += 1;
+                start = pos;
                 if (stmt.len > 0) try lowerStmt(b, stmt);
                 break;
             }
             pos += 1;
         }
         if (pos >= body.len or (pos == body.len)) {
-            const stmt = std.mem.trim(u8, body[start..body.len], " \t\r\n");
-            if (stmt.len > 0) try lowerStmt(b, stmt);
+            if (start < body.len) {
+                const stmt = std.mem.trim(u8, body[start..body.len], " \t\r\n");
+                if (stmt.len > 0) try lowerStmt(b, stmt);
+            }
             break;
         }
     }

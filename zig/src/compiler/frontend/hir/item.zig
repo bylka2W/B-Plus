@@ -28,6 +28,7 @@ pub const HirItem = struct {
 
         pub const FnItem = struct {
             name: SymbolId,
+            name_bytes: []const u8,
             def_id: DefId,
             params: []const Param,
             return_type: TypeId,
@@ -79,6 +80,7 @@ pub const HirItem = struct {
 
         pub const ExternFnItem = struct {
             name: SymbolId,
+            name_bytes: []const u8,
             def_id: DefId,
             params: []const Param,
             return_type: TypeId,

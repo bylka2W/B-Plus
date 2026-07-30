@@ -7,6 +7,7 @@ pub const CoffResult = struct {
 };
 
 pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
+    if (mfuncs.len == 0) return error.NoFunctions;
     const allocator = mfuncs[0].allocator;
 
     // Emit raw code with fixup list

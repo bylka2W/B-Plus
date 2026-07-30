@@ -74,6 +74,10 @@ pub fn optimize(mfunc: *mir.MFunction) !void {
                     if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
                     i += 1;
                 },
+                .string_const => {
+                    if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
+                    i += 1;
+                },
             }
         }
     }

@@ -44,6 +44,7 @@ pub const MFunction = struct {
             for (b.instrs.items) |*inst| {
                 switch (inst.*) {
                     .call => self.allocator.free(inst.call.name),
+                    .string_const => self.allocator.free(inst.string_const.data),
                     .phi => |p| self.allocator.free(p.incoming),
                     else => {},
                 }

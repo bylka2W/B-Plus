@@ -155,7 +155,7 @@ fn verifyInst(
             }
         },
         .@"const" => {
-            if (inst.data != .const_data) {
+            if (inst.data != .const_data and inst.data != .string) {
                 try errs.push(.{
                     .code = .invalid_operand_count,
                     .func_id = func_id,
@@ -165,7 +165,7 @@ fn verifyInst(
                     .inst_idx = idx,
                     .value_id = inst.result,
                     .op = .@"const",
-                    .message = "const must have const_data",
+                    .message = "const must have const_data or string data",
                 });
             }
         },

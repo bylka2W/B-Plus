@@ -53,6 +53,11 @@ pub const EventDispatchInst = struct { dst: MOperand, buf: MOperand, size: MOper
 pub const TransitionCheckInst = struct { result: MOperand, event: MOperand, event_id: u32 };
 pub const GuardEvalInst = struct { result: MOperand, lhs: MOperand, rhs: MOperand, cc: CondCode };
 
+pub const StringConstInst = struct {
+    dst: MOperand,
+    data: []const u8,
+};
+
 pub const PhiIncoming = struct {
     src: MOperand,
     pred_block: u32,
@@ -67,6 +72,7 @@ pub const MInst = union(enum) {
     mov: MovInst,
     add: AddInst,
     sub: SubInst,
+    string_const: StringConstInst,
     imul: IMulInst,
     idiv: IDivInst,
     @"and": AndInst,
@@ -132,6 +138,7 @@ pub const MInstUtils = struct {
             .transition_check,
             .guard_eval,
             => true,
+            .string_const => true,
             .idiv => true,
             .call => |c| !c.is_void,
             else => false,
@@ -162,6 +169,7 @@ pub const MInstUtils = struct {
             .sext_op, .zext_op, .trunc_op => |c| vregOf(c.dst),
             .select => |s| vregOf(s.dst),
             .setcc => |s| vregOf(s.dst),
+            .string_const => |s| vregOf(s.dst),
             .event_dispatch => |m| vregOf(m.dst),
             .transition_check => |m| vregOf(m.result),
             .guard_eval => |m| vregOf(m.result),

@@ -6,11 +6,20 @@ pub const VerifyError = error{
     DuplicateDefinition,
     UnusedVReg,
     VRegClassConflict,
+    UndefinedVReg,
+    OutOfMemory,
 };
 
 pub fn checkDefUse(func: *const machine.MFunction) VerifyError!void {
     var defined = std.AutoHashMap(u32, void).init(func.allocator);
     defer defined.deinit();
+
+    // Function parameters are defined at entry
+    for (func.params) |p| {
+        if (p == .vreg) {
+            defined.put(p.vreg.id, {}) catch {};
+        }
+    }
 
     var used = std.AutoHashMap(u32, void).init(func.allocator);
     defer used.deinit();
@@ -37,9 +46,16 @@ const VerifyError2 = VerifyError || error{};
 fn collectUses(inst: instruction.MInst, used: *std.AutoHashMap(u32, void)) void {
     switch (inst) {
         .mov => |m| addUse(m.src, used),
-        .add, .sub, .imul, .idiv, .@"and", .@"or", .xor => |bin| {
-            addUse(bin.src, used);
+        .add => |bin| addUse(bin.src, used),
+        .sub => |bin| addUse(bin.src, used),
+        .imul => |bin| addUse(bin.src, used),
+        .idiv => |d| {
+            addUse(d.dividend, used);
+            addUse(d.divisor, used);
         },
+        .@"and" => |bin| addUse(bin.src, used),
+        .@"or" => |bin| addUse(bin.src, used),
+        .xor => |bin| addUse(bin.src, used),
         .shl, .shr, .sar => |s| addUse(s.amount, used),
         .fadd, .fsub, .fmul, .fdiv => |f| {
             addUse(f.a, used);
@@ -65,12 +81,17 @@ fn collectUses(inst: instruction.MInst, used: *std.AutoHashMap(u32, void)) void 
         .call => |c| {
             for (0..c.arg_count) |i| addUse(c.args[i], used);
         },
-        .ret => |r| {
-            if (!r.is_void) addUse(r.val, used);
+        .ret => |r| switch (r) {
+            .void_ret => {},
+            .value => |val| addUse(val, used),
         },
-        .test_flags, .cmp_flags => |tf| {
+        .test_flags => |tf| {
             addUse(tf.a, used);
             addUse(tf.b, used);
+        },
+        .cmp_flags => |cf| {
+            addUse(cf.a, used);
+            addUse(cf.b, used);
         },
         else => {},
     }

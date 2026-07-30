@@ -1,0 +1,3 @@
+fn print_int(v: i64): void {
+    print(v)
+}

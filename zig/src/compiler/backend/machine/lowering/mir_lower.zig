@@ -107,6 +107,7 @@ fn lowerInst(mir_func: *const mir.MFunction, mir_inst: mir.MInst) !machine.MInst
         .event_dispatch => |m| .{ .event_dispatch = .{ .dst = lowerOp(mir_func, m.dst), .buf = lowerOp(mir_func, m.buf), .size = lowerOp(mir_func, m.size) } },
         .transition_check => |m| .{ .transition_check = .{ .result = lowerOp(mir_func, m.result), .event = lowerOp(mir_func, m.event), .event_id = m.event_id } },
         .guard_eval => |m| .{ .guard_eval = .{ .result = lowerOp(mir_func, m.result), .lhs = lowerOp(mir_func, m.lhs), .rhs = lowerOp(mir_func, m.rhs), .cc = convertCC(m.cc) } },
+        .string_const => |m| .{ .lea = .{ .dst = lowerOp(mir_func, m.dst), .base = .{ .imm = 0 }, .scale = 0, .disp = 0 } },
     };
 }
 

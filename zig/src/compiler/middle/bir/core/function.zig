@@ -38,6 +38,7 @@ pub const Function = struct {
     locals_count: u32,
     value_info: std.ArrayList(ValueInfo),
     attributes: std.StringHashMap(void),
+    value_debug_names: std.AutoHashMap(ValueId, []const u8),
 
     pub fn deinit(self: *Function, allocator: std.mem.Allocator) void {
         for (self.blocks.items) |*b| b.deinit(allocator);
@@ -51,6 +52,13 @@ pub const Function = struct {
         allocator.free(self.param_values);
         allocator.free(self.name);
         self.attributes.deinit();
+        {
+            var it = self.value_debug_names.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.value_ptr.*);
+            }
+            self.value_debug_names.deinit();
+        }
     }
 
     pub fn createValue(self: *Function) !ValueId {

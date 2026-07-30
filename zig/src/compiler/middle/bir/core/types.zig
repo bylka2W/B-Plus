@@ -115,6 +115,10 @@ pub const TypeTable = struct {
     }
 
     pub fn add(self: *TypeTable, kind: Type.Kind) !TypeId {
+        // Deduplicate: return existing ID if this kind already exists
+        for (self.types.items, 0..) |t, i| {
+            if (std.meta.eql(t.kind, kind)) return @intCast(i);
+        }
         const id = @as(TypeId, @intCast(self.types.items.len));
         try self.types.append(.{ .kind = kind });
         return id;

@@ -7,6 +7,7 @@ pub const VerifyError = error{
     EmptyBlock,
     BlockNotTerminated,
     UnreachableBlock,
+    OutOfMemory,
 };
 
 pub fn verifyCFG(func: *const machine.MFunction) VerifyError!void {

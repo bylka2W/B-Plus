@@ -26,6 +26,7 @@ pub fn lowerImplItem(self: *HirLowering, decl_id: AstDeclId, im: @import("../low
         const body: BodyId = if (m.body) |bid| try self.lowerFnBody(bid) else BodyId.INVALID;
         methods.append(.{
             .name = m.name,
+            .name_bytes = "",
             .def_id = self.resolveName(m.name),
             .params = params.toOwnedSlice() catch return error.OutOfMemory,
             .return_type = ret_ty,

@@ -16,21 +16,47 @@ pub fn verifyInst(
     defined_vregs: *const std.AutoHashMap(u32, void),
 ) VerifyError!void {
     switch (inst) {
-        .add, .sub, .imul, .@"and", .@"or", .xor => |bin| {
+        .add => |bin| {
             try verifyOperand(func, bin.dst, defined_vregs);
             try verifyOperand(func, bin.src, defined_vregs);
         },
-        .idiv => |bin| {
+        .sub => |bin| {
             try verifyOperand(func, bin.dst, defined_vregs);
             try verifyOperand(func, bin.src, defined_vregs);
+        },
+        .imul => |bin| {
+            try verifyOperand(func, bin.dst, defined_vregs);
+            try verifyOperand(func, bin.src, defined_vregs);
+        },
+        .@"and" => |bin| {
+            try verifyOperand(func, bin.dst, defined_vregs);
+            try verifyOperand(func, bin.src, defined_vregs);
+        },
+        .@"or" => |bin| {
+            try verifyOperand(func, bin.dst, defined_vregs);
+            try verifyOperand(func, bin.src, defined_vregs);
+        },
+        .xor => |bin| {
+            try verifyOperand(func, bin.dst, defined_vregs);
+            try verifyOperand(func, bin.src, defined_vregs);
+        },
+        .idiv => |d| {
+            try verifyOperand(func, d.dividend, defined_vregs);
+            try verifyOperand(func, d.divisor, defined_vregs);
+            try verifyOperand(func, d.quotient, defined_vregs);
+            try verifyOperand(func, d.remainder, defined_vregs);
         },
         .shl, .shr, .sar => |s| {
             try verifyOperand(func, s.dst, defined_vregs);
             try verifyOperand(func, s.amount, defined_vregs);
         },
-        .mov, .cmp => |m| {
+        .mov => |m| {
             try verifyOperand(func, m.dst, defined_vregs);
             try verifyOperand(func, m.src, defined_vregs);
+        },
+        .cmp => |c| {
+            try verifyOperand(func, c.a, defined_vregs);
+            try verifyOperand(func, c.b, defined_vregs);
         },
         .not_op, .neg_op, .fneg_op, .fsqrt_op => |u| {
             try verifyOperand(func, u.dst, defined_vregs);
@@ -79,16 +105,45 @@ pub fn verifyInst(
                 try verifyOperand(func, c.args[i], defined_vregs);
             }
         },
-        .ret => |r| {
-            if (!r.is_void) {
-                try verifyOperand(func, r.val, defined_vregs);
-            }
+        .ret => |r| switch (r) {
+            .void_ret => {},
+            .value => |val| try verifyOperand(func, val, defined_vregs),
         },
-        .test_flags, .cmp_flags => |tf| {
+        .test_flags => |tf| {
             try verifyOperand(func, tf.a, defined_vregs);
             try verifyOperand(func, tf.b, defined_vregs);
         },
+        .cmp_flags => |cf| {
+            try verifyOperand(func, cf.a, defined_vregs);
+            try verifyOperand(func, cf.b, defined_vregs);
+        },
         .jmp, .jcc => {},
+        .setcc => |s| {
+            try verifyOperand(func, s.dst, defined_vregs);
+        },
+        .state_init => |s| {
+            try verifyOperand(func, s.initial_state, defined_vregs);
+        },
+        .state_enter => |s| {
+            try verifyOperand(func, s.state_id, defined_vregs);
+        },
+        .state_exit => |s| {
+            try verifyOperand(func, s.state_id, defined_vregs);
+        },
+        .event_dispatch => |e| {
+            try verifyOperand(func, e.dst, defined_vregs);
+            try verifyOperand(func, e.buf, defined_vregs);
+            try verifyOperand(func, e.size, defined_vregs);
+        },
+        .transition_check => |t| {
+            try verifyOperand(func, t.result, defined_vregs);
+            try verifyOperand(func, t.event, defined_vregs);
+        },
+        .guard_eval => |g| {
+            try verifyOperand(func, g.result, defined_vregs);
+            try verifyOperand(func, g.lhs, defined_vregs);
+            try verifyOperand(func, g.rhs, defined_vregs);
+        },
     }
 }
 

@@ -22,6 +22,7 @@ pub fn lowerTraitItem(self: *HirLowering, decl_id: AstDeclId, t: @import("../low
         const ret_ty = if (m.return_type) |rt| try self.lowerTypeRefId(rt) else UNK;
         methods.append(.{
             .name = m.name,
+            .name_bytes = "",
             .def_id = self.resolveName(m.name),
             .params = params.toOwnedSlice() catch return error.OutOfMemory,
             .return_type = ret_ty,

@@ -6,6 +6,7 @@ const pe = @import("compiler/backend/object/pe/pe.zig");
 const coff = @import("compiler/backend/object/coff/coff.zig");
 const test_runner = @import("tools/test_runner/test_runner.zig");
 const sema_mod = @import("compiler/frontend/sema/sema.zig");
+const type_sys = @import("compiler/frontend/type_system/type_system.zig");
 const gpu_ir = @import("compiler/gpu/gpu_ir.zig");
 const bir = @import("compiler/middle/bir/bir.zig");
 const bir_frontend = @import("compiler/middle/bir/bir_frontend.zig");
@@ -22,6 +23,11 @@ const bir_lower_dump = @import("compiler/middle/bir/lowering/lower.zig");
 const mir = @import("compiler/backend/mir/mir.zig");
 const machine = @import("compiler/backend/machine/machine.zig");
 const mir_lower = machine.mir_lower;
+
+const safety = @import("compiler/safety/safety.zig");
+const ver_pipeline = @import("compiler/middle/pipeline/pipeline.zig");
+const settings = @import("compiler/settings.zig");
+const minrt_obj_bytes = @embedFile("runtime/minrt.obj");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -63,6 +69,8 @@ pub fn main() !void {
             } else if (std.mem.eql(u8, args[i], "-exports") and i + 1 < args.len) {
                 export_names = args[i + 1];
                 i += 1;
+            } else if (std.mem.eql(u8, args[i], "--debug-ir")) {
+                settings.debug_ir = true;
             }
         }
     }
@@ -312,7 +320,17 @@ pub fn main() !void {
         };
         defer sema_result.deinit();
 
-        const bir_module = try bir_bplus_frontend.lowerProgram(arena_alloc, &program);
+        var bir_module = try bir_bplus_frontend.lowerProgram(arena_alloc, &program);
+
+        {
+            var safety_result = try safety.runSafetyChecks(arena_alloc, &program, &bir_module);
+            defer safety_result.deinit();
+            if (safety_result.hasErrors()) {
+                try safety.reportSafetyErrors(std.io.getStdErr().writer(), &safety_result);
+                std.process.exit(1);
+            }
+        }
+
         const mfuncs = try bir_cpu.lowerModuleToMir(arena_alloc, &bir_module);
 
         // Wrap in MIR module for Machine IR lowering
@@ -334,6 +352,9 @@ pub fn main() !void {
                 }
             }
         }
+
+        // Dump MIR instructions per block
+        // This is the path from main.zig pipeline, not used by bplus.zig
 
         const coff_result = try coff.emitCoff(mfuncs);
         defer coff_result.bytes.deinit();
@@ -358,12 +379,19 @@ pub fn main() !void {
         const base = input_path[0..ext_idx];
         const out_path = output_path orelse try std.fmt.allocPrint(allocator, "{s}.exe", .{base});
 
+        // Write embedded runtime object to a temp file
+        const tmp_dir = std.fs.cwd();
+        const rt_obj_name = ".bpc_minrt.obj";
+        try tmp_dir.writeFile(.{ .sub_path = rt_obj_name, .data = minrt_obj_bytes });
+        defer tmp_dir.deleteFile(rt_obj_name) catch {};
+
         try linker.link(allocator, .{
             .obj_path = input_path,
             .output_path = out_path,
-            .entry = "plan",
+        .entry = "main",
             .subsystem = "console",
             .libs = &.{"kernel32.lib"},
+            .extra_objs = &.{rt_obj_name},
         });
 
         const stdout = std.io.getStdOut().writer();
@@ -389,6 +417,14 @@ pub fn main() !void {
 
         var module = try bir_bplus_frontend.lowerProgram(arena_alloc, &program);
         defer module.deinit();
+
+        {
+            var safety_result = try safety.runSafetyChecks(arena_alloc, &program, &module);
+            defer safety_result.deinit();
+            if (safety_result.hasErrors()) {
+                try safety.reportSafetyErrors(std.io.getStdErr().writer(), &safety_result);
+            }
+        }
 
         const stdout = std.io.getStdOut().writer();
         try bir_lower_dump.dumpModule(&module, stdout);
@@ -468,9 +504,23 @@ pub fn main() !void {
     defer sema_result_main.deinit();
 
     const is_dll = std.mem.eql(u8, command, "dll");
+    const is_run = std.mem.eql(u8, command, "run");
 
-    // Mark entries as exports based on -exports flag
     if (is_dll) {
+        // DLL: keep old x64gen path (DLL exports need special handling)
+        var output = try x64gen.generateEx(allocator, program, true, .off);
+        defer allocator.free(output.code);
+        defer output.symbols.deinit();
+
+        const out_path = output_path orelse blk: {
+            const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
+            const base = input_path[0..ext_idx];
+            break :blk try std.fmt.allocPrint(allocator, "{s}.dll", .{base});
+        };
+        defer if (output_path == null) allocator.free(out_path);
+
+        var resolved = std.ArrayList(pe.ResolvedExport).init(allocator);
+        defer resolved.deinit();
         if (export_names) |names| {
             var it = std.mem.splitScalar(u8, names, ',');
             while (it.next()) |name| {
@@ -482,24 +532,6 @@ pub fn main() !void {
                 }
             }
         }
-    }
-
-    var output = try if (is_dll) x64gen.generateEx(allocator, program, true, .off) else x64gen.generate(allocator, program);
-    defer allocator.free(output.code);
-    defer output.symbols.deinit();
-
-    const out_path = output_path orelse blk: {
-        const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
-        const base = input_path[0..ext_idx];
-        const ext = if (is_dll) ".dll" else ".exe";
-        break :blk try std.fmt.allocPrint(allocator, "{s}{s}", .{ base, ext });
-    };
-    defer if (output_path == null) allocator.free(out_path);
-
-    var pe_bytes: []u8 = undefined;
-    if (is_dll) {
-        var resolved = std.ArrayList(pe.ResolvedExport).init(allocator);
-        defer resolved.deinit();
         for (output.symbols.symbols.items) |s| {
             if (s.kind == .exp) {
                 try resolved.append(.{
@@ -509,15 +541,65 @@ pub fn main() !void {
                 });
             }
         }
-        pe_bytes = try pe.writeDll(allocator, output.code, output.import_dir_rva, output.idat_size, resolved.items);
-    } else {
-        pe_bytes = try pe.write(allocator, output.code, output.import_dir_rva, output.idat_size, output.entry_point_rva);
+        const pe_bytes = try pe.writeDll(allocator, output.code, output.import_dir_rva, output.idat_size, resolved.items);
+        defer allocator.free(pe_bytes);
+        try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = pe_bytes });
+        return;
     }
-    defer allocator.free(pe_bytes);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = pe_bytes });
+    // Verified pipeline: HIR → THIR → BIR(SSA) → MIR → COFF → link → PE
+    var type_engine = type_sys.TypeEngine.init(allocator);
+    defer type_engine.deinit();
 
-    if (std.mem.eql(u8, command, "run")) {
+    var pipeline_result = try ver_pipeline.runFullVerifiedPipeline(allocator, &program, &sema_result_main, &type_engine);
+    defer {
+        pipeline_result.verified_machine.deinit();
+        pipeline_result.verified_mir.deinit();
+        pipeline_result.verified_bir.deinit();
+    }
+
+    const mfuncs = pipeline_result.verified_mir.getModule().functions.items;
+    if (mfuncs.len == 0) {
+        std.log.err("pipeline produced no functions: PLAN state machines are not yet lowered through the new pipeline. Use 'bpc dll' for PLAN programs.", .{});
+        std.process.exit(1);
+    }
+    const coff_result = try coff.emitCoff(mfuncs);
+    defer coff_result.bytes.deinit();
+
+    // Determine output path
+    const out_path = output_path orelse blk: {
+        const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
+        const base = input_path[0..ext_idx];
+        break :blk try std.fmt.allocPrint(allocator, "{s}.exe", .{base});
+    };
+    defer if (output_path == null) allocator.free(out_path);
+
+    // Write COFF to temp file
+    const tmp_dir = std.fs.cwd();
+    const obj_name = try std.fmt.allocPrint(allocator, ".bpc_{s}.obj", .{std.fs.path.stem(input_path)});
+    defer {
+        allocator.free(obj_name);
+        tmp_dir.deleteFile(obj_name) catch {};
+    }
+    try tmp_dir.writeFile(.{ .sub_path = obj_name, .data = coff_result.bytes.items });
+
+    // Write embedded runtime object
+    const rt_obj_name = ".bpc_minrt.obj";
+    try tmp_dir.writeFile(.{ .sub_path = rt_obj_name, .data = minrt_obj_bytes });
+    defer tmp_dir.deleteFile(rt_obj_name) catch {};
+
+    // Link with lld-link
+    const linker = @import("linker/linker.zig");
+    try linker.link(allocator, .{
+        .obj_path = obj_name,
+        .output_path = out_path,
+        .entry = "main",
+        .subsystem = "console",
+        .libs = &.{"kernel32.lib"},
+        .extra_objs = &.{rt_obj_name},
+    });
+
+    if (is_run) {
         var child = std.process.Child.init(&[_][]const u8{ out_path }, allocator);
         child.stdin_behavior = .Inherit;
         child.stdout_behavior = .Inherit;

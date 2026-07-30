@@ -5,6 +5,7 @@ const enc = @import("../encoder.zig");
 const OpCode = enc.OpCode;
 const Operand = enc.Operand;
 const regalloc = @import("../../../regalloc/regalloc.zig");
+const spill = @import("spill.zig");
 pub const ir = @import("../ir/inst.zig");
 
 pub const OffsetMap = std.AutoHashMap(u32, i32);
@@ -19,15 +20,21 @@ pub const CallFixup = struct {
     disp_pos: usize,
 };
 
+pub const StringConstFixup = struct {
+    data: []const u8,
+};
+
 pub const SelectResult = struct {
     mf: ir.MachineFunction,
     block_fixups: std.ArrayListUnmanaged(BlockFixup),
     call_fixups: std.ArrayListUnmanaged(CallFixup),
+    string_fixups: std.ArrayListUnmanaged(StringConstFixup),
 
     pub fn deinit(self: *SelectResult, allocator: std.mem.Allocator) void {
         self.mf.deinit();
         self.block_fixups.deinit(allocator);
         self.call_fixups.deinit(allocator);
+        self.string_fixups.deinit(allocator);
     }
 };
 
@@ -40,7 +47,7 @@ pub const Ctx = struct {
     alloca_offsets: *const OffsetMap,
     block_fixups: *std.ArrayListUnmanaged(BlockFixup),
     call_fixups: *std.ArrayListUnmanaged(CallFixup),
-    code_dummy: *std.ArrayList(u8),
+    string_fixups: *std.ArrayListUnmanaged(StringConstFixup),
 };
 
 pub fn resolveReg(ra: *const regalloc.RegAllocResult, op: mir.MOperand) i16 {
@@ -66,7 +73,7 @@ pub fn resolveOpOrSpill(ctx: *Ctx, op: mir.MOperand) !Operand {
     return switch (op) {
         .vreg => |v| blk: {
             if (ctx.ra.regs.get(v)) |r| break :blk .{ .reg = r };
-            try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, op, ctx.scratch);
+            try spill.loadSpilledOp(ctx, op, ctx.scratch);
             break :blk .{ .reg = ctx.scratch };
         },
         .phys => |r| .{ .reg = @as(i16, @intCast(r)) },
@@ -127,7 +134,7 @@ pub fn loadFloatOpToXmm(ctx: *Ctx, op: mir.MOperand, into_xmm: i16, dtype: mir.D
     switch (op) {
         .vreg => {
             if (regalloc.isSpilled(ctx.ra, op)) {
-                try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, op, ctx.scratch);
+                try spill.loadSpilledOp(ctx, op, ctx.scratch);
                 try moveGprToXmm(ctx, ctx.scratch, into_xmm, dtype);
             } else {
                 const reg = resolveReg(ctx.ra, op);

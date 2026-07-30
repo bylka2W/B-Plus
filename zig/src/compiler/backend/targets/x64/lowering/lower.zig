@@ -1,15 +1,18 @@
-/// x64 lowering orchestrator.
-/// Orchestrates: regalloc → isel → encode → fixup.
 const std = @import("std");
 const mir = @import("../../../mir/mir.zig");
 const mir_verify = @import("../../../mir/passes/verify.zig");
 const mir_optimizer = @import("../../../mir/passes/manager.zig");
+const settings = @import("../../../../../compiler/settings.zig");
 const x64 = @import("../encoder.zig");
 const regalloc = @import("../../../regalloc/regalloc.zig");
 const frame_mod = @import("../../../frame/frame.zig");
 const isel = @import("../isel.zig");
+const x64_verify = @import("../verify/x64_verifier.zig");
 
 const OffsetMap = isel.OffsetMap;
+const SelectResult = isel.SelectResult;
+
+const StringDispFixup = struct { disp_pos: usize, str_idx: u32 };
 
 pub const EmitResult = struct {
     code: std.ArrayList(u8),
@@ -21,6 +24,8 @@ pub fn emitModule(mfuncs: []const mir.MFunction) !EmitResult {
     defer result.call_fixups.deinit();
     defer result.func_starts.deinit();
     defer result.name_to_offset.deinit();
+    defer result.string_pool.deinit();
+    defer result.string_disp_fixups.deinit();
 
     var code = result.code;
 
@@ -42,65 +47,30 @@ pub const EmitCodeResult = struct {
     name_to_offset: std.StringHashMap(usize),
     call_fixups: std.ArrayList(isel.CallFixup),
     func_starts: std.ArrayList(usize),
+    string_pool: std.ArrayList([]const u8),
+    string_disp_fixups: std.ArrayList(StringDispFixup),
 };
 
-pub fn emitCode(mfuncs: []const mir.MFunction) !EmitCodeResult {
-    if (mfuncs.len == 0) return error.NoFunctions;
-    const allocator = mfuncs[0].allocator;
-
-    for (mfuncs) |*mf| try mir_verify.verifyMir(mf);
-    for (mfuncs) |*mf| try mir_optimizer.optimize(@constCast(mf));
-
-    var code = std.ArrayList(u8).init(allocator);
-    errdefer code.deinit();
-    var name_to_offset = std.StringHashMap(usize).init(allocator);
-    var all_call_fixups = std.ArrayList(isel.CallFixup).init(allocator);
-    var func_starts = std.ArrayList(usize).init(allocator);
-    errdefer {
-        name_to_offset.deinit();
-        all_call_fixups.deinit();
-        func_starts.deinit();
-    }
-
-    for (mfuncs) |*mf| {
-        const func_start = code.items.len;
-        try func_starts.append(func_start);
-        try name_to_offset.put(mf.name, func_start);
-        try emitSingleFunction(&code, &all_call_fixups, mf);
-    }
-
-    // Emit the PLAN runtime event dispatch function.
-    // __plan_event_dispatch: returns event ID in RAX.
-    // For now, returns 0 (no event) — stub for testing.
-    if (true) {
-        const rt_start = code.items.len;
-        try name_to_offset.put("__plan_event_dispatch", rt_start);
-        // xor eax, eax  (48 31 C0)
-        try code.append(0x48);
-        try code.append(0x31);
-        try code.append(0xC0);
-        // ret  (C3)
-        try code.append(0xC3);
-    }
-
-    return .{
-        .code = code,
-        .name_to_offset = name_to_offset,
-        .call_fixups = all_call_fixups,
-        .func_starts = func_starts,
-    };
-}
-
-pub fn emitSingleFunction(
-    code: *std.ArrayList(u8),
-    call_fixups: *std.ArrayList(isel.CallFixup),
+/// Result of the ISEL stage (regalloc + instruction selection).
+pub const IselResult = struct {
+    sel: SelectResult,
+    ra: regalloc.RegAllocResult,
+    alloca_offsets: OffsetMap,
+    local_size: u32,
     mfunc: *const mir.MFunction,
-) !void {
-    const ra = try regalloc.allocRegs(mfunc, mfunc.allocator);
 
-    // Compute alloca offsets.
-    var alloca_offsets = OffsetMap.init(mfunc.allocator);
-    defer alloca_offsets.deinit();
+    pub fn deinit(self: *IselResult) void {
+        self.sel.deinit(self.mfunc.allocator);
+        self.alloca_offsets.deinit();
+    }
+};
+
+/// Stage 1: Regalloc + instruction selection → x64 IR.
+pub fn iselFunction(mfunc: *const mir.MFunction, allocator: std.mem.Allocator) !IselResult {
+    const ra = try regalloc.allocRegs(mfunc, allocator);
+
+    var alloca_offsets = OffsetMap.init(allocator);
+    errdefer alloca_offsets.deinit();
     var local_size: u32 = 0;
     for (mfunc.blocks.items) |*block| {
         for (block.instrs.items) |inst| {
@@ -113,17 +83,36 @@ pub fn emitSingleFunction(
         }
     }
 
-    // Instruction selection → x64 IR.
-    var sel_result = try isel.selectFunction(mfunc, &ra, alloca_offsets);
-    defer sel_result.deinit(mfunc.allocator);
+    const sel = try isel.selectFunction(mfunc, &ra, alloca_offsets);
 
+    return .{
+        .sel = sel,
+        .ra = ra,
+        .alloca_offsets = alloca_offsets,
+        .local_size = local_size,
+        .mfunc = mfunc,
+    };
+}
+
+/// Stage 2: Encode x64 IR → machine code bytes (prologue, body, epilogue, fixups).
+pub fn encodeFunction(
+    code: *std.ArrayList(u8),
+    isel_result: *const IselResult,
+    mfunc: *const mir.MFunction,
+    call_fixups: *std.ArrayList(isel.CallFixup),
+    string_pool: *std.ArrayList([]const u8),
+    string_disp_fixups: *std.ArrayList(StringDispFixup),
+) !void {
+    const sel_result = &isel_result.sel;
+    const ra = &isel_result.ra;
+    const local_size = isel_result.local_size;
     // Compute callee-saved regs and frame.
     var fm = frame_mod.FrameManager.init(mfunc.allocator, .win64);
     defer fm.deinit();
 
     var used_callee_saved = std.ArrayList(i16).init(mfunc.allocator);
     defer used_callee_saved.deinit();
-    regalloc.getUsedCalleeSaved(&ra, &used_callee_saved);
+    regalloc.getUsedCalleeSaved(ra, &used_callee_saved);
     for (used_callee_saved.items) |reg| {
         try fm.callee_saved_gprs.append(reg);
     }
@@ -134,8 +123,8 @@ pub fn emitSingleFunction(
     try fm.emitPrologue(code);
 
     // Move arguments from win64 arg regs (integer and float).
-    const win64_int_arg_regs = [_]i16{ 1, 2, 8, 9 }; // RCX, RDX, R8, R9
-    const win64_float_arg_regs = [_]i16{ 16, 17, 18, 19 }; // XMM0-XMM3
+    const win64_int_arg_regs = [_]i16{ 1, 2, 8, 9 };
+    const win64_float_arg_regs = [_]i16{ 16, 17, 18, 19 };
     var int_arg_idx: usize = 0;
     var float_arg_idx: usize = 0;
     for (mfunc.params) |p| {
@@ -166,35 +155,52 @@ pub fn emitSingleFunction(
     }
 
     // Encode x64 IR → bytes, emitting epilogue after each block that ends
-    // with a MIR `ret`.  Without this, control would fall through into
-    // subsequent blocks (e.g. critical‑edge split blocks), causing infinite
-    // loops when those blocks jump back to the ret block.
+    // with a MIR `ret`.
     var block_offsets = std.ArrayListUnmanaged(usize){};
     defer block_offsets.deinit(mfunc.allocator);
     var fixup_positions = std.ArrayListUnmanaged(usize){};
     defer fixup_positions.deinit(mfunc.allocator);
+    const FixupKind = enum { block, call };
+    var fixup_kinds = std.ArrayListUnmanaged(FixupKind){};
+    defer fixup_kinds.deinit(mfunc.allocator);
+    var string_fixup_idx: usize = 0;
 
     try block_offsets.ensureTotalCapacity(mfunc.allocator, sel_result.mf.blocks.items.len);
     try fixup_positions.ensureTotalCapacity(mfunc.allocator, 32);
+    try fixup_kinds.ensureTotalCapacity(mfunc.allocator, 32);
 
     for (sel_result.mf.blocks.items, 0..) |*x64_block, bi| {
         block_offsets.appendAssumeCapacity(code.items.len);
         for (x64_block.instrs.items) |inst| {
-            const fixup_offset: ?usize = switch (inst.op) {
-                .JMP_REL32, .CALL_REL32 => code.items.len + 1,
+            const fixup_info: ?struct { offset: usize, kind: FixupKind } = switch (inst.op) {
+                .JMP_REL32 => .{ .offset = code.items.len + 1, .kind = .block },
+                .CALL_REL32 => .{ .offset = code.items.len + 1, .kind = .call },
                 .JE_REL32, .JNE_REL32, .JG_REL32, .JGE_REL32,
                 .JL_REL32, .JLE_REL32, .JA_REL32, .JB_REL32, .JBE_REL32,
-                .JAE_REL32 => code.items.len + 2,
+                .JAE_REL32 => .{ .offset = code.items.len + 2, .kind = .block },
                 else => null,
             };
-            if (fixup_offset) |off| {
-                fixup_positions.appendAssumeCapacity(off);
+            if (fixup_info) |fi| {
+                fixup_positions.appendAssumeCapacity(fi.offset);
+                fixup_kinds.appendAssumeCapacity(fi.kind);
+            }
+            // Track string constant LEA positions (RIP-relative with base_reg=255)
+            if (inst.op == .LEA_R64_MEM and inst.operands.len >= 2) {
+                const mem_op = inst.operands[1];
+                if (mem_op.base_reg == 255) {
+                    const disp_pos = code.items.len + 3;
+                    if (string_fixup_idx < sel_result.string_fixups.items.len) {
+                        const sf = sel_result.string_fixups.items[string_fixup_idx];
+                        string_fixup_idx += 1;
+                        const str_idx = @as(u32, @intCast(string_pool.items.len));
+                        try string_pool.append(sf.data);
+                        try string_disp_fixups.append(.{ .disp_pos = disp_pos, .str_idx = str_idx });
+                    }
+                }
             }
             try x64.emitInst(code, inst);
         }
 
-        // If the corresponding MIR block ends with `ret`, emit the epilogue
-        // right here so that control cannot fall through into a later block.
         if (bi < mfunc.blocks.items.len) {
             const mir_block = mfunc.blocks.items[bi];
             if (mir_block.instrs.items.len > 0) {
@@ -206,26 +212,207 @@ pub fn emitSingleFunction(
         }
     }
 
-    // Emit a trailing epilogue for paths that don't end with `ret`
-    // (e.g. infinite loops or functions that fall off the end).
     try fm.emitEpilogue(code);
 
-    // Patch block fixups.
-    const fixup_positions_slice = fixup_positions.items;
+    // Patch fixups, interleaving block and call fixups in instruction order.
     const block_offsets_slice = block_offsets.items;
-    for (sel_result.block_fixups.items, 0..) |fx, i| {
-        const disp_pos = if (i < fixup_positions_slice.len) fixup_positions_slice[i] else continue;
-        if (fx.target >= block_offsets_slice.len) continue;
-        const target_off = block_offsets_slice[fx.target];
-        const disp: i32 = @intCast(@as(i64, @intCast(target_off)) - @as(i64, @intCast(disp_pos + 4)));
-        @memcpy(code.items[disp_pos..][0..4], &@as([4]u8, @bitCast(disp)));
+    var block_fixup_idx: usize = 0;
+    var call_fixup_idx: usize = 0;
+    for (fixup_positions.items, 0..) |disp_pos, i| {
+        switch (fixup_kinds.items[i]) {
+            .block => {
+                if (block_fixup_idx >= sel_result.block_fixups.items.len) continue;
+                const fx = sel_result.block_fixups.items[block_fixup_idx];
+                block_fixup_idx += 1;
+                if (fx.target >= block_offsets_slice.len) continue;
+                const target_off = block_offsets_slice[fx.target];
+                const disp: i32 = @intCast(@as(i64, @intCast(target_off)) - @as(i64, @intCast(disp_pos + 4)));
+                @memcpy(code.items[disp_pos..][0..4], &@as([4]u8, @bitCast(disp)));
+            },
+            .call => {
+                if (call_fixup_idx >= sel_result.call_fixups.items.len) continue;
+                const cf = sel_result.call_fixups.items[call_fixup_idx];
+                call_fixup_idx += 1;
+                try call_fixups.append(.{ .name = cf.name, .disp_pos = disp_pos });
+            },
+        }
+    }
+}
+
+/// Full pipeline: iselFunction → verify → (dump) → encodeFunction.
+pub fn emitSingleFunction(
+    code: *std.ArrayList(u8),
+    call_fixups: *std.ArrayList(isel.CallFixup),
+    string_pool: *std.ArrayList([]const u8),
+    string_disp_fixups: *std.ArrayList(StringDispFixup),
+    mfunc: *const mir.MFunction,
+) !void {
+    const allocator = mfunc.allocator;
+
+    var isel_result = try iselFunction(mfunc, allocator);
+    defer isel_result.deinit();
+
+    // Verify x64 IR — returns VerifiedX64Function as a type barrier.
+    const verified = try x64_verify.verifyFunction(&isel_result.sel.mf);
+
+    // Dump verified x64 IR (enable with BPC_DEBUG=1 env var).
+    if (isX64DumpEnabled()) x64_verify.dumpFunction(verified);
+
+    try encodeFunction(code, &isel_result, mfunc, call_fixups, string_pool, string_disp_fixups);
+}
+
+pub fn emitCode(mfuncs: []const mir.MFunction) !EmitCodeResult {
+    if (mfuncs.len == 0) return error.NoFunctions;
+    const allocator = mfuncs[0].allocator;
+
+    for (mfuncs) |*mf| try mir_verify.verifyMir(mf);
+
+    if (settings.debug_ir) {
+        for (mfuncs) |*mf| {
+            const stderr = std.io.getStdErr().writer();
+            stderr.print("\n; === MIR BEFORE OPT: '{s}' ===\n", .{mf.name}) catch {};
+            stderr.print(";   params: {d}\n", .{mf.params.len}) catch {};
+            for (mf.params, 0..) |param, pi| {
+                if (param == .vreg) {
+                    stderr.print(";   param[{d}]: vreg={d}\n", .{pi, param.vreg}) catch {};
+                } else {
+                    stderr.print(";   param[{d}]: (not vreg)\n", .{pi}) catch {};
+                }
+            }
+            for (mf.blocks.items, 0..) |*blk, bi| {
+                stderr.print(";   b{d} '{s}' ({d} instrs):\n", .{bi, blk.label, blk.instrs.items.len}) catch {};
+                for (blk.instrs.items, 0..) |mi, ii| {
+                    stderr.print(";     {d}: {s}", .{ii, @tagName(mi)}) catch {};
+                    if (mi == .mov) {
+                        if (mi.mov.dst == .vreg) stderr.print(" dst=v{d}", .{mi.mov.dst.vreg}) catch {};
+                        if (mi.mov.src == .vreg) stderr.print(" src=v{d}", .{mi.mov.src.vreg}) catch {};
+                        if (mi.mov.src == .imm) stderr.print(" imm", .{}) catch {};
+                    }
+                    if (mi == .add) {
+                        if (mi.add.dst == .vreg) stderr.print(" dst=v{d}", .{mi.add.dst.vreg}) catch {};
+                        if (mi.add.src == .vreg) stderr.print(" src=v{d}", .{mi.add.src.vreg}) catch {};
+                    }
+                    if (mi == .ret) {
+                        if (mi.ret == .value and mi.ret.value == .vreg) stderr.print(" val=v{d}", .{mi.ret.value.vreg}) catch {};
+                    }
+                    if (mi == .store) {
+                        if (mi.store.ptr == .vreg) stderr.print(" ptr=v{d}", .{mi.store.ptr.vreg}) catch {};
+                        if (mi.store.src == .vreg) stderr.print(" src=v{d}", .{mi.store.src.vreg}) catch {};
+                    }
+                    if (mi == .load) {
+                        if (mi.load.dst == .vreg) stderr.print(" dst=v{d}", .{mi.load.dst.vreg}) catch {};
+                        if (mi.load.ptr == .vreg) stderr.print(" ptr=v{d}", .{mi.load.ptr.vreg}) catch {};
+                    }
+                    if (mi == .alloca) {
+                        if (mi.alloca.dst == .vreg) stderr.print(" dst=v{d}", .{mi.alloca.dst.vreg}) catch {};
+                    }
+                    stderr.print("\n", .{}) catch {};
+                }
+            }
+        }
     }
 
-    // Patch call fixups.
-    const num_block_fixups = sel_result.block_fixups.items.len;
-    for (sel_result.call_fixups.items, 0..) |cf, i| {
-        const fixup_idx = num_block_fixups + i;
-        const disp_pos = if (fixup_idx < fixup_positions_slice.len) fixup_positions_slice[fixup_idx] else continue;
-        try call_fixups.append(.{ .name = cf.name, .disp_pos = disp_pos });
+    for (mfuncs) |*mf| try mir_optimizer.optimize(@constCast(mf));
+
+    if (settings.debug_ir) {
+        for (mfuncs) |*mf| {
+            const stderr = std.io.getStdErr().writer();
+            stderr.print("; === MIR AFTER OPT: '{s}' ===\n", .{mf.name}) catch {};
+            for (mf.blocks.items, 0..) |*blk, bi| {
+                stderr.print(";   b{d} '{s}' ({d} instrs):\n", .{bi, blk.label, blk.instrs.items.len}) catch {};
+                for (blk.instrs.items, 0..) |mi, ii| {
+                    stderr.print(";     {d}: {s}", .{ii, @tagName(mi)}) catch {};
+                    if (mi == .mov) {
+                        if (mi.mov.dst == .vreg) stderr.print(" dst=v{d}", .{mi.mov.dst.vreg}) catch {};
+                        if (mi.mov.src == .vreg) stderr.print(" src=v{d}", .{mi.mov.src.vreg}) catch {};
+                        if (mi.mov.src == .imm) stderr.print(" imm", .{}) catch {};
+                    }
+                    if (mi == .add) {
+                        if (mi.add.dst == .vreg) stderr.print(" dst=v{d}", .{mi.add.dst.vreg}) catch {};
+                        if (mi.add.src == .vreg) stderr.print(" src=v{d}", .{mi.add.src.vreg}) catch {};
+                    }
+                    if (mi == .ret) {
+                        if (mi.ret == .value and mi.ret.value == .vreg) stderr.print(" val=v{d}", .{mi.ret.value.vreg}) catch {};
+                    }
+                    if (mi == .load) {
+                        if (mi.load.dst == .vreg) stderr.print(" dst=v{d}", .{mi.load.dst.vreg}) catch {};
+                        if (mi.load.ptr == .vreg) stderr.print(" ptr=v{d}", .{mi.load.ptr.vreg}) catch {};
+                    }
+                    if (mi == .alloca) {
+                        if (mi.alloca.dst == .vreg) stderr.print(" dst=v{d}", .{mi.alloca.dst.vreg}) catch {};
+                    }
+                    stderr.print("\n", .{}) catch {};
+                }
+            }
+        }
     }
+
+    var code = std.ArrayList(u8).init(allocator);
+    errdefer code.deinit();
+    var name_to_offset = std.StringHashMap(usize).init(allocator);
+    var all_call_fixups = std.ArrayList(isel.CallFixup).init(allocator);
+    var func_starts = std.ArrayList(usize).init(allocator);
+    var string_pool = std.ArrayList([]const u8).init(allocator);
+    var string_disp_fixups = std.ArrayList(StringDispFixup).init(allocator);
+    errdefer {
+        name_to_offset.deinit();
+        all_call_fixups.deinit();
+        func_starts.deinit();
+        string_pool.deinit();
+        string_disp_fixups.deinit();
+    }
+
+    for (mfuncs) |*mf| {
+        const func_start = code.items.len;
+        try func_starts.append(func_start);
+        try name_to_offset.put(mf.name, func_start);
+        try emitSingleFunction(&code, &all_call_fixups, &string_pool, &string_disp_fixups, mf);
+    }
+
+    // Emit the PLAN runtime event dispatch function.
+    if (true) {
+        const rt_start = code.items.len;
+        try name_to_offset.put("__plan_event_dispatch", rt_start);
+        try code.append(0x48);
+        try code.append(0x31);
+        try code.append(0xC0);
+        try code.append(0xC3);
+    }
+
+    // Append string data after all code, aligned to 4 bytes.
+    const string_data_start = code.items.len;
+    for (string_pool.items, 0..) |sdata, i| {
+        _ = i;
+        try code.appendSlice(sdata);
+        try code.append(0); // null terminator
+    }
+    // Align to 4 bytes (not strictly needed for RIP-relative but good practice).
+    while (code.items.len % 4 != 0) try code.append(0);
+
+    // Resolve string fixups: patch each LEA's RIP-relative displacement.
+    for (string_disp_fixups.items) |sf| {
+        // Compute the exact offset of this string in the code buffer.
+        var str_off: usize = string_data_start;
+        for (0..sf.str_idx) |j| {
+            str_off += string_pool.items[j].len + 1; // +1 for null terminator
+        }
+        const lea_end = sf.disp_pos + 4; // RIP points here after the LEA
+        const disp: i32 = @intCast(@as(i64, @intCast(str_off)) - @as(i64, @intCast(lea_end)));
+        @memcpy(code.items[sf.disp_pos..][0..4], &@as([4]u8, @bitCast(disp)));
+    }
+
+    return .{
+        .code = code,
+        .name_to_offset = name_to_offset,
+        .call_fixups = all_call_fixups,
+        .func_starts = func_starts,
+        .string_pool = string_pool,
+        .string_disp_fixups = string_disp_fixups,
+    };
+}
+
+fn isX64DumpEnabled() bool {
+    const val = std.process.getEnvVarOwned(std.heap.page_allocator, "BPC_DEBUG") catch return false;
+    defer std.heap.page_allocator.free(val);
+    return val.len > 0;
 }

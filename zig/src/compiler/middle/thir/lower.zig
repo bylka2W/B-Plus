@@ -1,20 +1,25 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const thir = @import("thir.zig");
+const hir_arena = @import("../../frontend/hir/arena.zig");
 const hir_expr = @import("../../frontend/hir/expr.zig");
 const hir_stmt = @import("../../frontend/hir/stmt.zig");
 const hir_item = @import("../../frontend/hir/item.zig");
+const hir_body = @import("../../frontend/hir/body.zig");
 const hir_literal = @import("../../frontend/hir/literal.zig");
+const hir_pattern = @import("../../frontend/hir/pattern.zig");
 const hir_ty = @import("../../frontend/hir/ty.zig");
-const hir = @import("../../frontend/hir/hir.zig");
 const ids = @import("../../frontend/foundation/ids/ids.zig");
 const type_sys = @import("../../frontend/type_system/type_system.zig");
 const TypeEngine = type_sys.TypeEngine;
+const SourceSpan = @import("../../frontend/source/location/span.zig").SourceSpan;
 
-const HirExpr = hir.HirExpr;
-const HirStmt = hir.HirStmt;
-const HirItem = hir.HirItem;
-const HirLiteral = hir.HirLiteral;
+const HirExpr = hir_expr.HirExpr;
+const HirStmt = hir_stmt.HirStmt;
+const HirItem = hir_item.HirItem;
+const HirBody = hir_body.HirBody;
+const HirLiteral = hir_literal.HirLiteral;
+const HirPattern = hir_pattern.HirPattern;
 const HirBinOp = hir_expr.BinOp;
 const HirUnOp = hir_expr.UnaryOp;
 
@@ -23,6 +28,8 @@ const HirStmtId = ids.StmtId;
 const HirDefId = ids.DefId;
 const HirTypeId = ids.TypeId;
 const HirSymbolId = ids.SymbolId;
+const HirItemId = ids.ItemId;
+const HirBodyId = ids.BodyId;
 
 const HirItemKind = hir_item.HirItem.HirItemKind;
 
@@ -30,6 +37,8 @@ const HirItemKind = hir_item.HirItem.HirItemKind;
 pub const HirExprStore = std.ArrayList(HirExpr);
 pub const HirStmtStore = std.ArrayList(HirStmt);
 pub const HirItemStore = std.ArrayList(HirItem);
+pub const HirBodyStore = std.ArrayList(HirBody);
+pub const HirPatternStore = std.ArrayList(HirPattern);
 
 // ─── Lowering Error ───
 pub const LowerError = error{
@@ -48,13 +57,19 @@ const LoopContext = struct {
 
 // ─── Lowering Context ───
 pub const LowerContext = struct {
+    arena: std.heap.ArenaAllocator,
     allocator: Allocator,
     module: *thir.ThirModule,
     type_engine: *TypeEngine,
 
-    hir_exprs: *HirExprStore,
-    stmts: *HirStmtStore,
-    items: *HirItemStore,
+    hir_exprs: *const HirExprStore,
+    hir_patterns: *const HirPatternStore,
+    stmts: *const HirStmtStore,
+    items: *const HirItemStore,
+    hir_bodies: *const HirBodyStore,
+
+    // Map HIR DefId → THIR ValueId for variables and params
+    def_to_value: std.AutoHashMap(HirDefId, thir.ValueId),
 
     // Current function being lowered
     func: ?*thir.ThirFunction = null,
@@ -66,7 +81,7 @@ pub const LowerContext = struct {
     // Block storage
     blocks: std.ArrayList(thir.BasicBlock),
     block_labels: std.ArrayList([]const u8),
-    next_block_id: thir.BlockId = 0,
+    next_block_id: thir.BlockId = .{ .index = 0 },
 
     // Value arena
     values: std.ArrayList(thir.ValueDef),
@@ -74,23 +89,31 @@ pub const LowerContext = struct {
     places: std.ArrayList(thir.PlaceDesc),
 
     // Loop context stack
-    loop_ctx: ?*LoopContext = null,
+    loop_ctx: ?*const LoopContext = null,
 
     pub fn init(
-        allocator: Allocator,
+        backing: Allocator,
         module: *thir.ThirModule,
         engine: *TypeEngine,
-        hir_exprs: *HirExprStore,
-        stmts: *HirStmtStore,
-        items: *HirItemStore,
+        hir_exprs: *const HirExprStore,
+        hir_patterns: *const HirPatternStore,
+        stmts: *const HirStmtStore,
+        items: *const HirItemStore,
+        hir_bodies: *const HirBodyStore,
     ) LowerContext {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        const allocator = arena.allocator();
         return .{
+            .arena = arena,
             .allocator = allocator,
             .module = module,
             .type_engine = engine,
             .hir_exprs = hir_exprs,
+            .hir_patterns = hir_patterns,
             .stmts = stmts,
             .items = items,
+            .hir_bodies = hir_bodies,
+            .def_to_value = std.AutoHashMap(HirDefId, thir.ValueId).init(allocator),
             .current_stmts = std.ArrayList(thir.ThirStmt).init(allocator),
             .blocks = std.ArrayList(thir.BasicBlock).init(allocator),
             .block_labels = std.ArrayList([]const u8).init(allocator),
@@ -101,18 +124,13 @@ pub const LowerContext = struct {
     }
 
     pub fn deinit(self: *LowerContext) void {
-        self.current_stmts.deinit();
-        self.blocks.deinit();
-        self.block_labels.deinit();
-        self.values.deinit();
-        self.value_exprs.deinit();
-        self.places.deinit();
+        self.arena.deinit();
     }
 
     // ─── Value Allocation ───
     pub fn allocValue(self: *LowerContext, ty: ids.TypeId, storage: thir.Storage) !thir.ValueId {
-        const id: thir.ValueId = @intCast(self.values.items.len);
-        try self.values.append(.{ .ty = ty, .storage = storage, .expr = ids.ExprId.new(id) });
+        const id = thir.ValueId.new(@intCast(self.values.items.len));
+        try self.values.append(.{ .ty = ty, .storage = storage, .expr = ids.ExprId.new(id.index) });
         try self.value_exprs.append(.{ .span = .{}, .ty = ty, .kind = .{ .none = {} } });
         return id;
     }
@@ -123,13 +141,13 @@ pub const LowerContext = struct {
 
     pub fn allocLocal(self: *LowerContext, ty: ids.TypeId, mutable: bool) !thir.ValueId {
         const id = try self.allocValue(ty, .stack);
-        try self.places.append(.{ .ty = ty, .storage = .stack, .mutable = mutable });
+        try self.places.append(.{ .ty = ty, .storage = .stack, .mutable = mutable, .span = .{} });
         return id;
     }
 
     // ─── Block Management ───
     pub fn startBlock(self: *LowerContext, label: []const u8) !thir.BlockId {
-        const id: thir.BlockId = @intCast(self.blocks.items.len);
+        const id = thir.BlockId.new(@intCast(self.blocks.items.len));
         try self.block_labels.append(label);
         try self.blocks.append(.{
             .label = label,
@@ -142,8 +160,8 @@ pub const LowerContext = struct {
     }
 
     pub fn finishBlock(self: *LowerContext, id: thir.BlockId, term: thir.BasicBlock.Terminator) void {
-        self.blocks.items[id].terminator = term;
-        self.blocks.items[id].stmts = self.current_stmts.toOwnedSlice() catch unreachable;
+        self.blocks.items[id.index].terminator = term;
+        self.blocks.items[id.index].stmts = self.current_stmts.toOwnedSlice() catch unreachable;
     }
 
     // ─── Emit Statement ───
@@ -158,7 +176,7 @@ pub const LowerContext = struct {
         const ty = expr.ty;
 
         switch (expr.kind) {
-            .literal => |lit| return self.lowerLiteral(lit, ty),
+            .literal => |lit| return self.lowerLiteral(lit.value, ty),
             .path => |p| return self.lowerPath(p),
             .binary => |b| return self.lowerBinary(b, ty),
             .unary => |u| return self.lowerUnary(u, ty),
@@ -193,7 +211,7 @@ pub const LowerContext = struct {
             .local_decl => |ld| try self.lowerLocalDecl(ld, stmt.span),
             .expr => |es| {
                 const val = try self.lowerExpr(es.expr);
-                if (val != thir.NO_VALUE) {
+                if (!val.eql(thir.NO_VALUE)) {
                     try self.emitStmt(.{
                         .span = stmt.span,
                         .kind = .{ .expr_stmt = .{ .expr = val } },
@@ -244,19 +262,26 @@ pub const LowerContext = struct {
             .int => |v| .{ .int = v },
             .float => |v| .{ .float = v },
             .boolean => |v| .{ .bool_val = v },
-            .string => |s| .{ .string = s },
+            .string => |s| .{ .string = try self.allocator.dupe(u8, s) },
         };
         try self.setExpr(val, .{ .span = .{}, .ty = ty, .kind = .{ .literal = thir_lit } });
         return val;
     }
 
-    fn lowerPath(self: *LowerContext, p: HirExpr.Kind.PathExpr) !thir.ValueId {
+    fn lowerPath(self: *LowerContext, path: HirExpr.HirExprKind.PathExpr) !thir.ValueId {
+        if (self.def_to_value.get(path.def)) |var_vid| {
+            const var_ty = self.values.items[var_vid.index].ty;
+            const result = try self.allocValue(var_ty, .local_reg);
+            try self.setExpr(result, .{ .span = .{}, .ty = var_ty, .kind = .{ .load = .{ .place = .{ .local = var_vid, .projections = &.{} } } } });
+            return result;
+        }
+        // Unknown definition — produce a zero value as placeholder
         const val = try self.allocValue(.{ .index = 0 }, .local_reg);
-        try self.setExpr(val, .{ .span = .{}, .ty = .{ .index = 0 }, .kind = .{ .load = .{ .place = .{ .local = val, .projections = &.{} } } } });
+        try self.setExpr(val, .{ .span = .{}, .ty = .{ .index = 0 }, .kind = .{ .literal = .{ .int = 0 } } });
         return val;
     }
 
-    fn lowerBinary(self: *LowerContext, b: HirExpr.Kind.BinaryExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerBinary(self: *LowerContext, b: HirExpr.HirExprKind.BinaryExpr, ty: ids.TypeId) !thir.ValueId {
         const lhs = try self.lowerExpr(b.left);
         const rhs = try self.lowerExpr(b.right);
         const result = try self.allocValue(ty, .local_reg);
@@ -265,7 +290,7 @@ pub const LowerContext = struct {
         return result;
     }
 
-    fn lowerUnary(self: *LowerContext, u: HirExpr.Kind.UnaryExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerUnary(self: *LowerContext, u: HirExpr.HirExprKind.UnaryExpr, ty: ids.TypeId) !thir.ValueId {
         const operand = try self.lowerExpr(u.operand);
         const result = try self.allocValue(ty, .local_reg);
         const op = mapUnOp(u.op);
@@ -273,25 +298,53 @@ pub const LowerContext = struct {
         return result;
     }
 
-    fn lowerCall(self: *LowerContext, c: HirExpr.Kind.CallExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerCall(self: *LowerContext, c: HirExpr.HirExprKind.CallExpr, ty: ids.TypeId) !thir.ValueId {
         var args = try self.allocator.alloc(thir.ValueId, c.args.len);
         for (c.args, 0..) |arg, i| {
             args[i] = try self.lowerExpr(arg);
         }
 
-        const ret = if (ty.index != 0)
-            try self.allocValue(ty, .local_reg)
+        const callee_expr = self.hir_exprs.items[c.callee.index];
+        const func_def_id = switch (callee_expr.kind) {
+            .path => |p| p.def,
+            else => HirDefId{ .index = 0 },
+        };
+
+        const resolved_ty = if (ty.isValid()) ty else resolved: {
+            var found = ty;
+            for (self.items.items) |item| {
+                switch (item.kind) {
+                    .fn_decl => |f| {
+                        if (f.def_id.eql(func_def_id)) {
+                            found = f.return_type;
+                            break;
+                        }
+                    },
+                    .extern_fn => |e| {
+                        if (e.def_id.eql(func_def_id)) {
+                            found = e.return_type;
+                            break;
+                        }
+                    },
+                    else => {},
+                }
+            }
+            break :resolved found;
+        };
+
+        const ret = if (resolved_ty.isValid())
+            try self.allocValue(resolved_ty, .local_reg)
         else
             thir.NO_VALUE;
 
-        if (ret != thir.NO_VALUE) {
-            try self.setExpr(ret, .{ .span = .{}, .ty = ty, .kind = .{ .call = .{ .func = .{ .function = .{ .index = 0 } }, .args = args, .ret_ty = ty } } });
+        if (!ret.eql(thir.NO_VALUE)) {
+            try self.setExpr(ret, .{ .span = .{}, .ty = resolved_ty, .kind = .{ .call = .{ .func = .{ .function = func_def_id }, .args = args, .ret_ty = resolved_ty } } });
         }
 
         return ret;
     }
 
-    fn lowerMethodCall(self: *LowerContext, mc: HirExpr.Kind.MethodCallExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerMethodCall(self: *LowerContext, mc: HirExpr.HirExprKind.MethodCallExpr, ty: ids.TypeId) !thir.ValueId {
         const object = try self.lowerExpr(mc.object);
         const call_args_len = mc.args.len + 1;
         var args = try self.allocator.alloc(thir.ValueId, call_args_len);
@@ -300,26 +353,26 @@ pub const LowerContext = struct {
             args[i] = try self.lowerExpr(arg);
         }
 
-        const ret = if (ty.index != 0)
+        const ret = if (ty.isValid())
             try self.allocValue(ty, .local_reg)
         else
             thir.NO_VALUE;
 
-        if (ret != thir.NO_VALUE) {
-            try self.setExpr(ret, .{ .span = .{}, .ty = ty, .kind = .{ .call = .{ .func = .{ .function = .{ .index = 0 } }, .args = args, .ret_ty = ty } } });
+        if (!ret.eql(thir.NO_VALUE)) {
+            try self.setExpr(ret, .{ .span = .{}, .ty = ty, .kind = .{ .call = .{ .func = .{ .function = mc.method }, .args = args, .ret_ty = ty } } });
         }
 
         return ret;
     }
 
-    fn lowerField(self: *LowerContext, f: HirExpr.Kind.FieldExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerField(self: *LowerContext, f: HirExpr.HirExprKind.FieldExpr, ty: ids.TypeId) !thir.ValueId {
         const object = try self.lowerExpr(f.object);
         const result = try self.allocValue(ty, .local_reg);
         try self.setExpr(result, .{ .span = .{}, .ty = ty, .kind = .{ .field_addr = .{ .object = object, .field_index = 0 } } });
         return result;
     }
 
-    fn lowerIndex(self: *LowerContext, idx: HirExpr.Kind.IndexExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerIndex(self: *LowerContext, idx: HirExpr.HirExprKind.IndexExpr, ty: ids.TypeId) !thir.ValueId {
         const object = try self.lowerExpr(idx.object);
         const index = try self.lowerExpr(idx.index);
         const result = try self.allocValue(ty, .local_reg);
@@ -327,20 +380,20 @@ pub const LowerContext = struct {
         return result;
     }
 
-    fn lowerAssign(self: *LowerContext, a: HirExpr.Kind.AssignExpr) !thir.ValueId {
+    fn lowerAssign(self: *LowerContext, a: HirExpr.HirExprKind.AssignExpr) !thir.ValueId {
         const value = try self.lowerExpr(a.value);
         // target is a place — for now just emit the store
         try self.emitStmt(.{
             .span = .{},
             .kind = .{ .assignment = .{
-                .place = .{ .local = value, .projections = &.{} },
+                .place = value,
                 .value = value,
             } },
         });
         return thir.NO_VALUE;
     }
 
-    fn lowerIf(self: *LowerContext, if_e: HirExpr.Kind.IfExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerIf(self: *LowerContext, if_e: HirExpr.HirExprKind.IfExpr, ty: ids.TypeId) !thir.ValueId {
         // if as expression → phi-like merge
         const cond = try self.lowerExpr(if_e.condition);
         const then_blk = try self.startBlock("if.then");
@@ -348,7 +401,7 @@ pub const LowerContext = struct {
         const merge_blk = try self.startBlock("if.merge");
 
         // terminator for current block
-        self.finishBlock(self.blocks.items.len - 3, .{
+        self.finishBlock(thir.BlockId.new(@intCast(self.blocks.items.len - 3)), .{
             .cond_br = .{ .cond = cond, .then = then_blk, .else_ = else_blk },
         });
 
@@ -356,7 +409,7 @@ pub const LowerContext = struct {
         const then_val = try self.lowerExpr(if_e.then_branch);
         try self.emitStmt(.{
             .span = .{},
-            .kind = .{ .break_stmt = .{ .value = if (then_val != thir.NO_VALUE) then_val else null, .target_loop = merge_blk } },
+            .kind = .{ .break_stmt = .{ .value = if (!then_val.eql(thir.NO_VALUE)) then_val else null, .target_loop = merge_blk } },
         });
         self.finishBlock(then_blk, .{ .br = merge_blk });
 
@@ -364,28 +417,25 @@ pub const LowerContext = struct {
         const else_val = try self.lowerExpr(if_e.else_branch);
         try self.emitStmt(.{
             .span = .{},
-            .kind = .{ .break_stmt = .{ .value = if (else_val != thir.NO_VALUE) else_val else null, .target_loop = merge_blk } },
+            .kind = .{ .break_stmt = .{ .value = if (!else_val.eql(thir.NO_VALUE)) else_val else null, .target_loop = merge_blk } },
         });
         self.finishBlock(else_blk, .{ .br = merge_blk });
 
         // In merge block, result = phi
-        const result = if (ty.index != 0) try self.allocValue(ty, .local_reg) else thir.NO_VALUE;
-        _ = then_val;
-        _ = else_val;
-        _ = result;
-        return result;
+        const result_val = if (ty.isValid()) try self.allocValue(ty, .local_reg) else thir.NO_VALUE;
+        return result_val;
     }
 
-    fn lowerWhile(self: *LowerContext, w: HirExpr.Kind.WhileExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerWhile(self: *LowerContext, w: HirExpr.HirExprKind.WhileExpr, ty: ids.TypeId) !thir.ValueId {
         const cond_blk = try self.startBlock("while.cond");
         const body_blk = try self.startBlock("while.body");
         const exit_blk = try self.startBlock("while.exit");
 
         try self.emitStmt(.{
             .span = .{},
-            .kind = .{ .block_stmt = .{ .block = cond_blk } },
+            .kind = .{ .block = .{ .block = cond_blk } },
         });
-        self.finishBlock(self.blocks.items.len - 4, .{ .br = cond_blk });
+        self.finishBlock(thir.BlockId.new(@intCast(self.blocks.items.len - 4)), .{ .br = cond_blk });
 
         // cond check
         const cond = try self.lowerExpr(w.condition);
@@ -394,7 +444,7 @@ pub const LowerContext = struct {
         // body
         var ctx = LoopContext{ .break_block = exit_blk, .continue_block = cond_blk, .next = self.loop_ctx };
         self.loop_ctx = &ctx;
-        try self.lowerExpr(w.body);
+        _ = try self.lowerExpr(w.body);
         self.loop_ctx = ctx.next;
         try self.emitStmt(.{
             .span = .{},
@@ -406,7 +456,7 @@ pub const LowerContext = struct {
         return thir.NO_VALUE;
     }
 
-    fn lowerFor(self: *LowerContext, f: HirExpr.Kind.ForExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerFor(self: *LowerContext, f: HirExpr.HirExprKind.ForExpr, ty: ids.TypeId) !thir.ValueId {
         // for = while with iterator
         // Simplified: lower body as a loop
         const body_blk = try self.startBlock("for.body");
@@ -415,7 +465,7 @@ pub const LowerContext = struct {
 
         var ctx = LoopContext{ .break_block = exit_blk, .continue_block = body_blk, .next = self.loop_ctx };
         self.loop_ctx = &ctx;
-        try self.lowerExpr(f.body);
+        _ = try self.lowerExpr(f.body);
         self.loop_ctx = ctx.next;
         self.finishBlock(body_blk, .{ .br = body_blk });
 
@@ -424,15 +474,15 @@ pub const LowerContext = struct {
         return thir.NO_VALUE;
     }
 
-    fn lowerLoop(self: *LowerContext, l: HirExpr.Kind.LoopExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerLoop(self: *LowerContext, l: HirExpr.HirExprKind.LoopExpr, ty: ids.TypeId) !thir.ValueId {
         const body_blk = try self.startBlock("loop.body");
         const exit_blk = try self.startBlock("loop.exit");
 
-        self.finishBlock(self.blocks.items.len - 2, .{ .br = body_blk });
+        self.finishBlock(thir.BlockId.new(@intCast(self.blocks.items.len - 2)), .{ .br = body_blk });
 
         var ctx = LoopContext{ .break_block = exit_blk, .continue_block = body_blk, .next = self.loop_ctx };
         self.loop_ctx = &ctx;
-        try self.lowerExpr(l.body);
+        _ = try self.lowerExpr(l.body);
         self.loop_ctx = ctx.next;
 
         self.finishBlock(body_blk, .{ .br = body_blk });
@@ -441,15 +491,15 @@ pub const LowerContext = struct {
         return thir.NO_VALUE;
     }
 
-    fn lowerBlock(self: *LowerContext, b: HirExpr.Kind.BlockExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerBlock(self: *LowerContext, b: HirExpr.HirExprKind.BlockExpr, ty: ids.TypeId) !thir.ValueId {
         for (b.stmts) |s| try self.lowerStmt(s);
         const result = try self.lowerExpr(b.result);
         _ = ty;
         return result;
     }
 
-    fn lowerReturn(self: *LowerContext, r: HirExpr.Kind.ReturnExpr) !thir.ValueId {
-        const val = if (r.value) |v| try self.lowerExpr(v) else null;
+    fn lowerReturn(self: *LowerContext, r: HirExpr.HirExprKind.ReturnExpr) !thir.ValueId {
+        const val = if (r.value.index != 0) try self.lowerExpr(r.value) else null;
         try self.emitStmt(.{
             .span = .{},
             .kind = .{ .return_stmt = .{ .value = val } },
@@ -457,8 +507,8 @@ pub const LowerContext = struct {
         return thir.NO_VALUE;
     }
 
-    fn lowerBreak(self: *LowerContext, b: HirExpr.Kind.BreakExpr) !thir.ValueId {
-        const val = if (b.value) |v| try self.lowerExpr(v) else null;
+    fn lowerBreak(self: *LowerContext, b: HirExpr.HirExprKind.BreakExpr) !thir.ValueId {
+        const val = if (b.value.index != 0) try self.lowerExpr(b.value) else null;
         const target = self.loop_ctx.?.break_block;
         try self.emitStmt(.{
             .span = .{},
@@ -467,7 +517,7 @@ pub const LowerContext = struct {
         return thir.NO_VALUE;
     }
 
-    fn lowerContinue(self: *LowerContext, c: HirExpr.Kind.ContinueExpr) !thir.ValueId {
+    fn lowerContinue(self: *LowerContext, c: HirExpr.HirExprKind.ContinueExpr) !thir.ValueId {
         _ = c;
         const target = self.loop_ctx.?.continue_block;
         try self.emitStmt(.{
@@ -477,7 +527,7 @@ pub const LowerContext = struct {
         return thir.NO_VALUE;
     }
 
-    fn lowerCast(self: *LowerContext, tc: HirExpr.Kind.TypeCastExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerCast(self: *LowerContext, tc: HirExpr.HirExprKind.TypeCastExpr, ty: ids.TypeId) !thir.ValueId {
         const operand = try self.lowerExpr(tc.operand);
         const result = try self.allocValue(ty, .local_reg);
         const from_ty = self.getValueType(operand);
@@ -486,21 +536,21 @@ pub const LowerContext = struct {
         return result;
     }
 
-    fn lowerRef(self: *LowerContext, r: HirExpr.Kind.RefExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerRef(self: *LowerContext, r: HirExpr.HirExprKind.RefExpr, ty: ids.TypeId) !thir.ValueId {
         const operand = try self.lowerExpr(r.operand);
         const result = try self.allocValue(ty, .local_reg);
         try self.setExpr(result, .{ .span = .{}, .ty = ty, .kind = .{ .addr_of = .{ .operand = operand, .mut = r.mutable } } });
         return result;
     }
 
-    fn lowerDeref(self: *LowerContext, d: HirExpr.Kind.DerefExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerDeref(self: *LowerContext, d: HirExpr.HirExprKind.DerefExpr, ty: ids.TypeId) !thir.ValueId {
         const operand = try self.lowerExpr(d.operand);
         const result = try self.allocValue(ty, .local_reg);
         try self.setExpr(result, .{ .span = .{}, .ty = ty, .kind = .{ .deref = .{ .operand = operand } } });
         return result;
     }
 
-    fn lowerMatch(self: *LowerContext, m: HirExpr.Kind.MatchExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerMatch(self: *LowerContext, m: HirExpr.HirExprKind.MatchExpr, ty: ids.TypeId) !thir.ValueId {
         // match → switch tree
         const scrutinee = try self.lowerExpr(m.scrutinee);
         const exit_blk = try self.startBlock("match.exit");
@@ -518,7 +568,7 @@ pub const LowerContext = struct {
         return thir.NO_VALUE;
     }
 
-    fn lowerRange(self: *LowerContext, r: HirExpr.Kind.RangeExpr, ty: ids.TypeId) !thir.ValueId {
+    fn lowerRange(self: *LowerContext, r: HirExpr.HirExprKind.RangeExpr, ty: ids.TypeId) !thir.ValueId {
         _ = try self.lowerExpr(r.start);
         _ = try self.lowerExpr(r.end);
         _ = ty;
@@ -527,33 +577,39 @@ pub const LowerContext = struct {
 
     // ─── Statement Lowerers ───
 
-    fn lowerLocalDecl(self: *LowerContext, ld: HirStmt.Kind.LocalDecl, span: SourceSpan) !void {
-        const init_val = if (ld.init) |init| try self.lowerExpr(init) else thir.NO_VALUE;
+    fn lowerLocalDecl(self: *LowerContext, ld: HirStmt.HirStmtKind.LocalDecl, span: SourceSpan) !void {
+        const init_val = if (ld.init) |e| try self.lowerExpr(e) else thir.NO_VALUE;
         const mutable = ld.kind == .@"var" or ld.kind == .let;
 
         // Allocate the local
-        const ty = ld.type_annotation orelse .{ .index = 0 };
+        const ty = if (ld.type_annotation) |t| t else ids.TypeId{ .index = 0 };
         const place_val = try self.allocLocal(ty, mutable);
 
-        if (init_val != thir.NO_VALUE) {
+        if (!init_val.eql(thir.NO_VALUE)) {
             try self.emitStmt(.{
                 .span = span,
                 .kind = .{ .let = .{
-                    .place = .{ .local = place_val, .projections = &.{} },
+                    .place = place_val,
                     .init = init_val,
                     .storage = .stack,
                 } },
             });
         }
+
+        // Map the pattern's DefId to this THIR value
+        const pat = self.hir_patterns.items[ld.pattern.index];
+        if (pat.kind == .binding) {
+            try self.def_to_value.put(pat.kind.binding.def, place_val);
+        }
     }
 
-    fn lowerIfStmt(self: *LowerContext, is: HirStmt.Kind.IfStmt, span: SourceSpan) !void {
+    fn lowerIfStmt(self: *LowerContext, is: HirStmt.HirStmtKind.IfStmt, span: SourceSpan) !void {
         const cond = try self.lowerExpr(is.condition);
         const then_blk = try self.startBlock("if.then");
         const else_blk = try self.startBlock("if.else");
         const merge_blk = try self.startBlock("if.end");
 
-        self.finishBlock(self.blocks.items.len - 4, .{
+        self.finishBlock(thir.BlockId.new(@intCast(self.blocks.items.len - 4)), .{
             .cond_br = .{ .cond = cond, .then = then_blk, .else_ = else_blk },
         });
 
@@ -570,12 +626,12 @@ pub const LowerContext = struct {
         self.finishBlock(else_blk, .{ .br = merge_blk });
     }
 
-    fn lowerWhileStmt(self: *LowerContext, ws: HirStmt.Kind.WhileStmt, span: SourceSpan) !void {
+    fn lowerWhileStmt(self: *LowerContext, ws: HirStmt.HirStmtKind.WhileStmt, span: SourceSpan) !void {
         const cond_blk = try self.startBlock("while.cond");
         const body_blk = try self.startBlock("while.body");
         const exit_blk = try self.startBlock("while.exit");
 
-        self.finishBlock(self.blocks.items.len - 4, .{ .br = cond_blk });
+        self.finishBlock(thir.BlockId.new(@intCast(self.blocks.items.len - 4)), .{ .br = cond_blk });
 
         const cond = try self.lowerExpr(ws.condition);
         self.finishBlock(cond_blk, .{ .cond_br = .{ .cond = cond, .then = body_blk, .else_ = exit_blk } });
@@ -588,7 +644,7 @@ pub const LowerContext = struct {
         self.finishBlock(body_blk, .{ .br = cond_blk });
     }
 
-    fn lowerForStmt(self: *LowerContext, fs: HirStmt.Kind.ForStmt, span: SourceSpan) !void {
+    fn lowerForStmt(self: *LowerContext, fs: HirStmt.HirStmtKind.ForStmt, span: SourceSpan) !void {
         const body_blk = try self.startBlock("for.body");
         const exit_blk = try self.startBlock("for.exit");
         _ = try self.lowerExpr(fs.iterable);
@@ -602,11 +658,11 @@ pub const LowerContext = struct {
         _ = fs.iter_var;
     }
 
-    fn lowerLoopStmt(self: *LowerContext, ls: HirStmt.Kind.LoopStmt, span: SourceSpan) !void {
+    fn lowerLoopStmt(self: *LowerContext, ls: HirStmt.HirStmtKind.LoopStmt, span: SourceSpan) !void {
         const body_blk = try self.startBlock("loop.body");
         const exit_blk = try self.startBlock("loop.exit");
 
-        self.finishBlock(self.blocks.items.len - 2, .{ .br = body_blk });
+        self.finishBlock(thir.BlockId.new(@intCast(self.blocks.items.len - 2)), .{ .br = body_blk });
 
         var ctx = LoopContext{ .break_block = exit_blk, .continue_block = body_blk, .next = self.loop_ctx };
         self.loop_ctx = &ctx;
@@ -648,8 +704,10 @@ pub const LowerContext = struct {
             };
         }
 
+        const name_str = try self.allocator.dupe(u8, f.name_bytes);
         var func = thir.ThirFunction{
             .name = f.name,
+            .name_str = name_str,
             .def_id = f.def_id,
             .params = params,
             .return_type = f.return_type,
@@ -663,11 +721,20 @@ pub const LowerContext = struct {
         self.value_exprs.clearRetainingCapacity();
         self.places.clearRetainingCapacity();
         self.current_stmts.clearRetainingCapacity();
+        self.def_to_value.clearRetainingCapacity();
+
+        // Create THIR values for parameters (SSA, not stack slots)
+        for (func.params) |param| {
+            const param_val = try self.allocValue(param.ty, .local_reg);
+            try self.def_to_value.put(param.def_id, param_val);
+        }
 
         // Lower body
         const entry_blk = try self.startBlock("entry");
-        const hir_body = self.items.items[f.body.index]; // This is a BodyId index
-        _ = hir_body;
+        const fb = self.hir_bodies.items[f.body.index];
+        const result_val = try self.lowerExpr(fb.entry);
+        const return_val: ?thir.ValueId = if (result_val.isValid()) result_val else null;
+        self.finishBlock(entry_blk, .{ .return_ret = .{ .value = return_val } });
 
         // Build the body
         func.body = .{

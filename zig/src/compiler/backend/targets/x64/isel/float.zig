@@ -4,6 +4,7 @@ const enc = @import("../encoder.zig");
 const OpCode = enc.OpCode;
 const Operand = enc.Operand;
 const regalloc = @import("../../../regalloc/regalloc.zig");
+const spill = @import("spill.zig");
 const ctx_mod = @import("context.zig");
 const Ctx = ctx_mod.Ctx;
 const append2 = ctx_mod.append2;
@@ -23,7 +24,7 @@ pub fn selectFBinOp(ctx: *Ctx, f: mir.FloatBinOp, ss_op: OpCode, sd_op: OpCode) 
         try loadFloatOpToXmm(ctx, f.a, xs, dtype);
         try loadFloatOpToXmm(ctx, f.b, xs, dtype);
         try append2(ctx, sse_op, Operand.xmm(xs), Operand.xmm(xs));
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, f.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, f.dst, ctx.scratch);
     } else {
         const dst = resolveReg(ctx.ra, f.dst);
         try loadFloatOpToXmm(ctx, f.a, dst, dtype);
@@ -48,7 +49,7 @@ pub fn selectFNeg(ctx: *Ctx, n: mir.UnaryInst) !void {
     const xs = xmmScratch();
 
     if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, n.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, n.dst, ctx.scratch);
         if (dtype == .f64) {
             try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), .{ .imm64 = @as(u64, 0x8000000000000000) });
             try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
@@ -57,7 +58,7 @@ pub fn selectFNeg(ctx: *Ctx, n: mir.UnaryInst) !void {
             try append2(ctx, .SSE_MOVD_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
         }
         try append2(ctx, .SSE_XORPS, Operand.xmm(ctx.scratch), Operand.xmm(xs));
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, n.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, n.dst, ctx.scratch);
     } else {
         const dst = resolveReg(ctx.ra, n.dst);
         if (dtype == .f64) {
@@ -77,10 +78,10 @@ pub fn selectFSqrt(ctx: *Ctx, s: mir.UnaryInst) !void {
     const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
 
     if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, s.dst, ctx.scratch);
         const sqrt_op: OpCode = if (dtype == .f64) .SSE_SQRTSD else .SSE_SQRTSS;
         try append2(ctx, sqrt_op, Operand.xmm(ctx.scratch), Operand.xmm(ctx.scratch));
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, s.dst, ctx.scratch);
     } else {
         const dst = resolveReg(ctx.ra, s.dst);
         const sqrt_op: OpCode = if (dtype == .f64) .SSE_SQRTSD else .SSE_SQRTSS;
@@ -96,10 +97,10 @@ pub fn selectFCmp(ctx: *Ctx, c: mir.FCmpInst) !void {
     const ucomi_op: OpCode = if (dtype == .f64) .SSE_UCOMISD else .SSE_UCOMISS;
 
     if (a_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, c.a, ctx.scratch);
+        try spill.loadSpilledOp(ctx, c.a, ctx.scratch);
     }
     if (b_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, c.b, ctx.scratch);
+        try spill.loadSpilledOp(ctx, c.b, ctx.scratch);
     }
 
     const a_reg = if (a_spilled) ctx.scratch else resolveReg(ctx.ra, c.a);

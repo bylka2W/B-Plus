@@ -23,7 +23,7 @@ pub const Literal = union(enum) {
     int: i64,
     float: f64,
     bool_val: bool,
-    string: SymbolId,
+    string: []const u8,
     unit: void,
 };
 
@@ -319,6 +319,7 @@ pub const BasicBlock = struct {
 // ─── THIR Function ───
 pub const ThirFunction = struct {
     name: SymbolId,
+    name_str: []const u8,
     def_id: DefId,
     params: []const Param,
     return_type: TypeId,
@@ -391,34 +392,9 @@ pub const ThirModule = struct {
     }
 
     pub fn deinit(self: *ThirModule) void {
-        for (self.functions.items) |*f| self.deinitFunction(f);
         self.functions.deinit();
-        self.deinitStructList();
-        self.deinitEnumList();
-    }
-
-    fn deinitStructList(self: *ThirModule) void {
-        for (self.structs.items) |s| {
-            if (s.fields.len > 0) self.allocator.free(s.fields);
-        }
         self.structs.deinit();
-    }
-
-    fn deinitEnumList(self: *ThirModule) void {
-        for (self.enums.items) |e| {
-            for (e.variants) |v| {
-                if (v.fields.len > 0) self.allocator.free(v.fields);
-            }
-            if (e.variants.len > 0) self.allocator.free(e.variants);
-        }
         self.enums.deinit();
-    }
-
-    fn deinitFunction(self: *ThirModule, func: *ThirFunction) void {
-        if (func.params.len > 0) self.allocator.free(func.params);
-        // Note: func.body.blocks, values, places are owned by the lowering pass
-        // that created them (via toOwnedSlice()). The module does not free them.
-        _ = func.body;
     }
 
     pub fn addFunction(self: *ThirModule, func: ThirFunction) !u32 {

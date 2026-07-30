@@ -1,6 +1,7 @@
 ﻿const std = @import("std");
 const bir = @import("../bir.zig");
 const mir = @import("../../../backend/mir/mir.zig");
+const settings = @import("../../../../compiler/settings.zig");
 const Op = bir.Op;
 
 const CmpDef = struct { op0: u32, op1: u32, cc: mir.CondCode };
@@ -152,14 +153,35 @@ fn allocValue(next_vreg: *u32) u32 {
 }
 
 pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTable, bir_func: *const bir.Function) !mir.MFunction {
+    if (settings.debug_ir) {
+        const stderr4 = std.io.getStdErr().writer();
+        stderr4.print("; BIR FUNC: '{s}' (blocks={d}, locals={d}, params={d})\n", .{bir_func.name, bir_func.blocks.items.len, bir_func.locals_count, bir_func.param_values.len}) catch {};
+        for (bir_func.param_values, 0..) |pv, i| {
+            stderr4.print(";   param[{d}]: value={d}\n", .{i, pv}) catch {};
+        }
+        for (bir_func.blocks.items, 0..) |bir_block, bi| {
+            stderr4.print(";   blk {d} '{s}' ({d} instrs):\n", .{bi, bir_block.label, bir_block.instrs.items.len}) catch {};
+            for (bir_block.instrs.items, 0..) |inst, ii| {
+                stderr4.print(";     {d}: op={s} result={d} operands=[", .{ii, @tagName(inst.op), inst.result}) catch {};
+                for (inst.operands, 0..) |op, oi| {
+                    if (oi > 0) stderr4.print(",", .{}) catch {};
+                    stderr4.print("{d}", .{op}) catch {};
+                }
+                stderr4.print("]\n", .{}) catch {};
+            }
+        }
+    }
+
     var mfunc = mir.MFunction.init(allocator, bir_func.name);
     errdefer mfunc.deinit();
 
-    // Convert BIR function params to MIR params
-    if (bir_func.param_values.len > 0) {
+    // Map BIR param values to MIR param vregs (so x64 codegen emits MOVs from ABI registers)
+    {
         const mir_params = try allocator.alloc(mir.MOperand, bir_func.param_values.len);
         for (bir_func.param_values, 0..) |pv, i| {
             mir_params[i] = .{ .vreg = pv };
+            const dt = birTypeToDataType(types, bir_func.params[i].ty);
+            mfunc.putVReg(pv, dt) catch {};
         }
         mfunc.setParams(mir_params);
     }
@@ -183,19 +205,30 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
             switch (inst.op) {
                 .@"const" => {
                     if (result == NO_VALUE) continue;
-                    const val = switch (inst.data) {
-                        .const_data => |cd| switch (cd) {
-                            .int => |v| @as(i64, v),
-                            .float => |v| @as(i64, @intCast(@as(i64, @intFromFloat(v)))),
-                            .bool => |v| @as(i64, @intFromBool(v)),
-                            .undefined, .zero => 0,
+                    switch (inst.data) {
+                        .string => |s| {
+                            const owned = try allocator.dupe(u8, s);
+                            try mblock.instrs.append(.{ .string_const = .{
+                                .dst = .{ .vreg = result },
+                                .data = owned,
+                            } });
                         },
-                        else => 0,
-                    };
-                    try mblock.instrs.append(.{ .mov = .{
-                        .dst = .{ .vreg = result },
-                        .src = .{ .imm = val },
-                    } });
+                        else => {
+                            const val = switch (inst.data) {
+                                .const_data => |cd| switch (cd) {
+                                    .int => |v| @as(i64, v),
+                                    .float => |v| @as(i64, @intCast(@as(i64, @intFromFloat(v)))),
+                                    .bool => |v| @as(i64, @intFromBool(v)),
+                                    .undefined, .zero => 0,
+                                },
+                                else => 0,
+                            };
+                            try mblock.instrs.append(.{ .mov = .{
+                                .dst = .{ .vreg = result },
+                                .src = .{ .imm = val },
+                            } });
+                        },
+                    }
                 },
 
                 .phi => {

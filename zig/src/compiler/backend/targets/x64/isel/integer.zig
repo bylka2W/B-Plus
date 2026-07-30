@@ -4,6 +4,7 @@ const enc = @import("../encoder.zig");
 const OpCode = enc.OpCode;
 const Operand = enc.Operand;
 const regalloc = @import("../../../regalloc/regalloc.zig");
+const spill = @import("spill.zig");
 const ctx_mod = @import("context.zig");
 const Ctx = ctx_mod.Ctx;
 const append2 = ctx_mod.append2;
@@ -24,18 +25,18 @@ pub fn selectMov(ctx: *Ctx, m: mir.MovInst) !void {
     const src_is_xmm = src_vreg != 0 and (ctx.mfunc.getVRegClass(src_vreg) orelse .gpr) == .xmm;
 
     if (dst_spilled and src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, m.src, ctx.scratch);
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, m.src, ctx.scratch);
+        try spill.storeSpilledOp(ctx, m.dst, ctx.scratch);
     } else if (dst_spilled) {
         const src_val = try resolveOpOrSpill(ctx, m.src);
         const val_reg = if (src_val.reg >= 0) src_val.reg else ctx.scratch;
         if (src_val.reg < 0) {
             try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), src_val);
         }
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.dst, if (src_val.reg >= 0) val_reg else ctx.scratch);
+        try spill.storeSpilledOp(ctx, m.dst, if (src_val.reg >= 0) val_reg else ctx.scratch);
     } else if (src_spilled) {
         if (dst_is_xmm) {
-            try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, m.src, ctx.scratch);
+            try spill.loadSpilledOp(ctx, m.src, ctx.scratch);
             const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
             if (dtype == .f64) {
                 try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(@intCast(dst_vreg - 1 + 16)), Operand.r(ctx.scratch));
@@ -43,7 +44,7 @@ pub fn selectMov(ctx: *Ctx, m: mir.MovInst) !void {
                 try append2(ctx, .SSE_MOVD_LD, Operand.xmm(@intCast(dst_vreg - 1 + 16)), Operand.r(ctx.scratch));
             }
         } else {
-            try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, m.src, ctx.scratch);
+            try spill.loadSpilledOp(ctx, m.src, ctx.scratch);
             const dst = resolveReg(ctx.ra, m.dst);
             try append2(ctx, .MOV_R64_R64, Operand.r(dst), Operand.r(ctx.scratch));
         }
@@ -88,12 +89,12 @@ pub fn selectAdd(ctx: *Ctx, a: mir.AddInst) !void {
     const src_spilled = regalloc.isSpilled(ctx.ra, a.src);
 
     if (dst_spilled and src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, a.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, a.dst, ctx.scratch);
         const src_mem = regalloc.spilledMemOp(ctx.ra, a.src);
         try append2(ctx, .ADD_R64_MEM, Operand.r(ctx.scratch), src_mem);
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, a.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, a.dst, ctx.scratch);
     } else if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, a.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, a.dst, ctx.scratch);
         const src_val = try resolveOpOrSpill(ctx, a.src);
         if (src_val.reg >= 0) {
             if (src_val.reg == ctx.scratch) {
@@ -104,10 +105,10 @@ pub fn selectAdd(ctx: *Ctx, a: mir.AddInst) !void {
         } else {
             try append2(ctx, .ADD_R64_IMM32, Operand.r(ctx.scratch), src_val);
         }
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, a.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, a.dst, ctx.scratch);
     } else if (src_spilled) {
         const dst = resolveReg(ctx.ra, a.dst);
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, a.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, a.src, ctx.scratch);
         try append2(ctx, .ADD_R64_R64, Operand.r(dst), Operand.r(ctx.scratch));
     } else {
         const dst = resolveReg(ctx.ra, a.dst);
@@ -124,12 +125,12 @@ pub fn selectSub(ctx: *Ctx, s: mir.SubInst) !void {
     const src_spilled = regalloc.isSpilled(ctx.ra, s.src);
 
     if (dst_spilled and src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, s.dst, ctx.scratch);
         const src_mem = regalloc.spilledMemOp(ctx.ra, s.src);
         try append2(ctx, .SUB_R64_MEM, Operand.r(ctx.scratch), src_mem);
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, s.dst, ctx.scratch);
     } else if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, s.dst, ctx.scratch);
         const src_val = try resolveOpOrSpill(ctx, s.src);
         if (src_val.reg >= 0) {
             if (src_val.reg == ctx.scratch) {
@@ -140,10 +141,10 @@ pub fn selectSub(ctx: *Ctx, s: mir.SubInst) !void {
         } else {
             try append2(ctx, .SUB_R64_IMM32, Operand.r(ctx.scratch), src_val);
         }
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, s.dst, ctx.scratch);
     } else if (src_spilled) {
         const dst = resolveReg(ctx.ra, s.dst);
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, s.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, s.src, ctx.scratch);
         try append2(ctx, .SUB_R64_R64, Operand.r(dst), Operand.r(ctx.scratch));
     } else {
         const dst = resolveReg(ctx.ra, s.dst);
@@ -160,22 +161,22 @@ pub fn selectIMul(ctx: *Ctx, m: mir.IMulInst) !void {
     const src_spilled = regalloc.isSpilled(ctx.ra, m.src);
 
     if (dst_spilled and src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, m.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, m.dst, ctx.scratch);
         const src_mem = regalloc.spilledMemOp(ctx.ra, m.src);
         try append2(ctx, .IMUL_R64_R64, Operand.r(ctx.scratch), src_mem);
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, m.dst, ctx.scratch);
     } else if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, m.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, m.dst, ctx.scratch);
         const src_val = try resolveOpOrSpill(ctx, m.src);
         if (src_val.reg >= 0) {
             try append2(ctx, .IMUL_R64_R64, Operand.r(ctx.scratch), src_val);
         } else {
             try append2(ctx, .IMUL_R64_IMM32, Operand.r(ctx.scratch), .{ .reg = ctx.scratch, .imm64 = src_val.imm64 });
         }
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, m.dst, ctx.scratch);
     } else if (src_spilled) {
         const dst = resolveReg(ctx.ra, m.dst);
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, m.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, m.src, ctx.scratch);
         try append2(ctx, .IMUL_R64_R64, Operand.r(dst), Operand.r(ctx.scratch));
     } else {
         const dst = resolveReg(ctx.ra, m.dst);
@@ -194,7 +195,7 @@ pub fn selectSetCC(ctx: *Ctx, s: mir.SetCCInst) !void {
     if (dst_spilled) {
         try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), .{ .imm64 = 0 });
         try append1(ctx, .SETCC_R8, Operand.r(cc_reg));
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, s.dst, ctx.scratch);
     } else {
         const dst_reg = resolveReg(ctx.ra, s.dst);
         try append2(ctx, .MOV_R64_IMM64, Operand.r(dst_reg), .{ .imm64 = 0 });
@@ -219,7 +220,7 @@ pub fn selectIDiv(ctx: *Ctx, m: mir.IDivInst) !void {
     };
 
     if (quotient_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, m.quotient, 0);
+        try spill.loadSpilledOp(ctx, m.quotient, 0);
     } else if (!quotient_is_rax) {
         try append2(ctx, .MOV_R64_R64, Operand.r(0), Operand.r(quotient_reg));
     } else {
@@ -239,7 +240,7 @@ pub fn selectIDiv(ctx: *Ctx, m: mir.IDivInst) !void {
     if (!quotient_is_rax) {
         try append1(ctx, .POP_R64, Operand.r(0));
         if (quotient_spilled) {
-            try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.quotient, ctx.scratch);
+            try spill.storeSpilledOp(ctx, m.quotient, ctx.scratch);
         } else if (quotient_reg != 0) {
             try append2(ctx, .MOV_R64_R64, Operand.r(quotient_reg), Operand.r(ctx.scratch));
         }
@@ -250,12 +251,12 @@ pub fn selectIDiv(ctx: *Ctx, m: mir.IDivInst) !void {
     if (remainder_reg != 2) {
         if (remainder_spilled) {
             try append2(ctx, .MOV_R64_R64, Operand.r(ctx.scratch), Operand.r(2));
-            try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.remainder, ctx.scratch);
+            try spill.storeSpilledOp(ctx, m.remainder, ctx.scratch);
         } else {
             try append2(ctx, .MOV_R64_R64, Operand.r(remainder_reg), Operand.r(2));
         }
     } else if (remainder_spilled) {
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, m.remainder, 2);
+        try spill.storeSpilledOp(ctx, m.remainder, 2);
     }
 }
 
@@ -264,22 +265,22 @@ pub fn selectAnd(ctx: *Ctx, a: mir.AndInst) !void {
     const src_spilled = regalloc.isSpilled(ctx.ra, a.src);
 
     if (dst_spilled and src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, a.dst, ctx.scratch);
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, a.src, 1);
+        try spill.loadSpilledOp(ctx, a.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, a.src, 1);
         try append2(ctx, .AND_R64_R64, Operand.r(ctx.scratch), Operand.r(1));
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, a.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, a.dst, ctx.scratch);
     } else if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, a.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, a.dst, ctx.scratch);
         const src_val = try resolveOpOrSpill(ctx, a.src);
         if (src_val.reg >= 0) {
             try append2(ctx, .AND_R64_R64, Operand.r(ctx.scratch), src_val);
         } else {
             try append2(ctx, .AND_R64_IMM32, Operand.r(ctx.scratch), src_val);
         }
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, a.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, a.dst, ctx.scratch);
     } else if (src_spilled) {
         const dst = resolveReg(ctx.ra, a.dst);
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, a.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, a.src, ctx.scratch);
         try append2(ctx, .AND_R64_R64, Operand.r(dst), Operand.r(ctx.scratch));
     } else {
         const dst = resolveReg(ctx.ra, a.dst);
@@ -297,22 +298,22 @@ pub fn selectOr(ctx: *Ctx, o: mir.OrInst) !void {
     const src_spilled = regalloc.isSpilled(ctx.ra, o.src);
 
     if (dst_spilled and src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, o.dst, ctx.scratch);
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, o.src, 1);
+        try spill.loadSpilledOp(ctx, o.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, o.src, 1);
         try append2(ctx, .OR_R64_R64, Operand.r(ctx.scratch), Operand.r(1));
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, o.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, o.dst, ctx.scratch);
     } else if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, o.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, o.dst, ctx.scratch);
         const src_val = try resolveOpOrSpill(ctx, o.src);
         if (src_val.reg >= 0) {
             try append2(ctx, .OR_R64_R64, Operand.r(ctx.scratch), src_val);
         } else {
             try append2(ctx, .OR_R64_IMM32, Operand.r(ctx.scratch), src_val);
         }
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, o.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, o.dst, ctx.scratch);
     } else if (src_spilled) {
         const dst = resolveReg(ctx.ra, o.dst);
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, o.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, o.src, ctx.scratch);
         try append2(ctx, .OR_R64_R64, Operand.r(dst), Operand.r(ctx.scratch));
     } else {
         const dst = resolveReg(ctx.ra, o.dst);
@@ -330,22 +331,22 @@ pub fn selectXor(ctx: *Ctx, x: mir.XorInst) !void {
     const src_spilled = regalloc.isSpilled(ctx.ra, x.src);
 
     if (dst_spilled and src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, x.dst, ctx.scratch);
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, x.src, 1);
+        try spill.loadSpilledOp(ctx, x.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, x.src, 1);
         try append2(ctx, .XOR_R64_R64, Operand.r(ctx.scratch), Operand.r(1));
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, x.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, x.dst, ctx.scratch);
     } else if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, x.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, x.dst, ctx.scratch);
         const src_val = try resolveOpOrSpill(ctx, x.src);
         if (src_val.reg >= 0) {
             try append2(ctx, .XOR_R64_R64, Operand.r(ctx.scratch), src_val);
         } else {
             try append2(ctx, .XOR_R64_IMM32, Operand.r(ctx.scratch), src_val);
         }
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, x.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, x.dst, ctx.scratch);
     } else if (src_spilled) {
         const dst = resolveReg(ctx.ra, x.dst);
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, x.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, x.src, ctx.scratch);
         try append2(ctx, .XOR_R64_R64, Operand.r(dst), Operand.r(ctx.scratch));
     } else {
         const dst = resolveReg(ctx.ra, x.dst);
@@ -362,9 +363,9 @@ pub fn selectShift(ctx: *Ctx, s: mir.ShiftInst, cl_op: OpCode, imm_op: OpCode) !
     if (s.amount == .imm) {
         const dst_spilled = regalloc.isSpilled(ctx.ra, s.dst);
         if (dst_spilled) {
-            try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+            try spill.loadSpilledOp(ctx, s.dst, ctx.scratch);
             try append2(ctx, imm_op, Operand.r(ctx.scratch), .{ .imm64 = @bitCast(s.amount.imm) });
-            try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+            try spill.storeSpilledOp(ctx, s.dst, ctx.scratch);
         } else {
             const dst = resolveReg(ctx.ra, s.dst);
             try append2(ctx, imm_op, Operand.r(dst), .{ .imm64 = @bitCast(s.amount.imm) });
@@ -376,7 +377,7 @@ pub fn selectShift(ctx: *Ctx, s: mir.ShiftInst, cl_op: OpCode, imm_op: OpCode) !
     const amt_spilled = regalloc.isSpilled(ctx.ra, s.amount);
 
     if (amt_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, s.amount, 1);
+        try spill.loadSpilledOp(ctx, s.amount, 1);
     } else {
         const amt = resolveReg(ctx.ra, s.amount);
         if (amt != 1) {
@@ -385,9 +386,9 @@ pub fn selectShift(ctx: *Ctx, s: mir.ShiftInst, cl_op: OpCode, imm_op: OpCode) !
     }
 
     if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, s.dst, ctx.scratch);
         try append1(ctx, cl_op, Operand.r(ctx.scratch));
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, s.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, s.dst, ctx.scratch);
     } else {
         const dst = resolveReg(ctx.ra, s.dst);
         try append1(ctx, cl_op, Operand.r(dst));
@@ -397,9 +398,9 @@ pub fn selectShift(ctx: *Ctx, s: mir.ShiftInst, cl_op: OpCode, imm_op: OpCode) !
 pub fn selectNot(ctx: *Ctx, n: mir.UnaryInst) !void {
     const dst_spilled = regalloc.isSpilled(ctx.ra, n.dst);
     if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, n.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, n.dst, ctx.scratch);
         try append1(ctx, .NOT_R64, Operand.r(ctx.scratch));
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, n.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, n.dst, ctx.scratch);
     } else {
         const dst = resolveReg(ctx.ra, n.dst);
         try append1(ctx, .NOT_R64, Operand.r(dst));
@@ -409,9 +410,9 @@ pub fn selectNot(ctx: *Ctx, n: mir.UnaryInst) !void {
 pub fn selectNeg(ctx: *Ctx, n: mir.UnaryInst) !void {
     const dst_spilled = regalloc.isSpilled(ctx.ra, n.dst);
     if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, n.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, n.dst, ctx.scratch);
         try append1(ctx, .NEG_R64, Operand.r(ctx.scratch));
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, n.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, n.dst, ctx.scratch);
     } else {
         const dst = resolveReg(ctx.ra, n.dst);
         try append1(ctx, .NEG_R64, Operand.r(dst));
@@ -434,13 +435,17 @@ pub fn selectCmp(ctx: *Ctx, c: mir.CmpInst) !void {
     const b_spilled = regalloc.isSpilled(ctx.ra, c.b);
 
     if (a_spilled and b_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, c.a, ctx.scratch);
+        try spill.loadSpilledOp(ctx, c.a, ctx.scratch);
         const b_mem = regalloc.spilledMemOp(ctx.ra, c.b);
         try append2(ctx, .CMP_R64_MEM, Operand.r(ctx.scratch), b_mem);
     } else if (a_spilled) {
         const av = try resolveOpOrSpill(ctx, c.a);
         const bv = try resolveOpOrSpill(ctx, c.b);
-        try append2(ctx, .CMP_R64_R64, av, bv);
+        if (bv.reg >= 0) {
+            try append2(ctx, .CMP_R64_R64, av, bv);
+        } else {
+            try append2(ctx, .CMP_R64_IMM32, av, bv);
+        }
     } else if (b_spilled) {
         const av = try resolveOpOrSpill(ctx, c.a);
         const b_mem = regalloc.spilledMemOp(ctx.ra, c.b);
@@ -448,7 +453,11 @@ pub fn selectCmp(ctx: *Ctx, c: mir.CmpInst) !void {
     } else {
         const av = try resolveOpOrSpill(ctx, c.a);
         const bv = try resolveOpOrSpill(ctx, c.b);
-        try append2(ctx, .CMP_R64_R64, av, bv);
+        if (bv.reg >= 0) {
+            try append2(ctx, .CMP_R64_R64, av, bv);
+        } else {
+            try append2(ctx, .CMP_R64_IMM32, av, bv);
+        }
     }
 }
 
@@ -457,7 +466,7 @@ pub fn selectCmpFlags(ctx: *Ctx, cf: mir.CmpFlagsInst) !void {
     const b_spilled = regalloc.isSpilled(ctx.ra, cf.b);
 
     if (a_spilled and b_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, cf.a, ctx.scratch);
+        try spill.loadSpilledOp(ctx, cf.a, ctx.scratch);
         const b_mem = regalloc.spilledMemOp(ctx.ra, cf.b);
         try append2(ctx, .CMP_R64_MEM, Operand.r(ctx.scratch), b_mem);
         return;

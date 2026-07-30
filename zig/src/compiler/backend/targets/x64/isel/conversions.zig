@@ -4,6 +4,7 @@ const enc = @import("../encoder.zig");
 const OpCode = enc.OpCode;
 const Operand = enc.Operand;
 const regalloc = @import("../../../regalloc/regalloc.zig");
+const spill = @import("spill.zig");
 const ctx_mod = @import("context.zig");
 const Ctx = ctx_mod.Ctx;
 const append2 = ctx_mod.append2;
@@ -21,7 +22,7 @@ pub fn selectConv(ctx: *Ctx, c: mir.ConvInst, ss32_op: OpCode, sd32_op: OpCode, 
     const src_spilled = regalloc.isSpilled(ctx.ra, c.src);
 
     const src_reg: i16 = if (src_spilled) blk: {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, c.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, c.src, ctx.scratch);
         break :blk ctx.scratch;
     } else switch (c.src) {
         .vreg => resolveReg(ctx.ra, c.src),
@@ -44,7 +45,7 @@ pub fn selectConv(ctx: *Ctx, c: mir.ConvInst, ss32_op: OpCode, sd32_op: OpCode, 
     try append2(ctx, conv_op, Operand.xmm(dst_reg), Operand.r(src_reg));
 
     if (dst_spilled) {
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, c.dst, ctx.scratch);
     }
 }
 
@@ -53,10 +54,10 @@ pub fn selectConvSingle(ctx: *Ctx, c: mir.ConvInst, sse_op: OpCode) !void {
     const src_spilled = regalloc.isSpilled(ctx.ra, c.src);
 
     if (src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, c.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, c.src, ctx.scratch);
     }
     if (dst_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, c.dst, ctx.scratch);
+        try spill.loadSpilledOp(ctx, c.dst, ctx.scratch);
     }
 
     const src_reg = if (src_spilled) ctx.scratch else resolveReg(ctx.ra, c.src);
@@ -65,7 +66,7 @@ pub fn selectConvSingle(ctx: *Ctx, c: mir.ConvInst, sse_op: OpCode) !void {
     try append2(ctx, sse_op, Operand.xmm(dst_reg), Operand.xmm(src_reg));
 
     if (dst_spilled) {
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, c.dst, ctx.scratch);
     }
 }
 
@@ -74,7 +75,7 @@ pub fn selectSext(ctx: *Ctx, c: mir.ConvInst) !void {
     const src_spilled = if (c.src == .vreg) regalloc.isSpilled(ctx.ra, c.src) else false;
 
     if (src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, c.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, c.src, ctx.scratch);
     }
 
     const src_reg: i16 = if (src_spilled) ctx.scratch else switch (c.src) {
@@ -90,7 +91,7 @@ pub fn selectSext(ctx: *Ctx, c: mir.ConvInst) !void {
     try append2(ctx, .MOVSX_R64_R32, Operand.r(dst_reg), Operand.r(src_reg));
 
     if (dst_spilled) {
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, c.dst, ctx.scratch);
     }
 }
 
@@ -99,7 +100,7 @@ pub fn selectZext(ctx: *Ctx, c: mir.ConvInst) !void {
     const src_spilled = if (c.src == .vreg) regalloc.isSpilled(ctx.ra, c.src) else false;
 
     if (src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, c.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, c.src, ctx.scratch);
     }
 
     const src_reg: i16 = if (src_spilled) ctx.scratch else switch (c.src) {
@@ -115,7 +116,7 @@ pub fn selectZext(ctx: *Ctx, c: mir.ConvInst) !void {
     try append2(ctx, .MOVZX_R64_R32, Operand.r(dst_reg), Operand.r(src_reg));
 
     if (dst_spilled) {
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, c.dst, ctx.scratch);
     }
 }
 
@@ -124,7 +125,7 @@ pub fn selectTrunc(ctx: *Ctx, c: mir.ConvInst) !void {
     const src_spilled = if (c.src == .vreg) regalloc.isSpilled(ctx.ra, c.src) else false;
 
     if (src_spilled) {
-        try regalloc.loadSpilledOp(ctx.code_dummy, ctx.ra, c.src, ctx.scratch);
+        try spill.loadSpilledOp(ctx, c.src, ctx.scratch);
     }
 
     const src_reg: i16 = if (src_spilled) ctx.scratch else switch (c.src) {
@@ -140,6 +141,6 @@ pub fn selectTrunc(ctx: *Ctx, c: mir.ConvInst) !void {
     try append2(ctx, .MOV_R32_R32, Operand.r(dst_reg), Operand.r(src_reg));
 
     if (dst_spilled) {
-        try regalloc.storeSpilledOp(ctx.code_dummy, ctx.ra, c.dst, ctx.scratch);
+        try spill.storeSpilledOp(ctx, c.dst, ctx.scratch);
     }
 }

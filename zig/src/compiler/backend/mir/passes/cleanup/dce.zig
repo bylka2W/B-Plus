@@ -33,6 +33,7 @@ fn dstVreg(inst: mir.MInst) ?u32 {
         .transition_check => |m| if (m.result == .vreg) m.result.vreg else null,
         .guard_eval => |m| if (m.result == .vreg) m.result.vreg else null,
         .state_init, .state_enter, .state_exit, .cmp_flags, .cmp, .test_flags, .jmp, .jcc, .store, .ret => null,
+        .string_const => |s| if (s.dst == .vreg) s.dst.vreg else null,
     };
 }
 
@@ -46,6 +47,7 @@ fn isSideEffecting(inst: mir.MInst) bool {
         .state_init, .state_enter, .state_exit, .event_dispatch => true,
         .transition_check, .guard_eval => false,
         .mov => |m| m.dst != .vreg,
+        .string_const => false,
     };
 }
 
@@ -168,6 +170,7 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
             if (m.lhs == .vreg) { buf[n] = m.lhs.vreg; n += 1; }
             if (m.rhs == .vreg) { buf[n] = m.rhs.vreg; n += 1; }
         },
+        .string_const => {},
     }
     return n;
 }

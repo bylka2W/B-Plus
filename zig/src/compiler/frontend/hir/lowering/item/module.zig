@@ -43,6 +43,7 @@ pub fn lowerExternFnItem(self: *HirLowering, decl_id: AstDeclId, ef: @import("..
         .span = ef.span,
         .kind = .{ .extern_fn = .{
             .name = ef.name,
+            .name_bytes = "",
             .def_id = self.resolveName(ef.name),
             .params = params.toOwnedSlice() catch return error.OutOfMemory,
             .return_type = ret_ty,

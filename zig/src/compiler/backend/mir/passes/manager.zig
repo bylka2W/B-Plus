@@ -91,6 +91,7 @@ fn dumpInst(inst: mir.MInst) void {
         .event_dispatch => |m| { std.debug.print("event_dispatch ", .{}); dumpOp(m.dst); std.debug.print(", ", .{}); dumpOp(m.buf); std.debug.print(", ", .{}); dumpOp(m.size); },
         .transition_check => |m| { std.debug.print("transition_check ", .{}); dumpOp(m.event); std.debug.print(" ev={d}", .{m.event_id}); },
         .guard_eval => |m| { std.debug.print("guard_eval ", .{}); dumpOp(m.lhs); std.debug.print(", ", .{}); dumpOp(m.rhs); std.debug.print(" cc={s}", .{@tagName(m.cc)}); },
+        .string_const => |s| { std.debug.print("string_const ", .{}); dumpOp(s.dst); std.debug.print(", \"{s}\"", .{s.data}); },
     }
 }
 
@@ -114,7 +115,11 @@ fn dumpOp(op: mir.MOperand) void {
 }
 
 pub fn optimize(mfunc: *mir.MFunction) !void {
-    const debug = hasBackedge(mfunc);
+    const debug = blk: {
+        const val = std.process.getEnvVarOwned(mfunc.allocator, "BPC_DEBUG") catch { break :blk false; };
+        defer mfunc.allocator.free(val);
+        break :blk hasBackedge(mfunc) and val.len > 0;
+    };
 
     try mir_ssa_destroy.destroySSA(mfunc);
     try mir_verify.verifyNoPhis(mfunc);

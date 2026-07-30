@@ -206,21 +206,18 @@ fn renameBlock(
     }
 
     for (block.instrs.items) |*inst| {
+        if (inst.op == .store and inst.operands.len >= 2 and inst.operands[0] == alloca_val) {
+            const stored_val = inst.operands[1];
+            const old = version_for.get(alloca_val) orelse NO_VALUE;
+            try version_for.put(alloca_val, stored_val);
+            try push_log.append(.{ .alloca = alloca_val, .old_version = old });
+        }
         if (inst.op == .load and inst.operands.len >= 1 and inst.operands[0] == alloca_val) {
             const load_val = inst.result;
             const current_version = version_for.get(alloca_val) orelse alloca_val;
             if (load_val != current_version) {
                 replaceAllUses(func, load_val, current_version);
             }
-        }
-    }
-
-    for (block.instrs.items) |*inst| {
-        if (inst.op == .store and inst.operands.len >= 2 and inst.operands[0] == alloca_val) {
-            const stored_val = inst.operands[1];
-            const old = version_for.get(alloca_val) orelse NO_VALUE;
-            try version_for.put(alloca_val, stored_val);
-            try push_log.append(.{ .alloca = alloca_val, .old_version = old });
         }
     }
 

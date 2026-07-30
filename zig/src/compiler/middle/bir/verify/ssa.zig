@@ -87,15 +87,22 @@ pub fn verifySSA(
 
                 const vi = &func.value_info.items[op_val - 1];
                 if (vi.def.block == INVALID_ID) {
-                    try errs.push(.{
-                        .code = .value_used_before_def,
-                        .func_id = func_id,
-                        .func_name = func.name,
-                        .block_id = block_id,
-                        .block_name = block.label,
-                        .value_id = op_val,
-                        .message = "value has no definition",
-                    });
+                    // Allow function parameters (they have no defining instruction)
+                    var is_param = false;
+                    for (func.param_values) |pv| {
+                        if (pv == op_val) { is_param = true; break; }
+                    }
+                    if (!is_param) {
+                        try errs.push(.{
+                            .code = .value_used_before_def,
+                            .func_id = func_id,
+                            .func_name = func.name,
+                            .block_id = block_id,
+                            .block_name = block.label,
+                            .value_id = op_val,
+                            .message = "value has no definition",
+                        });
+                    }
                     continue;
                 }
 
@@ -260,15 +267,22 @@ pub fn verifyPhis(
 
                 const inc_vi = &func.value_info.items[inc.value - 1];
                 if (inc_vi.def.block == INVALID_ID) {
-                    try errs.push(.{
-                        .code = .phi_incoming_value_type_mismatch,
-                        .func_id = func_id,
-                        .func_name = func.name,
-                        .block_id = block_id,
-                        .block_name = block.label,
-                        .value_id = inst.result,
-                        .message = "phi incoming value has no definition",
-                    });
+                    // Allow function parameters
+                    var is_param = false;
+                    for (func.param_values) |pv| {
+                        if (pv == inc.value) { is_param = true; break; }
+                    }
+                    if (!is_param) {
+                        try errs.push(.{
+                            .code = .phi_incoming_value_type_mismatch,
+                            .func_id = func_id,
+                            .func_name = func.name,
+                            .block_id = block_id,
+                            .block_name = block.label,
+                            .value_id = inst.result,
+                            .message = "phi incoming value has no definition",
+                        });
+                    }
                     continue;
                 }
 

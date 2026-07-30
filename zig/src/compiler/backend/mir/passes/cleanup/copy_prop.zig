@@ -168,6 +168,10 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                     if (tc.result == .vreg) invalidatePointers(&map, tc.result.vreg);
                     i += 1;
                 },
+                .string_const => {
+                    if (dstOf(block.instrs.items[i])) |dv| invalidatePointers(&map, dv);
+                    i += 1;
+                },
                 .guard_eval => {
                     const ge = &block.instrs.items[i].guard_eval;
                     ge.lhs = resolve(map, ge.lhs);

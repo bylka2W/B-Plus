@@ -29,23 +29,28 @@ const Inst = bir.Inst;
 const Op = bir.Op;
 const PhiIncoming = bir.PhiIncoming;
 const BIR_NO_VALUE = bir.NO_VALUE;
+const hir_ty_mod = @import("../../../frontend/hir/ty.zig");
+const HirTy = hir_ty_mod.HirTy;
+const hir_item_mod = @import("../../../frontend/hir/item.zig");
+const HirItem = hir_item_mod.HirItem;
 const type_sys = @import("../../../frontend/type_system/type_system.zig");
-const TypeEngine = type_sys.TypeEngine;
-const BuiltinKind = type_sys.BuiltinKind;
+const ids = @import("../../../frontend/foundation/ids/ids.zig");
 
 pub const LowerError = error{ TypeError, OutOfMemory };
 
 pub const ThirToBir = struct {
     allocator: std.mem.Allocator,
     thir_mod: *ThirModule,
-    engine: *TypeEngine,
+    hir_types: *const std.ArrayList(HirTy),
+    hir_items: *const std.ArrayList(HirItem),
     module: bir.Module,
 
-    pub fn init(allocator: std.mem.Allocator, thir_mod: *ThirModule, engine: *TypeEngine) ThirToBir {
+    pub fn init(allocator: std.mem.Allocator, thir_mod: *ThirModule, hir_types: *const std.ArrayList(HirTy), hir_items: *const std.ArrayList(HirItem)) ThirToBir {
         return .{
             .allocator = allocator,
             .thir_mod = thir_mod,
-            .engine = engine,
+            .hir_types = hir_types,
+            .hir_items = hir_items,
             .module = bir.Module.init(allocator),
         };
     }
@@ -99,50 +104,55 @@ pub const ThirToBir = struct {
         _ = try self.module.types.pointerType(0, .generic);
     }
 
-    fn builtinToBir(self: *ThirToBir, kind: BuiltinKind) BIRTypeId {
+    fn builtinToBir(self: *ThirToBir, kind: HirTy.BuiltinKind) BIRTypeId {
         return switch (kind) {
-            .bool_type => self.module.types.scalarType(.i1) catch 0,
-            .i8_type => self.module.types.scalarType(.i8) catch 0,
-            .i16_type => self.module.types.scalarType(.i16) catch 0,
-            .i32_type => self.module.types.scalarType(.i32) catch 0,
-            .i64_type => self.module.types.scalarType(.i64) catch 0,
-            .u8_type => self.module.types.scalarType(.u8) catch 0,
-            .u16_type => self.module.types.scalarType(.u16) catch 0,
-            .u32_type => self.module.types.scalarType(.u32) catch 0,
-            .u64_type => self.module.types.scalarType(.u64) catch 0,
-            .f32_type => self.module.types.scalarType(.f32) catch 0,
-            .f64_type => self.module.types.scalarType(.f64) catch 0,
+            .bool => self.module.types.scalarType(.i1) catch 0,
+            .i8 => self.module.types.scalarType(.i8) catch 0,
+            .i16 => self.module.types.scalarType(.i16) catch 0,
+            .i32 => self.module.types.scalarType(.i32) catch 0,
+            .i64 => self.module.types.scalarType(.i64) catch 0,
+            .u8 => self.module.types.scalarType(.u8) catch 0,
+            .u16 => self.module.types.scalarType(.u16) catch 0,
+            .u32 => self.module.types.scalarType(.u32) catch 0,
+            .u64 => self.module.types.scalarType(.u64) catch 0,
+            .f32 => self.module.types.scalarType(.f32) catch 0,
+            .f64 => self.module.types.scalarType(.f64) catch 0,
             .void_type => self.module.types.voidType() catch 0,
-            .never_type => self.module.types.voidType() catch 0,
-            .str_type => self.module.types.pointerType(0, .generic) catch 0,
+            .never => self.module.types.voidType() catch 0,
+            .str => self.module.types.pointerType(0, .generic) catch 0,
             .char_type => self.module.types.scalarType(.u8) catch 0,
         };
     }
 
-    fn typeToBir(self: *ThirToBir, ty: type_sys.TypeId) BIRTypeId {
-        const resolved = self.engine.resolve(ty);
-        const data = self.engine.get(resolved) orelse return self.module.types.voidType() catch 0;
-        return switch (data) {
-            .builtin => |b| self.builtinToBir(b),
+    fn typeToBir(self: *ThirToBir, ty: ids.TypeId) BIRTypeId {
+        if (!ty.isValid()) return self.module.types.voidType() catch 0;
+        if (ty.index >= self.hir_types.items.len) return self.module.types.voidType() catch 0;
+        const hir_ty = self.hir_types.items[ty.index];
+        return switch (hir_ty) {
+            .builtin => |b| self.builtinToBir(b.kind),
+            .named => self.module.types.pointerType(0, .generic) catch 0,
             .pointer => self.module.types.pointerType(0, .generic) catch 0,
             .slice => self.module.types.pointerType(0, .generic) catch 0,
             .array => |a| {
                 const elem = self.typeToBir(a.element);
                 return self.module.types.arrayType(elem, @intCast(a.length)) catch 0;
             },
-            .fn_ptr => self.module.types.pointerType(0, .generic) catch 0,
+            .fn_type => self.module.types.pointerType(0, .generic) catch 0,
             .tuple => self.module.types.pointerType(0, .generic) catch 0,
-            .infer_var => self.module.types.voidType() catch 0,
-            .resolved_var => |r| self.typeToBir(r),
-            .never => self.module.types.voidType() catch 0,
-            .unit => self.module.types.voidType() catch 0,
-            else => self.module.types.pointerType(0, .generic) catch 0,
+            .inference_var => self.module.types.voidType() catch 0,
+            .generic => self.module.types.pointerType(0, .generic) catch 0,
+            .error_union => self.module.types.pointerType(0, .generic) catch 0,
+            .optional => self.module.types.pointerType(0, .generic) catch 0,
+            .missing => self.module.types.voidType() catch 0,
         };
     }
 
     fn lowerFunction(self: *ThirToBir, func: *ThirFunction) LowerError!void {
         const ret_ty = self.typeToBir(func.return_type);
-        const owned_name = try std.fmt.allocPrint(self.allocator, "fn_{d}", .{func.def_id.index});
+        const owned_name = if (func.name_str.len > 0)
+            try self.allocator.dupe(u8, func.name_str)
+        else
+            try std.fmt.allocPrint(self.allocator, "fn_{d}", .{func.def_id.index});
         defer self.allocator.free(owned_name);
 
         const cc: bir.CallingConvention = switch (func.linkage) {
@@ -194,12 +204,14 @@ pub const ThirToBir = struct {
             try param_map.put(param.def_id, .{ .value = self.module.getFunction(func_id).param_values[i], .kind = .ssa });
         }
 
+        const entry_bir = block_map.get(body.entry) orelse 0;
+
         for (body.values, 0..) |val_def, i| {
             const thir_vid = ThirValueId.new(@intCast(i));
             if (val_def.storage == .stack) {
                 const slot_ty = self.typeToBir(val_def.ty);
-                const entry_bir = block_map.get(body.entry) orelse 0;
-                const slot = try self.module.addInst(func_id, entry_bir, try makeInst(self.allocator, .alloca, slot_ty, &.{}, .{ .none = {} }));
+                const ptr_ty = try self.module.types.pointerType(slot_ty, .generic);
+                const slot = try self.module.addInst(func_id, entry_bir, try makeInst(self.allocator, .alloca, ptr_ty, &.{}, .{ .none = {} }));
                 try value_map.put(thir_vid, .{ .value = slot, .kind = .stack_slot });
                 try value_ty_map.put(thir_vid, slot_ty);
             } else {
@@ -208,11 +220,18 @@ pub const ThirToBir = struct {
             }
         }
 
+        // Map param THIR values to BIR param values (SSA, no allocas)
+        for (0..func.params.len) |i| {
+            const thir_vid = ThirValueId.new(@intCast(i));
+            const bir_val = self.module.getFunction(func_id).param_values[i];
+            try value_map.put(thir_vid, .{ .value = bir_val, .kind = .ssa });
+        }
+
         var builder = Builder{
             .alloc = self.allocator,
             .mod = &self.module,
             .fid = func_id,
-            .blk = block_map.get(body.entry) orelse 0,
+            .blk = entry_bir,
             .lowerer = self,
             .body = &body,
             .block_map = &block_map,
@@ -481,13 +500,29 @@ const Builder = struct {
 
     fn lowerLiteral(self: *Builder, lit: Literal, ty: type_sys.TypeId) LowerError!BIRValueId {
         const bir_ty = self.lowerer.typeToBir(ty);
+        const void_ty = self.lowerer.module.types.voidType() catch 0;
+        const use_ty = if (!ty.isValid() or bir_ty == void_ty)
+            switch (lit) {
+                .int => self.lowerer.module.types.scalarType(.i64) catch 0,
+                .float => self.lowerer.module.types.scalarType(.f64) catch 0,
+                .bool_val => self.lowerer.module.types.scalarType(.i1) catch 0,
+                .string => self.lowerer.module.types.pointerType(0, .generic) catch 0,
+                .unit => void_ty,
+            }
+        else
+            bir_ty;
         return switch (lit) {
-            .int => |v| self.emitOp(.@"const", bir_ty, &.{}, .{ .const_data = .{ .int = v } }),
-            .float => |v| self.emitOp(.@"const", bir_ty, &.{}, .{ .const_data = .{ .float = v } }),
-            .bool_val => |v| self.emitOp(.@"const", bir_ty, &.{}, .{ .const_data = .{ .bool = v } }),
-            .string => self.emitOp(.@"const", bir_ty, &.{}, .{ .const_data = .{ .int = 0 } }),
+            .int => |v| self.emitOp(.@"const", use_ty, &.{}, .{ .const_data = .{ .int = v } }),
+            .float => |v| self.emitOp(.@"const", use_ty, &.{}, .{ .const_data = .{ .float = v } }),
+            .bool_val => |v| self.emitOp(.@"const", use_ty, &.{}, .{ .const_data = .{ .bool = v } }),
+            .string => |s| self.emitOp(.@"const", use_ty, &.{}, .{ .string = try self.alloc.dupe(u8, s) }),
             .unit => BIR_NO_VALUE,
         };
+    }
+
+    fn resolveBirType(self: *Builder, ty: type_sys.TypeId, fallback_vid: ThirValueId) BIRTypeId {
+        if (ty.isValid()) return self.lowerer.typeToBir(ty);
+        return self.value_ty_map.get(fallback_vid) orelse (self.mod.types.voidType() catch 0);
     }
 
     fn lowerBinary(self: *Builder, bin: ThirExpr.BinaryExpr, ty: type_sys.TypeId) LowerError!BIRValueId {
@@ -495,7 +530,7 @@ const Builder = struct {
         const rhs = try self.lowerValueExpr(bin.rhs);
         if (lhs == BIR_NO_VALUE or rhs == BIR_NO_VALUE) return BIR_NO_VALUE;
 
-        const bir_ty = self.lowerer.typeToBir(ty);
+        const bir_ty = self.resolveBirType(ty, bin.lhs);
         const bir_op = switch (bin.op) {
             .add => Op.add,
             .sub => Op.sub,
@@ -523,7 +558,7 @@ const Builder = struct {
         const operand = try self.lowerValueExpr(un.operand);
         if (operand == BIR_NO_VALUE) return BIR_NO_VALUE;
 
-        const bir_ty = self.lowerer.typeToBir(ty);
+        const bir_ty = self.resolveBirType(ty, un.operand);
         const bir_op = switch (un.op) {
             .negate => Op.neg,
             .not => Op.not,
@@ -544,23 +579,71 @@ const Builder = struct {
         }
 
         const void_ty = self.mod.types.voidType() catch 0;
-        const result_ty = if (ty.index != 0) self.lowerer.typeToBir(ty) else void_ty;
+        const result_ty = if (ty.isValid()) self.lowerer.typeToBir(ty) else void_ty;
 
         const callee_name = switch (call.func) {
-            .function => |def_id| try std.fmt.allocPrint(self.alloc, "fn_{d}", .{def_id.index}),
+            .function => |def_id| blk: {
+                var found_name: ?[]const u8 = null;
+                for (self.lowerer.thir_mod.functions.items) |*func| {
+                    if (func.def_id.index == def_id.index) {
+                        found_name = func.name_str;
+                        break;
+                    }
+                }
+                if (found_name == null) {
+                    for (self.lowerer.hir_items.items) |*item| {
+                        switch (item.kind) {
+                            .extern_fn => |e| {
+                                if (e.def_id.index == def_id.index) {
+                                    found_name = e.name_bytes;
+                                    break;
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+                }
+                if (found_name) |name| {
+                    if (std.mem.eql(u8, name, "print")) {
+                        const callee = if (call.args.len > 0) blk2: {
+                            const arg_vid = call.args[0];
+                            if (arg_vid.isValid() and arg_vid.index < self.body.values.len) {
+                                const vd = self.body.values[arg_vid.index];
+                                if (vd.expr.isValid() and vd.expr.index < self.body.exprs.len) {
+                                    const arg_expr = self.body.exprs[vd.expr.index];
+                                    const is_str = switch (arg_expr.kind) {
+                                        .literal => |lit| switch (lit) {
+                                            .string => true,
+                                            else => false,
+                                        },
+                                        else => false,
+                                    };
+                                    break :blk2 if (is_str) "print_str" else "print_i64";
+                                }
+                            }
+                            break :blk2 "print_i64";
+                        } else "print_i64";
+                        break :blk try self.alloc.dupe(u8, callee);
+                    }
+                    break :blk try self.alloc.dupe(u8, name);
+                } else {
+                    break :blk try std.fmt.allocPrint(self.alloc, "fn_{d}", .{def_id.index});
+                }
+            },
             .value => try std.fmt.allocPrint(self.alloc, "closure_{d}", .{call.func.value.index}),
         };
-        defer self.alloc.free(callee_name);
 
         const owned_args = try self.alloc.dupe(BIRValueId, args.items);
-        return self.emitOp(.call, result_ty, &.{}, .{ .named_call = .{ .name = callee_name, .args = owned_args } });
+        const result = try self.emitOp(.call, result_ty, &.{}, .{ .named_call = .{ .name = callee_name, .args = owned_args } });
+        return result;
     }
 
     fn lowerCast(self: *Builder, cast: ThirExpr.CastExpr, ty: type_sys.TypeId) LowerError!BIRValueId {
         const operand = try self.lowerValueExpr(cast.operand);
         if (operand == BIR_NO_VALUE) return BIR_NO_VALUE;
 
-        const bir_ty = self.lowerer.typeToBir(ty);
+        const resolved_ty = if (ty.isValid()) ty else cast.from_ty;
+        const bir_ty = self.lowerer.typeToBir(resolved_ty);
         const from_bir_ty = self.lowerer.typeToBir(cast.from_ty);
 
         switch (cast.kind) {
@@ -584,6 +667,12 @@ const Builder = struct {
     }
 
     fn lowerLoad(self: *Builder, ld: ThirExpr.LoadExpr, ty: type_sys.TypeId) LowerError!BIRValueId {
+        if (ld.place.projections.len == 0) {
+            const binding = self.lookup(ld.place.local);
+            if (binding.value != BIR_NO_VALUE and binding.kind == .ssa) {
+                return binding.value;
+            }
+        }
         const ptr = try self.lowerPlace(ld.place);
         if (ptr == BIR_NO_VALUE) return BIR_NO_VALUE;
         const bir_ty = self.lowerer.typeToBir(ty);

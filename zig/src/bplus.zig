@@ -366,6 +366,13 @@ const VarStack = struct {
 };
 
 fn compileFn(ctx: *CompilerContext, func_def: FnDef) !mir.MFunction {
+    // DEBUG: dump body lines
+    const stderr3 = std.io.getStdErr().writer();
+    stderr3.print("; compileFn: '{s}' body lines ({d}):\n", .{func_def.name, func_def.body.len}) catch {};
+    for (func_def.body, 0..) |bl, i| {
+        stderr3.print(";   [{d}]: '{s}' (len={d})\n", .{i, bl, bl.len}) catch {};
+    }
+
     var mfunc = mir.MFunction.init(ctx.allocator, func_def.name);
 
     var params = try ctx.allocator.alloc(mir.MOperand, func_def.params.len);
@@ -564,15 +571,21 @@ fn findCompoundAssign(line: []const u8) ?struct { pos: usize, op: []const u8 } {
 fn compileBlockStmts(ctx: *CompilerContext, mfunc: *mir.MFunction, block_idx: *usize, var_stack: *VarStack, next_vreg: *u32, body: []const []const u8, body_line_indices: []const usize, start: usize, end: usize, break_target: ?usize, continue_target: ?usize, has_explicit_ret: *bool, last_vreg: *?u32) anyerror!void {
     var i = start;
     while (i < end) : (i += 1) {
-        const bline = body[i];
+        const bline_raw = body[i];
+        const bline = std.mem.trim(u8, bline_raw, " \t");
         ctx.err_line_idx = body_line_indices[i];
         ctx.err_col = 0;
         const block = &mfunc.blocks.items[block_idx.*];
 
         if (std.mem.startsWith(u8, bline, "return ")) {
+            const stderr3 = std.io.getStdErr().writer();
+            stderr3.print("; MATCHED 'return ': bline='{s}'\n", .{bline}) catch {};
             const expr = std.mem.trim(u8, bline["return ".len..], " \t;");
+            stderr3.print(";   expr='{s}'\n", .{expr}) catch {};
             if (expr.len > 0) {
+                stderr3.print(";   calling compileExpr\n", .{}) catch {};
                 const rvreg = try compileExpr(ctx, block, var_stack, next_vreg, expr);
+                stderr3.print(";   rvreg={d}\n", .{rvreg}) catch {};
                 try block.instrs.append(.{ .ret = .{ .value = .{ .vreg = rvreg } } });
             } else {
                 try block.instrs.append(.{ .ret = .{ .value = .{ .imm = 0 } } });
