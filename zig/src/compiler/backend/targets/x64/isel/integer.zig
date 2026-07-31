@@ -189,17 +189,17 @@ pub fn selectIMul(ctx: *Ctx, m: mir.IMulInst) !void {
 }
 
 pub fn selectSetCC(ctx: *Ctx, s: mir.SetCCInst) !void {
-    const cc_reg: i16 = @intCast(@intFromEnum(s.cc));
+    const cc: u64 = @intFromEnum(s.cc);
     const dst_spilled = regalloc.isSpilled(ctx.ra, s.dst);
 
     if (dst_spilled) {
         try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), .{ .imm64 = 0 });
-        try append1(ctx, .SETCC_R8, Operand.r(cc_reg));
+        try append2(ctx, .SETCC_R8, Operand.r(ctx.scratch), .{ .imm64 = cc });
         try spill.storeSpilledOp(ctx, s.dst, ctx.scratch);
     } else {
         const dst_reg = resolveReg(ctx.ra, s.dst);
         try append2(ctx, .MOV_R64_IMM64, Operand.r(dst_reg), .{ .imm64 = 0 });
-        try append1(ctx, .SETCC_R8, Operand.r(cc_reg));
+        try append2(ctx, .SETCC_R8, Operand.r(dst_reg), .{ .imm64 = cc });
     }
 }
 

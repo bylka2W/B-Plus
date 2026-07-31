@@ -20,6 +20,12 @@ const bir = @import("compiler/middle/bir/bir.zig");
 const BIRValueId = bir.ValueId;
 const BIR_NO_VALUE = bir.NO_VALUE;
 
+const HirTy = @import("compiler/frontend/hir/ty.zig").HirTy;
+const HirItem = @import("compiler/frontend/hir/item.zig").HirItem;
+
+var empty_types = std.ArrayList(HirTy).init(testing.allocator);
+var empty_items = std.ArrayList(HirItem).init(testing.allocator);
+
 fn makeVoidTy(engine: *TypeEngine) thir.TypeId {
     return engine.builtin(.void_type);
 }
@@ -53,6 +59,7 @@ test "THIR->BIR: empty function" {
 
     _ = try thir_mod.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test_fn",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = void_ty,
@@ -60,7 +67,7 @@ test "THIR->BIR: empty function" {
         .linkage = .internal,
     });
 
-    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &engine);
+    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &empty_types, &empty_items);
     defer lowerer.deinit();
     var bir_mod = try lowerer.lower();
     defer bir_mod.deinit();
@@ -98,6 +105,7 @@ test "THIR->BIR: return literal" {
 
     _ = try thir_mod.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test_fn",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = i32_ty,
@@ -105,7 +113,7 @@ test "THIR->BIR: return literal" {
         .linkage = .internal,
     });
 
-    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &engine);
+    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &empty_types, &empty_items);
     defer lowerer.deinit();
     var bir_mod = try lowerer.lower();
     defer bir_mod.deinit();
@@ -154,6 +162,7 @@ test "THIR->BIR: binary add" {
 
     _ = try thir_mod.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test_fn",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = void_ty,
@@ -161,7 +170,7 @@ test "THIR->BIR: binary add" {
         .linkage = .internal,
     });
 
-    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &engine);
+    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &empty_types, &empty_items);
     defer lowerer.deinit();
     var bir_mod = try lowerer.lower();
     defer bir_mod.deinit();
@@ -214,6 +223,7 @@ test "THIR->BIR: let binding creates store" {
 
     _ = try thir_mod.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test_fn",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = i32_ty,
@@ -221,7 +231,7 @@ test "THIR->BIR: let binding creates store" {
         .linkage = .internal,
     });
 
-    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &engine);
+    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &empty_types, &empty_items);
     defer lowerer.deinit();
     var bir_mod = try lowerer.lower();
     defer bir_mod.deinit();
@@ -276,6 +286,7 @@ test "THIR->BIR: if creates cond_br" {
 
     _ = try thir_mod.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test_fn",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = i32_ty,
@@ -283,7 +294,7 @@ test "THIR->BIR: if creates cond_br" {
         .linkage = .internal,
     });
 
-    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &engine);
+    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &empty_types, &empty_items);
     defer lowerer.deinit();
     var bir_mod = try lowerer.lower();
     defer bir_mod.deinit();
@@ -315,6 +326,7 @@ test "THIR->BIR: function with parameters" {
     const i32_ty = makeI32Ty(&engine);
 
     const owned_params = try allocator.alloc(ThirFunction.Param, 2);
+    defer allocator.free(owned_params);
     owned_params[0] = .{ .name = .{ .index = 1 }, .def_id = .{ .index = 1 }, .ty = i32_ty, .storage = .stack };
     owned_params[1] = .{ .name = .{ .index = 2 }, .def_id = .{ .index = 2 }, .ty = i32_ty, .storage = .stack };
 
@@ -335,6 +347,7 @@ test "THIR->BIR: function with parameters" {
 
     _ = try thir_mod.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test_fn",
         .def_id = .{ .index = 0 },
         .params = owned_params,
         .return_type = i32_ty,
@@ -342,7 +355,7 @@ test "THIR->BIR: function with parameters" {
         .linkage = .internal,
     });
 
-    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &engine);
+    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &empty_types, &empty_items);
     defer lowerer.deinit();
     var bir_mod = try lowerer.lower();
     defer bir_mod.deinit();
@@ -394,6 +407,7 @@ test "THIR->BIR: while loop creates blocks" {
 
     _ = try thir_mod.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test_fn",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = i32_ty,
@@ -401,7 +415,7 @@ test "THIR->BIR: while loop creates blocks" {
         .linkage = .internal,
     });
 
-    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &engine);
+    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &empty_types, &empty_items);
     defer lowerer.deinit();
     var bir_mod = try lowerer.lower();
     defer bir_mod.deinit();
@@ -455,6 +469,7 @@ test "THIR->BIR: phi inserted at merge block" {
 
     _ = try thir_mod.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test_fn",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = i32_ty,
@@ -462,7 +477,7 @@ test "THIR->BIR: phi inserted at merge block" {
         .linkage = .internal,
     });
 
-    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &engine);
+    var lowerer = thir_to_bir.ThirToBir.init(allocator, &thir_mod, &empty_types, &empty_items);
     defer lowerer.deinit();
     var bir_mod = try lowerer.lower();
     defer bir_mod.deinit();

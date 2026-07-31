@@ -1657,6 +1657,7 @@ fn testVerifierInvalidInstructions(alloc: std.mem.Allocator, stdout: anytype) !v
         var mod = bir.Module.init(alloc);
         defer mod.deinit();
 
+        _ = try mod.types.scalarType(.i64);
         const func_id = try mod.addFunction("alloca_void", try mod.types.voidType(), .internal);
         const b0 = try mod.addBlock(func_id, "entry");
         _ = try mod.addInst(func_id, b0, .{

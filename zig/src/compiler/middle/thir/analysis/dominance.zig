@@ -63,6 +63,7 @@ pub fn isValueReachableAt(
 fn makeFunction(blocks: []const thir.BasicBlock, entry: BlockId) thir.ThirFunction {
     return .{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },

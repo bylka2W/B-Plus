@@ -123,7 +123,10 @@ pub fn optimize(mfunc: *mir.MFunction) !void {
 
     try mir_ssa_destroy.destroySSA(mfunc);
     try mir_verify.verifyNoPhis(mfunc);
-    try mir_verify.verifyMir(mfunc);
+    mir_verify.verifyMir(mfunc) catch |err| {
+        if (err == error.UnreachableBlock) dumpMIR(mfunc, "AFTER destroySSA UNREACHABLE");
+        return err;
+    };
     if (debug) dumpMIR(mfunc, "after SSA destroy");
 
     try mir_addr_fold.AddrFoldPass.run(mfunc);

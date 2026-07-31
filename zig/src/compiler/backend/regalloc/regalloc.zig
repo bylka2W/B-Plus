@@ -33,7 +33,9 @@ pub fn allocRegs(mfunc: *const mir.MFunction, allocator: std.mem.Allocator) !Reg
     errdefer remat.deinit();
 
     var intervals = std.ArrayList(liveness.LiveInterval).init(allocator);
+    defer intervals.deinit();
     var call_positions = std.ArrayList(usize).init(allocator);
+    defer call_positions.deinit();
     var constraints = std.ArrayList(allocator_mod.ConstrainedReg).init(allocator);
     defer constraints.deinit();
 

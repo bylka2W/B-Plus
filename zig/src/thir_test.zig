@@ -35,6 +35,7 @@ test "ThirModule addFunction" {
 
     const idx = try module.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },
@@ -114,7 +115,7 @@ test "Literal types" {
         .{ .int = 42 },
         .{ .float = 3.14 },
         .{ .bool_val = true },
-        .{ .string = .{ .index = 0 } },
+        .{ .string = "test" },
         .{ .unit = {} },
     };
     try testing.expectEqual(@as(usize, 5), lits.len);
@@ -139,6 +140,7 @@ test "VerifyContext: valid module passes" {
 
     _ = try module.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },
@@ -163,6 +165,7 @@ test "VerifyContext: invalid block reference fails" {
 
     _ = try module.addFunction(.{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },
@@ -185,6 +188,7 @@ test "VerifyContext: invalid block reference fails" {
 fn makeFunc(blocks: []const BasicBlock, entry: BlockId) ThirFunction {
     return .{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },

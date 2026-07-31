@@ -1,6 +1,7 @@
 const std = @import("std");
-const mir = @import("../../src/compiler/backend/mir/mir.zig");
-const mir_x64 = @import("../../src/compiler/backend/mir/mir_x64.zig");
+const test_exports = @import("test_exports");
+const mir = test_exports.mir;
+const mir_x64 = test_exports.mir_x64;
 
 fn dumpMIR(writer: anytype, mfunc: *const mir.MFunction, num_vregs: u32) !void {
     try writer.print("  MIR ({d} blocks, {d} vregs):\n", .{ mfunc.blocks.items.len, num_vregs });
@@ -26,10 +27,9 @@ fn dumpMIR(writer: anytype, mfunc: *const mir.MFunction, num_vregs: u32) !void {
                     try dumpOp(writer, m.src);
                 },
                 .idiv => |m| {
-                    try writer.print("idiv v{d}, ", .{m.dst.vreg});
-                    try dumpOp(writer, m.src);
+                    try writer.print("idiv q v{d} = v{d} / v{d}", .{ m.quotient.vreg, m.dividend.vreg, m.divisor.vreg });
                 },
-                .cmp => |m| try writer.print("cmp {s} v{d}, v{d}, v{d}", .{ @tagName(m.cc), m.dst.vreg, m.a.vreg, m.b.vreg }),
+                .cmp => |m| try writer.print("cmp {s} v{d}, v{d}", .{ @tagName(m.cc), m.a.vreg, m.b.vreg }),
                 .cmp_flags => |m| try writer.print("cmp_flags v{d}, v{d}", .{ m.a.vreg, m.b.vreg }),
                 .jmp => |m| try writer.print("jmp b{d}", .{m.target}),
                 .jcc => |m| try writer.print("jcc {s} b{d}", .{ @tagName(m.cc), m.target }),
@@ -37,11 +37,15 @@ fn dumpMIR(writer: anytype, mfunc: *const mir.MFunction, num_vregs: u32) !void {
                 .store => |m| try writer.print("store v{d}, v{d}", .{ m.src.vreg, m.ptr.vreg }),
                 .call => |m| try writer.print("call v{d}", .{m.dst.vreg}),
                 .alloca => |m| try writer.print("alloca v{d}", .{m.dst.vreg}),
-                .ret => |m| {
-                    try writer.print("ret ", .{});
-                    try dumpOp(writer, m.val);
+                .ret => |m| switch (m) {
+                    .void_ret => try writer.print("ret void", .{}),
+                    .value => |v| {
+                        try writer.print("ret ", .{});
+                        try dumpOp(writer, v);
+                    },
                 },
                 .phi => try writer.print("phi", .{}),
+                else => {},
             }
             try writer.print("\n", .{});
         }
@@ -52,8 +56,8 @@ fn dumpOp(writer: anytype, op: mir.MOperand) !void {
     switch (op) {
         .vreg => |v| try writer.print("v{d}", .{v}),
         .imm => |v| try writer.print("{d}", .{v}),
-        .phys => |v| try writer.print("phys({d})", .{@intFromEnum(v)}),
-        .mem => |m| try writer.print("mem({s}+{d})", .{@tagName(m.base), m.offset}),
+        .phys => |v| try writer.print("phys({d})", .{v}),
+        .mem => |m| try writer.print("mem({d}+{d})", .{ m.base, m.offset }),
     }
 }
 
@@ -81,7 +85,6 @@ pub fn main() !void {
             failed += 1;
             continue;
         };
-        defer result.deinit();
 
         const expected = interpretMFunction(&result.mfunc) catch |err| {
             try stdout.print("\n  [{d}] interpret failed: {}\n", .{ test_i, err });
@@ -89,7 +92,12 @@ pub fn main() !void {
             continue;
         };
 
-        const compile_result = mir_x64.emitModule(&[_]mir.MFunction{result.mfunc}) catch |err| {
+        // Hand the mfunc off to the backend. emitCode mutates (and rebuilds) the
+        // blocks of the passed mfunc in place, so it must be given real storage
+        // (a named array), and the original `result.mfunc` must not be touched or
+        // deinit'd afterwards — it shares backing memory with `funcs[0]`.
+        var funcs = [_]mir.MFunction{result.mfunc};
+        const compile_result = mir_x64.emitModule(&funcs) catch |err| {
             try stdout.print("\n  [{d}] compile failed: {}\n", .{ test_i, err });
             failed += 1;
             continue;
@@ -99,7 +107,7 @@ pub fn main() !void {
         const actual = executeCode(compile_result.code.items);
         if (actual != expected) {
             try stdout.print("\n  [{d}] MISMATCH: expected {d}, got {d}\n", .{ test_i, expected, actual });
-            if (failed < 3) try dumpMIR(stdout, &result.mfunc, result.vreg_count);
+            if (failed < 3) try dumpMIR(stdout, &funcs[0], result.vreg_count);
             failed += 1;
         } else {
             passed += 1;
@@ -132,10 +140,6 @@ fn executeCode(code: []const u8) i64 {
 const FuzzResult = struct {
     mfunc: mir.MFunction,
     vreg_count: u32,
-
-    fn deinit(self: *FuzzResult) void {
-        self.mfunc.deinit();
-    }
 };
 
 fn generateRandomMIR(alloc: std.mem.Allocator, rand: std.Random) !FuzzResult {
@@ -193,20 +197,20 @@ fn generateRandomMIR(alloc: std.mem.Allocator, rand: std.Random) !FuzzResult {
         }
 
         if (is_last) {
-            try block.instrs.append(.{ .ret = .{ .val = randomMOperand(rand, num_vregs) } });
+            try block.instrs.append(.{ .ret = .{ .value = randomMOperand(rand, num_vregs) } });
         } else {
             // Random chance for a conditional jump, otherwise unconditional
             if (rand.boolean()) {
                 // Simple unconditional forward jump
-                try block.instrs.append(.{ .jmp = .{ .target = bi + 1 } });
+                try block.instrs.append(.{ .jmp = .{ .target = @intCast(bi + 1) } });
             } else {
                 // cmp_flags + jcc (conditional) + jmp (fallthrough to next)
                 const av = randomVReg(rand, num_vregs);
                 const bv = randomVReg(rand, num_vregs);
                 try block.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = av }, .b = .{ .vreg = bv } } });
                 const jcc_target = rand.intRangeAtMost(usize, bi + 1, num_blocks - 1);
-                try block.instrs.append(.{ .jcc = .{ .cc = .lt, .target = jcc_target } });
-                try block.instrs.append(.{ .jmp = .{ .target = bi + 1 } });
+                try block.instrs.append(.{ .jcc = .{ .cc = .lt, .target = @intCast(jcc_target) } });
+                try block.instrs.append(.{ .jmp = .{ .target = @intCast(bi + 1) } });
             }
         }
     }
@@ -221,8 +225,8 @@ fn randomBodyInst(rand: std.Random, num_vregs: u32) !mir.MInst {
         1 => .{ .add = .{ .dst = .{ .vreg = randomVReg(rand, num_vregs) }, .src = randomMOperand(rand, num_vregs) } },
         2 => .{ .sub = .{ .dst = .{ .vreg = randomVReg(rand, num_vregs) }, .src = randomMOperand(rand, num_vregs) } },
         3 => .{ .imul = .{ .dst = .{ .vreg = randomVReg(rand, num_vregs) }, .src = randomMOperand(rand, num_vregs) } },
-        4 => .{ .idiv = .{ .dst = .{ .vreg = randomVReg(rand, num_vregs) }, .src = .{ .imm = rand.intRangeAtMost(i64, -100, -1) } } },
-        5 => .{ .cmp = .{ .cc = .lt, .dst = .{ .vreg = randomVReg(rand, num_vregs) }, .a = .{ .vreg = randomVReg(rand, num_vregs) }, .b = .{ .vreg = randomVReg(rand, num_vregs) } } },
+        4 => .{ .idiv = .{ .dividend = .{ .vreg = randomVReg(rand, num_vregs) }, .divisor = .{ .imm = rand.intRangeAtMost(i64, -100, -1) }, .quotient = .{ .vreg = randomVReg(rand, num_vregs) }, .remainder = .{ .vreg = randomVReg(rand, num_vregs) } } },
+        5 => .{ .cmp = .{ .cc = .lt, .a = .{ .vreg = randomVReg(rand, num_vregs) }, .b = .{ .vreg = randomVReg(rand, num_vregs) } } },
         6 => .{ .cmp_flags = .{ .a = .{ .vreg = randomVReg(rand, num_vregs) }, .b = .{ .vreg = randomVReg(rand, num_vregs) } } },
         else => return error.Retry,
     };
@@ -276,22 +280,14 @@ fn interpretMFunction(mfunc: *const mir.MFunction) !i64 {
                     try setValue(&values, m.dst, dv *% sv);
                 },
                 .idiv => |m| {
-                    const dv = try resolveOp(&values, m.dst);
-                    const sv = try resolveOp(&values, m.src);
-                    try setValue(&values, m.dst, @divTrunc(dv, sv));
+                    const dv = try resolveOp(&values, m.dividend);
+                    const sv = try resolveOp(&values, m.divisor);
+                    try setValue(&values, m.quotient, @divTrunc(dv, sv));
+                    try setValue(&values, m.remainder, @rem(dv, sv));
                 },
                 .cmp => |m| {
-                    const av = try resolveOp(&values, m.a);
-                    const bv = try resolveOp(&values, m.b);
-                    const r: i64 = switch (m.cc) {
-                        .lt => @intFromBool(av < bv),
-                        .le => @intFromBool(av <= bv),
-                        .gt => @intFromBool(av > bv),
-                        .ge => @intFromBool(av >= bv),
-                        .eq => @intFromBool(av == bv),
-                        .ne => @intFromBool(av != bv),
-                    };
-                    try setValue(&values, m.dst, r);
+                    cmp_a = try resolveOp(&values, m.a);
+                    cmp_b = try resolveOp(&values, m.b);
                 },
                 .cmp_flags => |m| {
                     cmp_a = try resolveOp(&values, m.a);
@@ -336,9 +332,10 @@ fn interpretMFunction(mfunc: *const mir.MFunction) !i64 {
                     _ = m;
                 },
                 .ret => |m| {
-                    return resolveOp(&values, m.val);
+                    return resolveOp(&values, m.value);
                 },
                 .phi => {},
+                else => {},
             }
         }
 

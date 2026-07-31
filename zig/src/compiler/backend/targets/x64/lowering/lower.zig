@@ -61,6 +61,9 @@ pub const IselResult = struct {
 
     pub fn deinit(self: *IselResult) void {
         self.sel.deinit(self.mfunc.allocator);
+        self.ra.regs.deinit();
+        self.ra.spills.deinit();
+        self.ra.remat.deinit();
         self.alloca_offsets.deinit();
     }
 };

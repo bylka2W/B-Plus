@@ -57,7 +57,8 @@ const LoopContext = struct {
 
 // ─── Lowering Context ───
 pub const LowerContext = struct {
-    arena: std.heap.ArenaAllocator,
+    backing: Allocator,
+    arena: *std.heap.ArenaAllocator,
     allocator: Allocator,
     module: *thir.ThirModule,
     type_engine: *TypeEngine,
@@ -101,10 +102,12 @@ pub const LowerContext = struct {
         items: *const HirItemStore,
         hir_bodies: *const HirBodyStore,
     ) LowerContext {
-        var arena = std.heap.ArenaAllocator.init(backing);
-        const allocator = arena.allocator();
+        const arena_ptr = backing.create(std.heap.ArenaAllocator) catch unreachable;
+        arena_ptr.* = std.heap.ArenaAllocator.init(backing);
+        const allocator = arena_ptr.allocator();
         return .{
-            .arena = arena,
+            .backing = backing,
+            .arena = arena_ptr,
             .allocator = allocator,
             .module = module,
             .type_engine = engine,
@@ -125,7 +128,9 @@ pub const LowerContext = struct {
 
     pub fn deinit(self: *LowerContext) void {
         self.arena.deinit();
+        self.backing.destroy(self.arena);
     }
+
 
     // ─── Value Allocation ───
     pub fn allocValue(self: *LowerContext, ty: ids.TypeId, storage: thir.Storage) !thir.ValueId {

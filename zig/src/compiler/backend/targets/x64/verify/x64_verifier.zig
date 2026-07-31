@@ -161,13 +161,14 @@ pub fn verifyInst(inst: ir.Instruction) !void {
         .TEST_R64_R64, .TEST_R32_R32, .XOR_R64_R64, .XOR_R32_R32,
         .IMUL_R64_R64, .IMUL_R32_R32, .AND_R64_R64, .AND_R32_R32,
         .OR_R64_R64, .OR_R32_R32, .MOVSX_R64_R32,
+        .IMUL_R64_IMM32,
         => try verifyRR(inst),
 
         .MOV_R64_IMM64, .ADD_R64_IMM32, .ADD_R32_IMM32,
         .SUB_R64_IMM32, .SUB_R32_IMM32,
         .CMP_R64_IMM32, .CMP_R32_IMM32,
         .AND_R64_IMM32, .OR_R64_IMM32, .XOR_R64_IMM32,
-        .TEST_R64_IMM32, .IMUL_R64_IMM32,
+        .TEST_R64_IMM32,
         .SAR_R64_IMM32, .SAR_R32_IMM32,
         .SHIFT_LEFT, .SHIFT_LEFT_32, .SHIFT_RIGHT, .SHIFT_RIGHT_32,
         => try verifyRI(inst),
@@ -243,6 +244,10 @@ pub fn verifyFunction(mf: *const ir.MachineFunction) !VerifiedX64Function {
                     "x64 IR verify error in {s} block {s}[{}] instr[{}]: {}\n",
                     .{ mf.name, block.label, bi, ii, err },
                 );
+                std.debug.print("  op={s} olen={}\n", .{ @tagName(inst.op), inst.olen });
+                for (inst.operands[0..inst.olen]) |op| {
+                    std.debug.print("    reg={d} base={d} idx={d} disp={d} imm64={x} is_xmm={}\n", .{ op.reg, op.base_reg, op.index_reg, op.disp, op.imm64, op.is_xmm });
+                }
                 return err;
             };
         }

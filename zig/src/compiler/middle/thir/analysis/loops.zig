@@ -129,6 +129,7 @@ test "LoopNest: simple loop" {
 
     var func = thir.ThirFunction{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },
@@ -163,6 +164,7 @@ test "LoopNest: no loop in linear CFG" {
 
     var func = thir.ThirFunction{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },

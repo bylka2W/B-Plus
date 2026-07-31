@@ -472,6 +472,7 @@ pub fn findLoops(allocator: Allocator, cfg: *const Cfg) ![]const LoopInfo {
 test "Cfg: empty function" {
     const func = thir.ThirFunction{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },
@@ -501,6 +502,7 @@ test "Cfg: linear chain entry -> b1 -> exit" {
 
     var func = thir.ThirFunction{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },
@@ -537,6 +539,7 @@ test "Cfg: if-merge diamond" {
 
     var func = thir.ThirFunction{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },
@@ -579,6 +582,7 @@ test "Cfg: loop header dominates body" {
 
     var func = thir.ThirFunction{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },
@@ -613,6 +617,7 @@ test "Cfg: unreachable block not in RPO" {
 
     var func = thir.ThirFunction{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },
@@ -646,6 +651,7 @@ test "Cfg: edges have correct kinds" {
 
     var func = thir.ThirFunction{
         .name = .{ .index = 0 },
+        .name_str = "test",
         .def_id = .{ .index = 0 },
         .params = &.{},
         .return_type = .{ .index = 0 },

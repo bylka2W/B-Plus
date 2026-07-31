@@ -1,9 +1,16 @@
 ﻿const std = @import("std");
-const bir = @import("../../src/compiler/middle/bir/bir.zig");
-const bir_cpu = @import("../../src/compiler/middle/bir/bir_cpu.zig");
-const mir = @import("../../src/compiler/backend/mir/mir.zig");
-const mir_x64 = @import("../../src/compiler/backend/mir/mir_x64.zig");
-const coff = @import("../../src/compiler/backend/object/coff/coff.zig");
+const test_exports = @import("test_exports");
+const bir = test_exports.bir;
+const bir_cpu = test_exports.bir_cpu;
+const mir = test_exports.mir;
+const mir_x64 = test_exports.mir_x64;
+const coff = test_exports.coff;
+
+fn makeCallArgs(args: []const mir.MOperand) [14]mir.MOperand {
+    var a: [14]mir.MOperand = @splat(.{ .imm = 0 });
+    for (args, 0..) |x, i| a[i] = x;
+    return a;
+}
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -41,8 +48,12 @@ fn testBirPipelineAdd(alloc: std.mem.Allocator, stdout: anytype) !void {
     {
         const func = mod.getFunctionMut(add_id);
         func.param_values = try alloc.dupe(bir.ValueId, &.{
-            func.createValue(), // v1 = a
-            func.createValue(), // v2 = b
+            try func.createValue(), // v1 = a
+            try func.createValue(), // v2 = b
+        });
+        func.params = try alloc.dupe(bir.FuncParam, &.{
+            .{ .name = try alloc.dupe(u8, "a"), .ty = i64_ty },
+            .{ .name = try alloc.dupe(u8, "b"), .ty = i64_ty },
         });
     }
     const add_block = try mod.addBlock(add_id, "entry");
@@ -141,7 +152,7 @@ fn testCoffOutput(alloc: std.mem.Allocator, stdout: anytype) !void {
         });
         const b = &main_func.blocks.items[0];
         try b.instrs.append(.{ .mov = .{ .dst = .{ .vreg = 1 }, .src = .{ .imm = 42 } } });
-        try b.instrs.append(.{ .ret = .{ .val = .{ .vreg = 1 } } });
+        try b.instrs.append(.{ .ret = .{ .value = .{ .vreg = 1 } } });
         try mfuncs.append(main_func);
     }
 
@@ -229,7 +240,7 @@ fn testBirAddArgs(alloc: std.mem.Allocator, stdout: anytype) !void {
             const b = &add_func.blocks.items[0];
             try b.instrs.append(.{ .mov = .{ .dst = .{ .vreg = 3 }, .src = .{ .vreg = 1 } } });
             try b.instrs.append(.{ .add = .{ .dst = .{ .vreg = 3 }, .src = .{ .vreg = 2 } } });
-            try b.instrs.append(.{ .ret = .{ .val = .{ .vreg = 3 } } });
+            try b.instrs.append(.{ .ret = .{ .value = .{ .vreg = 3 } } });
         }
         const add_params = try alloc.alloc(mir.MOperand, 2);
         add_params[0] = .{ .vreg = 1 };
@@ -252,11 +263,11 @@ fn testBirAddArgs(alloc: std.mem.Allocator, stdout: anytype) !void {
             const fn_name = try alloc.dupe(u8, "add");
             try b.instrs.append(.{ .call = .{
                 .name = fn_name,
-                .args = .{ .{ .vreg = 1 }, .{ .vreg = 2 }, .{ .imm = 0 }, .{ .imm = 0 } },
+                .args = makeCallArgs(&.{ .{ .vreg = 1 }, .{ .vreg = 2 } }),
                 .arg_count = 2,
                 .dst = .{ .vreg = 3 },
             } });
-            try b.instrs.append(.{ .ret = .{ .val = .{ .vreg = 3 } } });
+            try b.instrs.append(.{ .ret = .{ .value = .{ .vreg = 3 } } });
         }
         try mfuncs.append(main_func);
     }
@@ -283,16 +294,18 @@ fn buildArithFunc(alloc: std.mem.Allocator, op: bir.Op, b: i64) !bir.Module {
     const func_id = try mod.addFunction("main", i32_ty, .internal);
     const func = mod.getFunctionMut(func_id);
 
-    const v1 = func.createValue();
-    const v2 = func.createValue();
-    const v3 = func.createValue();
-    const v4 = func.createValue();
+    const v1 = try func.createValue();
+    const v2 = try func.createValue();
+    const v3 = try func.createValue();
+    const v4 = try func.createValue();
 
     try func.blocks.append(.{
         .label = try alloc.dupe(u8, "entry"),
         .instrs = std.ArrayList(bir.Inst).init(alloc),
         .next_value_id = 0,
-        .loop = null,
+        .preds = std.ArrayList(bir.BlockId).init(alloc),
+        .succs = std.ArrayList(bir.BlockId).init(alloc),
+        .phi_count = 0,
     });
 
     const block = &func.blocks.items[0];
@@ -309,16 +322,18 @@ fn buildCmpFunc(alloc: std.mem.Allocator, op: bir.Op) !bir.Module {
     const func_id = try mod.addFunction("main", i32_ty, .internal);
     const func = mod.getFunctionMut(func_id);
 
-    const v1 = func.createValue();
-    const v2 = func.createValue();
-    const v3 = func.createValue();
-    const v4 = func.createValue();
+    const v1 = try func.createValue();
+    const v2 = try func.createValue();
+    const v3 = try func.createValue();
+    const v4 = try func.createValue();
 
     try func.blocks.append(.{
         .label = try alloc.dupe(u8, "entry"),
         .instrs = std.ArrayList(bir.Inst).init(alloc),
         .next_value_id = 0,
-        .loop = null,
+        .preds = std.ArrayList(bir.BlockId).init(alloc),
+        .succs = std.ArrayList(bir.BlockId).init(alloc),
+        .phi_count = 0,
     });
 
     const block = &func.blocks.items[0];
@@ -388,33 +403,39 @@ fn buildIfElseFunc(alloc: std.mem.Allocator, cond_op: bir.Op) !bir.Module {
     const func_id = try mod.addFunction("main", i32_ty, .internal);
     const func = mod.getFunctionMut(func_id);
 
-    const v1 = func.createValue();
-    const v2 = func.createValue();
-    const v3 = func.createValue();
-    const v4 = func.createValue();
-    const v5 = func.createValue();
-    const v6 = func.createValue();
-    const v7 = func.createValue();
+    const v1 = try func.createValue();
+    const v2 = try func.createValue();
+    const v3 = try func.createValue();
+    const v4 = try func.createValue();
+    const v5 = try func.createValue();
+    const v6 = try func.createValue();
+    const v7 = try func.createValue();
 
     try func.blocks.append(.{
         .label = try alloc.dupe(u8, "entry"),
         .instrs = std.ArrayList(bir.Inst).init(alloc),
         .next_value_id = 0,
-        .loop = null,
+        .preds = std.ArrayList(bir.BlockId).init(alloc),
+        .succs = std.ArrayList(bir.BlockId).init(alloc),
+        .phi_count = 0,
     });
 
     try func.blocks.append(.{
         .label = try alloc.dupe(u8, "then"),
         .instrs = std.ArrayList(bir.Inst).init(alloc),
         .next_value_id = 0,
-        .loop = null,
+        .preds = std.ArrayList(bir.BlockId).init(alloc),
+        .succs = std.ArrayList(bir.BlockId).init(alloc),
+        .phi_count = 0,
     });
 
     try func.blocks.append(.{
         .label = try alloc.dupe(u8, "else"),
         .instrs = std.ArrayList(bir.Inst).init(alloc),
         .next_value_id = 0,
-        .loop = null,
+        .preds = std.ArrayList(bir.BlockId).init(alloc),
+        .succs = std.ArrayList(bir.BlockId).init(alloc),
+        .phi_count = 0,
     });
 
     {
@@ -494,14 +515,16 @@ fn buildAllocaFunc(alloc: std.mem.Allocator) !bir.Module {
     const func_id = try mod.addFunction("main", i32_ty, .internal);
     const func = mod.getFunctionMut(func_id);
 
-    const v1 = func.createValue();
-    const v2 = func.createValue();
+    const v1 = try func.createValue();
+    const v2 = try func.createValue();
 
     try func.blocks.append(.{
         .label = try alloc.dupe(u8, "entry"),
         .instrs = std.ArrayList(bir.Inst).init(alloc),
         .next_value_id = 0,
-        .loop = null,
+        .preds = std.ArrayList(bir.BlockId).init(alloc),
+        .succs = std.ArrayList(bir.BlockId).init(alloc),
+        .phi_count = 0,
     });
 
     const block = &func.blocks.items[0];
@@ -529,17 +552,19 @@ fn buildLoadStoreFunc(alloc: std.mem.Allocator) !bir.Module {
     const func_id = try mod.addFunction("main", i32_ty, .internal);
     const func = mod.getFunctionMut(func_id);
 
-    const v1 = func.createValue();
-    const v2 = func.createValue();
-    const v3 = func.createValue();
-    const v4 = func.createValue();
-    const v5 = func.createValue();
+    const v1 = try func.createValue();
+    const v2 = try func.createValue();
+    const v3 = try func.createValue();
+    const v4 = try func.createValue();
+    const v5 = try func.createValue();
 
     try func.blocks.append(.{
         .label = try alloc.dupe(u8, "entry"),
         .instrs = std.ArrayList(bir.Inst).init(alloc),
         .next_value_id = 0,
-        .loop = null,
+        .preds = std.ArrayList(bir.BlockId).init(alloc),
+        .succs = std.ArrayList(bir.BlockId).init(alloc),
+        .phi_count = 0,
     });
 
     const block = &func.blocks.items[0];
@@ -569,23 +594,23 @@ fn buildLoopFunc(alloc: std.mem.Allocator) !bir.Module {
     const func_id = try mod.addFunction("main", i32_ty, .internal);
     const func = mod.getFunctionMut(func_id);
 
-    const vi = func.createValue();
-    const vsum = func.createValue();
-    const vc4 = func.createValue();
-    const vcond = func.createValue();
-    const vc1_body = func.createValue();
-    const vc1_latch = func.createValue();
-    const vsum_next = func.createValue();
-    const vi_next = func.createValue();
+    const vi = try func.createValue();
+    const vsum = try func.createValue();
+    const vc4 = try func.createValue();
+    const vcond = try func.createValue();
+    const vc1_body = try func.createValue();
+    const vc1_latch = try func.createValue();
+    const vsum_next = try func.createValue();
+    const vi_next = try func.createValue();
 
-    const v_i_phi = func.createValue();
-    const v_sum_phi = func.createValue();
+    const v_i_phi = try func.createValue();
+    const v_sum_phi = try func.createValue();
 
-    try func.blocks.append(.{ .label = try alloc.dupe(u8, "entry"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .loop = null });
-    try func.blocks.append(.{ .label = try alloc.dupe(u8, "header"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .loop = null });
-    try func.blocks.append(.{ .label = try alloc.dupe(u8, "body"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .loop = null });
-    try func.blocks.append(.{ .label = try alloc.dupe(u8, "latch"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .loop = null });
-    try func.blocks.append(.{ .label = try alloc.dupe(u8, "exit"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .loop = null });
+    try func.blocks.append(.{ .label = try alloc.dupe(u8, "entry"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .preds = std.ArrayList(bir.BlockId).init(alloc), .succs = std.ArrayList(bir.BlockId).init(alloc), .phi_count = 0 });
+    try func.blocks.append(.{ .label = try alloc.dupe(u8, "header"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .preds = std.ArrayList(bir.BlockId).init(alloc), .succs = std.ArrayList(bir.BlockId).init(alloc), .phi_count = 0 });
+    try func.blocks.append(.{ .label = try alloc.dupe(u8, "body"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .preds = std.ArrayList(bir.BlockId).init(alloc), .succs = std.ArrayList(bir.BlockId).init(alloc), .phi_count = 0 });
+    try func.blocks.append(.{ .label = try alloc.dupe(u8, "latch"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .preds = std.ArrayList(bir.BlockId).init(alloc), .succs = std.ArrayList(bir.BlockId).init(alloc), .phi_count = 0 });
+    try func.blocks.append(.{ .label = try alloc.dupe(u8, "exit"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .preds = std.ArrayList(bir.BlockId).init(alloc), .succs = std.ArrayList(bir.BlockId).init(alloc), .phi_count = 0 });
 
     {
         const b = &func.blocks.items[0];
@@ -625,7 +650,7 @@ fn buildLoopFunc(alloc: std.mem.Allocator) !bir.Module {
 
     {
         const b = &func.blocks.items[4];
-        try b.instrs.append(.{ .op = .ret, .ty = i32_ty, .result = func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{v_sum_phi}), .data = .{ .none = {} } });
+        try b.instrs.append(.{ .op = .ret, .ty = i32_ty, .result = try func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{v_sum_phi}), .data = .{ .none = {} } });
     }
 
     return mod;
@@ -658,7 +683,7 @@ fn testCrossCall(alloc: std.mem.Allocator, stdout: anytype) !void {
             const b = &add_func.blocks.items[0];
             try b.instrs.append(.{ .mov = .{ .dst = .{ .vreg = 3 }, .src = .{ .vreg = 1 } } });
             try b.instrs.append(.{ .add = .{ .dst = .{ .vreg = 3 }, .src = .{ .vreg = 2 } } });
-            try b.instrs.append(.{ .ret = .{ .val = .{ .vreg = 3 } } });
+            try b.instrs.append(.{ .ret = .{ .value = .{ .vreg = 3 } } });
         }
         const add_params = try alloc.alloc(mir.MOperand, 2);
         add_params[0] = .{ .vreg = 1 };
@@ -680,11 +705,11 @@ fn testCrossCall(alloc: std.mem.Allocator, stdout: anytype) !void {
             const fn_name = try alloc.dupe(u8, "add");
             try b.instrs.append(.{ .call = .{
                 .name = fn_name,
-                .args = .{ .{ .vreg = 1 }, .{ .vreg = 2 }, .{ .imm = 0 }, .{ .imm = 0 } },
+                .args = makeCallArgs(&.{ .{ .vreg = 1 }, .{ .vreg = 2 } }),
                 .arg_count = 2,
                 .dst = .{ .vreg = 3 },
             } });
-            try b.instrs.append(.{ .ret = .{ .val = .{ .vreg = 3 } } });
+            try b.instrs.append(.{ .ret = .{ .value = .{ .vreg = 3 } } });
         }
         try mfuncs.append(main_func);
     }
@@ -721,16 +746,18 @@ fn buildCallFunc(alloc: std.mem.Allocator) !bir.Module {
     const func_id = try mod.addFunction("main", i32_ty, .internal);
     const func = mod.getFunctionMut(func_id);
 
-    const v1 = func.createValue();
-    const v2 = func.createValue();
-    const v3 = func.createValue();
-    const v4 = func.createValue();
+    const v1 = try func.createValue();
+    const v2 = try func.createValue();
+    const v3 = try func.createValue();
+    const v4 = try func.createValue();
 
     try func.blocks.append(.{
         .label = try alloc.dupe(u8, "entry"),
         .instrs = std.ArrayList(bir.Inst).init(alloc),
         .next_value_id = 0,
-        .loop = null,
+        .preds = std.ArrayList(bir.BlockId).init(alloc),
+        .succs = std.ArrayList(bir.BlockId).init(alloc),
+        .phi_count = 0,
     });
 
     const block = &func.blocks.items[0];
@@ -768,7 +795,9 @@ fn buildSpillFunc(alloc: std.mem.Allocator, n: u32) !bir.Module {
         .label = try alloc.dupe(u8, "entry"),
         .instrs = std.ArrayList(bir.Inst).init(alloc),
         .next_value_id = 0,
-        .loop = null,
+        .preds = std.ArrayList(bir.BlockId).init(alloc),
+        .succs = std.ArrayList(bir.BlockId).init(alloc),
+        .phi_count = 0,
     });
     const block = &func.blocks.items[0];
 
@@ -776,19 +805,19 @@ fn buildSpillFunc(alloc: std.mem.Allocator, n: u32) !bir.Module {
     defer const_vals.deinit();
 
     for (0..n) |i| {
-        const v = func.createValue();
+        const v = try func.createValue();
         try const_vals.append(v);
         try block.instrs.append(.{ .op = .@"const", .ty = i32_ty, .result = v, .operands = try alloc.dupe(bir.ValueId, &.{}), .data = .{ .const_data = .{ .int = @as(i64, @intCast(i + 1)) } } });
     }
 
     var acc = const_vals.items[0];
     for (1..n) |i| {
-        const v = func.createValue();
+        const v = try func.createValue();
         try block.instrs.append(.{ .op = .add, .ty = i32_ty, .result = v, .operands = try alloc.dupe(bir.ValueId, &.{ acc, const_vals.items[i] }), .data = .{ .none = {} } });
         acc = v;
     }
 
-    const ret_v = func.createValue();
+    const ret_v = try func.createValue();
     try block.instrs.append(.{ .op = .ret, .ty = i32_ty, .result = ret_v, .operands = try alloc.dupe(bir.ValueId, &.{acc}), .data = .{ .none = {} } });
 
     return mod;
@@ -826,34 +855,34 @@ fn buildSpillLoopFunc(alloc: std.mem.Allocator) !bir.Module {
     const func = mod.getFunctionMut(func_id);
 
     // Sum 1..100 with many live values in the loop
-    const vi = func.createValue();
-    const vn = func.createValue();
-    const vsum = func.createValue();
-    const vi_next = func.createValue();
-    const vsum_next = func.createValue();
-    const vcond = func.createValue();
-    const vc1 = func.createValue();
-    const v100 = func.createValue();
+    const vi = try func.createValue();
+    const vn = try func.createValue();
+    const vsum = try func.createValue();
+    const vi_next = try func.createValue();
+    const vsum_next = try func.createValue();
+    const vcond = try func.createValue();
+    const vc1 = try func.createValue();
+    const v100 = try func.createValue();
 
     // Extra live values to create register pressure
-    const ve1 = func.createValue();
-    const ve2 = func.createValue();
-    const ve3 = func.createValue();
-    const ve4 = func.createValue();
-    const ve5 = func.createValue();
-    const ve6 = func.createValue();
-    const ve7 = func.createValue();
-    const ve8 = func.createValue();
+    const ve1 = try func.createValue();
+    const ve2 = try func.createValue();
+    const ve3 = try func.createValue();
+    const ve4 = try func.createValue();
+    const ve5 = try func.createValue();
+    const ve6 = try func.createValue();
+    const ve7 = try func.createValue();
+    const ve8 = try func.createValue();
 
     // phi nodes
-    const v_i_phi = func.createValue();
-    const v_sum_phi = func.createValue();
+    const v_i_phi = try func.createValue();
+    const v_sum_phi = try func.createValue();
 
-    try func.blocks.append(.{ .label = try alloc.dupe(u8, "entry"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .loop = null });
-    try func.blocks.append(.{ .label = try alloc.dupe(u8, "header"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .loop = null });
-    try func.blocks.append(.{ .label = try alloc.dupe(u8, "body"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .loop = null });
-    try func.blocks.append(.{ .label = try alloc.dupe(u8, "latch"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .loop = null });
-    try func.blocks.append(.{ .label = try alloc.dupe(u8, "exit"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .loop = null });
+    try func.blocks.append(.{ .label = try alloc.dupe(u8, "entry"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .preds = std.ArrayList(bir.BlockId).init(alloc), .succs = std.ArrayList(bir.BlockId).init(alloc), .phi_count = 0 });
+    try func.blocks.append(.{ .label = try alloc.dupe(u8, "header"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .preds = std.ArrayList(bir.BlockId).init(alloc), .succs = std.ArrayList(bir.BlockId).init(alloc), .phi_count = 0 });
+    try func.blocks.append(.{ .label = try alloc.dupe(u8, "body"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .preds = std.ArrayList(bir.BlockId).init(alloc), .succs = std.ArrayList(bir.BlockId).init(alloc), .phi_count = 0 });
+    try func.blocks.append(.{ .label = try alloc.dupe(u8, "latch"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .preds = std.ArrayList(bir.BlockId).init(alloc), .succs = std.ArrayList(bir.BlockId).init(alloc), .phi_count = 0 });
+    try func.blocks.append(.{ .label = try alloc.dupe(u8, "exit"), .instrs = std.ArrayList(bir.Inst).init(alloc), .next_value_id = 0, .preds = std.ArrayList(bir.BlockId).init(alloc), .succs = std.ArrayList(bir.BlockId).init(alloc), .phi_count = 0 });
 
     // entry: i=0, sum=0, extra=42
     {
@@ -893,14 +922,14 @@ fn buildSpillLoopFunc(alloc: std.mem.Allocator) !bir.Module {
         try b.instrs.append(.{ .op = .@"const", .ty = i32_ty, .result = vc1, .operands = try alloc.dupe(bir.ValueId, &.{}), .data = .{ .const_data = .{ .int = 1 } } });
         try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = vsum_next, .operands = try alloc.dupe(bir.ValueId, &.{ v_sum_phi, v_i_phi }), .data = .{ .none = {} } });
         // Touch all extra vars to keep them live across the loop
-        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve1, v_i_phi }), .data = .{ .none = {} } });
-        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve2, v_i_phi }), .data = .{ .none = {} } });
-        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve3, v_i_phi }), .data = .{ .none = {} } });
-        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve4, v_i_phi }), .data = .{ .none = {} } });
-        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve5, v_i_phi }), .data = .{ .none = {} } });
-        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve6, v_i_phi }), .data = .{ .none = {} } });
-        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve7, v_i_phi }), .data = .{ .none = {} } });
-        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve8, v_i_phi }), .data = .{ .none = {} } });
+        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = try func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve1, v_i_phi }), .data = .{ .none = {} } });
+        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = try func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve2, v_i_phi }), .data = .{ .none = {} } });
+        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = try func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve3, v_i_phi }), .data = .{ .none = {} } });
+        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = try func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve4, v_i_phi }), .data = .{ .none = {} } });
+        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = try func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve5, v_i_phi }), .data = .{ .none = {} } });
+        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = try func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve6, v_i_phi }), .data = .{ .none = {} } });
+        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = try func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve7, v_i_phi }), .data = .{ .none = {} } });
+        try b.instrs.append(.{ .op = .add, .ty = i32_ty, .result = try func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{ ve8, v_i_phi }), .data = .{ .none = {} } });
         try b.instrs.append(.{ .op = .br, .ty = i32_ty, .result = bir.NO_VALUE, .operands = try alloc.dupe(bir.ValueId, &.{}), .data = .{ .block_target = 3 } });
     }
 
@@ -915,7 +944,7 @@ fn buildSpillLoopFunc(alloc: std.mem.Allocator) !bir.Module {
     // exit: return sum
     {
         const b = &func.blocks.items[4];
-        try b.instrs.append(.{ .op = .ret, .ty = i32_ty, .result = func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{v_sum_phi}), .data = .{ .none = {} } });
+        try b.instrs.append(.{ .op = .ret, .ty = i32_ty, .result = try func.createValue(), .operands = try alloc.dupe(bir.ValueId, &.{v_sum_phi}), .data = .{ .none = {} } });
     }
 
     return mod;
@@ -960,7 +989,7 @@ fn buildCallSpillFunc(alloc: std.mem.Allocator) !struct { std.ArrayList(mir.MFun
             const b = &add7_func.blocks.items[0];
             try b.instrs.append(.{ .mov = .{ .dst = .{ .vreg = 3 }, .src = .{ .vreg = 1 } } });
             try b.instrs.append(.{ .add = .{ .dst = .{ .vreg = 3 }, .src = .{ .imm = 7 } } });
-            try b.instrs.append(.{ .ret = .{ .val = .{ .vreg = 3 } } });
+            try b.instrs.append(.{ .ret = .{ .value = .{ .vreg = 3 } } });
         }
         const params = try alloc.alloc(mir.MOperand, 1);
         params[0] = .{ .vreg = 1 };
@@ -983,7 +1012,7 @@ fn buildCallSpillFunc(alloc: std.mem.Allocator) !struct { std.ArrayList(mir.MFun
         const fn_name = try alloc.dupe(u8, "add7");
         try b.instrs.append(.{ .call = .{
             .name = fn_name,
-            .args = .{ .{ .vreg = 1 }, .{ .imm = 0 }, .{ .imm = 0 }, .{ .imm = 0 } },
+                .args = makeCallArgs(&.{ .{ .vreg = 1 } }),
             .arg_count = 1,
             .dst = .{ .vreg = 17 },
         } });
@@ -994,7 +1023,7 @@ fn buildCallSpillFunc(alloc: std.mem.Allocator) !struct { std.ArrayList(mir.MFun
             try b.instrs.append(.{ .add = .{ .dst = .{ .vreg = 18 }, .src = .{ .vreg = @intCast(i) } } });
         }
         try b.instrs.append(.{ .add = .{ .dst = .{ .vreg = 18 }, .src = .{ .vreg = 17 } } });
-        try b.instrs.append(.{ .ret = .{ .val = .{ .vreg = 18 } } });
+        try b.instrs.append(.{ .ret = .{ .value = .{ .vreg = 18 } } });
         try mfuncs.append(main_func);
     }
 

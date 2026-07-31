@@ -74,11 +74,20 @@ fn splitCriticalEdges(mfunc: *mir.MFunction, next_vreg: u32) !void {
                 }
 
                 if (pred_count > 1) {
-                    try splits.append(.{
-                        .pred_idx = bi,
-                        .succ_idx = target,
-                        .new_block_idx = mfunc.blocks.items.len + splits.items.len,
-                    });
+                    var already_split = false;
+                    for (splits.items) |sp| {
+                        if (sp.pred_idx == bi and sp.succ_idx == target) {
+                            already_split = true;
+                            break;
+                        }
+                    }
+                    if (!already_split) {
+                        try splits.append(.{
+                            .pred_idx = bi,
+                            .succ_idx = target,
+                            .new_block_idx = mfunc.blocks.items.len + splits.items.len,
+                        });
+                    }
                 }
             }
         }
