@@ -213,7 +213,11 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
 
 pub fn selectRet(ctx: *Ctx, r: mir.RetInst) !void {
     switch (r) {
-        .void_ret => {},
+        .void_ret => {
+            // A void entry (main) returns with EAX as the process exit code;
+            // zero it so successful programs exit with code 0.
+            try append2(ctx, .XOR_R64_R64, Operand.r(0), Operand.r(0));
+        },
         .value => |val| {
             // Determine the return register based on the value's type.
             const val_vreg = switch (val) { .vreg => |v| v, else => 0 };

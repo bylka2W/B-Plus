@@ -1,5 +1,7 @@
 #include <windows.h>
 
+extern int main(void);
+
 __declspec(dllexport) void print_i64(long long val) {
     char buf[32];
     int len = 0;
@@ -44,5 +46,36 @@ __declspec(dllexport) void print_str(long long ptr) {
 }
 
 __declspec(dllexport) void bplus_exit(long long code) {
+    ExitProcess((UINT)code);
+}
+
+static int launched_by_bpc(void) {
+    char buf[2];
+    DWORD n = GetEnvironmentVariableA("BPC_RUN", buf, 2);
+    return n > 0;
+}
+
+static void bplus_pause(void) {
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    if (in == INVALID_HANDLE_VALUE || in == NULL) return;
+    DWORD mode;
+    if (!GetConsoleMode(in, &mode)) return;
+
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD written;
+    const char msg[] = "\nPress any key to continue...\n";
+    if (out != INVALID_HANDLE_VALUE && out != NULL) {
+        WriteFile(out, msg, (DWORD)(sizeof(msg) - 1), &written, NULL);
+    }
+    char ch;
+    DWORD read;
+    ReadFile(in, &ch, 1, &read, NULL);
+}
+
+__declspec(dllexport) void bplus_start(void) {
+    int code = (int)main();
+    if (!launched_by_bpc()) {
+        bplus_pause();
+    }
     ExitProcess((UINT)code);
 }

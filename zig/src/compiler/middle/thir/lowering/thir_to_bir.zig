@@ -323,10 +323,11 @@ const Builder = struct {
     }
 
     fn emitRet(self: *Builder, val: BIRValueId, ty: BIRTypeId) !void {
-        if (val != BIR_NO_VALUE) {
-            _ = try self.emitOp(.ret, ty, &.{val}, .{ .none = {} });
-        } else {
+        const void_ty = self.mod.types.voidType() catch 0;
+        if (val == BIR_NO_VALUE or ty == void_ty) {
             try self.retVoid();
+        } else {
+            _ = try self.emitOp(.ret, ty, &.{val}, .{ .none = {} });
         }
     }
 

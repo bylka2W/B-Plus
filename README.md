@@ -1,11 +1,11 @@
-# B+ v4.6.2-beta — Compiled `.plan` / `.metal` Language (Frontend → HIR → BIR → MIR → Targets)
+# B+ v4.6.3-beta — Compiled `.plan` / `.metal` Language (Frontend → HIR → BIR → MIR → Targets)
 
 > [English version ↓](#b-v461-beta--compiled-plan--metal-language-frontend--hir--bir--mir--targets)
 
 **B+** компилирует `.plan` / `.metal` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор и оптимизатор написаны с нуля на Zig.
 
-### Что нового в v4.6.2-beta
+### Что нового в v4.6.3-beta
 
 - Новая архитектура: Frontend → HIR → BIR → MIR → Targets
 - Разделение слоёв: frontend / middle(BIR) / backend(MIR) / targets
@@ -33,6 +33,9 @@
 - **THIR (Typed HIR)** — новый слой между HIR и BIR. Статически типизированная IR: `ValueDef` (ty, storage, expr), `ThirExpr` (18 вариантов), `ThirStmt` (9 вариантов), `Terminator` (6 вариантов), `CastKind` (16 вариантов). Pipeline расширен: `AST → Unified HIR → THIR → BIR → MIR → x64`
 - **HIR → THIR lowering**: `LowerContext` с привязкой `ValueId → ExprId`, `classifyCast()` для определения kind кастов, трансляция state/event declarations
 - **THIR → BIR lowering**: модель `ValueBinding` (ssa/stack_slot/address) для корректного SSA. Indirection `ValueId → ExprId → Expr` вместо прямого индекса. `emitPhi`, `param_map`, проекции Place с отслеживанием типов
+- **Memory/ownership**: исправлен контракт владения `MFunction` — backend мутирует переданные mfuncs, защита от shallow-copy deinit и use-after-free при `emitModule`
+- **Тесты**: `test-thir`, `test-thir-to-bir`, `test-backend`, `test-cpu`, `test-fuzz`; новый `src/compiler/test_exports.zig` — единый экспорт compiler modules, исправлены Zig module boundaries
+- **Backend validation**: MIR verification, x64 IR verification, register/operand/instruction validation
 
 ---
 
@@ -950,12 +953,12 @@ SOFTWARE.
 
 ---
 
-# B+ v4.6.2-beta — Compiled `.b+` Language (Frontend → HIR → BIR → MIR → Targets)
+# B+ v4.6.3-beta — Compiled `.b+` Language (Frontend → HIR → BIR → MIR → Targets)
 
 **B+** compiles `.b+` files directly to x64 machine code and packages them into Windows PE executables (.exe/.dll).
 No assemblers, linkers, or LLVM — the entire code generator and optimizer are written from scratch in Zig.
 
-### What's new in v4.6.2-beta
+### What's new in v4.6.3-beta
 
 - **Frontend → HIR → BIR → MIR → Targets architecture** — full compiler migration to a
   multi-level architecture inspired by LLVM/rustc with strictly one-way dependency flow.

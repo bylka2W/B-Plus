@@ -473,7 +473,10 @@ pub const ProgramNodeToHir = struct {
         if (std.mem.indexOfScalar(u8, t, '=')) |eq_idx| {
             const lhs = std.mem.trim(u8, t[0..eq_idx], " \t\r\n");
             const rhs = std.mem.trim(u8, t[eq_idx + 1 ..], " \t\r\n");
-            if (lhs.len > 0 and rhs.len > 0) {
+            const looks_like_assign = lhs.len > 0 and rhs.len > 0 and
+                std.mem.indexOfScalar(u8, lhs, '(') == null and
+                std.mem.indexOfScalar(u8, lhs, '"') == null;
+            if (looks_like_assign) {
                 const target = try self.lowerExprStr(bb, lhs);
                 const val = try self.lowerExprStr(bb, rhs);
                 const assign_expr = self.hir.addExpr(.{

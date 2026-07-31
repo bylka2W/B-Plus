@@ -1,0 +1,5 @@
+fn main() {
+    print("count=")
+    print(42)
+    print(" done")
+}

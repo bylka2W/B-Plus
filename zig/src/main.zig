@@ -388,11 +388,16 @@ pub fn main() !void {
         try linker.link(allocator, .{
             .obj_path = input_path,
             .output_path = out_path,
-        .entry = "main",
+        .entry = "bplus_start",
             .subsystem = "console",
             .libs = &.{"kernel32.lib"},
             .extra_objs = &.{rt_obj_name},
         });
+
+        // Link succeeded: drop the import library / .exp that lld-link may emit.
+        const base_ext = std.mem.lastIndexOfScalar(u8, out_path, '.') orelse out_path.len;
+        std.fs.cwd().deleteFile(try std.fmt.allocPrint(allocator, "{s}.lib", .{out_path[0..base_ext]})) catch {};
+        std.fs.cwd().deleteFile(try std.fmt.allocPrint(allocator, "{s}.exp", .{out_path[0..base_ext]})) catch {};
 
         const stdout = std.io.getStdOut().writer();
         try stdout.print("Linked: {s} -> {s}\n", .{ input_path, out_path });
@@ -577,33 +582,46 @@ pub fn main() !void {
     // Write COFF to temp file
     const tmp_dir = std.fs.cwd();
     const obj_name = try std.fmt.allocPrint(allocator, ".bpc_{s}.obj", .{std.fs.path.stem(input_path)});
-    defer {
-        allocator.free(obj_name);
-        tmp_dir.deleteFile(obj_name) catch {};
-    }
+    defer allocator.free(obj_name);
     try tmp_dir.writeFile(.{ .sub_path = obj_name, .data = coff_result.bytes.items });
 
     // Write embedded runtime object
     const rt_obj_name = ".bpc_minrt.obj";
     try tmp_dir.writeFile(.{ .sub_path = rt_obj_name, .data = minrt_obj_bytes });
-    defer tmp_dir.deleteFile(rt_obj_name) catch {};
 
     // Link with lld-link
     const linker = @import("linker/linker.zig");
     try linker.link(allocator, .{
         .obj_path = obj_name,
         .output_path = out_path,
-        .entry = "main",
+        .entry = "bplus_start",
         .subsystem = "console",
         .libs = &.{"kernel32.lib"},
         .extra_objs = &.{rt_obj_name},
     });
+
+    // Link succeeded: remove temporary artifacts so the user only sees <input>.exe.
+    // On failure the temp files are left in place for diagnostics.
+    const base_ext = std.mem.lastIndexOfScalar(u8, out_path, '.') orelse out_path.len;
+    const lib_path = try std.fmt.allocPrint(allocator, "{s}.lib", .{out_path[0..base_ext]});
+    defer allocator.free(lib_path);
+    const exp_path = try std.fmt.allocPrint(allocator, "{s}.exp", .{out_path[0..base_ext]});
+    defer allocator.free(exp_path);
+    tmp_dir.deleteFile(obj_name) catch {};
+    tmp_dir.deleteFile(rt_obj_name) catch {};
+    std.fs.cwd().deleteFile(lib_path) catch {};
+    std.fs.cwd().deleteFile(exp_path) catch {};
 
     if (is_run) {
         var child = std.process.Child.init(&[_][]const u8{ out_path }, allocator);
         child.stdin_behavior = .Inherit;
         child.stdout_behavior = .Inherit;
         child.stderr_behavior = .Inherit;
+        // Mark launch so the runtime wrapper does not pause for a key.
+        var env = try std.process.getEnvMap(allocator);
+        defer env.deinit();
+        try env.put("BPC_RUN", "1");
+        child.env_map = &env;
         const term = try child.spawnAndWait();
         std.process.exit(switch (term) {
             .Exited => |code| code,
