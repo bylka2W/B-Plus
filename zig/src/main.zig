@@ -37,7 +37,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    if (args.len < 3) {
+    if (args.len < 3 and !(args.len == 2 and std.mem.eql(u8, args[1], "doctor"))) {
         const stderr = std.io.getStdErr().writer();
         try stderr.writeAll("Usage: bpc build <pipeline.b+> [-o <output_dir>]\n");
         try stderr.writeAll("       bpc dll   <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]\n");
@@ -52,11 +52,20 @@ pub fn main() !void {
         try stderr.writeAll("       bpc bpl   <input.b+>\n");
         try stderr.writeAll("       bpc mir   <input.b+>        B+ source to COFF .obj\n");
         try stderr.writeAll("       bpc link  <input.obj> -o <output.exe>\n");
+        try stderr.writeAll("       bpc check <input.b+>        verify all IR layers without codegen\n");
+        try stderr.writeAll("       bpc doctor                  compiler health check\n");
         std.process.exit(1);
     }
 
     const command = args[1];
-    const input_path = args[2];
+    const input_path: []const u8 = if (args.len > 2) args[2] else "";
+
+    if (std.mem.eql(u8, command, "doctor")) {
+        return doctorRun(allocator);
+    }
+    if (std.mem.eql(u8, command, "check")) {
+        return checkRun(allocator, input_path);
+    }
 
     var output_path: ?[]const u8 = null;
     var export_names: ?[]const u8 = null;
@@ -675,4 +684,133 @@ fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_pat
     const stderr = std.io.getStdErr().writer();
     try stderr.writeAll("DXIL/C++ backends not yet ported to unified pipeline.\n");
     std.process.exit(1);
+}
+
+const StageReporter = struct {
+    stdout: std.fs.File.Writer,
+    failed: bool = false,
+};
+
+fn reportStageCb(ctx: *anyopaque, stage: []const u8) void {
+    const self: *StageReporter = @ptrCast(@alignCast(ctx));
+    if (self.failed) return;
+    self.stdout.print("{s:<12} PASS\n", .{stage}) catch {};
+}
+
+fn checkRun(allocator: std.mem.Allocator, input_path: []const u8) !void {
+    const stdout = std.io.getStdOut().writer();
+
+    var src = std.fs.cwd().readFileAlloc(allocator, input_path, std.math.maxInt(u32)) catch |err| {
+        try stdout.print("bpc check: cannot read {s}: {s}\n", .{ input_path, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer allocator.free(src);
+    if (std.mem.startsWith(u8, src, "\xEF\xBB\xBF")) {
+        const stripped = try allocator.dupe(u8, src[3..]);
+        allocator.free(src);
+        src = stripped;
+    }
+
+    var p = parser.Parser.init(allocator, src, input_path);
+    var program = p.parse() catch |err| {
+        try stdout.print("FAIL: parse error: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer program.deinit();
+
+    try stdout.print("B+ check: {s}\n", .{input_path});
+    try stdout.print("{s:<12} ", .{"Parser"});
+    const sema_result = sema_mod.analyze(allocator, program, src, input_path) catch |err| {
+        try stdout.print("FAIL: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer sema_result.deinit();
+    try stdout.print("PASS\n", .{});
+
+    var type_engine = type_sys.TypeEngine.init(allocator);
+    defer type_engine.deinit();
+
+    var reporter = StageReporter{ .stdout = stdout };
+    const cr = ver_pipeline.CheckReporter{ .ctx = &reporter, .reportFn = reportStageCb };
+    var pipeline_result = ver_pipeline.runFullVerifiedPipelineReport(allocator, &program, &sema_result, &type_engine, &cr) catch |err| {
+        reporter.failed = true;
+        try stdout.print("FAIL: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer {
+        pipeline_result.verified_machine.deinit();
+        pipeline_result.verified_mir.deinit();
+        pipeline_result.verified_bir.deinit();
+    }
+    try stdout.print("OK: all layers verified\n", .{});
+}
+
+fn doctorRun(allocator: std.mem.Allocator) !void {
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("B+ Compiler Health Check\n", .{});
+    try stdout.print("-------------------------\n", .{});
+
+    var all_ok = true;
+
+    if (minrt_obj_bytes.len > 0) {
+        try stdout.print("{s:<12} PASS\n", .{"Runtime"});
+    } else {
+        all_ok = false;
+        try stdout.print("{s:<12} FAIL (empty minrt.obj)\n", .{"Runtime"});
+    }
+
+    const lld_path = "C:\\Program Files\\LLVM\\bin\\lld-link.exe";
+    if (std.fs.accessAbsolute(lld_path, .{})) |_| {
+        try stdout.print("{s:<12} PASS\n", .{"Linker"});
+    } else |_| {
+        all_ok = false;
+        try stdout.print("{s:<12} FAIL (not found: {s})\n", .{ "Linker", lld_path });
+    }
+
+    const self_src = "fn main() { print(\"ok\") }\n";
+    const src = try allocator.dupe(u8, self_src);
+    defer allocator.free(src);
+    const input_path = "<doctor>";
+
+    var p = parser.Parser.init(allocator, src, input_path);
+    var program = p.parse() catch |err| {
+        try stdout.print("FAIL: parse error: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer program.deinit();
+
+    try stdout.print("{s:<12} ", .{"Parser"});
+    const sema_result = sema_mod.analyze(allocator, program, src, input_path) catch |err| {
+        all_ok = false;
+        try stdout.print("FAIL: {s}\n", .{@errorName(err)});
+        try stdout.print("Compiler stability: {s}\n", .{"BROKEN"});
+        std.process.exit(1);
+    };
+    defer sema_result.deinit();
+    try stdout.print("PASS\n", .{});
+
+    var type_engine = type_sys.TypeEngine.init(allocator);
+    defer type_engine.deinit();
+
+    var reporter = StageReporter{ .stdout = stdout };
+    const cr = ver_pipeline.CheckReporter{ .ctx = &reporter, .reportFn = reportStageCb };
+    var pipeline_result = ver_pipeline.runFullVerifiedPipelineReport(allocator, &program, &sema_result, &type_engine, &cr) catch |err| {
+        all_ok = false;
+        reporter.failed = true;
+        try stdout.print("FAIL: {s}\n", .{@errorName(err)});
+        try stdout.print("Compiler stability: {s}\n", .{"BROKEN"});
+        std.process.exit(1);
+    };
+    defer {
+        pipeline_result.verified_machine.deinit();
+        pipeline_result.verified_mir.deinit();
+        pipeline_result.verified_bir.deinit();
+    }
+
+    if (all_ok) {
+        try stdout.print("Compiler stability: OK\n", .{});
+    } else {
+        try stdout.print("Compiler stability: WARNING\n", .{});
+        std.process.exit(1);
+    }
 }

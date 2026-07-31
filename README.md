@@ -36,6 +36,8 @@
 - **Memory/ownership**: исправлен контракт владения `MFunction` — backend мутирует переданные mfuncs, защита от shallow-copy deinit и use-after-free при `emitModule`
 - **Тесты**: `test-thir`, `test-thir-to-bir`, `test-backend`, `test-cpu`, `test-fuzz`; новый `src/compiler/test_exports.zig` — единый экспорт compiler modules, исправлены Zig module boundaries
 - **Backend validation**: MIR verification, x64 IR verification, register/operand/instruction validation
+- **`bpc check`**: прогон программы через все верифицируемые слои (Parser → HIR → THIR → BIR → MIR → x64) без кодогенерации; `PASS`/`FAIL` по слоям
+- **`bpc doctor`**: health-check компилятора — рантайм, линкер, полный верифицируемый pipeline на встроенной программе, итог `Compiler stability: OK`
 
 ---
 
@@ -321,6 +323,24 @@ dxc -T cs_6_6 -E main -Fo fsr2_easu.cso fsr2_easu.hlsl
 ```bash
 bpc run traffic.b+    — компилирует и сразу запускает
 bpc run hello.b+      — компилирует и сразу запускает
+```
+
+#### `bpc check <input.b+>`
+
+Проверяет программу через все верифицируемые слои компилятора (Parser → HIR → THIR → BIR → MIR → x64) без кодогенерации. Выводит `PASS` для каждого слоя.
+
+```bash
+bpc check hello.b+    — проверить программу, не компилируя
+```
+
+Код возврата: `0` — все слои проверены, `1` — ошибка (указывается слой).
+
+#### `bpc doctor`
+
+Health-check компилятора: наличие встроенного рантайма (`minrt.obj`), наличие линкера (`lld-link`), прогон встроенной программы через полный верифицируемый pipeline.
+
+```bash
+bpc doctor            — проверка здоровья компилятора
 ```
 
 ### Коды возврата

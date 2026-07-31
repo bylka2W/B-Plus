@@ -35,6 +35,19 @@ pub const FullVerifiedResult = struct {
     verified_machine: verifier.VerifiedMachineIR,
 };
 
+pub const CheckReporter = struct {
+    ctx: *anyopaque,
+    reportFn: *const fn (ctx: *anyopaque, stage: []const u8) void,
+
+    pub fn report(self: *const CheckReporter, stage: []const u8) void {
+        self.reportFn(self.ctx, stage);
+    }
+};
+
+fn reportStage(reporter: ?*const CheckReporter, stage: []const u8) void {
+    if (reporter) |r| r.report(stage);
+}
+
 pub fn lowerVerifiedBIRtoMIR(allocator: Allocator, verified: *const verifier.VerifiedBIR) !verifier.VerifiedMIR {
     const birm = verified.getModule();
     const mfuncs = try bir_cpu.lowerModuleToMir(birm.allocator, birm);
@@ -70,6 +83,10 @@ pub fn lowerVerifiedMIRtoMachine(allocator: Allocator, verified: *const verifier
 }
 
 pub fn runVerifiedPipeline(allocator: Allocator, program: *const ast.ProgramNode, sema_result: *const sema_mod.SemaResult, type_engine: *TypeEngine) !VerifiedPipelineResult {
+    return runVerifiedPipelineReport(allocator, program, sema_result, type_engine, null);
+}
+
+pub fn runVerifiedPipelineReport(allocator: Allocator, program: *const ast.ProgramNode, sema_result: *const sema_mod.SemaResult, type_engine: *TypeEngine, reporter: ?*const CheckReporter) !VerifiedPipelineResult {
     // 1. Build HIR from AST
     var arena = hir_arena_mod.HirArena.init(allocator);
     defer arena.deinit();
@@ -84,6 +101,7 @@ pub fn runVerifiedPipeline(allocator: Allocator, program: *const ast.ProgramNode
     // 2. Verify HIR → VerifiedHIR
     const verified_hir = try verifier.hir_verifier.verifyHIR(&arena);
     _ = verified_hir;
+    reportStage(reporter, "HIR");
 
     // 2.5. Inject Plan entry functions into HIR before THIR lowering
     if (plan_to_bir.hasStateItems(&arena)) {
@@ -115,6 +133,7 @@ pub fn runVerifiedPipeline(allocator: Allocator, program: *const ast.ProgramNode
     var thir_verifier = verifier.thir_verifier.ThirVerifier.init(allocator);
     defer thir_verifier.deinit();
     var verified_thir = try thir_verifier.verify(&thir_module);
+    reportStage(reporter, "THIR");
 
     // 5. Lower THIR → BIR (reads THIR bodies — ctx arena must be alive)
     const thir_mod = verified_thir.getModule();
@@ -135,6 +154,7 @@ pub fn runVerifiedPipeline(allocator: Allocator, program: *const ast.ProgramNode
     // 6. Verify BIR → VerifiedBIR
     var bir_verifier = verifier.bir_verifier.BirVerifier.init(allocator);
     const verified_bir = try bir_verifier.verify(bir_module);
+    reportStage(reporter, "BIR");
 
     return VerifiedPipelineResult{
         .bir_module = bir_module,
@@ -143,13 +163,19 @@ pub fn runVerifiedPipeline(allocator: Allocator, program: *const ast.ProgramNode
 }
 
 pub fn runFullVerifiedPipeline(allocator: Allocator, program: *const ast.ProgramNode, sema_result: *const sema_mod.SemaResult, type_engine: *TypeEngine) !FullVerifiedResult {
-    const pipeline_result = try runVerifiedPipeline(allocator, program, sema_result, type_engine);
+    return runFullVerifiedPipelineReport(allocator, program, sema_result, type_engine, null);
+}
+
+pub fn runFullVerifiedPipelineReport(allocator: Allocator, program: *const ast.ProgramNode, sema_result: *const sema_mod.SemaResult, type_engine: *TypeEngine, reporter: ?*const CheckReporter) !FullVerifiedResult {
+    const pipeline_result = try runVerifiedPipelineReport(allocator, program, sema_result, type_engine, reporter);
 
     var verified_mir = try lowerVerifiedBIRtoMIR(allocator, &pipeline_result.verified_bir);
     errdefer verified_mir.deinit();
+    reportStage(reporter, "MIR");
 
     var verified_machine = try lowerVerifiedMIRtoMachine(allocator, &verified_mir);
     errdefer verified_machine.deinit();
+    reportStage(reporter, "x64");
 
     return FullVerifiedResult{
         .verified_bir = pipeline_result.verified_bir,
