@@ -17,8 +17,8 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     defer emit.call_fixups.deinit();
     defer emit.func_starts.deinit();
 
-    // Build symbol table: one symbol per function
-    // Build relocations: one per call fixup
+    // Build symbol table: one symbol per function*
+    // Build relocations: one per call fixup* 
 
     var relocs = std.ArrayList(Reloc).init(allocator);
     defer relocs.deinit();

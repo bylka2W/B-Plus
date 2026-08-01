@@ -18,7 +18,7 @@ pub fn verifyFunction(func: *const machine.MFunction) VerifyError!void {
     var defined = std.AutoHashMap(u32, void).init(func.allocator);
     defer defined.deinit();
 
-    // Function parameters are defined at entry
+    // Function parameters are defined at entry *
     for (func.params) |p| {
         if (p == .vreg) {
             defined.put(p.vreg.id, {}) catch {};

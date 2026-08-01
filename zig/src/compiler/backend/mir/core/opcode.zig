@@ -89,6 +89,7 @@ pub const MInst = union(enum) {
     cmp_flags: CmpFlagsInst,
     jmp: JmpInst,
     jcc: JccInst,
+    trap,
     call: CallInst,
     alloca: AllocaInst,
     load: LoadInst,

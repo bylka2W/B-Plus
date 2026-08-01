@@ -28,7 +28,7 @@ pub fn optimize(mfunc: *mir.MFunction) !void {
                 .store => try handleStore(&map, block, &i),
                 .ret => try handleRet(&map, block, &i),
                 .call => try handleCall(&map, block, &i),
-                .jmp, .jcc, .alloca, .phi => i += 1,
+                .jmp, .jcc, .alloca, .phi, .trap => i += 1,
                 .lea => {
                     if (dstOf(block.instrs.items[i])) |dv| redefineVReg(&map, dv);
                     i += 1;

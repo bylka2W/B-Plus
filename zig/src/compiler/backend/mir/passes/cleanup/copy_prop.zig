@@ -87,7 +87,7 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                     }
                     i += 1;
                 },
-                .jmp, .jcc, .alloca, .phi => i += 1,
+                .jmp, .jcc, .alloca, .phi, .trap => i += 1,
                 .lea => {
                     const l = &block.instrs.items[i].lea;
                     l.base = resolveVregOnly(map, l.base);

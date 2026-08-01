@@ -45,6 +45,7 @@ fn dumpInst(inst: mir.MInst) void {
         .cmp => |c| { std.debug.print("cmp {s} ", .{@tagName(c.cc)}); dumpOp(c.a); std.debug.print(", ", .{}); dumpOp(c.b); },
         .jmp => |j| std.debug.print("jmp b{d}", .{j.target}),
         .jcc => |j| std.debug.print("jcc {s} b{d}", .{ @tagName(j.cc), j.target }),
+        .trap => std.debug.print("trap", .{}),
         .lea => |l| {
             std.debug.print("lea ", .{}); dumpOp(l.dst);
             std.debug.print(", [", .{}); dumpOp(l.base);

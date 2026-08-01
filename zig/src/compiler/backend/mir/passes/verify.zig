@@ -168,7 +168,7 @@ fn checkUsedVRegs(inst: mir.MInst, defs: *std.AutoHashMap(u32, void)) !void {
 
 fn isTerminator(inst: mir.MInst) bool {
     return switch (inst) {
-        .jmp, .jcc, .ret => true,
+        .jmp, .jcc, .ret, .trap => true,
         else => false,
     };
 }

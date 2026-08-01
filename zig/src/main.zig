@@ -99,12 +99,18 @@ pub fn main() !void {
         defer allocator.free(test_text);
 
         const dir = if (std.mem.lastIndexOfScalar(u8, input_path, '\\')) |idx| input_path[0..idx] else if (std.mem.lastIndexOfScalar(u8, input_path, '/')) |idx| input_path[0..idx] else ".";
-        const desc = try test_runner.parseTestDesc(allocator, test_text);
+        const stdout = std.io.getStdOut().writer();
+        const desc = test_runner.parseTestDesc(allocator, test_text) catch |err| {
+            if (err == error.ExpectedTestKeyword) {
+                try stdout.print("error: no 'test \"name\":' section found in {s}\n", .{input_path});
+                std.process.exit(1);
+            }
+            return err;
+        };
         // Resolve source path relative to .bpt directory
         const source_full = try std.fs.path.join(allocator, &.{ dir, desc.source });
         defer allocator.free(source_full);
 
-        const stdout = std.io.getStdOut().writer();
         try stdout.print("TEST: {s}\n", .{desc.name});
 
         const result = try test_runner.runTest(allocator, source_full, desc, stdout);

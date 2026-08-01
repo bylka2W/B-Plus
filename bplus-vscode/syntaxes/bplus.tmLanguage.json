@@ -1,0 +1,170 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "B+",
+  "scopeName": "source.bplus",
+  "fileTypes": ["b+", "bplus", "plan", "metal"],
+  "patterns": [
+    { "include": "#domains" },
+    { "include": "#program" }
+  ],
+  "repository": {
+    "program": {
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#states" },
+        { "include": "#declarations" },
+        { "include": "#builtins" },
+        { "include": "#keywords" },
+        { "include": "#types" },
+        { "include": "#ownership" },
+        { "include": "#ir" },
+        { "include": "#numbers" },
+        { "include": "#operators" },
+        { "include": "#identifiers" }
+      ]
+    },
+    "domains": {
+      "patterns": [
+        {
+          "begin": "\\b(plan|metal)\\s*\\{",
+          "end": "\\}",
+          "name": "meta.domain.bplus",
+          "patterns": [
+            { "include": "#program" },
+            {
+              "match": "\\b(plan|metal)\\b",
+              "name": "entity.name.type.domain.bplus"
+            }
+          ]
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        { "match": "\\/\\/\\/.*$", "name": "comment.line.documentation.bplus" },
+        { "match": "\\/\\/.*$", "name": "comment.line.double-slash.bplus" },
+        { "match": "--.*$", "name": "comment.line.double-dash.bplus" },
+        { "begin": "\\/\\*", "end": "\\*\\/", "name": "comment.block.bplus" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        { "begin": "\"", "end": "\"", "name": "string.quoted.double.bplus", "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.bplus" }] },
+        { "begin": "'", "end": "'", "name": "string.quoted.single.bplus", "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.bplus" }] }
+      ]
+    },
+    "states": {
+      "patterns": [
+        {
+          "match": "\\b(state|машина|состояние|автомат)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.state.bplus" },
+            "2": { "name": "entity.name.type.state.bplus" }
+          }
+        },
+        { "match": "\\b(entry|вход)\\b", "name": "keyword.control.state.bplus" },
+        { "match": "\\b(on|на)\\b", "name": "keyword.control.transition.bplus" },
+        { "match": "\\b(always|всегда)\\b", "name": "keyword.control.transition.bplus" },
+        { "match": "\\b(parallel|параллельно)\\b", "name": "keyword.control.transition.bplus" },
+        { "match": "\\b(fire|пуск)\\b", "name": "keyword.control.transition.bplus" },
+        { "match": "\\b(body|тело|step|шаг|publish|опубликовать|enter|войти|exit|выйти|event|buffer)\\b", "name": "keyword.control.runtime.bplus" },
+        { "match": "->", "name": "keyword.operator.transition.bplus" }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(fn|фн)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(",
+          "captures": {
+            "1": { "name": "keyword.declaration.function.bplus" },
+            "2": { "name": "entity.name.function.bplus" }
+          }
+        },
+        {
+          "match": "\\b(extern|внешний)\\s+(fn|фн)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(",
+          "captures": {
+            "1": { "name": "keyword.declaration.extern.bplus" },
+            "2": { "name": "keyword.declaration.function.bplus" },
+            "3": { "name": "entity.name.function.bplus" }
+          }
+        },
+        {
+          "match": "\\b(struct|структура)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.struct.bplus" },
+            "2": { "name": "entity.name.type.struct.bplus" }
+          }
+        },
+        {
+          "match": "\\b(enum|перечисление)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.enum.bplus" },
+            "2": { "name": "entity.name.type.enum.bplus" }
+          }
+        },
+        { "match": "\\b(machine|автомат|kernel|ядро|pipeline|конвейер|module|resource)\\b", "name": "keyword.declaration.machine.bplus" },
+        { "match": "\\b(import|импорт|use|использовать|export|экспорт|from)\\b", "name": "keyword.declaration.import.bplus" },
+        { "match": "\\b(var|пер|let|mut|const|static|pub|priv)\\b", "name": "keyword.declaration.variable.bplus" }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "match": "\\b(print|печать|free|освободить|malloc|ptr_load|ptr_store|reinterpret_cast|addr|sizeof|alignof|typeof|panic|unreachable|GetStdHandle|WriteConsoleA|ReadConsoleA|ExitProcess|VirtualAlloc|LoadLibraryA|GetProcAddress|GetLastError)\\b",
+          "name": "support.function.builtin.bplus"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "match": "\\b(return|вернуть|if|если|else|иначе|while|for|in|loop|break|continue|match|defer|errdefer|orelse|catch|try|and|or|not|ref|deref|as|comptime|inline|noinline|async|await|yield|atomic|volatile|self|this|super|type)\\b", "name": "keyword.control.bplus" },
+        { "match": "\\b(true|false|истина|ложь|null)\\b", "name": "constant.language.bplus" }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "match": "\\b(int|uint|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|float|double|char|bool|void|string|any|ptr|state|event|machine|kernel|buffer|handle|slice|array|module|resource)\\b",
+          "name": "storage.type.bplus"
+        },
+        { "match": "\\bptr\\s*<", "name": "storage.type.pointer.bplus" }
+      ]
+    },
+    "ownership": {
+      "patterns": [
+        {
+          "match": "\\b(owned|владение|borrowed|заимствовано|borrow|borrow_mut|move|copy|clone|drop|lifetime|owned)\\b",
+          "name": "storage.modifier.ownership.bplus"
+        }
+      ]
+    },
+    "ir": {
+      "patterns": [
+        {
+          "match": "\\b(HIR|THIR|BIR|MIR|Value|Block|Phi|Instruction|TypeId|ValueId|MFunction|MBlock|Opcode|Operand|Module|Function)\\b",
+          "name": "support.type.ir.bplus"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "match": "\\b0[xX][0-9a-fA-F]+\\b", "name": "constant.numeric.hex.bplus" },
+        { "match": "\\b\\d+\\.\\d+\\b", "name": "constant.numeric.float.bplus" },
+        { "match": "\\b\\d+\\b", "name": "constant.numeric.integer.bplus" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "match": "==|!=|<=|>=|<<=|>>=|\\+=|-=|\\*=|/=|%=|\\^=|&=|\\|=|&&|\\|\\||\\+\\+|--|<<|>>|->|=>|\\.\\.=|::", "name": "keyword.operator.assignment.bplus" },
+        { "match": "\\+|-|\\*|/|%|\\^|&|\\||~|!|=|<|>", "name": "keyword.operator.bplus" }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        { "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\s*(?=\\s*:)", "name": "variable.other.member.bplus" },
+        { "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b", "name": "variable.other.bplus" }
+      ]
+    }
+  }
+}

@@ -97,6 +97,7 @@ pub const OpCode = enum(u16) {
     RET,
     NOP,
     INT3,
+    UD2,
     // SSE packed single (no prefix)
     SSE_MOVUPS_LD, // 0F 10: xmm1 <- xmm2/m128
     SSE_MOVUPS_ST, // 0F 11: xmm2/m128 <- xmm1
@@ -714,6 +715,10 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
         .RET => try code.append(0xC3),
         .NOP => try code.append(0x90),
         .INT3 => try code.append(0xCC),
+        .UD2 => {
+            try code.append(0x0F);
+            try code.append(0x0B);
+        },
         // SSE packed single (no simd_prefix)
         .SSE_MOVUPS_LD => try emitSseOp(code, 0, 0x10, operands[0].reg, operands[1]),
         .SSE_MOVUPS_ST => try emitSseOp(code, 0, 0x11, operands[1].reg, operands[0]),

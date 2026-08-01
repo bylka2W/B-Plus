@@ -792,7 +792,11 @@ fn findBraceBlock(text: []const u8) ?BraceBlock {
         if (text[i] == '}') depth -= 1;
         i += 1;
     }
-    return .{ .body_start = body_start, .body_end = i - 1 };
+    // Unterminated block (`{` at end of line, no `}` on this line): treat the
+    // rest of the line as the body instead of returning an inverted slice.
+    const body_end = if (depth > 0) text.len else i - 1;
+    if (body_start > body_end or body_end > text.len) return null;
+    return .{ .body_start = body_start, .body_end = body_end };
 }
 
 const BinParts = struct { left: []const u8, right: []const u8 };

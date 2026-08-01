@@ -3,7 +3,7 @@ const mir = @import("../mir/mir.zig");
 const classes = @import("classes.zig");
 const RegClass = classes.RegClass;
 
-// ===== Live Interval =====
+// Live Interval 
 
 pub const LiveInterval = struct {
     vreg: u32,
@@ -15,7 +15,7 @@ pub const LiveInterval = struct {
 
 pub const IntervalList = std.ArrayList(LiveInterval);
 
-// ===== CFG / Dominators =====
+// CFG / Dominators 
 
 pub const CfgInfo = struct {
     predecessors: std.ArrayList(usize),
@@ -214,7 +214,7 @@ pub fn isDominatedBy(node: usize, dominator: usize, cfg_infos: []const CfgInfo) 
     return false;
 }
 
-// ===== Utilities =====
+// Utilities
 
 pub fn vregOf(op: mir.MOperand) u32 {
     return switch (op) {
@@ -253,7 +253,7 @@ pub fn findNextUse(
     return null;
 }
 
-// ===== Live Interval Computation =====
+// Live Interval Computation
 
 const Remat = @import("allocator.zig").Remat;
 
@@ -355,7 +355,7 @@ pub fn computeLiveIntervals(
                     reads[read_count] = vregOf(cf.a); read_count += 1;
                     reads[read_count] = vregOf(cf.b); read_count += 1;
                 },
-                .jmp, .jcc => {},
+                .jmp, .jcc, .trap => {},
                 .alloca => |a| {
                     writes[write_count] = vregOf(a.dst); write_count += 1;
                 },
@@ -491,7 +491,7 @@ pub fn computeLiveIntervals(
         }
     }
 
-    // ── Extend intervals across back-edges ──
+    // Extend intervals across back-edges
     for (mfunc.blocks.items, 0..) |*blk, bi| {
         if (blk.instrs.items.len > 0) {
             const last = blk.instrs.items[blk.instrs.items.len - 1];

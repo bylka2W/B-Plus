@@ -7,14 +7,14 @@ const LiveInterval = liveness.LiveInterval;
 const IntervalList = liveness.IntervalList;
 const CfgInfo = liveness.CfgInfo;
 
-// ===== Rematerialization =====
+// Rematerialization
 
 pub const Remat = union(enum) {
     imm64: i64,
     zero: void,
 };
 
-// ===== Constraints =====
+// Constraints 
 
 pub const ConstrainedReg = struct {
     vreg: u32,
@@ -54,7 +54,7 @@ pub fn applyConstraints(
     }
 }
 
-// ===== Linear Scan with Splitting =====
+// Linear Scan with Splitting 
 
 pub fn linearScanSplitting(
     initial: []const LiveInterval,

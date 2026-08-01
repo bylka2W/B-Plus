@@ -27,6 +27,10 @@ pub fn selectJcc(ctx: *Ctx, j: mir.JccInst, allocator: std.mem.Allocator) !void 
     try append1(ctx, jcc_op, Operand.imm(0));
 }
 
+pub fn selectTrap(ctx: *Ctx) !void {
+    try append1(ctx, .UD2, .{ .imm = 0 });
+}
+
 pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
     const int_arg_regs = [_]i16{ 1, 2, 8, 9 }; // RCX, RDX, R8, R9
     const float_arg_regs = [_]i16{ 16, 17, 18, 19 }; // XMM0-XMM3

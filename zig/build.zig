@@ -91,4 +91,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     b.installArtifact(bplus_exe);
+
+    const lsp_exe = b.addExecutable(.{
+        .name = "bplus-lsp",
+        .root_source_file = b.path("src/bplus_lsp.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(lsp_exe);
 }

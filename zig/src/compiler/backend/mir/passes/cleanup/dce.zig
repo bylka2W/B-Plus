@@ -32,14 +32,14 @@ fn dstVreg(inst: mir.MInst) ?u32 {
         .event_dispatch => |m| if (m.dst == .vreg) m.dst.vreg else null,
         .transition_check => |m| if (m.result == .vreg) m.result.vreg else null,
         .guard_eval => |m| if (m.result == .vreg) m.result.vreg else null,
-        .state_init, .state_enter, .state_exit, .cmp_flags, .cmp, .test_flags, .jmp, .jcc, .store, .ret => null,
+        .state_init, .state_enter, .state_exit, .cmp_flags, .cmp, .test_flags, .jmp, .jcc, .store, .ret, .trap => null,
         .string_const => |s| if (s.dst == .vreg) s.dst.vreg else null,
     };
 }
 
 fn isSideEffecting(inst: mir.MInst) bool {
     return switch (inst) {
-        .call, .store, .ret, .jmp, .jcc, .cmp, .cmp_flags, .test_flags => true,
+        .call, .store, .ret, .jmp, .jcc, .cmp, .cmp_flags, .test_flags, .trap => true,
         .add, .sub, .imul, .idiv, .@"and", .@"or", .xor, .shl, .shr, .sar, .not_op, .neg_op, .alloca, .load, .lea, .phi => false,
         .fadd, .fsub, .fmul, .fdiv, .fneg_op, .fsqrt_op, .fcmp => false,
         .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => false,
@@ -123,7 +123,7 @@ fn srcVregs(inst: mir.MInst, buf: *[8]u32) usize {
                 if (inc.src == .vreg) { buf[n] = inc.src.vreg; n += 1; }
             }
         },
-        .jmp, .jcc, .alloca => {},
+        .jmp, .jcc, .alloca, .trap => {},
         .lea => |m| {
             if (m.base == .vreg) { buf[n] = m.base.vreg; n += 1; }
             if (m.index == .vreg) { buf[n] = m.index.vreg; n += 1; }

@@ -292,6 +292,11 @@ fn replaceAllUses(func: *bir.Function, old_val: ValueId, new_val: ValueId) void 
                     if (arg.* == old_val) arg.* = new_val;
                 }
             },
+            .named_call => |*nc| {
+                for (nc.args) |*arg| {
+                    if (arg.* == old_val) arg.* = new_val;
+                }
+            },
             .gep_info => |*gi| {
                 if (gi.ptr == old_val) gi.ptr = new_val;
                 for (gi.indices) |*idx| {

@@ -204,9 +204,9 @@ pub const FrameManager = struct {
     }
 
     fn emitChkstk(code: *std.ArrayList(u8), frame_size: u32) !void {
-        // Inline stack probe: walk downward through each 4096-byte page,
+        // Inline stack probe: walk downward through each 4096-byte page,* <<<<<
         // performing a store to trigger guard-page expansion.
-        // Uses r10 as scratch (caller-saved, not used for integer arg passing).
+        // Uses r10 as scratch (caller-saved, not used for integer arg passing). <<<<<<<
         const probe_pages = (frame_size + 0xFFF) / 0x1000;
         var remaining = frame_size;
         var i: u32 = 0;

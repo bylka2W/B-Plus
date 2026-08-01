@@ -1,0 +1,6 @@
+fn main() {
+    var n: i64 = 10
+    if (n > 5) {
+        print(1)
+    }
+}

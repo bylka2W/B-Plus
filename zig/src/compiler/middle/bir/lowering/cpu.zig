@@ -464,6 +464,10 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     try mblock.instrs.append(.{ .fcmp = .{ .cc = .ge, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
                 },
 
+                .unreachable_op => {
+                    try mblock.instrs.append(.trap);
+                },
+
                 else => {
                     if (@import("builtin").mode == .Debug) {
                         std.debug.print("Unsupported BIR operation in CPU backend: {s}\n", .{@tagName(inst.op)});

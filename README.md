@@ -1,11 +1,11 @@
-# B+ v4.6.3-beta — Compiled `.plan` / `.metal` Language (Frontend → HIR → BIR → MIR → Targets)
+# B+ v4.6.4-beta — Compiled `.plan` / `.metal` Language (Frontend → HIR → BIR → MIR → Targets)
 
 > [English version ↓](#b-v461-beta--compiled-plan--metal-language-frontend--hir--bir--mir--targets)
 
 **B+** компилирует `.plan` / `.metal` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор и оптимизатор написаны с нуля на Zig.
 
-### Что нового в v4.6.3-beta
+### Что нового в v4.6.4-beta
 
 - Новая архитектура: Frontend → HIR → BIR → MIR → Targets
 - Разделение слоёв: frontend / middle(BIR) / backend(MIR) / targets
@@ -973,12 +973,12 @@ SOFTWARE.
 
 ---
 
-# B+ v4.6.3-beta — Compiled `.b+` Language (Frontend → HIR → BIR → MIR → Targets)
+# B+ v4.6.4-beta — Compiled `.b+` Language (Frontend → HIR → BIR → MIR → Targets)
 
 **B+** compiles `.b+` files directly to x64 machine code and packages them into Windows PE executables (.exe/.dll).
 No assemblers, linkers, or LLVM — the entire code generator and optimizer are written from scratch in Zig.
 
-### What's new in v4.6.3-beta
+### What's new in v4.6.4-beta
 
 - **Frontend → HIR → BIR → MIR → Targets architecture** — full compiler migration to a
   multi-level architecture inspired by LLVM/rustc with strictly one-way dependency flow.

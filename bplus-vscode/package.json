@@ -1,0 +1,103 @@
+{
+  "name": "bplus",
+  "displayName": "B+",
+  "description": "B+ language support: syntax highlighting, language configuration, compiler integration (build/run/test/check) and LSP diagnostics",
+  "version": "0.2.0",
+  "publisher": "bplus",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  },
+  "scripts": {
+    "compile": "node node_modules/typescript/bin/tsc -p .",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "activationEvents": [
+    "onLanguage:bplus",
+    "onCommand:bplus.build",
+    "onCommand:bplus.run",
+    "onCommand:bplus.test",
+    "onCommand:bplus.check"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "bplus",
+        "aliases": ["B+", "bplus"],
+        "extensions": [".b+", ".bplus", ".plan", ".metal"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "bplus",
+        "scopeName": "source.bplus",
+        "path": "./syntaxes/bplus.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "bplus.build",
+        "title": "B+: Build"
+      },
+      {
+        "command": "bplus.run",
+        "title": "B+: Run"
+      },
+      {
+        "command": "bplus.test",
+        "title": "B+: Run tests"
+      },
+      {
+        "command": "bplus.check",
+        "title": "B+: Check (verify all layers)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "bplus.run",
+          "when": "resourceLangId == bplus"
+        },
+        {
+          "command": "bplus.check",
+          "when": "resourceLangId == bplus"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "B+",
+      "properties": {
+        "bplus.bpcPath": {
+          "type": "string",
+          "default": "C:\\B-Plus\\zig\\zig-out\\bin\\bpc.exe",
+          "description": "Path to the bpc compiler executable"
+        },
+        "bplus.lspPath": {
+          "type": "string",
+          "default": "C:\\B-Plus\\zig\\zig-out\\bin\\bplus-lsp.exe",
+          "description": "Path to the B+ language server executable"
+        },
+        "bplus.diagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable live diagnostics (LSP) while editing"
+        }
+      }
+    }
+  }
+}
