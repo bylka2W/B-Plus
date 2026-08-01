@@ -81,6 +81,7 @@ pub const MInst = union(enum) {
     setcc: SetCCInst,
     jmp: JmpInst,
     jcc: JccInst,
+    trap,
     call: CallInst,
     alloca: AllocaInst,
     load: LoadInst,

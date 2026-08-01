@@ -71,6 +71,7 @@ fn lowerInst(mir_func: *const mir.MFunction, mir_inst: mir.MInst) !machine.MInst
         .setcc => |m| .{ .setcc = .{ .dst = lowerOp(mir_func, m.dst), .cc = convertCC(m.cc) } },
         .jmp => |m| .{ .jmp = .{ .target = @intCast(m.target) } },
         .jcc => |m| .{ .jcc = .{ .cc = convertCC(m.cc), .target = @intCast(m.target) } },
+        .trap => .trap,
         .call => |m| blk: {
             var args: [14]machine.MOperand = undefined;
             for (&args) |*a| a.* = .{ .imm = 0 };

@@ -16,6 +16,7 @@ pub fn verifyInst(
     defined_vregs: *const std.AutoHashMap(u32, void),
 ) VerifyError!void {
     switch (inst) {
+        .trap => {},
         .add => |bin| {
             try verifyOperand(func, bin.dst, defined_vregs);
             try verifyOperand(func, bin.src, defined_vregs);

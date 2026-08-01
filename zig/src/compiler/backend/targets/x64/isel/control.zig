@@ -28,7 +28,7 @@ pub fn selectJcc(ctx: *Ctx, j: mir.JccInst, allocator: std.mem.Allocator) !void 
 }
 
 pub fn selectTrap(ctx: *Ctx) !void {
-    try append1(ctx, .UD2, .{ .imm = 0 });
+    try append1(ctx, .UD2, Operand.imm(0));
 }
 
 pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {

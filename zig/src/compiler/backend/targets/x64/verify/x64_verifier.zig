@@ -189,7 +189,7 @@ pub fn verifyInst(inst: ir.Instruction) !void {
         .SHR_R64_CL, .SHR_R32_CL,
         => try verifyR(inst),
 
-        .RET, .NOP, .INT3, .PUSHFQ, .POPFQ,
+        .RET, .NOP, .INT3, .UD2, .PUSHFQ, .POPFQ,
         => try verifyNone(inst),
 
         .JMP_REL32, .CALL_REL32,
