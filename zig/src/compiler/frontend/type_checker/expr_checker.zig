@@ -173,7 +173,13 @@ fn checkCall(self: *TypeChecker, c: HirExpr.HirExprKind.CallExpr, span: anytype)
             }
             for (c.args, 0..) |arg, i| {
                 const arg_ty = try self.checkExpr(arg);
-                _ = self.engine.unify(data.fn_ptr.params[i], arg_ty, 0) catch {};
+                // Strict type checking - no coercion allowed
+                if (!data.fn_ptr.params[i].eql(arg_ty)) {
+                    self.reportError(.{ .type_mismatch = .{
+                        .expected = self.builtinTypeName(data.fn_ptr.params[i]),
+                        .found = self.builtinTypeName(arg_ty),
+                    } }, span);
+                }
             }
             return data.fn_ptr.ret;
         }

@@ -731,7 +731,7 @@ pub const ProgramNodeToHir = struct {
     }
 
     fn makePath(self: *ProgramNodeToHir, name: []const u8) ConvertError!ExprId {
-        const d = try self.getOrCreateDef(name);
+        const d = self.name_to_def.get(name) orelse DefId.INVALID;
         return self.hir.addExpr(.{
             .span = .{ .file_id = 0, .start = 0, .end = 0 },
             .ty = TypeId.INVALID,

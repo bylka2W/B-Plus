@@ -591,7 +591,7 @@ const TypeChecker = type_checker_mod.TypeChecker;
 const type_errors = @import("type_checker/errors.zig");
 const ErrorList = type_errors.ErrorList;
 
-fn typeCheckSource(source: []const u8, allocator: std.mem.Allocator) !struct {
+pub fn typeCheckSource(source: []const u8, allocator: std.mem.Allocator) !struct {
     hir_arena: HirArena,
     engine: TypeEngine,
     errors: ErrorList,

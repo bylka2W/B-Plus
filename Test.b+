@@ -1,12 +1,8 @@
-// c:\B-Plus\Test.b+
-extern fn print_i64(x: i64);
+fn main():int {
 
-fn main() {
-    var n: i64 = 10;
-    if n > 5 {
-        print_i64(n);
-    }
+    var x:int = 10
+
+    x = "hello"
+
+    return x
 }
-
-
-

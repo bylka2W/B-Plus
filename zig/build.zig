@@ -27,6 +27,23 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run frontend + HIR lower tests");
     test_step.dependOn(&test_run.step);
 
+    const semantic_mod = b.createModule(.{
+        .root_source_file = b.path("tests/semantic/semantic_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    semantic_mod.addImport("frontend_test", b.createModule(.{
+        .root_source_file = b.path("src/compiler/frontend/frontend_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    const semtest_exe = b.addTest(.{
+        .root_module = semantic_mod,
+    });
+    const semtest_run = b.addRunArtifact(semtest_exe);
+    // Make the semantic tests part of the main `test` step
+    test_step.dependOn(&semtest_run.step);
+
     const test_exports_mod = b.createModule(.{
         .root_source_file = b.path("src/compiler/test_exports.zig"),
     });

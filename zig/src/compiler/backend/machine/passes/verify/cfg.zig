@@ -23,24 +23,29 @@ pub fn verifyCFG(func: *const machine.MFunction) VerifyError!void {
 
         const last = blk.instrs.items[blk.instrs.items.len - 1];
         const has_term = switch (last) {
-            .jmp, .jcc, .ret => true,
+            .jmp, .jcc, .ret, .trap => true,
             else => false,
         };
         if (!has_term) return error.BlockNotTerminated;
 
-        switch (last) {
-            .jmp => |j| {
-                if (j.target >= func.blocks.items.len) return error.InvalidBlockTarget;
-                try reachable.put(j.target, {});
-            },
-            .jcc => |j| {
-                if (j.target >= func.blocks.items.len) return error.InvalidBlockTarget;
-                try reachable.put(j.target, {});
-                if (i + 1 < func.blocks.items.len) {
-                    try reachable.put(@intCast(i + 1), {});
-                }
-            },
-            else => {},
+        // Collect successors from every branch in the block: MIR lowers
+        // cond_br to `jcc` followed by `jmp`, so looking only at the last
+        // instruction misses the jcc target.
+        for (blk.instrs.items) |inst| {
+            switch (inst) {
+                .jmp => |j| {
+                    if (j.target >= func.blocks.items.len) return error.InvalidBlockTarget;
+                    try reachable.put(j.target, {});
+                },
+                .jcc => |j| {
+                    if (j.target >= func.blocks.items.len) return error.InvalidBlockTarget;
+                    try reachable.put(j.target, {});
+                    if (i + 1 < func.blocks.items.len) {
+                        try reachable.put(@intCast(i + 1), {});
+                    }
+                },
+                else => {},
+            }
         }
     }
 
