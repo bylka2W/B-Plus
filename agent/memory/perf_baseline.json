@@ -1,0 +1,584 @@
+{
+ "schema": "performance_baseline",
+ "version": 1,
+ "generated_at": "2026-08-25T12:55:05",
+ "source_root": "C:\\B-Plus\\zig",
+ "iterations_warm": 100,
+ "cold": {
+  "wall": {
+   "python_boot": {
+    "p50": 46.527,
+    "p95": 46.527,
+    "p99": 46.527,
+    "mean": 48.178
+   },
+   "imports": {
+    "p50": 121.975,
+    "p95": 121.975,
+    "p99": 121.975,
+    "mean": 122.957
+   },
+   "store": {
+    "p50": 360.269,
+    "p95": 360.269,
+    "p99": 360.269,
+    "mean": 357.084
+   },
+   "graph": {
+    "p50": 230.231,
+    "p95": 230.231,
+    "p99": 230.231,
+    "mean": 228.385
+   },
+   "search": {
+    "p50": 251.402,
+    "p95": 251.402,
+    "p99": 251.402,
+    "mean": 248.823
+   },
+   "query": {
+    "p50": 298.892,
+    "p95": 298.892,
+    "p99": 298.892,
+    "mean": 297.753
+   },
+   "knowledge": {
+    "p50": 819.443,
+    "p95": 819.443,
+    "p99": 819.443,
+    "mean": 819.185
+   },
+   "verify": {
+    "p50": 797.35,
+    "p95": 797.35,
+    "p99": 797.35,
+    "mean": 802.379
+   },
+   "full_suite_style": {
+    "p50": 1431.929,
+    "p95": 1431.929,
+    "p99": 1431.929,
+    "mean": 1447.997
+   }
+  },
+  "net_of_interpreter": {
+   "python_boot": {
+    "p50": 0.0,
+    "p95": 0.0,
+    "p99": 0.0,
+    "mean": 1.651
+   },
+   "imports": {
+    "p50": 75.448,
+    "p95": 75.448,
+    "p99": 75.448,
+    "mean": 76.43
+   },
+   "store": {
+    "p50": 313.742,
+    "p95": 313.742,
+    "p99": 313.742,
+    "mean": 310.557
+   },
+   "graph": {
+    "p50": 183.704,
+    "p95": 183.704,
+    "p99": 183.704,
+    "mean": 181.858
+   },
+   "search": {
+    "p50": 204.875,
+    "p95": 204.875,
+    "p99": 204.875,
+    "mean": 202.296
+   },
+   "query": {
+    "p50": 252.365,
+    "p95": 252.365,
+    "p99": 252.365,
+    "mean": 251.226
+   },
+   "knowledge": {
+    "p50": 772.916,
+    "p95": 772.916,
+    "p99": 772.916,
+    "mean": 772.658
+   },
+   "verify": {
+    "p50": 750.823,
+    "p95": 750.823,
+    "p99": 750.823,
+    "mean": 755.852
+   },
+   "full_suite_style": {
+    "p50": 1385.402,
+    "p95": 1385.402,
+    "p99": 1385.402,
+    "mean": 1401.47
+   }
+  },
+  "interpreter_boot_p50_ms": 46.527
+ },
+ "memory_rss_mb": {
+  "mem_base": {
+   "rss_mb": 14.3,
+   "peak_rss_mb": 14.3,
+   "objects_kept": 0
+  },
+  "mem_imports": {
+   "rss_mb": 16.4,
+   "peak_rss_mb": 16.4,
+   "objects_kept": 0
+  },
+  "mem_store": {
+   "rss_mb": 50.9,
+   "peak_rss_mb": 55.9,
+   "objects_kept": 1
+  },
+  "mem_graph": {
+   "rss_mb": 42.8,
+   "peak_rss_mb": 49.3,
+   "objects_kept": 1
+  },
+  "mem_knowledge": {
+   "rss_mb": 132.4,
+   "peak_rss_mb": 136.3,
+   "objects_kept": 1
+  },
+  "mem_full_suite_style": {
+   "rss_mb": 250.1,
+   "peak_rss_mb": 252.5,
+   "objects_kept": 2
+  }
+ },
+ "artifact_bytes": {
+  "api.txt": 11,
+  "architecture.txt": 800,
+  "build_source_index.py": 1031,
+  "concepts.json": 7478038,
+  "current_task.txt": 64,
+  "decisions.txt": 231,
+  "domains.txt": 180,
+  "execution_test.txt": 15,
+  "facts.json": 11646932,
+  "filelist.txt": 205906,
+  "fixes.txt": 109,
+  "graph.json": 3935128,
+  "language.txt": 1200,
+  "learned_knowledge.json": 148705,
+  "learned_knowledge_backup.json": 148705,
+  "learned_knowledge_before_concepts.json": 2617,
+  "learned_knowledge_before_contradiction.json": 7524,
+  "learned_knowledge_before_contradiction_test.json": 7524,
+  "learned_knowledge_before_dedup_20260822_202522.json": 19964,
+  "learned_knowledge_before_graph_link.json": 10099,
+  "learned_knowledge_before_graph_query.json": 12262,
+  "opencode_test.txt": 17,
+  "perf_baseline.json": 10194,
+  "project.txt": 457,
+  "semantic_relations.json": 9734542,
+  "source_evidence.json": 6983106,
+  "source_index.json": 198065,
+  "source_index.txt": 80683,
+  "source_index_builder.py": 3932,
+  "source_knowledge.txt": 78606,
+  "source_relations.json": 7478020,
+  "source_symbols.json": 3987279,
+  "stage2_test.txt": 21,
+  "structured.json": 20700048,
+  "structured_backup.json": 20700048,
+  "structured_before_relations.json": 9702469,
+  "syntax.txt": 8,
+  "test.txt": 5,
+  "tests.txt": 1725,
+  "training_dataset.jsonl": 949,
+  "type_system.txt": 8,
+  "verify_source_index.py": 1368
+ },
+ "warm": {
+  "DEFINITION": {
+   "route": {
+    "p50": 0.057,
+    "p95": 0.097,
+    "p99": 0.111,
+    "mean": 0.063
+   },
+   "query": {
+    "p50": 0.006,
+    "p95": 0.008,
+    "p99": 0.013,
+    "mean": 0.007
+   },
+   "answer": {
+    "p50": 0.072,
+    "p95": 0.122,
+    "p99": 0.149,
+    "mean": 0.081
+   },
+   "verify": {
+    "p50": 19.576,
+    "p95": 20.903,
+    "p99": 21.038,
+    "mean": 19.693
+   },
+   "ask_end_to_end": {
+    "p50": 0.175,
+    "p95": 0.241,
+    "p99": 0.288,
+    "mean": 0.181
+   }
+  },
+  "CALLERS": {
+   "route": {
+    "p50": 0.043,
+    "p95": 0.061,
+    "p99": 0.071,
+    "mean": 0.045
+   },
+   "query": {
+    "p50": 0.007,
+    "p95": 0.009,
+    "p99": 0.024,
+    "mean": 0.007
+   },
+   "answer": {
+    "p50": 0.085,
+    "p95": 0.126,
+    "p99": 0.178,
+    "mean": 0.09
+   },
+   "verify": {
+    "p50": 20.072,
+    "p95": 21.066,
+    "p99": 21.754,
+    "mean": 20.096
+   },
+   "ask_end_to_end": {
+    "p50": 0.164,
+    "p95": 0.206,
+    "p99": 0.248,
+    "mean": 0.172
+   }
+  },
+  "CALLEES": {
+   "route": {
+    "p50": 0.045,
+    "p95": 0.067,
+    "p99": 0.086,
+    "mean": 0.049
+   },
+   "query": {
+    "p50": 0.007,
+    "p95": 0.008,
+    "p99": 0.012,
+    "mean": 0.007
+   },
+   "answer": {
+    "p50": 0.085,
+    "p95": 0.133,
+    "p99": 0.142,
+    "mean": 0.092
+   },
+   "verify": {
+    "p50": 19.968,
+    "p95": 20.998,
+    "p99": 21.554,
+    "mean": 20.037
+   },
+   "ask_end_to_end": {
+    "p50": 0.169,
+    "p95": 0.224,
+    "p99": 0.24,
+    "mean": 0.177
+   }
+  },
+  "REFERENCES": {
+   "route": {
+    "p50": 0.034,
+    "p95": 0.054,
+    "p99": 0.069,
+    "mean": 0.038
+   },
+   "query": {
+    "p50": 0.011,
+    "p95": 0.027,
+    "p99": 0.029,
+    "mean": 0.013
+   },
+   "answer": {
+    "p50": 0.085,
+    "p95": 0.129,
+    "p99": 0.137,
+    "mean": 0.092
+   },
+   "verify": {
+    "p50": 7.485,
+    "p95": 8.024,
+    "p99": 8.302,
+    "mean": 7.512
+   },
+   "ask_end_to_end": {
+    "p50": 0.164,
+    "p95": 0.215,
+    "p99": 0.232,
+    "mean": 0.171
+   }
+  },
+  "USES_TYPE": {
+   "route": {
+    "p50": 0.034,
+    "p95": 0.051,
+    "p99": 0.072,
+    "mean": 0.036
+   },
+   "query": {
+    "p50": 0.009,
+    "p95": 0.011,
+    "p99": 0.026,
+    "mean": 0.009
+   },
+   "answer": {
+    "p50": 0.098,
+    "p95": 0.143,
+    "p99": 0.154,
+    "mean": 0.106
+   },
+   "verify": {
+    "p50": 22.005,
+    "p95": 22.814,
+    "p99": 23.213,
+    "mean": 22.059
+   },
+   "ask_end_to_end": {
+    "p50": 0.176,
+    "p95": 0.24,
+    "p99": 0.248,
+    "mean": 0.183
+   }
+  },
+  "TYPE_USERS": {
+   "route": {
+    "p50": 0.024,
+    "p95": 0.046,
+    "p99": 0.058,
+    "mean": 0.026
+   },
+   "query": {
+    "p50": 0.009,
+    "p95": 0.011,
+    "p99": 0.026,
+    "mean": 0.01
+   },
+   "answer": {
+    "p50": 0.064,
+    "p95": 0.095,
+    "p99": 0.105,
+    "mean": 0.068
+   },
+   "verify": {
+    "p50": 9.257,
+    "p95": 9.75,
+    "p99": 9.818,
+    "mean": 9.232
+   },
+   "ask_end_to_end": {
+    "p50": 0.126,
+    "p95": 0.176,
+    "p99": 0.195,
+    "mean": 0.133
+   }
+  },
+  "CONTAINS": {
+   "route": {
+    "p50": 0.054,
+    "p95": 0.078,
+    "p99": 0.094,
+    "mean": 0.058
+   },
+   "query": {
+    "p50": 0.016,
+    "p95": 0.026,
+    "p99": 0.032,
+    "mean": 0.017
+   },
+   "answer": {
+    "p50": 0.134,
+    "p95": 0.212,
+    "p99": 0.229,
+    "mean": 0.146
+   },
+   "verify": {
+    "p50": 14.942,
+    "p95": 15.806,
+    "p99": 16.03,
+    "mean": 14.993
+   },
+   "ask_end_to_end": {
+    "p50": 0.25,
+    "p95": 0.335,
+    "p99": 0.379,
+    "mean": 0.261
+   }
+  },
+  "DEPENDENCIES": {
+   "route": {
+    "p50": 0.137,
+    "p95": 0.208,
+    "p99": 0.256,
+    "mean": 0.153
+   },
+   "query": {
+    "p50": 0.089,
+    "p95": 0.147,
+    "p99": 0.176,
+    "mean": 0.099
+   },
+   "answer": {
+    "p50": 0.316,
+    "p95": 0.522,
+    "p99": 0.689,
+    "mean": 0.359
+   },
+   "verify": {
+    "p50": 101.465,
+    "p95": 117.286,
+    "p99": 120.105,
+    "mean": 103.655
+   },
+   "ask_end_to_end": {
+    "p50": 0.872,
+    "p95": 1.087,
+    "p99": 1.252,
+    "mean": 0.914
+   }
+  },
+  "DEPENDENTS": {
+   "route": {
+    "p50": 0.146,
+    "p95": 0.201,
+    "p99": 0.221,
+    "mean": 0.154
+   },
+   "query": {
+    "p50": 0.088,
+    "p95": 0.134,
+    "p99": 0.159,
+    "mean": 0.099
+   },
+   "answer": {
+    "p50": 0.309,
+    "p95": 0.485,
+    "p99": 0.544,
+    "mean": 0.356
+   },
+   "verify": {
+    "p50": 84.11,
+    "p95": 89.365,
+    "p99": 91.789,
+    "mean": 84.194
+   },
+   "ask_end_to_end": {
+    "p50": 0.837,
+    "p95": 1.025,
+    "p99": 1.078,
+    "mean": 0.837
+   }
+  },
+  "MODULE": {
+   "route": {
+    "p50": 0.151,
+    "p95": 0.233,
+    "p99": 0.254,
+    "mean": 0.163
+   },
+   "query": {
+    "p50": 0.077,
+    "p95": 0.126,
+    "p99": 0.133,
+    "mean": 0.086
+   },
+   "answer": {
+    "p50": 0.265,
+    "p95": 0.431,
+    "p99": 0.464,
+    "mean": 0.297
+   },
+   "verify": {
+    "p50": 80.375,
+    "p95": 87.394,
+    "p99": 90.619,
+    "mean": 80.95
+   },
+   "ask_end_to_end": {
+    "p50": 0.8,
+    "p95": 0.99,
+    "p99": 1.096,
+    "mean": 0.817
+   }
+  },
+  "FILE": {
+   "route": {
+    "p50": 0.071,
+    "p95": 0.123,
+    "p99": 0.158,
+    "mean": 0.081
+   },
+   "query": {
+    "p50": 0.003,
+    "p95": 0.003,
+    "p99": 0.004,
+    "mean": 0.003
+   },
+   "answer": {
+    "p50": 0.022,
+    "p95": 0.04,
+    "p99": 0.056,
+    "mean": 0.025
+   },
+   "verify": {
+    "p50": 0.564,
+    "p95": 0.741,
+    "p99": 0.822,
+    "mean": 0.585
+   },
+   "ask_end_to_end": {
+    "p50": 0.114,
+    "p95": 0.177,
+    "p99": 0.203,
+    "mean": 0.125
+   }
+  }
+ },
+ "micro": {
+  "find_symbol": {
+   "p50": 0.002,
+   "p95": 0.003,
+   "p99": 0.018,
+   "mean": 0.002
+  },
+  "find_module": {
+   "p50": 0.101,
+   "p95": 0.127,
+   "p99": 0.163,
+   "mean": 0.095
+  },
+  "find_file": {
+   "p50": 0.002,
+   "p95": 0.003,
+   "p99": 0.007,
+   "mean": 0.002
+  },
+  "evidence_get": {
+   "p50": 0.0,
+   "p95": 0.001,
+   "p99": 0.001,
+   "mean": 0.0
+  },
+  "fact_get": {
+   "p50": 0.0,
+   "p95": 0.0,
+   "p99": 0.001,
+   "mean": 0.0
+  }
+ }
+}

@@ -1,0 +1,43 @@
+B+ LANGUAGE
+
+WHAT IS B+:
+A domain-specific language for describing state machines and GPU workloads.
+
+PURPOSE:
+To provide high‑level constructs for defining states, transitions, GPU kernels, and plan execution.
+
+SOURCE FILES:
+- .b+ files under tests/* and examples/*
+- .plan files for state machine definition
+- .metal files for GPU kernel code
+
+EXTENSIONS:
+- .b+, .plan, .metal, .bp (legacy)
+
+SYNTAX:
+- Keywords: if, else, while, for, fn, let, return, break, continue, match, match
+- Literals: numbers (integers, floats), strings (""), booleans (true, false)
+- Operators: +, -, *, /, ==, !=, <, >, <=, >=, &&, ||, !
+- Comments: // single line
+- Declarations: var, const, fn, struct, enum, type, interface
+- Functions: fn name(params) -> return_type { ... }
+- Variables: let x = expr;
+- Control flow: if, else, while, for, return, break, continue
+- Builtins: print, log, printError, assert, cpu, gpu, compute, kernel
+
+VARIABLES:
+- Declared with let or var.
+
+FUNCTIONS:
+- Declared with fn.
+
+CONDITIONS/LOOPS/RUNS:
+- if/else, while, for.
+- Execution entry via plan entry or metal kernel.
+
+BASICS:
+- Supports state machine via .plan domain.
+- Supports GPU kernels via .metal domain.
+
+STATUS:
+VERIFIED

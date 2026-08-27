@@ -1,0 +1,244 @@
+{
+  "schema": "golden_knowledge_cases",
+  "version": 1,
+  "cases": [
+    {
+      "id": "G01",
+      "group": "DEFINITION",
+      "kind": "positive",
+      "question": "Где определён foldConstantOp?",
+      "expect": {
+        "intent": "DEFINITION",
+        "entity": "foldConstantOp",
+        "status": "RESOLVED",
+        "answer_type": "DEFINITION",
+        "confidence": "VERIFIED",
+        "verify_overall": "VERIFIED",
+        "min_facts": 5,
+        "min_relations": 0,
+        "min_evidence": 1,
+        "direct_answer_contains": ["is defined at", "manager.zig", "184"]
+      }
+    },
+    {
+      "id": "G02",
+      "group": "CALLERS",
+      "kind": "positive",
+      "question": "Кто вызывает foldConstantOp?",
+      "expect": {
+        "intent": "CALLERS",
+        "entity": "foldConstantOp",
+        "status": "RESOLVED",
+        "answer_type": "SYMBOL_RELATION",
+        "confidence": "VERIFIED",
+        "verify_overall": "VERIFIED",
+        "min_facts": 5,
+        "min_relations": 1,
+        "min_evidence": 1,
+        "direct_answer_contains": ["is called by", "runConstantFolding"],
+        "required_entity_names": ["runConstantFolding"]
+      }
+    },
+    {
+      "id": "G03",
+      "group": "CALLEES",
+      "kind": "positive",
+      "question": "What does foldConstantOp call?",
+      "expect": {
+        "intent": "CALLEES",
+        "entity": "foldConstantOp",
+        "status": "RESOLVED",
+        "answer_type": "SYMBOL_RELATION",
+        "confidence": "VERIFIED",
+        "verify_overall": "VERIFIED",
+        "min_facts": 5,
+        "min_relations": 1,
+        "min_evidence": 1,
+        "direct_answer_contains": ["calls", "getConstValue"],
+        "required_entity_names": ["getConstValue"]
+      }
+    },
+    {
+      "id": "G04",
+      "group": "USES_TYPE",
+      "kind": "positive",
+      "question": "Какие типы использует foldConstantOp?",
+      "expect": {
+        "intent": "USES_TYPE",
+        "entity": "foldConstantOp",
+        "status": "RESOLVED",
+        "answer_type": "SYMBOL_RELATION",
+        "confidence": "VERIFIED",
+        "verify_overall": "VERIFIED",
+        "exact_relation_count": 3,
+        "min_facts": 5,
+        "min_evidence": 1,
+        "direct_answer_contains": ["ConstData", "Function", "Inst"]
+      }
+    },
+    {
+      "id": "G05",
+      "group": "DEPENDENCIES",
+      "kind": "positive",
+      "question": "От чего зависит x64gen.zig?",
+      "expect": {
+        "intent": "DEPENDENCIES",
+        "entity": "x64gen.zig",
+        "status": "RESOLVED",
+        "answer_type": "MODULE_RELATION",
+        "confidence": "VERIFIED",
+        "verify_overall": "VERIFIED",
+        "exact_relation_count": 5,
+        "min_facts": 5,
+        "min_evidence": 1,
+        "direct_answer_contains": ["depends on 5 module"]
+      }
+    },
+    {
+      "id": "G06",
+      "group": "DEPENDENTS",
+      "kind": "positive",
+      "question": "Кто зависит от x64gen.zig?",
+      "expect": {
+        "intent": "DEPENDENTS",
+        "entity": "x64gen.zig",
+        "status": "RESOLVED",
+        "answer_type": "MODULE_RELATION",
+        "confidence": "VERIFIED",
+        "verify_overall": "VERIFIED",
+        "exact_relation_count": 3,
+        "min_facts": 5,
+        "min_evidence": 1,
+        "direct_answer_contains": ["3 module(s) depend on x64gen.zig"]
+      }
+    },
+    {
+      "id": "G07",
+      "group": "MODULE",
+      "kind": "positive",
+      "question": "Модуль x64gen.zig",
+      "expect": {
+        "intent": "MODULE",
+        "entity": "x64gen.zig",
+        "status": "RESOLVED",
+        "answer_type": "ENTITY_PROFILE",
+        "confidence": "VERIFIED",
+        "verify_overall": "VERIFIED",
+        "min_facts": 1,
+        "min_evidence": 1
+      }
+    },
+    {
+      "id": "G08",
+      "group": "TYPE_USERS",
+      "kind": "positive",
+      "question": "Кто использует тип Arena?",
+      "expect": {
+        "intent": "TYPE_USERS",
+        "entity": "Arena",
+        "status": "RESOLVED",
+        "answer_type": "SYMBOL_RELATION",
+        "confidence": "VERIFIED",
+        "verify_overall": "VERIFIED",
+        "exact_relation_count": 3,
+        "min_evidence": 1
+      }
+    },
+    {
+      "id": "G09",
+      "group": "FILE",
+      "kind": "positive",
+      "question": "Файл C:\\B-Plus\\zig\\build.zig",
+      "expect": {
+        "intent": "FILE",
+        "status": "RESOLVED",
+        "answer_type": "ENTITY_LOCATION",
+        "confidence": "VERIFIED",
+        "verify_overall": "VERIFIED",
+        "min_facts": 1,
+        "min_evidence": 1,
+        "direct_answer_contains": ["build.zig", "module"]
+      }
+    },
+    {
+      "id": "N01",
+      "group": "NEGATIVE_NOT_FOUND",
+      "kind": "negative",
+      "question": "Кто вызывает ghost_xyz_999?",
+      "expect": {
+        "intent": "CALLERS",
+        "entity": "ghost_xyz_999",
+        "routing_status": "ENTITY_NOT_FOUND",
+        "status": "NOT_FOUND",
+        "confidence_ne": "VERIFIED",
+        "verify_overall": "UNSUPPORTED",
+        "zero_claims": true,
+        "direct_answer_null": true
+      }
+    },
+    {
+      "id": "N02",
+      "group": "NEGATIVE_AMBIGUOUS",
+      "kind": "negative",
+      "question": "Покажи emit",
+      "expect": {
+        "intent": "DEFINITION",
+        "entity": "emit",
+        "routing_status": "AMBIGUOUS_ENTITY",
+        "status": "AMBIGUOUS",
+        "min_candidates": 2,
+        "confidence_ne": "VERIFIED",
+        "verify_overall": "UNSUPPORTED",
+        "zero_claims": true,
+        "direct_answer_null": true
+      }
+    },
+    {
+      "id": "N03",
+      "group": "NEGATIVE_AMBIGUOUS_QUOTED",
+      "kind": "negative",
+      "question": "Кто вызывает `emit`?",
+      "expect": {
+        "intent": "CALLERS",
+        "entity": "emit",
+        "routing_status": "AMBIGUOUS_ENTITY",
+        "status": "AMBIGUOUS",
+        "min_candidates": 2,
+        "confidence_ne": "VERIFIED",
+        "verify_overall": "UNSUPPORTED",
+        "zero_claims": true,
+        "direct_answer_null": true
+      }
+    },
+    {
+      "id": "N04",
+      "group": "NEGATIVE_UNKNOWN_INTENT",
+      "kind": "negative",
+      "question": "???",
+      "expect": {
+        "routing_status": "UNKNOWN_INTENT",
+        "status": "UNKNOWN_INTENT",
+        "confidence_ne": "VERIFIED",
+        "verify_overall": "UNSUPPORTED",
+        "direct_answer_null": true
+      }
+    },
+    {
+      "id": "N05",
+      "group": "NEGATIVE_AMBIGUOUS_DEFINITION",
+      "kind": "negative",
+      "question": "Что такое ConstData?",
+      "expect": {
+        "intent": "DEFINITION",
+        "entity": "ConstData",
+        "routing_status": "AMBIGUOUS_ENTITY",
+        "status": "AMBIGUOUS",
+        "min_candidates": 2,
+        "confidence_ne": "VERIFIED",
+        "verify_overall": "UNSUPPORTED",
+        "zero_claims": true,
+        "direct_answer_null": true
+      }
+    }
+  ]
+}

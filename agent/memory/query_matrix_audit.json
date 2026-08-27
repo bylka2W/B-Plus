@@ -1,0 +1,201 @@
+{
+  "timestamp": 1787686194.7796688,
+  "results": [
+    {
+      "entity_type": "FUNCTION",
+      "intent": "DEFINITION",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "DEFINITION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "FUNCTION",
+      "intent": "CALLERS",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "SYMBOL_RELATION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "FUNCTION",
+      "intent": "CALLEES",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "SYMBOL_RELATION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "FUNCTION",
+      "intent": "REFERENCES",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "SYMBOL_RELATION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "FUNCTION",
+      "intent": "CONTAINS",
+      "expected": "TYPE_MISMATCH",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "TYPE_MISMATCH",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "FUNCTION",
+      "intent": "DEPENDENCIES",
+      "expected": "TYPE_MISMATCH",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "TYPE_MISMATCH",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "STRUCT",
+      "intent": "DEFINITION",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "DEFINITION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "STRUCT",
+      "intent": "CALLERS",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "SYMBOL_RELATION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "STRUCT",
+      "intent": "CALLEES",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "SYMBOL_RELATION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "STRUCT",
+      "intent": "REFERENCES",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "SYMBOL_RELATION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "STRUCT",
+      "intent": "CONTAINS",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "SYMBOL_RELATION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "STRUCT",
+      "intent": "DEPENDENCIES",
+      "expected": "TYPE_MISMATCH",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "TYPE_MISMATCH",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "MODULE",
+      "intent": "DEFINITION",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "DEFINITION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "MODULE",
+      "intent": "CALLERS",
+      "expected": "TYPE_MISMATCH",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "TYPE_MISMATCH",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "MODULE",
+      "intent": "CALLEES",
+      "expected": "TYPE_MISMATCH",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "TYPE_MISMATCH",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "MODULE",
+      "intent": "REFERENCES",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "SYMBOL_RELATION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "MODULE",
+      "intent": "CONTAINS",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "SYMBOL_RELATION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "MODULE",
+      "intent": "DEPENDENCIES",
+      "expected": "VERIFIED",
+      "actual": "ANSWER_READY",
+      "answer_type": "MODULE_RELATION",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "NONEXISTENT",
+      "intent": "DEFINITION",
+      "expected": "NEEDS_DEEP",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "EMPTY",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "NONEXISTENT",
+      "intent": "CALLERS",
+      "expected": "NEEDS_DEEP",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "EMPTY",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "NONEXISTENT",
+      "intent": "CALLEES",
+      "expected": "NEEDS_DEEP",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "EMPTY",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "NONEXISTENT",
+      "intent": "REFERENCES",
+      "expected": "NEEDS_DEEP",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "EMPTY",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "NONEXISTENT",
+      "intent": "CONTAINS",
+      "expected": "NEEDS_DEEP",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "EMPTY",
+      "status": "PASS"
+    },
+    {
+      "entity_type": "NONEXISTENT",
+      "intent": "DEPENDENCIES",
+      "expected": "NEEDS_DEEP",
+      "actual": "NEEDS_DEEP_SEARCH",
+      "answer_type": "EMPTY",
+      "status": "PASS"
+    }
+  ],
+  "passed": 24,
+  "failed": 0,
+  "total": 24,
+  "all_pass": true
+}

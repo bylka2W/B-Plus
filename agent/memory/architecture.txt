@@ -1,0 +1,38 @@
+﻿ARCHITECTURE:
+
+SOURCE
+  └─ src/*
+
+LEXER
+  → src/compiler/frontend/syntax/lexer/scanner.zig
+
+PARSER
+  → src/compiler/frontend/parser/parser.zig
+
+RESOLVER
+  → src/compiler/frontend/resolver/resolver.zig
+
+HIR
+  → src/compiler/frontend/hir/hir.zig (verified via verifier modules)
+
+TYPE CHECKER
+  → src/compiler/frontend/type_checker/checker.zig (error present)
+
+INFERENCE
+  → src/compiler/frontend/type_inference/inference.zig (verified via verifier modules)
+
+BIR
+  → src/compiler/frontend/bir/bir_frontend.zig
+
+MIR
+  → src/compiler/frontend/mir/mir_frontend.zig
+
+BACKEND
+  → src/compiler/frontend/backend/backend.zig
+
+RUNTIME
+  → src/runtime/*
+
+PIPELINE:
+Source → Lexer → Parser → Resolver → HIR → Type Checker → Inference → BIR → MIR → Backend → Runtime
+

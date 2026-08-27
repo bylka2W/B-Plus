@@ -1,0 +1,29 @@
+﻿PROJECT: B+
+
+ROOT:
+C:\B-Plus\zig
+
+COMPILER LANGUAGE:
+Zig
+
+BUILD SYSTEM:
+zig build
+
+MAIN BUILD COMMAND:
+zig build test --summary all
+
+TEST COMMAND:
+zig build test --summary all
+
+SOURCE TREE:
+C:\B-Plus\zig\src
+C:\B-Plus\zig\tests
+
+CURRENT PROJECT STATE:
+Build fails due to error in src/compiler/frontend/type_checker/checker.zig (stray return statement).
+
+IMPORTANT FILES:
+- build.zig
+- src/main.zig
+- src/... (various modules)
+- tests/... (various tests)

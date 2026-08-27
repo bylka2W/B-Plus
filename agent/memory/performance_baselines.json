@@ -1,0 +1,55 @@
+{
+  "schema": "performance_baselines",
+  "version": 1,
+  "phase": "performance_hardening",
+  "measured_at": "2026-08-24",
+  "baselines": {
+    "evidence_bundle_callers": {
+      "question": "Кто вызывает foldConstantOp?",
+      "intent": "CALLERS",
+      "complexity": "simple",
+      "status": "ANSWER_READY",
+      "ms": 7,
+      "cache_ms": 3
+    },
+    "evidence_bundle_definition": {
+      "question": "Где определён foldConstantOp?",
+      "intent": "DEFINITION",
+      "complexity": "simple",
+      "status": "ANSWER_READY",
+      "ms": 8
+    },
+    "evidence_bundle_dependencies": {
+      "question": "От чего зависит x64gen.zig?",
+      "intent": "DEPENDENCIES",
+      "complexity": "simple",
+      "status": "ANSWER_READY",
+      "ms": 1
+    },
+    "cache_hit": {
+      "overhead_ms": 3,
+      "speedup_vs_cold": "2.3x"
+    },
+    "budget_overhead": {
+      "simple_check_ms": 0.1,
+      "description": "budget check is synchronous, near-zero overhead"
+    },
+    "snapshot_build": {
+      "files": 1816,
+      "build_ms": 1800
+    },
+    "snapshot_compare": {
+      "compare_ms": 1900
+    }
+  },
+  "gates": {
+    "simple_avg_ms": 1000,
+    "simple_p95_ms": 2000,
+    "simple_max_ms": 5000,
+    "normal_avg_ms": 3000,
+    "normal_p95_ms": 5000,
+    "normal_max_ms": 30000,
+    "complex_p95_ms": 30000,
+    "complex_max_ms": 60000
+  }
+}

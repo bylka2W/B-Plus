@@ -1,0 +1,39 @@
+{
+  "schema": "performance_contract",
+  "version": 1,
+  "phase": "performance_hardening",
+  "created_at": "2026-08-24",
+  "contracts": {
+    "latency": {
+      "simple": {"p50_ms": 1000, "p95_ms": 2000, "max_ms": 5000},
+      "normal": {"p50_ms": 3000, "p95_ms": 5000, "max_ms": 30000},
+      "complex": {"p50_ms": 15000, "p95_ms": 30000, "max_ms": 60000}
+    },
+    "tool_budgets": {
+      "simple": {"max_tool_calls": 3, "max_search": 1, "max_source_reads": 2, "max_grep": 0, "max_llm": 1},
+      "normal": {"max_tool_calls": 8, "max_search": 3, "max_source_reads": 5, "max_grep": 0, "max_llm": 2},
+      "complex": {"max_tool_calls": 12, "max_search": 4, "max_source_reads": 8, "max_grep": 1, "max_llm": 3}
+    },
+    "context_budgets": {
+      "simple": {"max_input_tokens": 1500, "max_output_tokens": 300},
+      "normal": {"max_input_tokens": 4000, "max_output_tokens": 800},
+      "complex": {"max_input_tokens": 12000, "max_output_tokens": 2000}
+    },
+    "cache": {
+      "max_entries": 500,
+      "default_ttl_sec": 300,
+      "tree_sha_invalidation": true
+    },
+    "invariants": [
+      "ANSWER_READY status requires VERIFIED confidence and zero unresolved facts",
+      "global grep forbidden for DEFINITION/MODULE/FILE/CALLEES intents",
+      "wall clock timeout enforced at all complexity levels",
+      "tool budget exceeded raises BudgetExceeded, never infinite loop",
+      "query cache invalidated on tree_sha mismatch",
+      "query cache entries evicted at FIFO when max_entries exceeded",
+      "evidence bundle truncated to context budget limits per complexity",
+      "telemetry records every question with timing and budget",
+      "budget tracker increments and checks atomically"
+    ]
+  }
+}

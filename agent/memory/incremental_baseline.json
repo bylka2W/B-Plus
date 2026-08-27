@@ -1,0 +1,29 @@
+{
+  "schema": "incremental_baseline",
+  "version": 1,
+  "snapshot_build": {
+    "p50": 1828,
+    "min": 1825,
+    "max": 1900,
+    "n": 3
+  },
+  "snapshot_compare": {
+    "p50": 1956,
+    "min": 1825,
+    "max": 1991,
+    "n": 10
+  },
+  "verify_sha_cache": {
+    "cold_p50_ms": 6,
+    "warm_p50_ms": 0,
+    "speedup": 61.6,
+    "files_tested": 20,
+    "n": 5
+  },
+  "shared_context_builder": {
+    "p50_ms": 662,
+    "min_ms": 586,
+    "max_ms": 699,
+    "n": 3
+  }
+}

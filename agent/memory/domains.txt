@@ -1,0 +1,8 @@
+domains.txt:
+
+- STATE MACHINE: .plan files, plan module in compiler.
+- GPU KERNEL: .metal files, metal module in compiler.
+- LEGACY: .bp files for back‑compat.
+
+STATUS:
+VERIFIED

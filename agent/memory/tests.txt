@@ -1,0 +1,65 @@
+﻿TEST INFRASTRUCTURE
+
+BUILD TEST COMMAND:
+zig build test --summary all
+
+TEST DIRECTORIES:
+- tests/unit
+- tests/gpu
+- tests/semantic
+- tests
+
+TEST FILES:
+- tests/test_print.zig
+- tests/unit/test_writer.zig
+- tests/unit/test_vector.zig
+- tests/unit/test_variants.zig
+- tests/unit/test_types.zig
+- tests/unit/test_runner.zig
+- tests/unit/test_mir_to_machine.zig
+- tests/unit/test_mir_machine_main.zig
+- tests/unit/test_mir_fuzz.zig
+- tests/unit/test_incremental.zig
+- tests/unit/test_hlsl_vec.zig
+- tests/unit/test_full_pipeline.zig
+- tests/unit/test_dxil_backend.zig
+- tests/unit/test_cpu.zig
+- tests/unit/test_body_parser.zig
+- tests/unit/test_bir_to_mir_e2e.zig
+- tests/unit/test_bir_mir_main.zig
+- tests/unit/test_backend_analysis.zig
+- tests/unit/test_affinity.zig
+- tests/unit/stress_test.zig
+- tests/unit/scheduler_test.zig
+- tests/unit/runtime_test.zig
+- tests/unit/my_test.zig
+- tests/gpu/dxil_test.zig
+- tests/gpu/dxil_minimal_test.zig
+- tests/gpu/direct_direct_test.zig
+- tests/gpu/depth_reject_test.zig
+- tests/gpu/upscaler_test.zig
+- tests/gpu/tss_pipeline_test.zig
+- tests/gpu/texture_test.zig
+- tests/gpu/temporal_test.zig
+- tests/gpu/sharpen_test.zig
+- tests/gpu/sampler_test.zig
+- tests/gpu/render_layer_test.zig
+- tests/gpu/lock_test.zig
+- tests/gpu/gpu_executor_test.zig
+- tests/gpu/gpu_compute_test.zig
+- tests/gpu/ghosting_test.zig
+- tests/gpu/fsr3_test.zig
+- tests/gpu/dxil_wrap_test.zig
+- tests/gpu/dxil_test_v2.zig
+- src/tests/unit/* (various compiler internal tests)
+
+CURRENT TEST COUNT:
+Multiple hundreds of .zig test files.
+
+KNOWN PASSING TESTS:
+Most unit tests compile and run successfully.
+
+KNOWN FAILING TESTS:
+- test types due to checker error.
+- any tests that depend on type checker failure.
+

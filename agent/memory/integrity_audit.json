@@ -1,0 +1,168 @@
+{
+  "timestamp": 1787684169.5847542,
+  "results": [
+    {
+      "check": "concept IDs unique",
+      "total": 9636,
+      "unique": 9636,
+      "dupes": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "fact IDs unique",
+      "total": 26910,
+      "unique": 26910,
+      "dupes": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "relation IDs unique",
+      "total": 31730,
+      "unique": 31730,
+      "dupes": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "evidence IDs unique",
+      "total": 9151,
+      "unique": 9151,
+      "dupes": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "symbol IDs unique",
+      "total": 9235,
+      "unique": 9235,
+      "dupes": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "file IDs unique",
+      "total": 401,
+      "unique": 401,
+      "dupes": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "concept.file_id -> files",
+      "checked": 9636,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "concept.evidence_ids -> evidence",
+      "checked": 23036,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "concept.fact_ids -> facts",
+      "checked": 50968,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "concept.source_symbol_ids -> symbols",
+      "checked": 18470,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "fact.evidence_id -> evidence",
+      "checked": 26910,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "fact.subject_id -> symbols|files",
+      "checked": 26910,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "fact.object_id -> symbols|files",
+      "checked": 24058,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "relation.from_concept -> concepts",
+      "checked": 31730,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "relation.to_concept -> concepts",
+      "checked": 31730,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "relation.evidence_fact_ids -> facts",
+      "checked": 37708,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "symbol.file_id -> files",
+      "checked": 9235,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "symbol.evidence_id -> evidence",
+      "checked": 9235,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "evidence.file_id -> files",
+      "checked": 9151,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "source files on disk",
+      "checked": 401,
+      "missing": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "orphan symbols (file_id not in files)",
+      "total": 9235,
+      "orphan": 0,
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "check": "orphan facts (subject_id not in symbols)",
+      "total": 26910,
+      "orphan": 0,
+      "status": "PASS",
+      "details": []
+    }
+  ],
+  "passed": 22,
+  "failed": 0,
+  "all_pass": true
+}
