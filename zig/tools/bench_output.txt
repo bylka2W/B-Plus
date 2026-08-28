@@ -1,6 +1,0 @@
-
-
-═══ Benchmark: Baseline (dumb) vs Smart scheduler ═══
-  [hot-core-skew] baseline… smart… done.
-  [burst-load] baseline… smart… done.
-  [mixed-size] baseline… smart…

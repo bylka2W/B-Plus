@@ -101,7 +101,11 @@ class Sandbox:
 
 class KnowledgeQuery:
     def __init__(self, kb_dir):
-        self.kb_dir = Path(kb_dir)
+        # Accept a single path OR a list of paths (tiers: environment + truth).
+        if isinstance(kb_dir, (list, tuple)):
+            self.kb_dirs = [Path(d) for d in kb_dir]
+        else:
+            self.kb_dirs = [Path(kb_dir)]
         self.facts = []
         self.concepts = {}
         self.concepts_by_id = {}
@@ -116,40 +120,41 @@ class KnowledgeQuery:
             "relations": "semantic_relations.json",
             "evidence": "source_evidence.json",
         }
-        for name, filename in file_map.items():
-            path = self.kb_dir / filename
-            if path.exists():
-                try:
-                    with open(path, encoding="utf-8") as f:
-                        data = json.load(f)
-                        if name == "facts":
-                            if isinstance(data, dict):
-                                self.facts = data.get("items", [])
-                            elif isinstance(data, list):
-                                self.facts = data
-                        elif name == "concepts":
-                            if isinstance(data, dict):
-                                items = data.get("items", [])
-                                if isinstance(items, list):
-                                    self.concepts_by_id = {item.get("concept_id", str(i)): item for i, item in enumerate(items) if isinstance(item, dict)}
-                                    self.concepts = {item.get("name", item.get("concept_id", str(i))): item for i, item in enumerate(items) if isinstance(item, dict)}
-                                else:
-                                    self.concepts = data
-                            elif isinstance(data, list):
-                                self.concepts_by_id = {item.get("concept_id", str(i)): item for i, item in enumerate(data) if isinstance(item, dict)}
-                                self.concepts = {item.get("name", item.get("concept_id", str(i))): item for i, item in enumerate(data)}
-                        elif name == "relations":
-                            if isinstance(data, dict):
-                                self.relations = data.get("items", [])
-                            elif isinstance(data, list):
-                                self.relations = data
-                        elif name == "evidence":
-                            if isinstance(data, dict):
-                                self.evidence = data.get("items", [])
-                            elif isinstance(data, list):
-                                self.evidence = data
-                except (json.JSONDecodeError, OSError):
-                    pass
+        for kb_dir in self.kb_dirs:
+            for name, filename in file_map.items():
+                path = kb_dir / filename
+                if path.exists():
+                    try:
+                        with open(path, encoding="utf-8") as f:
+                            data = json.load(f)
+                            if name == "facts":
+                                if isinstance(data, dict):
+                                    self.facts.extend(data.get("items", []))
+                                elif isinstance(data, list):
+                                    self.facts.extend(data)
+                            elif name == "concepts":
+                                if isinstance(data, dict):
+                                    items = data.get("items", [])
+                                    if isinstance(items, list):
+                                        self.concepts_by_id.update({item.get("concept_id", str(i)): item for i, item in enumerate(items) if isinstance(item, dict)})
+                                        self.concepts.update({item.get("name", item.get("concept_id", str(i))): item for i, item in enumerate(items) if isinstance(item, dict)})
+                                    else:
+                                        self.concepts.update(data)
+                                elif isinstance(data, list):
+                                    self.concepts_by_id.update({item.get("concept_id", str(i)): item for i, item in enumerate(data) if isinstance(item, dict)})
+                                    self.concepts.update({item.get("name", item.get("concept_id", str(i))): item for i, item in enumerate(data)})
+                            elif name == "relations":
+                                if isinstance(data, dict):
+                                    self.relations.extend(data.get("items", []))
+                                elif isinstance(data, list):
+                                    self.relations.extend(data)
+                            elif name == "evidence":
+                                if isinstance(data, dict):
+                                    self.evidence.extend(data.get("items", []))
+                                elif isinstance(data, list):
+                                    self.evidence.extend(data)
+                    except (json.JSONDecodeError, OSError):
+                        pass
 
     def query_symbol(self, name):
         results = []
@@ -651,7 +656,12 @@ def main():
     print("=" * 60)
 
     kb_path = AGENT_ROOT.parent / "memory"
-    knowledge = KnowledgeQuery(kb_path)
+    full_zig_path = kb_path / "full_zig"
+    # Load BOTH knowledge blocks: B+ environment (memory/) and the full Zig
+    # compiler source of truth (memory/full_zig/). The runtime retrieves the
+    # full raw file from disk on demand (never copied into memory).
+    kb_dirs = [kb_path, full_zig_path] if full_zig_path.exists() else [kb_path]
+    knowledge = KnowledgeQuery(kb_dirs)
     print(f"Knowledge: facts={len(knowledge.facts)} concepts={len(knowledge.concepts)} relations={len(knowledge.relations)}")
 
     source_index = SourceIndex([Path(r"C:\Users\Local\zig"), Path(r"C:\B-Plus\zig")])
