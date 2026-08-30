@@ -306,6 +306,17 @@
     "STATUS не может быть OK.",
 
     "=== FINAL RULE ===",
-    "МОДЕЛИРУЙ. ОЦЕНИВАЙ ФУНДАМЕНТАЛЬНО. ОПРЕДЕЛЯЙ НАПРАВЛЕНИЕ. ПРОВЕРЯЙ СООТВЕТСТВИЕ. ЗАПИСЫВАЙ ЗНАНИЯ."
+    "МОДЕЛИРУЙ. ОЦЕНИВАЙ ФУНДАМЕНТАЛЬНО. ОПРЕДЕЛЯЙ НАПРАВЛЕНИЕ. ПРОВЕРЯЙ СООТВЕТСТВИЕ. ЗАПИСЫВАЙ ЗНАНИЯ.",
+
+    "=== ZIG DATASET ===",
+    "При решении задач по Zig ИСПОЛЬЗУЙ датасет:",
+    "  - agent/agent b+/knowledge/dataset/instruction_train.jsonl (280 verified examples)",
+    "  - agent/agent b+/knowledge/dataset/combined_train.jsonl (174 verified examples)",
+    "  - agent/agent b+/knowledge/dataset/instruction_val.jsonl (71 eval examples)",
+    "Формат: instruction → output → oracle (zig test для проверки).",
+    "Категории: code_write, code_complete, code_test, code_explain, code_fix.",
+    "Все примеры verified через реальный zig test.",
+    "Используй как reference при генерации кода, объяснений, исправлений.",
+    "Source: C:/B-Plus/zig — реальный исходный код Zig-компилятора."
   ]
 }
