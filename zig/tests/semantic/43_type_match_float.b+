@@ -1,5 +1,0 @@
-state Main {
-  entry {
-    var x: f64 = 3.14
-  }
-}

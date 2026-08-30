@@ -1,2 +1,0 @@
-fn f() { f() }
-state Main { entry { } }

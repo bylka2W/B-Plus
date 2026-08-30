@@ -1,6 +1,0 @@
-state Main {
-    on Go -> NonexistentState
-    entry {
-        print(1)
-    }
-}

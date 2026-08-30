@@ -1,6 +1,0 @@
-state Main {
-  var x: int = x + 1
-  entry {
-    print(x)
-  }
-}

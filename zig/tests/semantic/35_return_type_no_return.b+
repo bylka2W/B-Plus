@@ -1,9 +1,0 @@
-fn adder(x: int, y: int) -> int {
-  var result = x + y
-}
-state Main {
-  entry {
-    var r = adder(1, 2)
-    print(r)
-  }
-}

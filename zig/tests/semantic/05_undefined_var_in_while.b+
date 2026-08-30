@@ -1,7 +1,0 @@
-state Main {
-  entry {
-    while (nonexistent) {
-      print(1)
-    }
-  }
-}

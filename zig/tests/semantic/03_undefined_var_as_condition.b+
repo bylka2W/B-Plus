@@ -1,9 +1,0 @@
-state Main {
-  entry {
-    if (ghost_variable) {
-      print(1)
-    } else {
-      print(0)
-    }
-  }
-}

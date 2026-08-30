@@ -1,1 +1,0 @@
-state Main { entry { } on ev -> Main }

@@ -1,9 +1,0 @@
-fn add(a: int, b: int) {
-  return a + b
-}
-state Main {
-  entry {
-    var x = add(1, 2)
-    print(x)
-  }
-}

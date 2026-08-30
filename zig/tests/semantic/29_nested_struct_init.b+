@@ -1,8 +1,0 @@
-struct Inner { val: int }
-struct Outer { inner: Inner
-extra: int }
-state Main {
-  entry {
-    var o: Outer
-  }
-}

@@ -1,6 +1,0 @@
-state Main {
-  entry {
-    var x = undefined_a + undefined_b
-    print(x)
-  }
-}

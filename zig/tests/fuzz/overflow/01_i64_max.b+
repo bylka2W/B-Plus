@@ -1,2 +1,0 @@
-state Main { entry { var x = 9223372036854775807
-var y = x + 1 } }

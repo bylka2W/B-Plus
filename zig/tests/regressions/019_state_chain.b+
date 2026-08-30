@@ -1,3 +1,0 @@
-state A { entry { print("A") } on go -> B }
-state B { entry { print("B") } on go -> C }
-state C { entry { print("C") } }

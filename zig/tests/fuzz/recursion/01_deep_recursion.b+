@@ -1,5 +1,0 @@
-fn deep(n: int) {
-  if (n > 0) { deep(n - 1) }
-  else { print(n) }
-}
-state Main { entry { deep(500) } }

@@ -1,5 +1,0 @@
-state Main {
-  entry {
-    var x: int = 42 + 10
-  }
-}

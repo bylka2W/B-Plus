@@ -1,6 +1,0 @@
-import "this_file_does_not_exist_ever.b+"
-state Main {
-  entry {
-    print(1)
-  }
-}

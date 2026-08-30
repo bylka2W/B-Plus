@@ -1,5 +1,0 @@
-state Hello {
-    entry {
-        print("Hello World!")
-    }
-}

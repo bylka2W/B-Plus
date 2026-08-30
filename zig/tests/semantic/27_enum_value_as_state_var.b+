@@ -1,9 +1,0 @@
-enum Color { Red
-Green
-Blue }
-state Main {
-  var c: Color
-  entry {
-    print(c)
-  }
-}

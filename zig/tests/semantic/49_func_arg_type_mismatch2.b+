@@ -1,8 +1,0 @@
-fn greet(name: string) {
-  print(name)
-}
-state Main {
-  entry {
-    greet(42)
-  }
-}

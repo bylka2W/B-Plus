@@ -1,6 +1,0 @@
-state Main {
-  var arr: int = 5
-  entry {
-    var x = arr[-1]
-  }
-}

@@ -1,1 +1,0 @@
-state Lib345 { entry { print(345) } }

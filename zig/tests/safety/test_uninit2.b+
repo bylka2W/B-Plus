@@ -1,4 +1,0 @@
-fn main() {
-    var x: i64
-    print(x)
-}

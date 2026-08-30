@@ -1,3 +1,0 @@
-state A {
-  on foo -> NonexistentState
-}

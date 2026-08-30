@@ -1,9 +1,0 @@
-state Main {
-  entry {
-    if (42) {
-      print(1)
-    } else {
-      print(0)
-    }
-  }
-}

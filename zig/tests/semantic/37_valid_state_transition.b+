@@ -1,7 +1,0 @@
-state A {
-  entry {}
-  on foo -> B
-}
-state B {
-  entry {}
-}

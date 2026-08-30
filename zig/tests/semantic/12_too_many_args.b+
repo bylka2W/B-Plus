@@ -1,8 +1,0 @@
-fn adder(x: int) {
-  print(x)
-}
-state Main {
-  entry {
-    adder(1, 2, 3)
-  }
-}

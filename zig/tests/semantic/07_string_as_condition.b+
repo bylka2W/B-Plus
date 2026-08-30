@@ -1,7 +1,0 @@
-state Main {
-  entry {
-    if ("hello") {
-      print(1)
-    }
-  }
-}

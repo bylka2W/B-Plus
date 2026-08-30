@@ -1,8 +1,0 @@
-enum Color { Red
-Green
-Blue }
-state Main {
-  entry {
-    var c = Color.Purple
-  }
-}
