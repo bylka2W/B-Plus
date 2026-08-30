@@ -171,7 +171,13 @@ def extract_zig_tokens(text):
             j = i + 1
             while j < n and (text[j].isalnum() or text[j] == "_"):
                 j += 1
-            tokens.append(text[i:j])
+            run = text[i:j]
+            # Cyrillic runs are emitted per-character so Russian maps to the
+            # single-char ru_ tokens; Latin identifier runs stay as words (Zig).
+            if any(ord(ch) > 127 for ch in run):
+                tokens.extend(run)
+            else:
+                tokens.append(run)
             i = j
             continue
 
@@ -235,6 +241,8 @@ class ZigTokenizer:
                 prefix = "op_"
             elif k.startswith("tok_"):
                 prefix = "tok_"
+            elif k.startswith("ru_"):
+                prefix = "ru_"
             raw = k[len(prefix):] if prefix else k
             self.token_to_id[raw] = v
 
@@ -264,6 +272,46 @@ class ZigTokenizer:
                 ids.append(self.token_to_id.get(UNK_TOKEN, 0))
         return ids
 
+    @classmethod
+    def build_ru_zig(cls, zig_roots, ru_texts=None, max_vocab=32000, cyr_room=400):
+        """Build a tokenizer that covers ONLY Russian (Cyrillic) + Zig.
+
+        Zig tokens keep their word/operator encoding; every Cyrillic letter is
+        added as a single-char token so Russian encodes losslessly (any other
+        script maps to UNK, enforcing the Russian+Zig-only constraint).
+        """
+        import collections as _collections
+        vocab = build_tokenizer_vocab(zig_roots, max_vocab - cyr_room)
+        cyr = "абвгдежзийклмнопрстуфхцчшщъыьэюяёАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯЁ"
+        for ch in cyr:
+            key = f"ru_{ch}"
+            if key not in vocab:
+                vocab[key] = len(vocab)
+
+        if ru_texts:
+            bigrams = _collections.Counter()
+            for text in ru_texts:
+                runs = []
+                cur = ""
+                for ch in text:
+                    if "а" <= ch.lower() <= "я" or ch in "ёЁ":
+                        cur += ch
+                    else:
+                        if len(cur) >= 2:
+                            runs.append(cur)
+                        cur = ""
+                if len(cur) >= 2:
+                    runs.append(cur)
+                for run in runs:
+                    for i in range(len(run) - 1):
+                        bigrams[run[i:i + 2]] += 1
+            for bg, _ in bigrams.most_common(cyr_room - len(cyr)):
+                key = f"ru_{bg}"
+                if key not in vocab:
+                    vocab[key] = len(vocab)
+
+        return cls(vocab)
+
     def decode(self, ids):
         parts = []
         for i in ids:
@@ -288,6 +336,8 @@ class ZigTokenizer:
                 elif key.startswith("bl_"):
                     parts.append(key[3:])
                 elif key.startswith("op_"):
+                    parts.append(key[3:])
+                elif key.startswith("ru_"):
                     parts.append(key[3:])
                 elif key.startswith("tok_"):
                     parts.append(key[4:])

@@ -7,6 +7,14 @@ import tempfile
 import shutil
 import time
 import re
+import glob
+
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "engine"))
+    import compact_store
+    _HAVE_COMPACT = True
+except Exception:
+    _HAVE_COMPACT = False
 import copy
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
@@ -111,7 +119,21 @@ class KnowledgeQuery:
         self.concepts_by_id = {}
         self.relations = []
         self.evidence = []
+        self.compact_readers = []
         self._load()
+        if _HAVE_COMPACT:
+            for kb_dir in self.kb_dirs:
+                opened = False
+                for cand in (kb_dir / "knowledge.db", kb_dir / "knowledge.db.gz"):
+                    if cand.exists():
+                        try:
+                            self.compact_readers.append(compact_store.CompactReader(str(cand)))
+                            opened = True
+                            break
+                        except Exception:
+                            pass
+                if opened:
+                    continue
 
     def _load(self):
         file_map = {
@@ -124,37 +146,47 @@ class KnowledgeQuery:
             for name, filename in file_map.items():
                 path = kb_dir / filename
                 if path.exists():
-                    try:
-                        with open(path, encoding="utf-8") as f:
-                            data = json.load(f)
-                            if name == "facts":
-                                if isinstance(data, dict):
-                                    self.facts.extend(data.get("items", []))
-                                elif isinstance(data, list):
-                                    self.facts.extend(data)
-                            elif name == "concepts":
-                                if isinstance(data, dict):
-                                    items = data.get("items", [])
-                                    if isinstance(items, list):
-                                        self.concepts_by_id.update({item.get("concept_id", str(i)): item for i, item in enumerate(items) if isinstance(item, dict)})
-                                        self.concepts.update({item.get("name", item.get("concept_id", str(i))): item for i, item in enumerate(items) if isinstance(item, dict)})
-                                    else:
-                                        self.concepts.update(data)
-                                elif isinstance(data, list):
-                                    self.concepts_by_id.update({item.get("concept_id", str(i)): item for i, item in enumerate(data) if isinstance(item, dict)})
-                                    self.concepts.update({item.get("name", item.get("concept_id", str(i))): item for i, item in enumerate(data)})
-                            elif name == "relations":
-                                if isinstance(data, dict):
-                                    self.relations.extend(data.get("items", []))
-                                elif isinstance(data, list):
-                                    self.relations.extend(data)
-                            elif name == "evidence":
-                                if isinstance(data, dict):
-                                    self.evidence.extend(data.get("items", []))
-                                elif isinstance(data, list):
-                                    self.evidence.extend(data)
-                    except (json.JSONDecodeError, OSError):
-                        pass
+                    self._ingest(name, path)
+            # sharded facts / relations / evidence (full_zig layer)
+            for shard in sorted(glob.glob(str(kb_dir / "facts_*.json"))):
+                self._ingest("facts", Path(shard))
+            for shard in sorted(glob.glob(str(kb_dir / "relations_*.json"))):
+                self._ingest("relations", Path(shard))
+            for shard in sorted(glob.glob(str(kb_dir / "evidence_*.json"))):
+                self._ingest("evidence", Path(shard))
+
+    def _ingest(self, name, path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+                if name == "facts":
+                    if isinstance(data, dict):
+                        self.facts.extend(data.get("items", []))
+                    elif isinstance(data, list):
+                        self.facts.extend(data)
+                elif name == "concepts":
+                    if isinstance(data, dict):
+                        items = data.get("items", [])
+                        if isinstance(items, list):
+                            self.concepts_by_id.update({item.get("concept_id", str(i)): item for i, item in enumerate(items) if isinstance(item, dict)})
+                            self.concepts.update({item.get("name", item.get("concept_id", str(i))): item for i, item in enumerate(items) if isinstance(item, dict)})
+                        else:
+                            self.concepts.update(data)
+                    elif isinstance(data, list):
+                        self.concepts_by_id.update({item.get("concept_id", str(i)): item for i, item in enumerate(data) if isinstance(item, dict)})
+                        self.concepts.update({item.get("name", item.get("concept_id", str(i))): item for i, item in enumerate(data)})
+                elif name == "relations":
+                    if isinstance(data, dict):
+                        self.relations.extend(data.get("items", []))
+                    elif isinstance(data, list):
+                        self.relations.extend(data)
+                elif name == "evidence":
+                    if isinstance(data, dict):
+                        self.evidence.extend(data.get("items", []))
+                    elif isinstance(data, list):
+                        self.evidence.extend(data)
+        except (json.JSONDecodeError, OSError):
+            pass
 
     def query_symbol(self, name):
         results = []
@@ -167,6 +199,11 @@ class KnowledgeQuery:
         for concept_name, concept_data in self.concepts.items():
             if name.lower() in str(concept_name).lower():
                 results.append({"type": "concept", "name": concept_name, **(concept_data if isinstance(concept_data, dict) else {})})
+        for reader in self.compact_readers:
+            for sym in reader.symbol_by_name(name):
+                results.append({"type": "symbol", **sym})
+            for f in reader.query_facts_text(name):
+                results.append(f)
         return results
 
     def query_file(self, filepath):
@@ -175,7 +212,142 @@ class KnowledgeQuery:
             if isinstance(fact, dict):
                 if filepath.lower() in str(fact.get("source_file", "")).lower():
                     results.append(fact)
+        for reader in self.compact_readers:
+            fid = reader.file_id_by_path(filepath)
+            if fid is not None:
+                results.extend(reader.query_facts(file_id=fid, limit=20000))
         return results
+
+    def evidence_text(self, fact):
+        """Recover real source text for a fact (compact or JSON)."""
+        for reader in self.compact_readers:
+            ev_id = fact.get("evidence_id")
+            if isinstance(ev_id, int) and ev_id:
+                rec = reader.get_evidence_text(ev_id)
+                if rec:
+                    return rec
+        if self.evidence:
+            ev_id = fact.get("evidence_id")
+            for e in self.evidence:
+                if isinstance(e, dict) and e.get("id") == ev_id:
+                    return e.get("text", "")
+        return None
+
+    def retrieve_context(self, query, max_symbols=8, max_facts_per_symbol=40,
+                         max_related=80, expand_members=True):
+        """Build a compact, provable model context for a query.
+
+        Returns symbols + their atomic facts + member symbols (methods/fields
+        of containers) + resolved CALLS/USES_TYPE targets + the REAL source
+        spans (evidence) — bounded to a few KB, never the whole DB.
+        """
+        ctx = {"query": query, "symbols": [], "related": [], "source_snippets": []}
+        seen_sym = set()
+        seen_snip = set()
+        # 1) candidate symbols: exact first, then substring
+        cands = []
+        for reader in self.compact_readers:
+            cands.extend(reader.symbol_by_name(query))
+            cands.extend(reader.symbol_by_substr(query))
+        def _def_priority(s):
+            k = s.get("kind")
+            sig = s.get("signature") or ""
+            if k in ("struct", "enum", "union", "error", "opaque", "fn", "test"):
+                return 0
+            if any(t in sig for t in ("struct", "enum", "union", "error")):
+                return 0
+            if k == "import":
+                return 2
+            return 1
+        cands.sort(key=lambda s: (_def_priority(s), 0 if s.get("name") == query else 1))
+        container_kinds = {"struct", "enum", "union", "const", "error", "opaque"}
+
+        def add_snippet(fact):
+            rec = self.evidence_text(fact)
+            if isinstance(rec, dict) and rec.get("text"):
+                key = (rec.get("path"), rec.get("start"), rec.get("end"))
+                if key not in seen_snip:
+                    seen_snip.add(key)
+                    ctx["source_snippets"].append({
+                        "path": rec.get("path"), "start": rec.get("start"),
+                        "end": rec.get("end"), "text": rec.get("text")})
+                return True
+            return False
+
+        for sym in cands[:max_symbols]:
+            sid = sym.get("symbol_id")
+            if sid in seen_sym:
+                continue
+            seen_sym.add(sid)
+            entry = dict(sym)
+            facts = []
+            for reader in self.compact_readers:
+                facts.extend(reader.query_facts(subject_id=sid, limit=max_facts_per_symbol))
+            entry["facts"] = facts
+            if facts:
+                add_snippet(facts[0])
+            ctx["symbols"].append(entry)
+            # expand container members (methods/fields) -> their facts+evidence
+            if expand_members and sym.get("kind") in container_kinds:
+                for reader in self.compact_readers:
+                    for mem in reader.nested_symbols(sym):
+                        if mem["symbol_id"] in seen_sym:
+                            continue
+                        seen_sym.add(mem["symbol_id"])
+                        mfacts = reader.query_facts(subject_id=mem["symbol_id"],
+                                                   limit=max_facts_per_symbol)
+                        mentry = dict(mem)
+                        mentry["facts"] = mfacts
+                        if mfacts:
+                            add_snippet(mfacts[0])
+                        ctx["symbols"].append(mentry)
+            # resolve CALLS / USES_TYPE targets -> related symbols
+            for f in facts:
+                if f.get("fact_type") in ("CALLS", "USES_TYPE", "FIELD_ACCESS"):
+                    tgt = f.get("object_value") or f.get("object_id")
+                    if not tgt:
+                        continue
+                    for reader in self.compact_readers:
+                        for rs in reader.symbol_by_name(tgt)[:3]:
+                            if rs["symbol_id"] not in seen_sym and len(ctx["related"]) < max_related:
+                                seen_sym.add(rs["symbol_id"])
+                                ctx["related"].append(rs)
+        blob = json.dumps(ctx, ensure_ascii=False)
+        ctx["_stats"] = {
+            "symbols": len(ctx["symbols"]),
+            "related": len(ctx["related"]),
+            "facts": sum(len(s["facts"]) for s in ctx["symbols"]),
+            "source_snippets": len(ctx["source_snippets"]),
+            "context_chars": len(blob),
+        }
+        return ctx
+
+    def format_context(self, ctx):
+        """Render the retrieved context as compact human/LLM-readable text."""
+        lines = [f"# Knowledge context for: {ctx['query']}", ""]
+        for s in ctx["symbols"]:
+            lines.append(f"## symbol {s.get('name')} ({s.get('kind')}) "
+                         f"@ {s.get('source_file')}:{s.get('line_start')}")
+            if s.get("signature"):
+                lines.append(f"   sig: {s['signature']}")
+            for f in s.get("facts", [])[:25]:
+                lines.append(f"   - {f.get('fact_type')} "
+                             f"{f.get('object_value') or ''} "
+                             f"[{f.get('resolution_status')}]")
+        if ctx.get("related"):
+            lines.append("")
+            lines.append("## related symbols")
+            for r in ctx["related"][:25]:
+                lines.append(f"   - {r.get('name')} ({r.get('kind')}) "
+                             f"@ {r.get('source_file')}:{r.get('line_start')}")
+        if ctx.get("source_snippets"):
+            lines.append("")
+            lines.append("## real source evidence")
+            for sn in ctx["source_snippets"][:15]:
+                lines.append(f"   # {sn.get('path')}:{sn.get('start')}-{sn.get('end')}")
+                for sl in sn.get("text", "").split("\n"):
+                    lines.append(f"   | {sl}")
+        return "\n".join(lines)
 
 
 class SourceIndex:

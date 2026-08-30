@@ -2,6 +2,10 @@
 # The model itself is NEVER committed/pushed; only the knowledge web
 # (source + prebuilt memory/ table) is released via GitHub.
 
+# Compact knowledge store: ship ONLY the gzip artifact (<=100MB). The raw
+# SQLite DB is regenerated locally from source; never push the 282MB raw file.
+**/full_zig/knowledge.db
+
 # Model weights
 *.pt
 **/checkpoints/

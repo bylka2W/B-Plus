@@ -62,3 +62,7 @@ zig/NUL
 
 # Internal docs
 ROADMAP.md
+
+# Tests - not released
+**/tests/
+
