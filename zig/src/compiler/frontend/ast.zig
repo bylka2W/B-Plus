@@ -95,7 +95,7 @@ pub const StructDef = struct {
 
 pub const VariableNode = struct {
     name: []const u8,
-    type_name: []const u8,
+    type_name: ?[]const u8,  // null = auto-infer type from value
     default_value: ?[]const u8,
     is_fast_path: bool,
     cache_policy: ?[]const u8,

@@ -275,8 +275,7 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     const lhs = inst.operands[0];
                     const rhs = inst.operands[1];
                     const rem = allocValue(&next_vreg);
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
-                    try mblock.instrs.append(.{ .idiv = .{ .dividend = .{ .vreg = result }, .divisor = .{ .vreg = rhs }, .quotient = .{ .vreg = result }, .remainder = .{ .vreg = rem } } });
+                    try mblock.instrs.append(.{ .idiv = .{ .dividend = .{ .vreg = lhs }, .divisor = .{ .vreg = rhs }, .quotient = .{ .vreg = result }, .remainder = .{ .vreg = rem } } });
                 },
 
                 .mod => {
@@ -284,8 +283,7 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     const lhs = inst.operands[0];
                     const rhs = inst.operands[1];
                     const q = allocValue(&next_vreg);
-                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = q }, .src = .{ .vreg = lhs } } });
-                    try mblock.instrs.append(.{ .idiv = .{ .dividend = .{ .vreg = q }, .divisor = .{ .vreg = rhs }, .quotient = .{ .vreg = q }, .remainder = .{ .vreg = result } } });
+                    try mblock.instrs.append(.{ .idiv = .{ .dividend = .{ .vreg = lhs }, .divisor = .{ .vreg = rhs }, .quotient = .{ .vreg = q }, .remainder = .{ .vreg = result } } });
                 },
 
                 .neg => {
@@ -462,6 +460,26 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                 },
                 .fge => if (result != NO_VALUE and inst.operands.len >= 2) {
                     try mblock.instrs.append(.{ .fcmp = .{ .cc = .ge, .dst = .{ .vreg = result }, .a = .{ .vreg = inst.operands[0] }, .b = .{ .vreg = inst.operands[1] } } });
+                },
+
+                .and_op => {
+                    if (result == NO_VALUE or inst.operands.len < 2) continue;
+                    const lhs = inst.operands[0];
+                    const rhs = inst.operands[1];
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
+                    try mblock.instrs.append(.{ .@"and" = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = rhs } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .or_op => {
+                    if (result == NO_VALUE or inst.operands.len < 2) continue;
+                    const lhs = inst.operands[0];
+                    const rhs = inst.operands[1];
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
+                    try mblock.instrs.append(.{ .@"or" = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = rhs } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
                 },
 
                 .unreachable_op => {

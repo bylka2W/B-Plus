@@ -581,16 +581,27 @@ pub const Parser = struct {
 
     fn parseVarDecls(p: *Parser) !std.ArrayList(ast.VariableNode) {
         var vars = std.ArrayList(ast.VariableNode).init(p.allocator);
-        try p.expect(.kw_var);
+        
+        // Support both: var x:i32 = 10 (old) and x = 10 (new auto-infer)
+        const has_var_kw = p.peek(.kw_var);
+        if (has_var_kw) {
+            p.advance();  // consume 'var'
+        }
 
         const is_fast_path = false;
 
         const name = p.identText();
         p.advance();
-        try p.expect(.colon);
-        const type_name = p.identText();
-        p.advance();
 
+        // Check for type annotation (colon)
+        var type_name: ?[]const u8 = null;
+        if (p.peek(.colon)) {
+            p.advance();  // consume ':'
+            type_name = p.identText();
+            p.advance();
+        }
+
+        // Expect '=' for value assignment
         var default: ?[]const u8 = null;
         if (p.peek(.eq)) {
             p.advance();
@@ -603,7 +614,7 @@ pub const Parser = struct {
         const cp = parseVarCacheAnnotation(p);
         try vars.append(.{
             .name = name,
-            .type_name = type_name,
+            .type_name = type_name,  // null = auto-infer
             .default_value = default,
             .is_fast_path = is_fast_path,
             .cache_policy = cp,
@@ -615,13 +626,18 @@ pub const Parser = struct {
             p.advance();
             const n = p.identText();
             p.advance();
-            try p.expect(.colon);
-            const t = p.identText();
-            p.advance();
+            
+            var t: ?[]const u8 = null;
+            if (p.peek(.colon)) {
+                p.advance();
+                t = p.identText();
+                p.advance();
+            }
+            
             const cp2 = parseVarCacheAnnotation(p);
             try vars.append(.{
                 .name = n,
-                .type_name = t,
+                .type_name = t,  // null = auto-infer
                 .default_value = null,
                 .is_fast_path = false,
                 .cache_policy = cp2,

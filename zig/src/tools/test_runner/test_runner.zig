@@ -1,7 +1,11 @@
 ﻿const std = @import("std");
 const parser = @import("../../compiler/frontend/parser/parser.zig");
-const x64gen = @import("../../compiler/backend/targets/x64/x64gen.zig");
-const pe = @import("../../compiler/backend/object/pe/pe.zig");
+const coff = @import("../../compiler/backend/object/coff/coff.zig");
+const sema_mod = @import("../../compiler/frontend/sema/sema.zig");
+const type_sys = @import("../../compiler/frontend/type_system/type_system.zig");
+const ver_pipeline = @import("../../compiler/middle/pipeline/pipeline.zig");
+const linker = @import("../../linker/linker.zig");
+const minrt_obj_bytes = @embedFile("../../runtime/minrt.obj");
 
 // --- v1: per-case return expectations ---
 pub const Expect = union(enum) {
@@ -516,10 +520,10 @@ pub fn parseTestDesc(allocator: std.mem.Allocator, text: []const u8) !TestDesc {
 // --- Compilation ---
 
 fn compileDll(allocator: std.mem.Allocator, source_path: []const u8, dll_path: []const u8) !void {
-    return compileDllEx(allocator, source_path, dll_path, .off);
+    return compileDllEx(allocator, source_path, dll_path);
 }
 
-fn compileDllEx(allocator: std.mem.Allocator, source_path: []const u8, dll_path: []const u8, trace_mode: x64gen.TraceMode) !void {
+fn compileDllEx(allocator: std.mem.Allocator, source_path: []const u8, dll_path: []const u8) !void {
     var src = try std.fs.cwd().readFileAlloc(allocator, source_path, std.math.maxInt(u32));
     defer allocator.free(src);
 
@@ -533,26 +537,44 @@ fn compileDllEx(allocator: std.mem.Allocator, source_path: []const u8, dll_path:
     var program = try p.parse();
     defer program.deinit();
 
-    var output = try x64gen.generateEx(allocator, program, true, trace_mode);
-    defer allocator.free(output.code);
-    defer output.symbols.deinit();
+    const sema_result = sema_mod.analyze(allocator, program, src, "test.bpt") catch |err| {
+        std.log.err("semantic analysis failed: {}", .{err});
+        std.process.exit(1);
+    };
+    defer sema_result.deinit();
 
-    var resolved = std.ArrayList(pe.ResolvedExport).init(allocator);
-    defer resolved.deinit();
-    for (output.symbols.symbols.items) |s| {
-        if (s.kind == .exp) {
-            try resolved.append(.{
-                .name = s.name,
-                .rva = if (s.forward_to == null) pe.section_rva + s.rva else 0,
-                .forward_to = s.forward_to,
-            });
-        }
+    var type_engine = type_sys.TypeEngine.init(allocator);
+    defer type_engine.deinit();
+
+    var pipeline_result = try ver_pipeline.runFullVerifiedPipeline(allocator, &program, &sema_result, &type_engine);
+    defer {
+        pipeline_result.verified_machine.deinit();
+        pipeline_result.verified_mir.deinit();
+        pipeline_result.verified_bir.deinit();
     }
 
-    const pe_bytes = try pe.writeDll(allocator, output.code, output.import_dir_rva, output.idat_size, resolved.items);
-    defer allocator.free(pe_bytes);
+    const mfuncs = pipeline_result.verified_mir.getModule().functions.items;
+    const coff_result = try coff.emitCoff(mfuncs);
+    defer coff_result.bytes.deinit();
 
-    try std.fs.cwd().writeFile(.{ .sub_path = dll_path, .data = pe_bytes });
+    const tmp_dir = std.fs.cwd();
+    const obj_name = ".bpc_test.obj";
+    try tmp_dir.writeFile(.{ .sub_path = obj_name, .data = coff_result.bytes.items });
+    const rt_obj_name = ".bpc_minrt.obj";
+    try tmp_dir.writeFile(.{ .sub_path = rt_obj_name, .data = minrt_obj_bytes });
+
+    try linker.link(allocator, .{
+        .obj_path = obj_name,
+        .output_path = dll_path,
+        .entry = "bplus_start",
+        .subsystem = "console",
+        .mode = .dll,
+        .libs = &.{"kernel32.lib"},
+        .extra_objs = &.{rt_obj_name},
+    });
+
+    tmp_dir.deleteFile(obj_name) catch {};
+    tmp_dir.deleteFile(rt_obj_name) catch {};
 }
 
 // --- v1: per-case return expectation helpers ---
@@ -991,8 +1013,7 @@ pub fn runTest(allocator: std.mem.Allocator, source_full: []const u8, desc: Test
 
     // Step 1: compile
     try writer.print("  COMPILE: ", .{});
-    const trace_mode: x64gen.TraceMode = if (has_frames) .full else .off;
-    compileDllEx(allocator, source_full, dll_path, trace_mode) catch |err| {
+    compileDllEx(allocator, source_full, dll_path) catch |err| {
         try writer.print("FAIL ({any})\n", .{err});
         return TestResult{ .name = desc.name, .status = .@"error", .compile_ok = false, .load_ok = false, .cases = &.{}, .frames = &.{} };
     };

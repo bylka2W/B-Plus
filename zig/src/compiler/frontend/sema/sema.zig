@@ -3,6 +3,49 @@ const Allocator = std.mem.Allocator;
 const ast = @import("ast.zig");
 const scope_mod = @import("scope.zig");
 
+/// Infer type from default value when type_name is null (auto-infer)
+/// B+ default rules: int → i64, float → f64, string, bool
+/// Returns the inferred type name (caller owns the memory)
+fn inferTypeFromValue(allocator: Allocator, default_value: []const u8) ![]const u8 {
+    if (default_value.len > 0) {
+        // Check if it's a numeric literal
+        var is_number = true;
+        var has_dot = false;
+        for (default_value, 0..) |ch, i| {
+            if (i == 0 and (ch == '-' or ch == '+')) continue;
+            if (ch == '.') {
+                if (has_dot) { is_number = false; break; }
+                has_dot = true;
+                continue;
+            }
+            if (ch < '0' or ch > '9') { is_number = false; break; }
+        }
+        
+        if (is_number and default_value.len > 0) {
+            if (has_dot) {
+                // Float literal → f64 (B+ default float)
+                return try allocator.dupe(u8, "f64");
+            } else {
+                // Integer literal → i64 (B+ default integer)
+                return try allocator.dupe(u8, "i64");
+            }
+        }
+        
+        // String literal → string
+        if (default_value[0] == '"' and default_value[default_value.len - 1] == '"') {
+            return try allocator.dupe(u8, "string");
+        }
+        
+        // Boolean literals
+        if (std.mem.eql(u8, default_value, "true") or std.mem.eql(u8, default_value, "false")) {
+            return try allocator.dupe(u8, "bool");
+        }
+    }
+    
+    // Default to i64 if can't infer (B+ default integer)
+    return try allocator.dupe(u8, "i64");
+}
+
 pub const SemaError = error{
     UndefinedVariable,
     UndefinedFunction,
@@ -243,6 +286,7 @@ fn validateFuncBody(
 
         if (std.mem.startsWith(u8, trimmed, "return")) return_count += 1;
 
+        // var x:i32 = 10 (old syntax)
         if (std.mem.startsWith(u8, trimmed, "var ")) {
             const rest = trimmed["var ".len..];
             const name = extractVarName(rest);
@@ -253,6 +297,29 @@ fn validateFuncBody(
                 if (vtype) |vt| {
                     try validateTypeRef(vt, defined_structs, defined_enums, file_path, src);
                 }
+            }
+        }
+        // x = 10 or x:i64 = 10 (new auto-infer syntax)
+        else if (std.mem.indexOfScalar(u8, trimmed, '=')) |eq_idx| {
+            const lhs = std.mem.trim(u8, trimmed[0..eq_idx], " \t\r\n");
+            // Check for type annotation: x:i64 = 10
+            if (std.mem.indexOfScalar(u8, lhs, ':')) |colon_idx| {
+                const var_name = std.mem.trim(u8, lhs[0..colon_idx], " \t\r\n");
+                const type_name = std.mem.trim(u8, lhs[colon_idx + 1 ..], " \t\r\n");
+                if (var_name.len > 0 and type_name.len > 0) {
+                    const type_id = ast.TypeId.fromName(type_name);
+                    try parent_symtab.define(var_name, .variable, type_id, type_name);
+                    try validateTypeRef(type_name, defined_structs, defined_enums, file_path, src);
+                }
+            }
+            // x = 10 (auto-infer)
+            else if (lhs.len > 0) {
+                // Infer type from RHS
+                const rhs = std.mem.trim(u8, trimmed[eq_idx + 1 ..], " \t\r\n");
+                const inferred_type = try inferTypeFromValue(allocator, rhs);
+                defer allocator.free(inferred_type);
+                const type_id = ast.TypeId.fromName(inferred_type);
+                try parent_symtab.define(lhs, .variable, type_id, inferred_type);
             }
         }
 
@@ -294,9 +361,15 @@ fn validateBody(
 
     // Register state variables
     for (state_vars) |v| {
-        const type_id = ast.TypeId.fromName(v.type_name);
-        try parent_symtab.define(v.name, .variable, type_id, v.type_name);
-        try validateTypeRef(v.type_name, defined_structs, defined_enums, file_path, src);
+        // Auto-infer type if not specified
+        const resolved_type_name = if (v.type_name) |tn| tn 
+            else if (v.default_value) |dv| try inferTypeFromValue(allocator, dv)
+            else "i32";
+        const type_id = ast.TypeId.fromName(resolved_type_name);
+        try parent_symtab.define(v.name, .variable, type_id, resolved_type_name);
+        if (v.type_name) |tn| {
+            try validateTypeRef(tn, defined_structs, defined_enums, file_path, src);
+        }
     }
 
     var brace_depth: i32 = 0;

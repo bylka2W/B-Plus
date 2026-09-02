@@ -1,7 +1,6 @@
 ﻿const std = @import("std");
 const ast = @import("compiler/frontend/ast.zig");
 const parser = @import("compiler/frontend/parser/parser.zig");
-const x64gen = @import("compiler/backend/targets/x64/x64gen.zig");
 const pe = @import("compiler/backend/object/pe/pe.zig");
 const coff = @import("compiler/backend/object/coff/coff.zig");
 const test_runner = @import("tools/test_runner/test_runner.zig");
@@ -128,34 +127,6 @@ pub fn main() !void {
             try stdout.print("STATUS: {s}\n", .{@tagName(result.status)});
         }
         std.process.exit(if (result.status == .pass) 0 else 1);
-    }
-
-    // C++ mode: generate C++ from B+
-    if (std.mem.eql(u8, command, "cpp")) {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
-
-        const trimmed = std.mem.trim(u8, src, " \t\r\n");
-        if (std.mem.startsWith(u8, trimmed, "kernel ")) {
-            // GPU kernel → UE C++ shader class via gpu_cpp
-            try gpuCompileAndWrite(arena_alloc, src, input_path, output_path, .cpp);
-        } else {
-            // General B+ → full C++ via cppgen
-            const cppgen = @import("compiler/frontend/cppgen.zig");
-            var p = parser.Parser.init(arena_alloc, src, input_path);
-            const program = try p.parse();
-            const output = try cppgen.generate(arena_alloc, program);
-            const out_path = output_path orelse blk: {
-                const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
-                const base = input_path[0..ext_idx];
-                break :blk try std.fmt.allocPrint(arena_alloc, "{s}.cpp", .{base});
-            };
-            try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = output.text });
-            const stdout = std.io.getStdOut().writer();
-            try stdout.print("C++ written to {s}\n", .{out_path});
-        }
-        return;
     }
 
     // HLSL mode: generate HLSL shader text
@@ -526,48 +497,71 @@ pub fn main() !void {
     const is_dll = std.mem.eql(u8, command, "dll");
     const is_run = std.mem.eql(u8, command, "run");
 
-    if (is_dll) {
-        // DLL: keep old x64gen path (DLL exports need special handling)
-        var output = try x64gen.generateEx(allocator, program, true, .off);
-        defer allocator.free(output.code);
-        defer output.symbols.deinit();
+    // For .b+ files: use bir_bplus_frontend path (B+ native syntax: x = 10 without var)
+    const is_bplus_file = std.mem.endsWith(u8, input_path, ".b+");
+    if (is_bplus_file and (is_run or is_dll)) {
+        var bir_module = try bir_bplus_frontend.lowerProgram(allocator, &program);
 
-        const out_path = output_path orelse blk: {
+        const mfuncs = try bir_cpu.lowerModuleToMir(allocator, &bir_module);
+
+        var mir_funcs_list = std.ArrayList(mir.MFunction).init(allocator);
+        try mir_funcs_list.appendSlice(mfuncs);
+        _ = mir.MModule{ .functions = mir_funcs_list, .allocator = allocator };
+        const coff_result = try coff.emitCoff(mfuncs);
+        defer coff_result.bytes.deinit();
+
+        const ext = if (is_dll) "dll" else "exe";
+        const out_path_result = output_path orelse blk: {
             const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
             const base = input_path[0..ext_idx];
-            break :blk try std.fmt.allocPrint(allocator, "{s}.dll", .{base});
+            break :blk try std.fmt.allocPrint(allocator, "{s}.{s}", .{ base, ext });
         };
-        defer if (output_path == null) allocator.free(out_path);
+        defer if (output_path == null) allocator.free(out_path_result);
 
-        var resolved = std.ArrayList(pe.ResolvedExport).init(allocator);
-        defer resolved.deinit();
-        if (export_names) |names| {
-            var it = std.mem.splitScalar(u8, names, ',');
-            while (it.next()) |name| {
-                const trimmed = std.mem.trim(u8, name, " \t");
-                for (program.metal.entries.items) |*e| {
-                    if (std.mem.eql(u8, e.name, trimmed)) {
-                        e.is_export = true;
-                    }
-                }
+        const tmp_dir = std.fs.cwd();
+        const obj_name = try std.fmt.allocPrint(allocator, ".bpc_{s}.obj", .{std.fs.path.stem(input_path)});
+        defer allocator.free(obj_name);
+        try tmp_dir.writeFile(.{ .sub_path = obj_name, .data = coff_result.bytes.items });
+
+        const rt_obj_name = ".bpc_minrt.obj";
+        try tmp_dir.writeFile(.{ .sub_path = rt_obj_name, .data = minrt_obj_bytes });
+
+        const linker = @import("linker/linker.zig");
+        try linker.link(allocator, .{
+            .obj_path = obj_name,
+            .output_path = out_path_result,
+            .entry = "bplus_start",
+            .subsystem = "console",
+            .mode = if (is_dll) .dll else .exe,
+            .libs = &.{"kernel32.lib"},
+            .extra_objs = &.{rt_obj_name},
+        });
+
+        _ = tmp_dir.deleteFile(obj_name) catch {};
+        _ = tmp_dir.deleteFile(rt_obj_name) catch {};
+
+        const stdout = std.io.getStdOut().writer();
+        try stdout.print("Built: {s}\n", .{out_path_result});
+
+        if (is_run) {
+            const run_result = std.process.Child.run(.{
+                .allocator = allocator,
+                .argv = &.{out_path_result},
+            }) catch |err| {
+                std.log.err("failed to run: {}", .{err});
+                std.process.exit(1);
+            };
+            defer allocator.free(run_result.stdout);
+            defer allocator.free(run_result.stderr);
+            try std.io.getStdOut().writeAll(run_result.stdout);
+            if (run_result.stderr.len > 0) {
+                try std.io.getStdErr().writeAll(run_result.stderr);
             }
         }
-        for (output.symbols.symbols.items) |s| {
-            if (s.kind == .exp) {
-                try resolved.append(.{
-                    .name = s.name,
-                    .rva = if (s.forward_to == null) pe.section_rva + s.rva else 0,
-                    .forward_to = s.forward_to,
-                });
-            }
-        }
-        const pe_bytes = try pe.writeDll(allocator, output.code, output.import_dir_rva, output.idat_size, resolved.items);
-        defer allocator.free(pe_bytes);
-        try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = pe_bytes });
         return;
     }
 
-    // Verified pipeline: HIR → THIR → BIR(SSA) → MIR → COFF → link → PE
+    // Verified pipeline: HIR → THIR → BIR(SSA) → MIR → COFF → link → PE/DLL
     var type_engine = type_sys.TypeEngine.init(allocator);
     defer type_engine.deinit();
 
@@ -580,17 +574,17 @@ pub fn main() !void {
 
     const mfuncs = pipeline_result.verified_mir.getModule().functions.items;
     if (mfuncs.len == 0) {
-        std.log.err("pipeline produced no functions: PLAN state machines are not yet lowered through the new pipeline. Use 'bpc dll' for PLAN programs.", .{});
+        std.log.err("pipeline produced no functions: PLAN state machines are not yet lowered through the new pipeline.", .{});
         std.process.exit(1);
     }
     const coff_result = try coff.emitCoff(mfuncs);
     defer coff_result.bytes.deinit();
 
-    // Determine output path
+    const ext = if (is_dll) "dll" else "exe";
     const out_path = output_path orelse blk: {
         const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
         const base = input_path[0..ext_idx];
-        break :blk try std.fmt.allocPrint(allocator, "{s}.exe", .{base});
+        break :blk try std.fmt.allocPrint(allocator, "{s}.{s}", .{ base, ext });
     };
     defer if (output_path == null) allocator.free(out_path);
 
@@ -604,19 +598,19 @@ pub fn main() !void {
     const rt_obj_name = ".bpc_minrt.obj";
     try tmp_dir.writeFile(.{ .sub_path = rt_obj_name, .data = minrt_obj_bytes });
 
-    // Link with lld-link
+    // Link with lld-link (EXE or DLL)
     const linker = @import("linker/linker.zig");
     try linker.link(allocator, .{
         .obj_path = obj_name,
         .output_path = out_path,
         .entry = "bplus_start",
         .subsystem = "console",
+        .mode = if (is_dll) .dll else .exe,
         .libs = &.{"kernel32.lib"},
         .extra_objs = &.{rt_obj_name},
     });
 
-    // Link succeeded: remove temporary artifacts so the user only sees <input>.exe.
-    // On failure the temp files are left in place for diagnostics.
+    // Clean up temp artifacts
     const base_ext = std.mem.lastIndexOfScalar(u8, out_path, '.') orelse out_path.len;
     const lib_path = try std.fmt.allocPrint(allocator, "{s}.lib", .{out_path[0..base_ext]});
     defer allocator.free(lib_path);

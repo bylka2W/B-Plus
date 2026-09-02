@@ -184,10 +184,13 @@ pub fn verifyInst(inst: ir.Instruction) !void {
         => try verifyMR(inst),
 
         .NOT_R64, .NEG_R64, .NOT_R32, .NEG_R32,
-        .IDIV_R64, .PUSH_R64, .POP_R64, .CALL_R64, .CQO,
+        .IDIV_R64, .PUSH_R64, .POP_R64, .CALL_R64,
         .SHIFT_LEFT_CL, .SHIFT_RIGHT_CL, .SAR_R64_CL,
         .SHR_R64_CL, .SHR_R32_CL,
         => try verifyR(inst),
+
+        .CQO,
+        => try verifyNone(inst),
 
         .RET, .NOP, .INT3, .UD2, .PUSHFQ, .POPFQ,
         => try verifyNone(inst),

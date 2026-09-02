@@ -93,6 +93,10 @@ pub fn append2(ctx: *Ctx, op: OpCode, o1: Operand, o2: Operand) !void {
     try ctx.mf.appendInstr2(ctx.bi, op, o1, o2);
 }
 
+pub fn append0(ctx: *Ctx, op: OpCode) !void {
+    try ctx.mf.appendInstr(ctx.bi, op, &.{});
+}
+
 pub fn append1(ctx: *Ctx, op: OpCode, o1: Operand) !void {
     try ctx.mf.appendInstr1(ctx.bi, op, o1);
 }

@@ -66,3 +66,55 @@ ROADMAP.md
 # Tests - not released
 **/tests/
 
+# ==========================================
+# TEMP FILES - build outputs, test artifacts
+# ==========================================
+
+# Compiled B+ test files
+*.lib
+*.obj
+!src/**/*.obj
+
+# Debug/temp files
+dbg_*.txt
+debug_*.txt
+test_output.txt
+model_warn.log
+
+# Temp test .b+ files in root (not source)
+fix*.b+
+fix*.lib
+t*.b+
+t*.lib
+Test.b+
+Test.lib
+test*.lib
+cmp*.b+
+td*.b+
+tv_*.b+
+tc_*.b+
+tsmod*.b+
+tdmod.b+
+tmod*.b+
+tmul.b+
+tsub.b+
+tlogic.b+
+tlogic.lib
+tmin.lib
+tfn.lib
+ti32.lib
+tflt.lib
+tcmp.lib
+test1.lib
+test2.lib
+test3.lib
+test4.lib
+test6.lib
+test_all.lib
+test_return.lib
+
+# Profiling
+zig/prof/
+
+# Agent warnings
+agent/agent b+/model_warn.log

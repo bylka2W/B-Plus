@@ -8,6 +8,7 @@ const spill = @import("spill.zig");
 const ctx_mod = @import("context.zig");
 const Ctx = ctx_mod.Ctx;
 const append2 = ctx_mod.append2;
+const append0 = ctx_mod.append0;
 const append1 = ctx_mod.append1;
 const resolveReg = ctx_mod.resolveReg;
 const resolveOp = ctx_mod.resolveOp;
@@ -206,23 +207,41 @@ pub fn selectSetCC(ctx: *Ctx, s: mir.SetCCInst) !void {
 pub fn selectIDiv(ctx: *Ctx, m: mir.IDivInst) !void {
     const quotient_spilled = regalloc.isSpilled(ctx.ra, m.quotient);
     const quotient_reg = if (quotient_spilled) -1 else resolveReg(ctx.ra, m.quotient);
-    const quotient_is_rax = !quotient_spilled and quotient_reg == 0;
+    // Treat unallocated quotient as RAX (it's dead, just leave result in RAX).
+    const quotient_is_rax = quotient_spilled or quotient_reg == 0 or quotient_reg == -1;
 
+    const remainder_spilled = regalloc.isSpilled(ctx.ra, m.remainder);
+    const remainder_reg = if (remainder_spilled) -1 else resolveReg(ctx.ra, m.remainder);
+
+
+
+    // Save RAX only if quotient won't be in RAX (we need RAX for dividend).
     if (!quotient_is_rax) {
         try append1(ctx, .PUSH_R64, Operand.r(0));
     }
+    // Always save RDX (IDIV clobbers it).
     try append1(ctx, .PUSH_R64, Operand.r(2));
 
+    // Resolve divisor BEFORE loading dividend (divisor may use scratch).
     const raw_src = try resolveOpOrSpill(ctx, m.divisor);
-    const src_op = if (raw_src.reg >= 0 or raw_src.base_reg >= 0 or raw_src.index_reg >= 0) raw_src else blk: {
-        try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), raw_src);
-        break :blk Operand.r(ctx.scratch);
+    const src_op = blk: {
+        const is_rax_or_rdx = raw_src.reg == 0 or raw_src.reg == 2;
+        const is_mem_based = raw_src.base_reg >= 0 or raw_src.index_reg >= 0;
+        if (raw_src.reg < 0 and !is_mem_based) {
+            try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), raw_src);
+            break :blk Operand.r(ctx.scratch);
+        } else if (is_rax_or_rdx or is_mem_based) {
+            try append2(ctx, .MOV_R64_R64, Operand.r(ctx.scratch), raw_src);
+            break :blk Operand.r(ctx.scratch);
+        } else {
+            break :blk raw_src;
+        }
     };
 
-    if (quotient_spilled) {
-        try spill.loadSpilledOp(ctx, m.quotient, 0);
-    } else if (!quotient_is_rax) {
-        try append2(ctx, .MOV_R64_R64, Operand.r(0), Operand.r(quotient_reg));
+    // Load dividend into RAX.
+    const dividend_spilled = regalloc.isSpilled(ctx.ra, m.dividend);
+    if (dividend_spilled) {
+        try spill.loadSpilledOp(ctx, m.dividend, 0);
     } else {
         const dividend_reg = resolveReg(ctx.ra, m.dividend);
         if (dividend_reg != 0) {
@@ -230,33 +249,28 @@ pub fn selectIDiv(ctx: *Ctx, m: mir.IDivInst) !void {
         }
     }
 
-    try append1(ctx, .CQO, .{});
+    try append0(ctx, .CQO);
     try append1(ctx, .IDIV_R64, src_op);
 
+    // After IDIV: RAX = quotient, RDX = remainder.
+    // Step 1: If quotient target is NOT RAX, move quotient out of RAX first.
     if (!quotient_is_rax) {
-        try append2(ctx, .MOV_R64_R64, Operand.r(ctx.scratch), Operand.r(0));
+        try append2(ctx, .MOV_R64_R64, Operand.r(quotient_reg), Operand.r(0));
     }
+    // Step 2: Save remainder from RDX to scratch.
+    try append2(ctx, .MOV_R64_R64, Operand.r(ctx.scratch), Operand.r(2));
+
+    // Step 3: Restore stack.
     try append1(ctx, .POP_R64, Operand.r(2));
     if (!quotient_is_rax) {
         try append1(ctx, .POP_R64, Operand.r(0));
-        if (quotient_spilled) {
-            try spill.storeSpilledOp(ctx, m.quotient, ctx.scratch);
-        } else if (quotient_reg != 0) {
-            try append2(ctx, .MOV_R64_R64, Operand.r(quotient_reg), Operand.r(ctx.scratch));
-        }
     }
 
-    const remainder_spilled = regalloc.isSpilled(ctx.ra, m.remainder);
-    const remainder_reg = if (remainder_spilled) -1 else resolveReg(ctx.ra, m.remainder);
-    if (remainder_reg != 2) {
-        if (remainder_spilled) {
-            try append2(ctx, .MOV_R64_R64, Operand.r(ctx.scratch), Operand.r(2));
-            try spill.storeSpilledOp(ctx, m.remainder, ctx.scratch);
-        } else {
-            try append2(ctx, .MOV_R64_R64, Operand.r(remainder_reg), Operand.r(2));
-        }
-    } else if (remainder_spilled) {
-        try spill.storeSpilledOp(ctx, m.remainder, 2);
+    // Step 4: Store remainder from scratch.
+    if (remainder_spilled) {
+        try spill.storeSpilledOp(ctx, m.remainder, ctx.scratch);
+    } else {
+        try append2(ctx, .MOV_R64_R64, Operand.r(remainder_reg), Operand.r(ctx.scratch));
     }
 }
 

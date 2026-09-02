@@ -88,6 +88,7 @@ fn makeInst(allocator: Allocator, op: Op, ty: TypeId, ops: []const ValueId, data
 const VarInfo = struct {
     value: ValueId,
     type_id: TypeId,
+    is_param: bool = false,
 };
 
 fn lowerFunction(
@@ -127,7 +128,7 @@ fn lowerFunction(
     for (func.params.items, 0..) |param, i| {
         const param_ty = try mapType(module, param.type_name);
         const pval = module.getFunction(func_id).param_values[i];
-        try b.vars.put(param.name, .{ .value = pval, .type_id = param_ty });
+        try b.vars.put(param.name, .{ .value = pval, .type_id = param_ty, .is_param = true });
         {
             const fn_mut = module.getFunctionMut(func_id);
             const owned_name = try allocator.dupe(u8, param.name);
@@ -247,7 +248,25 @@ fn lowerStateEntry(
     defer b.func_return_types.deinit();
 
     for (state.variables.items) |v| {
-        const vt = try mapType(module, v.type_name);
+        const resolved_type = v.type_name orelse blk: {
+            // Auto-infer from default value (B+ rules: int → i64, float → f64)
+            if (v.default_value) |dv| {
+                if (dv.len > 0) {
+                    var is_num = true;
+                    var has_dot = false;
+                    for (dv, 0..) |ch, i| {
+                        if (i == 0 and (ch == '-' or ch == '+')) continue;
+                        if (ch == '.') { if (has_dot) { is_num = false; break; } has_dot = true; continue; }
+                        if (ch < '0' or ch > '9') { is_num = false; break; }
+                    }
+                    if (is_num) break :blk if (has_dot) "f64" else "i64";
+                    if (dv[0] == '"') break :blk "string";
+                    if (std.mem.eql(u8, dv, "true") or std.mem.eql(u8, dv, "false")) break :blk "bool";
+                }
+            }
+            break :blk "i64";
+        };
+        const vt = try mapType(module, resolved_type);
         const slot = try b.emitOp(.alloca, vt, &.{}, .{ .none = {} });
         try b.vars.put(v.name, .{ .value = slot, .type_id = vt });
         if (v.default_value) |dv| {
@@ -348,6 +367,10 @@ const Builder = struct {
         return self.emitOp(.@"const", t_i64, &.{}, .{ .const_data = .{ .int = v } });
     }
 
+    fn emitConstFloat(self: *Builder, v: f64) !ValueId {
+        return self.emitOp(.@"const", t_f64, &.{}, .{ .const_data = .{ .float = v } });
+    }
+
     fn emitConstBool(self: *Builder, v: bool) !ValueId {
         return self.emitOp(.@"const", t_i1, &.{}, .{ .const_data = .{ .bool = v } });
     }
@@ -358,16 +381,11 @@ const Builder = struct {
     }
 
     fn emitBinOp(self: *Builder, op: Op, lty: TypeId, rty: TypeId, l: ValueId, r: ValueId) !ValueId {
-        const result_ty = self.inferBinResultType(lty, rty);
-        return self.emitOp(op, result_ty, &.{ l, r }, .{ .none = {} });
-    }
-
-    fn inferBinResultType(_: *Builder, lty: TypeId, rty: TypeId) TypeId {
-        if (lty == rty) return lty;
-        if (lty == t_i1 or rty == t_i1) return t_i1;
-        if (lty == t_f64 or rty == t_f64) return t_f64;
-        if (lty == t_f32 or rty == t_f32) return t_f32;
-        return lty;
+        if (lty != rty) {
+            std.log.err("type mismatch: binary operand types must match (got different types)", .{});
+            return BIRError.TypeError;
+        }
+        return self.emitOp(op, lty, &.{ l, r }, .{ .none = {} });
     }
 
     fn emitNeg(self: *Builder, val: ValueId, ty: TypeId) !ValueId {
@@ -392,7 +410,69 @@ const Builder = struct {
     }
 };
 
-fn inferExprType(b: *Builder, expr: []const u8) TypeId {
+/// Resolve the correct BIR Op for a binary operation based on operand types.
+/// Returns the BIR op or error if the operation is not valid for the given types.
+fn resolveBinOp(op_str: []const u8, ty: TypeId) !Op {
+    const is_float = (ty == t_f32 or ty == t_f64);
+    const is_int = (ty == t_i64 or ty == t_i32 or ty == t_i16 or ty == t_i8 or
+        ty == t_u64 or ty == t_u32 or ty == t_u16 or ty == t_u8);
+    const is_bool = (ty == t_i1);
+
+    if (std.mem.eql(u8, op_str, "+")) {
+        if (is_int) return .add;
+        if (is_float) return .fadd;
+    }
+    if (std.mem.eql(u8, op_str, "-")) {
+        if (is_int) return .sub;
+        if (is_float) return .fsub;
+    }
+    if (std.mem.eql(u8, op_str, "*")) {
+        if (is_int) return .mul;
+        if (is_float) return .fmul;
+    }
+    if (std.mem.eql(u8, op_str, "/")) {
+        if (is_int) return .div;
+        if (is_float) return .fdiv;
+    }
+    if (std.mem.eql(u8, op_str, "%")) {
+        if (is_int) return .mod;
+        if (is_float) return .fmod;
+    }
+    if (std.mem.eql(u8, op_str, "==")) {
+        if (is_int or is_bool) return .eq;
+        if (is_float) return .feq;
+    }
+    if (std.mem.eql(u8, op_str, "!=")) {
+        if (is_int or is_bool) return .ne;
+        if (is_float) return .fne;
+    }
+    if (std.mem.eql(u8, op_str, "<=")) {
+        if (is_int) return .le;
+        if (is_float) return .fle;
+    }
+    if (std.mem.eql(u8, op_str, ">=")) {
+        if (is_int) return .ge;
+        if (is_float) return .fge;
+    }
+    if (std.mem.eql(u8, op_str, "<")) {
+        if (is_int) return .lt;
+        if (is_float) return .flt;
+    }
+    if (std.mem.eql(u8, op_str, ">")) {
+        if (is_int) return .gt;
+        if (is_float) return .fgt;
+    }
+    if (std.mem.eql(u8, op_str, "&&")) {
+        if (is_bool) return .and_op;
+    }
+    if (std.mem.eql(u8, op_str, "||")) {
+        if (is_bool) return .or_op;
+    }
+    std.log.err("type mismatch: operator '{s}' is not valid for this type", .{op_str});
+    return BIRError.TypeError;
+}
+
+fn inferExprType(b: *Builder, expr: []const u8) !TypeId {
     const t = std.mem.trim(u8, expr, " \t\r\n");
     if (t.len == 0) return t_void;
 
@@ -407,7 +487,7 @@ fn inferExprType(b: *Builder, expr: []const u8) TypeId {
 
     if (t[0] == '(') {
         if (findParenEnd(t, 0)) |end| {
-            if (end == t.len - 1) return inferExprType(b, t[1..end]);
+            if (end == t.len - 1) return try inferExprType(b, t[1..end]);
         }
     }
 
@@ -437,16 +517,15 @@ fn inferExprType(b: *Builder, expr: []const u8) TypeId {
     };
     for (arop_ops) |pair| {
         if (findBinOp(t, pair[0])) |parts| {
-            const lty = inferExprType(b, parts.left);
-            const rty = inferExprType(b, parts.right);
-            if (lty == t_f64 or rty == t_f64) return t_f64;
-            if (lty == t_f32 or rty == t_f32) return t_f32;
+            const lty = try inferExprType(b, parts.left);
+            const rty = try inferExprType(b, parts.right);
             if (lty == rty) return lty;
-            return t_i64;
+            std.log.err("type mismatch: incompatible types in binary operation (different types must match in B+)", .{});
+            return BIRError.TypeError;
         }
     }
 
-    if (t[0] == '-' and t.len > 1) return inferExprType(b, t[1..]);
+    if (t[0] == '-' and t.len > 1) return try inferExprType(b, t[1..]);
 
     if (b.getVar(t)) |vi| return vi.type_id;
 
@@ -462,7 +541,7 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
             try b.retVoid();
         } else {
             const val = try lowerExpr(b, rest);
-            const ty = inferExprType(b, rest);
+            const ty = try inferExprType(b, rest);
             try b.emitRet(val, ty);
         }
         return;
@@ -490,7 +569,7 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
             const expr_str = std.mem.trim(u8, rest[eq + 1 ..], " \t\r\n");
             const val = try lowerExpr(b, expr_str);
             if (val != NO_VALUE) {
-                const expr_ty = inferExprType(b, expr_str);
+                const expr_ty = try inferExprType(b, expr_str);
                 const store_ty = if (expr_ty != t_i64) expr_ty else var_type;
                 try b.emitStore(store_ty, slot, val);
             }
@@ -512,9 +591,45 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
         const lhs = std.mem.trim(u8, line[0..eq_idx], " \t\r\n");
         const rhs = std.mem.trim(u8, line[eq_idx + 1 ..], " \t\r\n");
         if (lhs.len > 0 and rhs.len > 0) {
+            // Check if this is a type annotation: name:type = value
+            if (std.mem.indexOfScalar(u8, lhs, ':')) |colon_idx| {
+                const var_name = std.mem.trim(u8, lhs[0..colon_idx], " \t\r\n");
+                const type_name = std.mem.trim(u8, lhs[colon_idx + 1 ..], " \t\r\n");
+                if (var_name.len > 0 and type_name.len > 0) {
+                    const var_type = try mapType(b.mod, type_name);
+                    const slot = try b.emitAlloca(var_type);
+                    try b.vars.put(var_name, .{ .value = slot, .type_id = var_type });
+                    {
+                        const fn_mut = b.mod.getFunctionMut(b.fid);
+                        const owned_name = try b.alloc.dupe(u8, var_name);
+                        try fn_mut.value_debug_names.put(slot, owned_name);
+                    }
+                    const val = try lowerExpr(b, rhs);
+                    if (val != NO_VALUE) {
+                        const expr_ty = try inferExprType(b, rhs);
+                        const store_ty = if (expr_ty != t_i64) expr_ty else var_type;
+                        try b.emitStore(store_ty, slot, val);
+                    }
+                    return;
+                }
+            }
+            // Auto-infer: if variable doesn't exist, create it with inferred type
+            if (b.getVar(lhs) == null) {
+                const val = try lowerExpr(b, rhs);
+                const inferred_type = try inferExprType(b, rhs);
+                const slot = try b.emitAlloca(inferred_type);
+                try b.vars.put(lhs, .{ .value = slot, .type_id = inferred_type });
+                {
+                    const fn_mut = b.mod.getFunctionMut(b.fid);
+                    const owned_name = try b.alloc.dupe(u8, lhs);
+                    try fn_mut.value_debug_names.put(slot, owned_name);
+                }
+                if (val != NO_VALUE) try b.emitStore(inferred_type, slot, val);
+                return;
+            }
             if (b.getVar(lhs)) |vi| {
                 const val = try lowerExpr(b, rhs);
-                const expr_ty = inferExprType(b, rhs);
+                const expr_ty = try inferExprType(b, rhs);
                 const store_ty = if (expr_ty != t_i64) expr_ty else vi.type_id;
                 try b.emitStore(store_ty, vi.value, val);
             }
@@ -538,7 +653,29 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
     }
 
     if (std.ascii.isDigit(t[0]) or (t.len > 1 and t[0] == '-' and std.ascii.isDigit(t[1]))) {
-        return b.emitConstInt(try std.fmt.parseInt(i64, t, 10));
+        var is_valid_number = true;
+        var seen_dot = false;
+        for (t, 0..) |c, i| {
+            if (i == 0 and c == '-') continue;
+            if (c == '.') {
+                if (seen_dot) {
+                    is_valid_number = false;
+                    break;
+                }
+                seen_dot = true;
+                continue;
+            }
+            if (!std.ascii.isDigit(c)) {
+                is_valid_number = false;
+                break;
+            }
+        }
+        if (is_valid_number) {
+            if (seen_dot) {
+                return b.emitConstFloat(try std.fmt.parseFloat(f64, t));
+            }
+            return b.emitConstInt(try std.fmt.parseInt(i64, t, 10));
+        }
     }
 
     if (t[0] == '(') {
@@ -556,31 +693,32 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
         }
     }
 
-    const ops = [_]struct { []const u8, Op }{
-        .{ "+", .add }, .{ "-", .sub }, .{ "*", .mul },
-        .{ "/", .div }, .{ "%", .mod },
-        .{ "==", .eq }, .{ "!=", .ne },
-        .{ "<=", .le }, .{ ">=", .ge },
-        .{ "<", .lt },  .{ ">", .gt },
-        .{ "&&", .and_op }, .{ "||", .or_op },
-    };
-    for (ops) |pair| {
-        if (findBinOp(t, pair[0])) |parts| {
+    const op_strs = [_][]const u8{ "+", "-", "*", "/", "%", "==", "!=", "<=", ">=", "<", ">", "&&", "||" };
+    for (op_strs) |op_str| {
+        if (findBinOp(t, op_str)) |parts| {
             const l = try lowerExpr(b, parts.left);
             const r = try lowerExpr(b, parts.right);
-            const lty = inferExprType(b, parts.left);
-            const rty = inferExprType(b, parts.right);
-            return b.emitBinOp(pair[1], lty, rty, l, r);
+            const lty = try inferExprType(b, parts.left);
+            const rty = try inferExprType(b, parts.right);
+            // Both operands must have the same type
+            if (lty != rty) {
+                std.log.err("type mismatch: binary operand types must match (got different types)", .{});
+                return BIRError.TypeError;
+            }
+            // Resolve correct BIR op for the type
+            const bir_op = try resolveBinOp(op_str, lty);
+            return b.emitOp(bir_op, lty, &.{ l, r }, .{ .none = {} });
         }
     }
 
     if (t[0] == '-' and t.len > 1) {
         const inner = try lowerExpr(b, t[1..]);
-        const ty = inferExprType(b, t[1..]);
+        const ty = try inferExprType(b, t[1..]);
         return b.emitNeg(inner, ty);
     }
 
     if (b.getVar(t)) |vi| {
+        if (vi.is_param) return vi.value;
         return b.emitLoad(vi.value, vi.type_id);
     }
 

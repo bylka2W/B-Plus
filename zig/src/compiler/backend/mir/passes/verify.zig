@@ -25,7 +25,11 @@ fn collectDefinedVRegs(mfunc: *const mir.MFunction) std.AutoHashMap(u32, void) {
                 .add => |a| a.dst,
                 .sub => |s| s.dst,
                 .imul => |m| m.dst,
-                .idiv => |m| m.quotient,
+                .idiv => |m| {
+                    if (m.quotient == .vreg) defs.put(m.quotient.vreg, {}) catch {};
+                    if (m.remainder == .vreg) defs.put(m.remainder.vreg, {}) catch {};
+                    continue;
+                },
                 .@"and" => |a| a.dst,
                 .@"or" => |o| o.dst,
                 .xor => |x| x.dst,
