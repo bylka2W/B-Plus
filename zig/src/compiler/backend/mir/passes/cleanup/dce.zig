@@ -39,8 +39,8 @@ fn dstVreg(inst: mir.MInst) ?u32 {
 
 fn isSideEffecting(inst: mir.MInst) bool {
     return switch (inst) {
-        .call, .store, .ret, .jmp, .jcc, .cmp, .cmp_flags, .test_flags, .trap => true,
-        .add, .sub, .imul, .idiv, .@"and", .@"or", .xor, .shl, .shr, .sar, .not_op, .neg_op, .alloca, .load, .lea, .phi => false,
+        .call, .store, .ret, .jmp, .jcc, .cmp, .cmp_flags, .test_flags, .trap, .idiv => true,
+        .add, .sub, .imul, .@"and", .@"or", .xor, .shl, .shr, .sar, .not_op, .neg_op, .alloca, .load, .lea, .phi => false,
         .fadd, .fsub, .fmul, .fdiv, .fneg_op, .fsqrt_op, .fcmp => false,
         .sitofp, .fptosi, .fpext, .fptrunc, .sext_op, .zext_op, .trunc_op => false,
         .select, .setcc => false,
