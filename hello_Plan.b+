@@ -1,7 +1,0 @@
-state Hello 
-{
-    entry 
-    {
-        print("Hello Plan!")
-    }
-}
