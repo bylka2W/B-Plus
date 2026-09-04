@@ -1,5 +1,0 @@
-# Agent configuration
-# Set base directories for the project and agent
-# Adjust these paths if your working directory differs
-BASE_DIR = r'C:\B-Plus\zig'
-AGENT_DIR = r'C:\B-Plus\agent'

@@ -1,4 +1,0 @@
-﻿- Do not modify source code during reconnaissance.
-- Record only factual findings from existing files.
-- Follow the established directory layout when documenting architecture.
-- Use the found files to determine pipeline stages.

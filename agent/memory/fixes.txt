@@ -1,5 +1,0 @@
-﻿INITIAL STATE
-
-No source modifications performed.
-
-The agent is currently in READONLY reconnaissance mode.

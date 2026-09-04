@@ -1,3 +1,0 @@
-﻿TASK: Initial B+ project reconnaissance
-
-STATUS: IN_PROGRESS
