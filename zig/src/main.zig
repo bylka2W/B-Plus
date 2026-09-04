@@ -6,7 +6,6 @@ const coff = @import("compiler/backend/object/coff/coff.zig");
 const test_runner = @import("tools/test_runner/test_runner.zig");
 const sema_mod = @import("compiler/frontend/sema/sema.zig");
 const type_sys = @import("compiler/frontend/type_system/type_system.zig");
-const gpu_ir = @import("compiler/gpu/gpu_ir.zig");
 const bir = @import("compiler/middle/bir/bir.zig");
 const bir_frontend = @import("compiler/middle/bir/bir_frontend.zig");
 const bir_passes = @import("compiler/middle/bir/passes/manager.zig");
@@ -44,7 +43,6 @@ pub fn main() !void {
         try stderr.writeAll("       bpc run   <input.b+>\n");
         try stderr.writeAll("       bpc test  <test.bpt>\n");
         try stderr.writeAll("       bpc hlsl  <input.b+> [-o <output.hlsl>]\n");
-        try stderr.writeAll("       bpc gpu   <input.b+> [-o <output>]\n");
         try stderr.writeAll("       bpc ir    <pipeline.b+>\n");
         try stderr.writeAll("       bpc cfg   <pipeline.b+>\n");
         try stderr.writeAll("       bpc dom   <pipeline.b+>\n");
@@ -135,13 +133,6 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
-
-        // Auto-detect GPU kernel syntax
-        const trimmed = std.mem.trim(u8, src, " \t\r\n");
-        if (std.mem.startsWith(u8, trimmed, "kernel ")) {
-            try gpuCompileAndWrite(arena_alloc, src, input_path, output_path, .hlsl);
-            return;
-        }
 
         // Pipeline description → BIR → HLSL
         {
@@ -475,15 +466,6 @@ pub fn main() !void {
         return;
     }
 
-    // GPU mode: parse GPU kernel and generate HLSL via parser.zig
-    if (std.mem.eql(u8, command, "gpu")) {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
-        try gpuCompileAndWrite(arena_alloc, src, input_path, output_path, .dxil);
-        return;
-    }
-
     var p = parser.Parser.init(allocator, src, input_path);
     var program = try p.parse();
     defer program.deinit();
@@ -638,53 +620,6 @@ pub fn main() !void {
             else => 1,
         });
     }
-}
-
-fn gpuCompileAndWrite(arena_alloc: std.mem.Allocator, src: []const u8, input_path: []const u8, output_path_arg: ?[]const u8, target: gpu_ir.BackendType) !void {
-    var p = parser.Parser.init(arena_alloc, src, input_path);
-    const kernel = p.parseGpuKernelBlock() catch |err| {
-        const stderr = std.io.getStdErr().writer();
-        try stderr.print("GPU parse error: {}\n", .{err});
-        std.process.exit(1);
-    };
-
-    var gpu_mod = gpu_ir.GpuModule{
-        .allocator = arena_alloc,
-        .kernels = std.ArrayList(gpu_ir.GpuKernel).init(arena_alloc),
-    };
-    try gpu_mod.kernels.append(kernel);
-
-    // BIR path for HLSL
-    if (target == .hlsl) {
-        var bir_mod = try bir_frontend.lowerToBir(arena_alloc, &gpu_mod);
-        defer bir_mod.deinit();
-
-        var am = bir.AnalysisManager.init(arena_alloc, &bir_mod);
-        defer am.deinit();
-        var ctx = bir.PassContext{
-            .module = &bir_mod,
-            .analysis = &am,
-            .allocator = arena_alloc,
-        };
-        var pm = bir_passes.StandardPasses.init(arena_alloc);
-        try pm.run(&ctx);
-
-        const output = try bir_hlsl.generateHlsl(arena_alloc, &bir_mod);
-        const out_path = output_path_arg orelse blk: {
-            const ext_idx = std.mem.lastIndexOfScalar(u8, input_path, '.') orelse input_path.len;
-            const base = input_path[0..ext_idx];
-            break :blk try std.fmt.allocPrint(arena_alloc, "{s}.hlsl", .{base});
-        };
-        try std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = output });
-        const stdout = std.io.getStdOut().writer();
-        try stdout.print("BIR→HLSL written to {s}\n", .{out_path});
-        return;
-    }
-
-    // DXIL/C++ backends — TODO: rewrite without gpu_lower
-    const stderr = std.io.getStdErr().writer();
-    try stderr.writeAll("DXIL/C++ backends not yet ported to unified pipeline.\n");
-    std.process.exit(1);
 }
 
 const StageReporter = struct {

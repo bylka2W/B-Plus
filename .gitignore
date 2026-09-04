@@ -1,5 +1,7 @@
-# Build output
+#сборка
 zig-out/
+zig-cache/
+**/zig-cache/
 *.exe
 *.dll
 *.lib
@@ -9,20 +11,24 @@ zig-out/
 *.ilk
 *.bin
 
-# Zig cache
-zig/.zig-cache/
-**/zig-cache/
+#тесты — не пушим
+zig/tests/
+*.b+
+*.bpt
+*.py
+*.txt
+!zig/src/**/*.zig
 
-# IDE
+#IDE
 .vscode/
 .vs/
 .idea/
 *.swp
 *.swo
 
-# OS
+#OS
 Thumbs.db
 .DS_Store
 
-# Profiling
+#профилирование
 zig/prof/
