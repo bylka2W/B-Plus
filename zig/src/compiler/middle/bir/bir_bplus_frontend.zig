@@ -720,7 +720,7 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
         if (pp > 0) {
             const nm = std.mem.trim(u8, t[0..pp], " \t\r\n");
             if (findParenEnd(t, pp)) |c| {
-                return lowerCallExpr(b, nm, std.mem.trim(u8, t[pp + 1 .. c], " \t\r\n"));
+                if (c == t.len - 1) return lowerCallExpr(b, nm, std.mem.trim(u8, t[pp + 1 .. c], " \t\r\n"));
             }
         }
     }
