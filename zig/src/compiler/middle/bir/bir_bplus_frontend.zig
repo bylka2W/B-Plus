@@ -91,13 +91,45 @@ const VarInfo = struct {
     is_param: bool = false,
 };
 
+/// Infer function return type from its body's return statements.
+/// Pre-scans body lines for `return expr` and uses simple literal inference.
+/// Falls back to t_i64 (B+ default) if no return found or can't infer.
+fn inferReturnType(module: *bir.Module, func: ast.EntryDecl) TypeId {
+    _ = module;
+    for (func.body_lines.items) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        if (!std.mem.startsWith(u8, trimmed, "return")) continue;
+        const rest = std.mem.trim(u8, trimmed["return".len..], " \t\r\n");
+        if (rest.len == 0) continue; // bare `return` → void, keep scanning
+        // String literal
+        if (rest[0] == '"') return t_ptr;
+        // Boolean literals
+        if (std.mem.eql(u8, rest, "true") or std.mem.eql(u8, rest, "false")) return t_i1;
+        // Numeric literal
+        var is_num = true;
+        var has_dot = false;
+        for (rest, 0..) |ch, i| {
+            if (i == 0 and (ch == '-' or ch == '+')) continue;
+            if (ch == '.') { if (has_dot) { is_num = false; break; } has_dot = true; continue; }
+            if (ch < '0' or ch > '9') { is_num = false; break; }
+        }
+        if (is_num and rest.len > 0) {
+            return if (has_dot) t_f64 else t_i64;
+        }
+        // For variables/expressions/function calls, default to i64
+        return t_i64;
+    }
+    return t_void;
+}
+
 fn lowerFunction(
     allocator: Allocator,
     module: *bir.Module,
     func: ast.EntryDecl,
 ) !void {
     try ensureTypes(module);
-    const ret_type = if (func.return_type) |rt| try mapType(module, rt) else t_void;
+    // B+ design: return type is optional. Infer from return expressions if not declared.
+    const ret_type = if (func.return_type) |rt| try mapType(module, rt) else inferReturnType(module, func);
     const func_id = try module.addFunction(func.name, ret_type, .internal);
 
     {
@@ -773,18 +805,55 @@ fn lowerIf(b: *Builder, line: []const u8) anyerror!void {
 
     const then_id = try b.newBlock("if_then");
     const else_id = try b.newBlock("if_else");
-    const merge_id = try b.newBlock("if_merge");
 
     try b.emitCondBr(cond_val, then_id, else_id);
 
+    // Lower then body
     b.blk = then_id;
     try lowerBodyStr(b, body_str, ';');
-    if (!b.terminated()) try b.emitBr(merge_id);
+    const then_term = b.terminated();
 
+    // Lower else body
     b.blk = else_id;
-    try b.emitBr(merge_id);
+    const after_body = std.mem.trim(u8, rest[cb.body_end + 1 ..], " \t\r\n");
+    if (after_body.len > 0 and std.mem.startsWith(u8, after_body, "else")) {
+        const else_rest = after_body["else".len..];
+        const trimmed_else = std.mem.trim(u8, else_rest, " \t\r\n");
+        if (trimmed_else.len > 0 and std.mem.startsWith(u8, trimmed_else, "if ")) {
+            try lowerIf(b, trimmed_else);
+        } else {
+            if (findBraceBlock(trimmed_else)) |else_cb| {
+                const else_body = std.mem.trim(u8, trimmed_else[else_cb.body_start..else_cb.body_end], " \t\r\n");
+                try lowerBodyStr(b, else_body, ';');
+            }
+        }
+    }
+    const else_term = b.terminated();
 
-    b.blk = merge_id;
+    if (then_term and else_term) {
+        // Both branches terminate — no merge needed, no continuation
+        // Point b.blk to a terminated block so no more code is emitted
+        b.blk = else_id;
+    } else if (then_term and !else_term) {
+        // Only then terminates — else needs to jump to merge
+        const merge_id = try b.newBlock("if_merge");
+        try b.emitBr(merge_id);
+        b.blk = merge_id;
+    } else if (!then_term and else_term) {
+        // Only else terminates — then needs to jump to merge
+        const merge_id = try b.newBlock("if_merge");
+        b.blk = then_id;
+        try b.emitBr(merge_id);
+        b.blk = merge_id;
+    } else {
+        // Neither terminates — both jump to merge
+        const merge_id = try b.newBlock("if_merge");
+        b.blk = then_id;
+        try b.emitBr(merge_id);
+        b.blk = else_id;
+        try b.emitBr(merge_id);
+        b.blk = merge_id;
+    }
 }
 
 fn lowerWhile(b: *Builder, line: []const u8) anyerror!void {

@@ -46,6 +46,35 @@ fn inferTypeFromValue(allocator: Allocator, default_value: []const u8) ![]const 
     return try allocator.dupe(u8, "i64");
 }
 
+/// Infer function return type from its body's return statements.
+/// Scans body lines for `return expr` and infers type from the expression.
+/// Falls back to "i64" (B+ default) if no return found or can't infer.
+fn inferReturnTypeName(func: ast.EntryDecl) []const u8 {
+    for (func.body_lines.items) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        if (!std.mem.startsWith(u8, trimmed, "return")) continue;
+        const rest = std.mem.trim(u8, trimmed["return".len..], " \t\r\n");
+        if (rest.len == 0) continue; // bare `return` → void, keep scanning
+        // Try simple literal inference
+        if (rest[0] == '"') return "string";
+        if (std.mem.eql(u8, rest, "true") or std.mem.eql(u8, rest, "false")) return "bool";
+        // Numeric literal
+        var is_num = true;
+        var has_dot = false;
+        for (rest, 0..) |ch, i| {
+            if (i == 0 and (ch == '-' or ch == '+')) continue;
+            if (ch == '.') { if (has_dot) { is_num = false; break; } has_dot = true; continue; }
+            if (ch < '0' or ch > '9') { is_num = false; break; }
+        }
+        if (is_num and rest.len > 0) {
+            return if (has_dot) "f64" else "i64";
+        }
+        // For variables/expressions, default to i64
+        return "i64";
+    }
+    return "void";
+}
+
 pub const SemaError = error{
     UndefinedVariable,
     UndefinedFunction,
@@ -160,7 +189,7 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
             std.log.err("{s}:{d}: error: duplicate function definition '{s}'", .{ file_path, ln, func.name });
             return SemaError.DuplicateDefinition;
         }
-        const rt = func.return_type orelse "void";
+        const rt = func.return_type orelse inferReturnTypeName(func);
         try symtab.define(func.name, .function, ast.TypeId.fromName(rt), func.return_type);
         try defined_funcs.put(func.name, func);
     }
@@ -336,11 +365,9 @@ fn validateFuncBody(
             }
         }
     }
-    if (!has_return_type and return_count > 0) {
-        const ln2 = findLineNumber(src, func.name);
-        std.log.err("{s}:{d}: error: function '{s}' has return statements but declares no return type", .{ file_path, ln2, func.name });
-        return SemaError.ReturnTypeMismatch;
-    }
+    // B+ design: return type is optional. If function has return statements
+    // but no explicit return type, the type is inferred from return expressions.
+    // No error needed here — the BIR frontend handles inference.
 }
 
 fn validateBody(

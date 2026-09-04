@@ -30,7 +30,8 @@ const minrt_obj_bytes = @embedFile("runtime/minrt.obj");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    // Leak reports suppressed — BIR/MIR data structures are intentionally
+    // not freed; the OS reclaims all memory at process exit.
     const allocator = gpa.allocator();
 
     const args = try std.process.argsAlloc(allocator);
