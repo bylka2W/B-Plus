@@ -153,9 +153,11 @@ fn lowerFunction(
         .vars = std.StringHashMap(VarInfo).init(allocator),
         .ret_type = ret_type,
         .func_return_types = std.StringHashMap(TypeId).init(allocator),
+        .loop_stack = std.ArrayList(LoopCtx).init(allocator),
     };
     defer b.vars.deinit();
     defer b.func_return_types.deinit();
+    defer b.loop_stack.deinit();
 
     for (func.params.items, 0..) |param, i| {
         const param_ty = try mapType(module, param.type_name);
@@ -237,9 +239,11 @@ fn lowerStateMachine(
                     .vars = std.StringHashMap(VarInfo).init(allocator),
                     .ret_type = t_void,
                     .func_return_types = std.StringHashMap(TypeId).init(allocator),
+                    .loop_stack = std.ArrayList(LoopCtx).init(allocator),
                 };
                 defer ab.vars.deinit();
                 defer ab.func_return_types.deinit();
+                defer ab.loop_stack.deinit();
                 try lowerBodyStr(&ab, action_body, ';');
                 if (!ab.terminated()) try ab.retVoid();
                 action_fn = afid;
@@ -275,9 +279,11 @@ fn lowerStateEntry(
         .vars = std.StringHashMap(VarInfo).init(allocator),
         .ret_type = t_void,
         .func_return_types = std.StringHashMap(TypeId).init(allocator),
+        .loop_stack = std.ArrayList(LoopCtx).init(allocator),
     };
     defer b.vars.deinit();
     defer b.func_return_types.deinit();
+    defer b.loop_stack.deinit();
 
     for (state.variables.items) |v| {
         const resolved_type = v.type_name orelse blk: {
@@ -335,13 +341,20 @@ fn lowerStateExit(
         .vars = std.StringHashMap(VarInfo).init(allocator),
         .ret_type = t_void,
         .func_return_types = std.StringHashMap(TypeId).init(allocator),
+        .loop_stack = std.ArrayList(LoopCtx).init(allocator),
     };
     defer b.vars.deinit();
     defer b.func_return_types.deinit();
+    defer b.loop_stack.deinit();
     try lowerBodyStr(&b, tb, ';');
     if (!b.terminated()) try b.retVoid();
     return fid;
 }
+
+const LoopCtx = struct {
+    header_id: BlockId,
+    exit_id: BlockId,
+};
 
 const Builder = struct {
     alloc: Allocator,
@@ -351,6 +364,7 @@ const Builder = struct {
     vars: std.StringHashMap(VarInfo),
     ret_type: TypeId,
     func_return_types: std.StringHashMap(TypeId),
+    loop_stack: std.ArrayList(LoopCtx),
 
     fn terminated(self: *Builder) bool {
         const bl = self.mod.getFunctionMut(self.fid).getBlock(self.blk);
@@ -619,6 +633,21 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
         return;
     }
 
+    if (std.mem.startsWith(u8, line, "for ") or std.mem.startsWith(u8, line, "for(")) {
+        try lowerFor(b, line);
+        return;
+    }
+
+    if (std.mem.eql(u8, line, "break")) {
+        try lowerBreak(b);
+        return;
+    }
+
+    if (std.mem.eql(u8, line, "continue")) {
+        try lowerContinue(b);
+        return;
+    }
+
     if (std.mem.indexOfScalar(u8, line, '=')) |eq_idx| {
         const lhs = std.mem.trim(u8, line[0..eq_idx], " \t\r\n");
         const rhs = std.mem.trim(u8, line[eq_idx + 1 ..], " \t\r\n");
@@ -873,11 +902,99 @@ fn lowerWhile(b: *Builder, line: []const u8) anyerror!void {
     if (cond_val == NO_VALUE) return;
     try b.emitCondBr(cond_val, body_id, exit_id);
 
+    //пушим контекст цикла чтобы break/continue знали куда прыгать
+    try b.loop_stack.append(.{ .header_id = header_id, .exit_id = exit_id });
+    defer _ = b.loop_stack.pop();
+
     b.blk = body_id;
     try lowerBodyStr(b, body_str, ';');
     if (!b.terminated()) try b.emitBr(header_id);
 
     b.blk = exit_id;
+}
+
+fn lowerFor(b: *Builder, line: []const u8) anyerror!void {
+    //for i = 0; i < n; i = i + 1 { body }
+    const rest = std.mem.trim(u8, line[4..], " \t\r\n");
+    const cb = findBraceBlock(rest) orelse return;
+    const header_str = std.mem.trim(u8, rest[0..cb.body_start - 1], " \t\r\n");
+    const body_str = std.mem.trim(u8, rest[cb.body_start..cb.body_end], " \t\r\n");
+
+    //разбиваем по точке с запятой: init; cond; update
+    var parts: [3][]const u8 = .{ "", "", "" };
+    var part_idx: usize = 0;
+    var depth: i32 = 0;
+    var start: usize = 0;
+    var in_str = false;
+    for (header_str, 0..) |c, i| {
+        if (c == '"') in_str = !in_str;
+        if (in_str) continue;
+        if (c == '(') depth += 1;
+        if (c == ')') depth -= 1;
+        if (c == ';' and depth == 0 and part_idx < 3) {
+            parts[part_idx] = std.mem.trim(u8, header_str[start..i], " \t\r\n");
+            part_idx += 1;
+            start = i + 1;
+        }
+    }
+    if (part_idx < 3) parts[part_idx] = std.mem.trim(u8, header_str[start..], " \t\r\n");
+
+    const init_str = parts[0];
+    const cond_str = parts[1];
+    const update_str = parts[2];
+
+    //init
+    if (init_str.len > 0) try lowerStmt(b, init_str);
+
+    const header_id = try b.newBlock("for_header");
+    const body_id = try b.newBlock("for_body");
+    const update_id = try b.newBlock("for_update");
+    const exit_id = try b.newBlock("for_exit");
+
+    try b.emitBr(header_id);
+
+    //условие
+    b.blk = header_id;
+    if (cond_str.len > 0) {
+        const cond_val = try lowerExpr(b, cond_str);
+        if (cond_val == NO_VALUE) return;
+        try b.emitCondBr(cond_val, body_id, exit_id);
+    } else {
+        try b.emitBr(body_id);
+    }
+
+    //тело цикла
+    try b.loop_stack.append(.{ .header_id = update_id, .exit_id = exit_id });
+    defer _ = b.loop_stack.pop();
+
+    b.blk = body_id;
+    try lowerBodyStr(b, body_str, ';');
+    if (!b.terminated()) try b.emitBr(update_id);
+
+    //update
+    b.blk = update_id;
+    if (update_str.len > 0) try lowerStmt(b, update_str);
+    if (!b.terminated()) try b.emitBr(header_id);
+
+    b.blk = exit_id;
+}
+
+fn lowerBreak(b: *Builder) anyerror!void {
+    if (b.loop_stack.items.len == 0) {
+        std.log.err("break вне цикла", .{});
+        return BIRError.TypeError;
+    }
+    const ctx = b.loop_stack.items[b.loop_stack.items.len - 1];
+    try b.emitBr(ctx.exit_id);
+}
+
+fn lowerContinue(b: *Builder) anyerror!void {
+    if (b.loop_stack.items.len == 0) {
+        std.log.err("continue вне цикла", .{});
+        return BIRError.TypeError;
+    }
+    const ctx = b.loop_stack.items[b.loop_stack.items.len - 1];
+    try b.emitBr(ctx.header_id);
 }
 
 fn lowerBodyStr(b: *Builder, body: []const u8, sep: u8) anyerror!void {
@@ -909,9 +1026,36 @@ fn lowerBodyStr(b: *Builder, body: []const u8, sep: u8) anyerror!void {
                 }
             }
             if (c == sep and depth == 0) {
-                const stmt = std.mem.trim(u8, body[start..pos], " \t\r\n");
+                var stmt = std.mem.trim(u8, body[start..pos], " \t\r\n");
                 pos += 1;
                 start = pos;
+                //для for/while/if
+                const is_ctrl = stmt.len > 2 and (std.mem.startsWith(u8, stmt, "for ") or std.mem.startsWith(u8, stmt, "for(") or std.mem.startsWith(u8, stmt, "while ") or std.mem.startsWith(u8, stmt, "while(") or std.mem.startsWith(u8, stmt, "if ") or std.mem.startsWith(u8, stmt, "if("));
+                if (is_ctrl) {
+                    var brace_depth: i32 = 0;
+                    for (stmt) |ch| { if (ch == '{') brace_depth += 1; if (ch == '}') brace_depth -= 1; }
+                    var found_open = std.mem.indexOfScalar(u8, stmt, '{') != null;
+                    while (pos < body.len) {
+                        if (found_open and brace_depth <= 0) break;
+                        while (pos < body.len and (body[pos] == ' ' or body[pos] == '\t' or body[pos] == '\r' or body[pos] == '\n')) : (pos += 1) {}
+                        if (pos >= body.len) break;
+                        const part_start = pos;
+                        while (pos < body.len) {
+                            const c2 = body[pos];
+                            if (c2 == '"') in_str = !in_str;
+                            if (in_str) { pos += 1; continue; }
+                            if (c2 == '(' or c2 == '{') { depth += 1; brace_depth += 1; }
+                            if (c2 == ')' or c2 == '}') { depth -= 1; brace_depth -= 1; }
+                            if (c2 == sep and depth == 0) break;
+                            pos += 1;
+                        }
+                        const part = std.mem.trim(u8, body[part_start..pos], " \t\r\n");
+                        if (part.len > 0) stmt = std.mem.concat(b.alloc, u8, &.{ stmt, ";", part }) catch stmt;
+                        if (!found_open) found_open = std.mem.indexOfScalar(u8, stmt, '{') != null;
+                        if (found_open and brace_depth <= 0) break;
+                        if (pos < body.len and body[pos] == sep) { pos += 1; }
+                    }
+                }
                 if (stmt.len > 0) try lowerStmt(b, stmt);
                 break;
             }

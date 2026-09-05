@@ -3,12 +3,8 @@ const Allocator = std.mem.Allocator;
 const ast = @import("ast.zig");
 const scope_mod = @import("scope.zig");
 
-/// Infer type from default value when type_name is null (auto-infer)
-/// B+ default rules: int → i64, float → f64, string, bool
-/// Returns the inferred type name (caller owns the memory)
 fn inferTypeFromValue(allocator: Allocator, default_value: []const u8) ![]const u8 {
     if (default_value.len > 0) {
-        // Check if it's a numeric literal
         var is_number = true;
         var has_dot = false;
         for (default_value, 0..) |ch, i| {
@@ -23,10 +19,9 @@ fn inferTypeFromValue(allocator: Allocator, default_value: []const u8) ![]const 
         
         if (is_number and default_value.len > 0) {
             if (has_dot) {
-                // Float literal → f64 (B+ default float)
+
                 return try allocator.dupe(u8, "f64");
             } else {
-                // Integer literal → i64 (B+ default integer)
                 return try allocator.dupe(u8, "i64");
             }
         }
@@ -314,6 +309,36 @@ fn validateFuncBody(
         if (trimmed.len == 0) continue;
 
         if (std.mem.startsWith(u8, trimmed, "return")) return_count += 1;
+
+        //for init; cond; update { body } — парсим init чтобы создать переменную
+        if (std.mem.startsWith(u8, trimmed, "for ") or std.mem.startsWith(u8, trimmed, "for(")) {
+            const rest = if (trimmed[3] == ' ') trimmed[4..] else trimmed[4..];
+            const header = if (std.mem.indexOfScalar(u8, rest, '{')) |brace| rest[0..brace] else rest;
+            const header_trim = std.mem.trim(u8, header, " \t\r\n");
+            var depth: i32 = 0;
+            var si: usize = header_trim.len;
+            for (header_trim, 0..) |ch, idx| {
+                if (ch == '(') depth += 1;
+                if (ch == ')') depth -= 1;
+                if (ch == ';' and depth == 0) {
+                    si = idx;
+                    break;
+                }
+            }
+            const init_part = std.mem.trim(u8, header_trim[0..si], " \t\r\n");
+            if (init_part.len > 0) {
+                if (std.mem.indexOfScalar(u8, init_part, '=')) |eq| {
+                    const var_name = std.mem.trim(u8, init_part[0..eq], " \t\r\n");
+                    if (var_name.len > 0) {
+                        const rhs = std.mem.trim(u8, init_part[eq + 1 ..], " \t\r\n");
+                        const inferred_type = try inferTypeFromValue(allocator, rhs);
+                        defer allocator.free(inferred_type);
+                        const type_id = ast.TypeId.fromName(inferred_type);
+                        try parent_symtab.define(var_name, .variable, type_id, inferred_type);
+                    }
+                }
+            }
+        }
 
         // var x:i32 = 10 (old syntax)
         if (std.mem.startsWith(u8, trimmed, "var ")) {
@@ -740,6 +765,23 @@ fn isBuiltin(ident: []const u8) bool {
         if (std.mem.eql(u8, ident, b)) return true;
     }
     return false;
+}
+
+fn findBraceBlockSimple(s: []const u8) ?struct { start: usize, end: usize } {
+    var depth: i32 = 0;
+    var open_idx: ?usize = null;
+    for (s, 0..) |ch, i| {
+        if (ch == '{') {
+            if (depth == 0) open_idx = i;
+            depth += 1;
+        } else if (ch == '}') {
+            depth -= 1;
+            if (depth == 0) {
+                return .{ .start = open_idx.?, .end = i };
+            }
+        }
+    }
+    return null;
 }
 
 fn extractVarName(rest: []const u8) []const u8 {
