@@ -1,5 +1,7 @@
 #сборка
 zig-out/
+.zig-cache/
+**/.zig-cache/
 zig-cache/
 **/zig-cache/
 *.exe
@@ -11,7 +13,7 @@ zig-cache/
 *.ilk
 *.bin
 
-#тесты — не пушим
+#тесты — не пушиться
 zig/tests/
 *.b+
 *.bpt

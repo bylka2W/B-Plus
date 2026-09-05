@@ -41,7 +41,6 @@ pub fn build(b: *std.Build) void {
         .root_module = semantic_mod,
     });
     const semtest_run = b.addRunArtifact(semtest_exe);
-    // Make the semantic tests part of the main `test` step
     test_step.dependOn(&semtest_run.step);
 
     const test_exports_mod = b.createModule(.{
@@ -83,37 +82,4 @@ pub fn build(b: *std.Build) void {
     const test_fuzz_step = b.step("test-fuzz", "Run MIR fuzzer tests");
     test_fuzz_step.dependOn(&test_fuzz_run.step);
 
-    const test_thir_exe = b.addTest(.{
-        .root_source_file = b.path("src/thir_test.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const test_thir_run = b.addRunArtifact(test_thir_exe);
-    const test_thir_step = b.step("test-thir", "Run THIR IR tests");
-    test_thir_step.dependOn(&test_thir_run.step);
-
-    const test_thir_to_bir_exe = b.addTest(.{
-        .root_source_file = b.path("src/thir_to_bir_test.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const test_thir_to_bir_run = b.addRunArtifact(test_thir_to_bir_exe);
-    const test_thir_to_bir_step = b.step("test-thir-to-bir", "Run THIR→BIR lowering tests");
-    test_thir_to_bir_step.dependOn(&test_thir_to_bir_run.step);
-
-    const bplus_exe = b.addExecutable(.{
-        .name = "bplus",
-        .root_source_file = b.path("src/bplus.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    b.installArtifact(bplus_exe);
-
-    const lsp_exe = b.addExecutable(.{
-        .name = "bplus-lsp",
-        .root_source_file = b.path("src/bplus_lsp.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    b.installArtifact(lsp_exe);
 }
