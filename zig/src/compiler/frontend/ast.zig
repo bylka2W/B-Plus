@@ -236,6 +236,12 @@ pub const ProgramNode = struct {
         }
         self.metal.func_defs.deinit();
         self.metal.forwarders.deinit();
+        for (self.metal.extern_cpp_fns.items) |*ef| {
+            a.free(ef.name);
+            for (ef.parameters.items) |*p| { a.free(p.name); a.free(p.type_name); }
+            ef.parameters.deinit();
+            if (ef.return_type) |rt| a.free(rt);
+        }
         self.metal.extern_cpp_fns.deinit();
         self.metal.directives.deinit();
 

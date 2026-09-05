@@ -440,6 +440,10 @@ const Builder = struct {
         return self.emitBinOp(.sub, ty, ty, zero, val);
     }
 
+    fn emitNot(self: *Builder, val: ValueId) !ValueId {
+        return self.emitOp(.not, t_i1, &.{val}, .{ .none = {} });
+    }
+
     fn emitCall(self: *Builder, name: []const u8, args: []const ValueId) !ValueId {
         const ret_ty = self.func_return_types.get(name) orelse t_void;
         const owned_name = try self.alloc.dupe(u8, name);
@@ -572,6 +576,8 @@ fn inferExprType(b: *Builder, expr: []const u8) !TypeId {
     }
 
     if (t[0] == '-' and t.len > 1) return try inferExprType(b, t[1..]);
+
+    if (t[0] == '!' and t.len > 1) return t_i1;
 
     if (b.getVar(t)) |vi| return vi.type_id;
 
@@ -745,6 +751,36 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
         }
     }
 
+    if (t[0] == '!' and t.len > 1) {
+        const rest = t[1..];
+        if (rest[0] == '(') {
+            if (findParenEnd(rest, 0)) |pend| {
+                const inner_expr = rest[1..pend];
+                const inner = try lowerExpr(b, inner_expr);
+                return try b.emitNot(inner);
+            }
+        }
+        if (rest[0] == '!' or rest[0] == '-') {
+            const inner = try lowerExpr(b, rest);
+            const ty = try inferExprType(b, rest);
+            if (ty != t_i1) {
+                std.log.err("type mismatch: '!' operator requires bool operand", .{});
+                return BIRError.TypeError;
+            }
+            return try b.emitNot(inner);
+        }
+        var atom_end: usize = 0;
+        while (atom_end < rest.len and (std.ascii.isAlphanumeric(rest[atom_end]) or rest[atom_end] == '_')) : (atom_end += 1) {}
+        const atom = rest[0..atom_end];
+        const inner = try lowerExpr(b, atom);
+        const ty = try inferExprType(b, atom);
+        if (ty != t_i1) {
+            std.log.err("type mismatch: '!' operator requires bool operand", .{});
+            return BIRError.TypeError;
+        }
+        return try b.emitNot(inner);
+    }
+
     if (std.mem.indexOfScalar(u8, t, '(')) |pp| {
         if (pp > 0) {
             const nm = std.mem.trim(u8, t[0..pp], " \t\r\n");
@@ -754,7 +790,7 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
         }
     }
 
-    const op_strs = [_][]const u8{ "+", "-", "*", "/", "%", "==", "!=", "<=", ">=", "<", ">", "&&", "||" };
+    const op_strs = [_][]const u8{ "||", "&&", "==", "!=", "<=", ">=", "<", ">", "+", "-", "*", "/", "%" };
     for (op_strs) |op_str| {
         if (findBinOp(t, op_str)) |parts| {
             const l = try lowerExpr(b, parts.left);

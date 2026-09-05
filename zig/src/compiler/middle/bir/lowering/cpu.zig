@@ -482,6 +482,13 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     try mfunc.putVReg(result, dt);
                 },
 
+                .not => {
+                    if (result == NO_VALUE or inst.operands.len < 1) continue;
+                    const src = inst.operands[0];
+                    try mblock.instrs.append(.{ .cmp_flags = .{ .a = .{ .vreg = src }, .b = .{ .imm = 0 } } });
+                    try mblock.instrs.append(.{ .setcc = .{ .dst = .{ .vreg = result }, .cc = .eq } });
+                },
+
                 .unreachable_op => {
                     try mblock.instrs.append(.trap);
                 },

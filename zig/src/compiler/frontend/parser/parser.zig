@@ -326,15 +326,15 @@ pub const Parser = struct {
                 var params = std.ArrayList(ast.KernelParam).init(p.allocator);
                 errdefer params.deinit();
                 while (!p.peek(.rparen)) {
-                    const pname = p.identText(); p.advance();
+                    const pname = try p.allocator.dupe(u8, p.identText()); p.advance();
                     try p.expect(.colon);
-                    const ptype = p.identText(); p.advance();
+                    const ptype = try p.allocator.dupe(u8, p.identText()); p.advance();
                     try params.append(.{ .name = pname, .type_name = ptype });
                     if (p.peek(.comma)) p.advance();
                 }
                 try p.expect(.rparen);
                 var ret: ?[]const u8 = null;
-                if (p.peek(.arrow)) { p.advance(); ret = p.identText(); p.advance(); }
+                if (p.peek(.arrow)) { p.advance(); ret = try p.allocator.dupe(u8, p.identText()); p.advance(); }
                 try program.metal.extern_cpp_fns.append(.{ .name = fn_name, .parameters = params, .return_type = ret });
                 try p.expect(.semicolon);
             } else if (p.peek(.kw_import)) {
@@ -734,19 +734,20 @@ pub const Parser = struct {
         var params = std.ArrayList(ast.KernelParam).init(p.allocator);
         errdefer params.deinit();
         while (!p.peek(.rparen) and !p.peek(.eof)) {
-            const pname = p.identText();
+            const pname = try p.allocator.dupe(u8, p.identText());
             p.advance();
             if (p.peek(.colon)) {
                 p.advance();
-                const ptype = p.identText();
+                const ptype = try p.allocator.dupe(u8, p.identText());
                 p.advance();
                 try params.append(.{ .name = pname, .type_name = ptype });
             } else {
-                try params.append(.{ .name = pname, .type_name = "int" });
+                try params.append(.{ .name = pname, .type_name = try p.allocator.dupe(u8, "int") });
             }
             if (p.peek(.comma)) p.advance();
         }
         if (!p.peek(.rparen)) {
+            for (params.items) |pp| { p.allocator.free(pp.name); p.allocator.free(pp.type_name); }
             params.deinit();
             p.lexer.pos = save_pos;
             p.lexer.char = save_char;
@@ -759,7 +760,7 @@ pub const Parser = struct {
         var ret_type: ?[]const u8 = null;
         if (p.peek(.arrow) or p.peek(.colon)) {
             p.advance();
-            ret_type = p.identText();
+            ret_type = try p.allocator.dupe(u8, p.identText());
             p.advance();
             p.consumeNewlines();
         }
@@ -839,17 +840,17 @@ pub const Parser = struct {
         if (p.peek(.lparen)) {
             p.advance();
             while (!p.peek(.rparen) and !p.peek(.eof)) {
-                const pname = p.identText();
+                const pname = try p.allocator.dupe(u8, p.identText());
                 p.advance();
                 try p.expect(.colon);
                 var ptype_buf: []const u8 = "";
                 if (p.peek(.star)) {
-                    ptype_buf = "*";
+                    ptype_buf = try p.allocator.dupe(u8, "*");
                     p.advance();
                 }
                 const ptype_start = p.identText();
                 p.advance();
-                ptype_buf = if (ptype_buf.len > 0) try std.mem.concat(p.allocator, u8, &.{ ptype_buf, ptype_start }) else ptype_start;
+                ptype_buf = if (ptype_buf.len > 0) try std.mem.concat(p.allocator, u8, &.{ ptype_buf, ptype_start }) else try p.allocator.dupe(u8, ptype_start);
                 try params.append(.{ .name = pname, .type_name = ptype_buf });
                 if (p.peek(.comma)) p.advance();
             }
@@ -860,7 +861,7 @@ pub const Parser = struct {
         var entry_ret_type: ?[]const u8 = null;
         if (p.peek(.arrow) or p.peek(.colon)) {
             p.advance();
-            entry_ret_type = p.identText();
+            entry_ret_type = try p.allocator.dupe(u8, p.identText());
             p.advance();
             p.consumeNewlines();
         }
