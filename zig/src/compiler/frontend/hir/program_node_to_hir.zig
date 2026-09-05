@@ -108,7 +108,7 @@ pub const ProgramNodeToHir = struct {
     pub fn convert(self: *ProgramNodeToHir) ConvertError!void {
         const p = self.program;
         try self.registerBuiltins();
-        for (p.common.func_defs.items) |*f| try self.lowerFunction(f);
+        for (p.metal.func_defs.items) |*f| try self.lowerFunction(f);
         for (p.metal.entries.items) |*e| try self.lowerEntry(e);
         for (p.plan.states.items) |*s| try self.lowerState(s);
         for (p.metal.kernels.items) |*k| try self.lowerKernel(k);
@@ -360,10 +360,8 @@ pub const ProgramNodeToHir = struct {
             return self.hir.addType(.{ .builtin = .{ .kind = bk } });
         }
 
-        // Check for user-defined types
         if (self.sema.isStruct(name) or self.sema.isEnum(name)) {
             const sym = self.allocSym();
-            // Create a named type reference — the HirTy.named stores a SymbolId
             return self.hir.addType(.{ .named = .{ .name = sym, .args = &.{} } });
         }
 
@@ -381,8 +379,6 @@ pub const ProgramNodeToHir = struct {
             try self.lowerStmtLine(bb, trimmed, &stmts);
         }
 
-        // Pop the last statement if it's an expr, and use its expression as the block result.
-        // This avoids the same expression being lowered twice (once as a stmt, once as the result).
         const last_result = if (stmts.items.len > 0) blk: {
             const last = self.hir.getStmt(stmts.items[stmts.items.len - 1]) orelse break :blk self.makeMissingExpr();
             if (last.kind == .expr) {
@@ -792,8 +788,6 @@ fn findBraceBlock(text: []const u8) ?BraceBlock {
         if (text[i] == '}') depth -= 1;
         i += 1;
     }
-    // Unterminated block (`{` at end of line, no `}` on this line): treat the
-    // rest of the line as the body instead of returning an inverted slice.
     const body_end = if (depth > 0) text.len else i - 1;
     if (body_start > body_end or body_end > text.len) return null;
     return .{ .body_start = body_start, .body_end = body_end };

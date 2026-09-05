@@ -1298,7 +1298,7 @@ test "parser: mixed PLAN + METAL in one file" {
     }
     try std.testing.expectEqual(@as(usize, 1), program.plan.states.items.len);
     try std.testing.expectEqual(@as(usize, 1), program.metal.kernels.items.len);
-    try std.testing.expectEqual(@as(usize, 1), program.common.struct_defs.count());
+    try std.testing.expectEqual(@as(usize, 1), program.metal.struct_defs.count());
 }
 
 test "program architecture: common declarations only" {
@@ -1312,8 +1312,8 @@ test "program architecture: common declarations only" {
         var prog = program;
         prog.deinit();
     }
-    try std.testing.expectEqual(@as(usize, 1), program.common.struct_defs.count());
-    try std.testing.expectEqual(@as(usize, 1), program.common.func_defs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), program.metal.struct_defs.count());
+    try std.testing.expectEqual(@as(usize, 1), program.metal.func_defs.items.len);
     try std.testing.expectEqual(@as(usize, 0), program.plan.states.items.len);
     try std.testing.expectEqual(@as(usize, 0), program.metal.kernels.items.len);
 }
@@ -1331,8 +1331,8 @@ test "program architecture: plan declarations" {
         var prog = program;
         prog.deinit();
     }
-    try std.testing.expectEqual(@as(usize, 0), program.common.func_defs.items.len);
-    try std.testing.expectEqual(@as(usize, 0), program.common.struct_defs.count());
+    try std.testing.expectEqual(@as(usize, 0), program.metal.func_defs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), program.metal.struct_defs.count());
     try std.testing.expectEqual(@as(usize, 1), program.plan.states.items.len);
     try std.testing.expectEqual(@as(usize, 0), program.metal.kernels.items.len);
     try std.testing.expectEqualStrings("Active", program.plan.states.items[0].name);
@@ -1346,8 +1346,8 @@ test "program architecture: metal cpu function" {
         var prog = program;
         prog.deinit();
     }
-    try std.testing.expectEqual(@as(usize, 1), program.common.func_defs.items.len);
-    try std.testing.expectEqualStrings("compute", program.common.func_defs.items[0].name);
+    try std.testing.expectEqual(@as(usize, 1), program.metal.func_defs.items.len);
+    try std.testing.expectEqualStrings("compute", program.metal.func_defs.items[0].name);
     try std.testing.expectEqual(@as(usize, 0), program.plan.states.items.len);
     try std.testing.expectEqual(@as(usize, 0), program.metal.kernels.items.len);
 }
@@ -1360,7 +1360,7 @@ test "program architecture: metal gpu kernel" {
         var prog = program;
         prog.deinit();
     }
-    try std.testing.expectEqual(@as(usize, 0), program.common.func_defs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), program.metal.func_defs.items.len);
     try std.testing.expectEqual(@as(usize, 0), program.plan.states.items.len);
     try std.testing.expectEqual(@as(usize, 1), program.metal.kernels.items.len);
     try std.testing.expectEqualStrings("Main", program.metal.kernels.items[0].name);
@@ -1378,7 +1378,7 @@ test "program architecture: all three sections populated" {
         var prog = program;
         prog.deinit();
     }
-    try std.testing.expectEqual(@as(usize, 1), program.common.struct_defs.count());
+    try std.testing.expectEqual(@as(usize, 1), program.metal.struct_defs.count());
     try std.testing.expectEqual(@as(usize, 1), program.plan.states.items.len);
     try std.testing.expectEqual(@as(usize, 1), program.metal.kernels.items.len);
     try std.testing.expectEqualStrings("Idle", program.plan.states.items[0].name);

@@ -38,7 +38,7 @@ pub fn generate(allocator: std.mem.Allocator, program: ast.ProgramNode) !CppOutp
     try w.writeAll("static int32_t abs(int32_t a) { return a < 0 ? -a : a; }\n\n");
 
     // Enums
-    for (program.common.enums.items) |e| {
+    for (program.metal.enums.items) |e| {
         try w.print("enum class {s} : uint32_t {{\n", .{e.name});
         for (e.members.items, 0..) |m, i| {
             try w.print("    {s}", .{m});
@@ -50,7 +50,7 @@ pub fn generate(allocator: std.mem.Allocator, program: ast.ProgramNode) !CppOutp
 
     // Structs
     {
-        var it = program.common.struct_defs.iterator();
+        var it = program.metal.struct_defs.iterator();
         while (it.next()) |entry| {
             try w.print("struct {s} {{\n", .{entry.key_ptr.*});
             for (entry.value_ptr.fields.items) |f| {
@@ -61,13 +61,13 @@ pub fn generate(allocator: std.mem.Allocator, program: ast.ProgramNode) !CppOutp
     }
 
     // Forwards (dllimport)
-    for (program.common.forwarders.items) |fwd| {
+    for (program.metal.forwarders.items) |fwd| {
         try w.print("extern \"C\" __declspec(dllimport) void {s}();\n", .{fwd.export_name});
     }
-    if (program.common.forwarders.items.len > 0) try w.writeAll("\n");
+    if (program.metal.forwarders.items.len > 0) try w.writeAll("\n");
 
     // ExternCppFn declarations
-    for (program.common.extern_cpp_fns.items) |ext| {
+    for (program.metal.extern_cpp_fns.items) |ext| {
         try w.print("extern \"C\" {s} {s}(", .{ mapType(ext.return_type orelse "void"), ext.name });
         for (ext.parameters.items, 0..) |p, i| {
             if (i > 0) try w.writeAll(", ");
@@ -81,7 +81,7 @@ pub fn generate(allocator: std.mem.Allocator, program: ast.ProgramNode) !CppOutp
         }
         try w.writeAll(");\n");
     }
-    if (program.common.extern_cpp_fns.items.len > 0) try w.writeAll("\n");
+    if (program.metal.extern_cpp_fns.items.len > 0) try w.writeAll("\n");
 
     // Metal (global state variables)
     if (program.metal.context) |ctx| {

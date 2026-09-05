@@ -228,15 +228,6 @@ pub const Parser = struct {
     pub fn parse(p: *Parser) !ast.ProgramNode {
         var program = ast.ProgramNode{
             .allocator = p.allocator,
-            .common = .{
-                .imports = std.ArrayList(ast.ImportNode).init(p.allocator),
-                .enums = std.ArrayList(ast.EnumDecl).init(p.allocator),
-                .struct_defs = std.StringHashMap(ast.StructDef).init(p.allocator),
-                .func_defs = std.ArrayList(ast.EntryDecl).init(p.allocator),
-                .forwarders = std.ArrayList(ast.ForwardDecl).init(p.allocator),
-                .extern_cpp_fns = std.ArrayList(ast.ExternCppFn).init(p.allocator),
-                .directives = std.ArrayList([]const u8).init(p.allocator),
-            },
             .plan = .{
                 .states = std.ArrayList(ast.StateDefNode).init(p.allocator),
                 .parallel_blocks = std.ArrayList(ast.ParallelBlock).init(p.allocator),
@@ -248,6 +239,13 @@ pub const Parser = struct {
                 .entries = std.ArrayList(ast.EntryDecl).init(p.allocator),
                 .kernels = std.ArrayList(ast.KernelDecl).init(p.allocator),
                 .context = null,
+                .imports = std.ArrayList(ast.ImportNode).init(p.allocator),
+                .enums = std.ArrayList(ast.EnumDecl).init(p.allocator),
+                .struct_defs = std.StringHashMap(ast.StructDef).init(p.allocator),
+                .func_defs = std.ArrayList(ast.EntryDecl).init(p.allocator),
+                .forwarders = std.ArrayList(ast.ForwardDecl).init(p.allocator),
+                .extern_cpp_fns = std.ArrayList(ast.ExternCppFn).init(p.allocator),
+                .directives = std.ArrayList([]const u8).init(p.allocator),
             },
         };
         errdefer program.deinit();
@@ -260,7 +258,7 @@ pub const Parser = struct {
                 const start = p.lexer.pos;
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 const dir = p.src[start..p.lexer.pos];
-                try program.common.directives.append(std.mem.trim(u8, dir, " \t\r"));
+                try program.metal.directives.append(std.mem.trim(u8, dir, " \t\r"));
                 if (p.peek(.newline)) p.advance();
             } else if (p.peek(.kw_state)) {
                 const s = try p.parseStateDef();
@@ -274,12 +272,12 @@ pub const Parser = struct {
                     errdefer e.body_lines.deinit();
                     try program.metal.entries.append(e);
                 } else if (p.peek(.kw_forward)) {
-                    try program.common.forwarders.append(try p.parseForward());
+                    try program.metal.forwarders.append(try p.parseForward());
                 } else {
                     return error.ExpectedEntryOrForwardAfterExport;
                 }
             } else if (p.peek(.kw_forward)) {
-                try program.common.forwarders.append(try p.parseForward());
+                try program.metal.forwarders.append(try p.parseForward());
             } else if (p.peek(.kw_entry)) {
                 const e = try p.parseEntry();
                 errdefer e.body_lines.deinit();
@@ -295,15 +293,15 @@ pub const Parser = struct {
             } else if (p.peek(.kw_struct)) {
                 const s = try p.parseStructDef();
                 errdefer s.fields.deinit();
-                if (program.common.struct_defs.get(s.name)) |_| {
+                if (program.metal.struct_defs.get(s.name)) |_| {
                     std.debug.print("error: duplicate struct definition '{s}'\n", .{s.name});
                     return error.DuplicateStruct;
                 }
-                try program.common.struct_defs.put(try p.allocator.dupe(u8, s.name), s);
+                try program.metal.struct_defs.put(try p.allocator.dupe(u8, s.name), s);
             } else if (p.peek(.kw_enum)) {
                 const e = try p.parseEnum();
                 errdefer e.members.deinit();
-                try program.common.enums.append(e);
+                try program.metal.enums.append(e);
             } else if (p.peek(.kw_parallel)) {
                 const pb = try p.parseParallel();
                 errdefer {
@@ -337,29 +335,26 @@ pub const Parser = struct {
                 try p.expect(.rparen);
                 var ret: ?[]const u8 = null;
                 if (p.peek(.arrow)) { p.advance(); ret = p.identText(); p.advance(); }
-                try program.common.extern_cpp_fns.append(.{ .name = fn_name, .parameters = params, .return_type = ret });
+                try program.metal.extern_cpp_fns.append(.{ .name = fn_name, .parameters = params, .return_type = ret });
                 try p.expect(.semicolon);
             } else if (p.peek(.kw_import)) {
                 const imp = try p.parseImport();
-                try program.common.imports.append(imp);
+                try program.metal.imports.append(imp);
             } else if (p.peek(.kw_fn)) {
-                p.advance(); // consume 'fn'
+                p.advance();
                 if (try p.tryParseFunction()) |fn_decl| {
-                    try program.common.func_defs.append(fn_decl);
+                    try program.metal.func_defs.append(fn_decl);
                 } else {
                     std.debug.print("warning: fn keyword without valid function definition\n", .{});
                 }
             } else if (p.peek(.identifier)) {
-                // Try to parse as function definition: name(params): rettype { body }
                 if (try p.tryParseFunction()) |fn_decl| {
                     try program.metal.entries.append(fn_decl);
                 } else {
-                    // Skip stray ident at top level
                     while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                     if (p.peek(.newline)) p.advance();
                 }
             } else if (p.peek(.at) or p.peek(.kw_if) or p.peek(.kw_return) or p.peek(.kw_print) or p.peek(.kw_free)) {
-                // Skip stray statements at top level
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 if (p.peek(.newline)) p.advance();
             } else if (p.peek(.kw_fire)) {
@@ -374,7 +369,7 @@ pub const Parser = struct {
             } else if (p.peek(.kw_machine)) {
                 p.advance();
                 if (p.peek(.identifier)) {
-                    p.advance(); // skip machine name
+                    p.advance();
                 }
                 p.consumeNewlines();
                 if (p.peek(.lbrace)) {
@@ -434,7 +429,6 @@ pub const Parser = struct {
         var inline_hint: ast.InlineHint = .default;
         var ownership: ast.OwnershipHint = .default;
 
-        // Parse annotations before opening brace
         while (p.peek(.at)) {
             const full_a = p.readAnnotationFull();
             if (std.mem.eql(u8, full_a, "hot")) { hot_weight = 0.9; }
@@ -489,7 +483,6 @@ pub const Parser = struct {
                 _ = p.readAnnotationFull();
                 p.consumeNewlines();
             } else if (p.peek(.kw_state)) {
-                // Nested state - skip
                 const s = try p.parseStateDef();
                 s.variables.deinit();
                 s.transitions.deinit();
@@ -581,10 +574,9 @@ pub const Parser = struct {
     fn parseVarDecls(p: *Parser) !std.ArrayList(ast.VariableNode) {
         var vars = std.ArrayList(ast.VariableNode).init(p.allocator);
         
-        // Support both: var x:i32 = 10 (old) and x = 10 (new auto-infer)
         const has_var_kw = p.peek(.kw_var);
         if (has_var_kw) {
-            p.advance();  // consume 'var'
+            p.advance();  
         }
 
         const is_fast_path = false;
@@ -592,15 +584,15 @@ pub const Parser = struct {
         const name = p.identText();
         p.advance();
 
-        // Check for type annotation (colon)
+  
         var type_name: ?[]const u8 = null;
         if (p.peek(.colon)) {
-            p.advance();  // consume ':'
+            p.advance();  
             type_name = p.identText();
             p.advance();
         }
 
-        // Expect '=' for value assignment
+        
         var default: ?[]const u8 = null;
         if (p.peek(.eq)) {
             p.advance();
@@ -613,14 +605,14 @@ pub const Parser = struct {
         const cp = parseVarCacheAnnotation(p);
         try vars.append(.{
             .name = name,
-            .type_name = type_name,  // null = auto-infer
+            .type_name = type_name,  
             .default_value = default,
             .is_fast_path = is_fast_path,
             .cache_policy = cp,
             .cache_align = null,
         });
 
-        // Handle comma-separated
+        
         while (p.peek(.comma)) {
             p.advance();
             const n = p.identText();
@@ -636,7 +628,7 @@ pub const Parser = struct {
             const cp2 = parseVarCacheAnnotation(p);
             try vars.append(.{
                 .name = n,
-                .type_name = t,  // null = auto-infer
+                .type_name = t,  
                 .default_value = null,
                 .is_fast_path = false,
                 .cache_policy = cp2,
@@ -669,7 +661,7 @@ pub const Parser = struct {
             is_always = true;
             p.advance();
 
-            // Guard [expr] for always transitions
+            
             if (p.peek(.lbracket)) {
                 p.advance();
                 const guardStart = p.cur_tok.start;
@@ -682,7 +674,7 @@ pub const Parser = struct {
             event = p.identText();
             p.advance();
 
-            // Guard [expr]
+            
             if (p.peek(.lbracket)) {
                 p.advance();
                 const guardStart = p.cur_tok.start;
@@ -691,7 +683,7 @@ pub const Parser = struct {
                 if (p.peek(.rbracket)) p.advance();
             }
 
-            // Annotations
+            
             while (p.peek(.at)) {
                 const full_a = p.readAnnotationFull();
                 if (std.mem.eql(u8, full_a, "hot")) { hot_weight = 0.9; }
@@ -721,8 +713,8 @@ pub const Parser = struct {
     }
 
     fn tryParseFunction(p: *Parser) !?ast.EntryDecl {
-        // Check for pattern: name (...) : type { body }
-        // Save position in case it's not a function
+        
+       
         const save_pos = p.lexer.pos;
         const save_char = p.lexer.char;
         const save_tok = p.cur_tok;
@@ -772,7 +764,7 @@ pub const Parser = struct {
             p.consumeNewlines();
         }
 
-        // Now check for { body } — if not, restore and return null
+        
         if (!p.peek(.lbrace)) {
             params.deinit();
             p.lexer.pos = save_pos;
@@ -902,7 +894,7 @@ pub const Parser = struct {
                     if (t.len > 0) try body_lines.append(try p.allocator.dupe(u8, t));
                 }
             }
-            // Re-sync lexer to position after the matching }
+           
             p.lexer.pos = scan_pos - 1;
             p.lexer.char = if (scan_pos - 1 < p.src.len) p.src[scan_pos - 1] else 0;
             p.cur_tok = p.lexer.next();
@@ -969,8 +961,8 @@ pub const Parser = struct {
     }
 
     fn skipGpuKernelBlock(p: *Parser) !void {
-        p.advance(); // skip 'kernel' keyword
-        p.advance(); // skip kernel name
+        p.advance(); 
+        p.advance(); 
         p.consumeNewlines();
         try p.expect(.lbrace);
         var depth: u32 = 1;

@@ -178,7 +178,7 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
         try symtab.define(state.name, .state, .void, null);
     }
 
-    for (program.common.func_defs.items) |func| {
+    for (program.metal.func_defs.items) |func| {
         if (symtab.isDefinedInCurrentScope(func.name)) {
             const ln = findLineNumber(src, func.name);
             std.log.err("{s}:{d}: error: duplicate function definition '{s}'", .{ file_path, ln, func.name });
@@ -190,14 +190,14 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
     }
 
     {
-        var struct_it = program.common.struct_defs.iterator();
+        var struct_it = program.metal.struct_defs.iterator();
         while (struct_it.next()) |entry| {
             try symtab.define(entry.key_ptr.*, .struct_def, .struct_type, entry.key_ptr.*);
             try defined_structs.put(entry.key_ptr.*, entry.value_ptr.*);
         }
     }
 
-    for (program.common.enums.items) |en| {
+    for (program.metal.enums.items) |en| {
         if (symtab.isDefinedInCurrentScope(en.name)) {
             const ln = findLineNumber(src, en.name);
             std.log.err("{s}:{d}: error: duplicate enum definition '{s}'", .{ file_path, ln, en.name });
@@ -208,7 +208,7 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
     }
 
     // ── Pass 2: Validate imports ──
-    for (program.common.imports.items) |imp| {
+    for (program.metal.imports.items) |imp| {
         const file = std.fs.cwd().openFile(imp.path, .{}) catch {
             const ln = findLineNumber(src, imp.path);
             std.log.err("{s}:{d}: error: import file not found '{s}'", .{ file_path, ln, imp.path });
@@ -232,7 +232,7 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
     }
 
     // ── Pass 4: Validate function bodies & return counts ──
-    for (program.common.func_defs.items) |func| {
+    for (program.metal.func_defs.items) |func| {
         try validateFuncBody(allocator, func, &symtab, &defined_funcs, &defined_structs, &defined_enums, file_path, src);
     }
 
@@ -246,16 +246,16 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
     };
     errdefer result.deinit();
 
-    for (program.common.func_defs.items) |func| {
+    for (program.metal.func_defs.items) |func| {
         try result.defined_func_names.append(try allocator.dupe(u8, func.name));
     }
     {
-        var struct_it = program.common.struct_defs.iterator();
+        var struct_it = program.metal.struct_defs.iterator();
         while (struct_it.next()) |entry| {
             try result.defined_struct_names.append(try allocator.dupe(u8, entry.key_ptr.*));
         }
     }
-    for (program.common.enums.items) |en| {
+    for (program.metal.enums.items) |en| {
         try result.defined_enum_names.append(try allocator.dupe(u8, en.name));
     }
 

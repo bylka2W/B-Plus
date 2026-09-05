@@ -182,16 +182,6 @@ pub const ForwardDecl = struct {
     target_dll: []const u8,
 };
 
-pub const ProgramCommon = struct {
-    imports: std.ArrayList(ImportNode),
-    enums: std.ArrayList(EnumDecl),
-    struct_defs: std.StringHashMap(StructDef),
-    func_defs: std.ArrayList(EntryDecl),
-    forwarders: std.ArrayList(ForwardDecl),
-    extern_cpp_fns: std.ArrayList(ExternCppFn),
-    directives: std.ArrayList([]const u8),
-};
-
 pub const ProgramPlan = struct {
     states: std.ArrayList(StateDefNode),
     parallel_blocks: std.ArrayList(ParallelBlock),
@@ -204,40 +194,50 @@ pub const ProgramMetal = struct {
     entries: std.ArrayList(EntryDecl),
     kernels: std.ArrayList(KernelDecl),
     context: ?ContextDecl,
+    imports: std.ArrayList(ImportNode),
+    enums: std.ArrayList(EnumDecl),
+    struct_defs: std.StringHashMap(StructDef),
+    func_defs: std.ArrayList(EntryDecl),
+    forwarders: std.ArrayList(ForwardDecl),
+    extern_cpp_fns: std.ArrayList(ExternCppFn),
+    directives: std.ArrayList([]const u8),
 };
 
 pub const ProgramNode = struct {
     allocator: Allocator,
-    common: ProgramCommon,
     plan: ProgramPlan,
     metal: ProgramMetal,
 
     pub fn deinit(self: *ProgramNode) void {
         const a = self.allocator;
 
-        // Common
-        for (self.common.imports.items) |*imp| a.free(imp.path);
-        self.common.imports.deinit();
-        for (self.common.enums.items) |*e| e.members.deinit();
-        self.common.enums.deinit();
+        // Metal
+        for (self.metal.imports.items) |*imp| a.free(imp.path);
+        self.metal.imports.deinit();
+        for (self.metal.enums.items) |*e| e.members.deinit();
+        self.metal.enums.deinit();
         {
-            var it = self.common.struct_defs.iterator();
-            while (it.next()) |entry| {
-                a.free(entry.key_ptr.*);
-                entry.value_ptr.fields.deinit();
+            var it = self.metal.struct_defs.iterator();
+            while (it.next()) |kv| {
+                a.free(kv.key_ptr.*);
+                kv.value_ptr.fields.deinit();
             }
-            self.common.struct_defs.deinit();
         }
-        for (self.common.func_defs.items) |*f| {
-            a.free(f.name);
+        self.metal.struct_defs.deinit();
+        for (self.metal.func_defs.items) |*f| {
+            for (f.params.items) |*p| {
+                a.free(p.name);
+                a.free(p.type_name);
+            }
+            f.params.deinit();
             for (f.body_lines.items) |line| a.free(line);
             f.body_lines.deinit();
-            f.params.deinit();
+            if (f.return_type) |rt| a.free(rt);
         }
-        self.common.func_defs.deinit();
-        self.common.forwarders.deinit();
-        self.common.extern_cpp_fns.deinit();
-        self.common.directives.deinit();
+        self.metal.func_defs.deinit();
+        self.metal.forwarders.deinit();
+        self.metal.extern_cpp_fns.deinit();
+        self.metal.directives.deinit();
 
         // Plan
         for (self.plan.states.items) |*s| {
