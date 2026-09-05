@@ -1057,6 +1057,7 @@ fn lowerBodyStr(b: *Builder, body: []const u8, sep: u8) anyerror!void {
                     }
                 }
                 if (stmt.len > 0) try lowerStmt(b, stmt);
+                start = pos;
                 break;
             }
             pos += 1;

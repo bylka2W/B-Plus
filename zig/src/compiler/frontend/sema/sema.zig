@@ -282,6 +282,82 @@ fn collectTypedVars(symtab: *scope_mod.ScopeTable, result: *SemaResult) !void {
     }
 }
 
+fn defineVarsFromStatement(
+    allocator: Allocator,
+    s: []const u8,
+    symtab: *scope_mod.ScopeTable,
+    defined_structs: *const std.StringHashMap(ast.StructDef),
+    defined_enums: *const std.StringHashMap(ast.EnumDecl),
+    file_path: []const u8,
+    src: []const u8,
+) !void {
+    // for init; cond; update { body } — define init variable
+    if (std.mem.startsWith(u8, s, "for ") or std.mem.startsWith(u8, s, "for(")) {
+        const rest = if (s[3] == ' ') s[4..] else s[4..];
+        const header = if (std.mem.indexOfScalar(u8, rest, '{')) |brace| rest[0..brace] else rest;
+        const header_trim = std.mem.trim(u8, header, " \t\r\n");
+        var depth: i32 = 0;
+        var si: usize = header_trim.len;
+        for (header_trim, 0..) |ch, idx| {
+            if (ch == '(') depth += 1;
+            if (ch == ')') depth -= 1;
+            if (ch == ';' and depth == 0) {
+                si = idx;
+                break;
+            }
+        }
+        const init_part = std.mem.trim(u8, header_trim[0..si], " \t\r\n");
+        if (init_part.len > 0) {
+            if (std.mem.indexOfScalar(u8, init_part, '=')) |eq| {
+                const var_name = std.mem.trim(u8, init_part[0..eq], " \t\r\n");
+                if (var_name.len > 0) {
+                    const rhs = std.mem.trim(u8, init_part[eq + 1 ..], " \t\r\n");
+                    const inferred_type = try inferTypeFromValue(allocator, rhs);
+                    defer allocator.free(inferred_type);
+                    const type_id = ast.TypeId.fromName(inferred_type);
+                    try symtab.define(var_name, .variable, type_id, inferred_type);
+                }
+            }
+        }
+        return;
+    }
+
+    // var x:i32 = 10 (old syntax)
+    if (std.mem.startsWith(u8, s, "var ")) {
+        const rest = s["var ".len..];
+        const name = extractVarName(rest);
+        const vtype = extractVarType(rest);
+        if (name.len > 0) {
+            const type_id = if (vtype) |vt| ast.TypeId.fromName(vt) else .unknown;
+            try symtab.define(name, .variable, type_id, vtype);
+            if (vtype) |vt| {
+                try validateTypeRef(vt, defined_structs, defined_enums, file_path, src);
+            }
+        }
+        return;
+    }
+
+    // x = 10 or x:i64 = 10 (auto-infer)
+    if (std.mem.indexOfScalar(u8, s, '=')) |eq_idx| {
+        const lhs = std.mem.trim(u8, s[0..eq_idx], " \t\r\n");
+        if (std.mem.indexOfScalar(u8, lhs, ':')) |colon_idx| {
+            const var_name = std.mem.trim(u8, lhs[0..colon_idx], " \t\r\n");
+            const type_name = std.mem.trim(u8, lhs[colon_idx + 1 ..], " \t\r\n");
+            if (var_name.len > 0 and type_name.len > 0) {
+                const type_id = ast.TypeId.fromName(type_name);
+                try symtab.define(var_name, .variable, type_id, type_name);
+                try validateTypeRef(type_name, defined_structs, defined_enums, file_path, src);
+            }
+        } else if (lhs.len > 0) {
+            const rhs = std.mem.trim(u8, s[eq_idx + 1 ..], " \t\r\n");
+            const inferred_type = try inferTypeFromValue(allocator, rhs);
+            defer allocator.free(inferred_type);
+            const type_id = ast.TypeId.fromName(inferred_type);
+            try symtab.define(lhs, .variable, type_id, inferred_type);
+        }
+    }
+}
+
 fn validateFuncBody(
     allocator: Allocator,
     func: ast.EntryDecl,
@@ -310,74 +386,60 @@ fn validateFuncBody(
 
         if (std.mem.startsWith(u8, trimmed, "return")) return_count += 1;
 
-        //for init; cond; update { body } — парсим init чтобы создать переменную
-        if (std.mem.startsWith(u8, trimmed, "for ") or std.mem.startsWith(u8, trimmed, "for(")) {
-            const rest = if (trimmed[3] == ' ') trimmed[4..] else trimmed[4..];
-            const header = if (std.mem.indexOfScalar(u8, rest, '{')) |brace| rest[0..brace] else rest;
-            const header_trim = std.mem.trim(u8, header, " \t\r\n");
-            var depth: i32 = 0;
-            var si: usize = header_trim.len;
-            for (header_trim, 0..) |ch, idx| {
-                if (ch == '(') depth += 1;
-                if (ch == ')') depth -= 1;
-                if (ch == ';' and depth == 0) {
-                    si = idx;
-                    break;
+        //scan for top-level statements at depth 0
+        var scan_depth: i32 = 0;
+        var scan_pos: usize = 0;
+        var scan_start: usize = 0;
+        var in_str_v: bool = false;
+        while (scan_pos <= trimmed.len) {
+            const at_end = scan_pos == trimmed.len;
+            if (!at_end and !in_str_v) {
+                const sc = trimmed[scan_pos];
+                if (sc == '"') { in_str_v = !in_str_v; scan_pos += 1; continue; }
+                if (sc == '(') scan_depth += 1
+                else if (sc == ')') { scan_depth -= 1; if (scan_depth < 0) scan_depth = 0; }
+                else if (sc == ';' and scan_depth == 0) {
+                    const s = std.mem.trim(u8, trimmed[scan_start..scan_pos], " \t\r\n");
+                    scan_start = scan_pos + 1;
+                    scan_pos += 1;
+                    if (s.len > 0) {
+                        try defineVarsFromStatement(allocator, s, parent_symtab, defined_structs, defined_enums, file_path, src);
+                        const is_ctrl = std.mem.startsWith(u8, s, "for ") or std.mem.startsWith(u8, s, "for(") or std.mem.startsWith(u8, s, "while ") or std.mem.startsWith(u8, s, "while(") or std.mem.startsWith(u8, s, "if ") or std.mem.startsWith(u8, s, "if(") or isControlKeyword(s);
+                        if (!is_ctrl) {
+                            try validateBodyLine(allocator, s, parent_symtab, defined_funcs, defined_structs, defined_enums, file_path, src);
+                        } else {
+                            //skip for/while/if body: scan to matching }
+                            var skip_braces: i32 = 0;
+                            var found_open = std.mem.indexOfScalar(u8, s, '{') != null;
+                            for (s) |ch| { if (ch == '{') skip_braces += 1; if (ch == '}') skip_braces -= 1; }
+                            while (scan_pos < trimmed.len) {
+                                if (found_open and skip_braces <= 0) break;
+                                const sc2 = trimmed[scan_pos];
+                                if (sc2 == '{') { skip_braces += 1; found_open = true; }
+                                if (sc2 == '}') skip_braces -= 1;
+                                scan_pos += 1;
+                            }
+                            scan_start = scan_pos;
+                        }
+                    }
+                    continue;
                 }
             }
-            const init_part = std.mem.trim(u8, header_trim[0..si], " \t\r\n");
-            if (init_part.len > 0) {
-                if (std.mem.indexOfScalar(u8, init_part, '=')) |eq| {
-                    const var_name = std.mem.trim(u8, init_part[0..eq], " \t\r\n");
-                    if (var_name.len > 0) {
-                        const rhs = std.mem.trim(u8, init_part[eq + 1 ..], " \t\r\n");
-                        const inferred_type = try inferTypeFromValue(allocator, rhs);
-                        defer allocator.free(inferred_type);
-                        const type_id = ast.TypeId.fromName(inferred_type);
-                        try parent_symtab.define(var_name, .variable, type_id, inferred_type);
+            if (at_end) {
+                if (scan_start < trimmed.len) {
+                    const s = std.mem.trim(u8, trimmed[scan_start..], " \t\r\n");
+                    if (s.len > 0) {
+                        try defineVarsFromStatement(allocator, s, parent_symtab, defined_structs, defined_enums, file_path, src);
+                        const is_ctrl = std.mem.startsWith(u8, s, "for ") or std.mem.startsWith(u8, s, "for(") or std.mem.startsWith(u8, s, "while ") or std.mem.startsWith(u8, s, "while(") or std.mem.startsWith(u8, s, "if ") or std.mem.startsWith(u8, s, "if(") or isControlKeyword(s);
+                        if (!is_ctrl) {
+                            try validateBodyLine(allocator, s, parent_symtab, defined_funcs, defined_structs, defined_enums, file_path, src);
+                        }
                     }
                 }
+                break;
             }
+            scan_pos += 1;
         }
-
-        // var x:i32 = 10 (old syntax)
-        if (std.mem.startsWith(u8, trimmed, "var ")) {
-            const rest = trimmed["var ".len..];
-            const name = extractVarName(rest);
-            const vtype = extractVarType(rest);
-            if (name.len > 0) {
-                const type_id = if (vtype) |vt| ast.TypeId.fromName(vt) else .unknown;
-                try parent_symtab.define(name, .variable, type_id, vtype);
-                if (vtype) |vt| {
-                    try validateTypeRef(vt, defined_structs, defined_enums, file_path, src);
-                }
-            }
-        }
-        // x = 10 or x:i64 = 10 (new auto-infer syntax)
-        else if (std.mem.indexOfScalar(u8, trimmed, '=')) |eq_idx| {
-            const lhs = std.mem.trim(u8, trimmed[0..eq_idx], " \t\r\n");
-            // Check for type annotation: x:i64 = 10
-            if (std.mem.indexOfScalar(u8, lhs, ':')) |colon_idx| {
-                const var_name = std.mem.trim(u8, lhs[0..colon_idx], " \t\r\n");
-                const type_name = std.mem.trim(u8, lhs[colon_idx + 1 ..], " \t\r\n");
-                if (var_name.len > 0 and type_name.len > 0) {
-                    const type_id = ast.TypeId.fromName(type_name);
-                    try parent_symtab.define(var_name, .variable, type_id, type_name);
-                    try validateTypeRef(type_name, defined_structs, defined_enums, file_path, src);
-                }
-            }
-            // x = 10 (auto-infer)
-            else if (lhs.len > 0) {
-                // Infer type from RHS
-                const rhs = std.mem.trim(u8, trimmed[eq_idx + 1 ..], " \t\r\n");
-                const inferred_type = try inferTypeFromValue(allocator, rhs);
-                defer allocator.free(inferred_type);
-                const type_id = ast.TypeId.fromName(inferred_type);
-                try parent_symtab.define(lhs, .variable, type_id, inferred_type);
-            }
-        }
-
-        try validateBodyLine(allocator, trimmed, parent_symtab, defined_funcs, defined_structs, defined_enums, file_path, src);
     }
 
     const has_return_type = func.return_type != null;
@@ -765,23 +827,6 @@ fn isBuiltin(ident: []const u8) bool {
         if (std.mem.eql(u8, ident, b)) return true;
     }
     return false;
-}
-
-fn findBraceBlockSimple(s: []const u8) ?struct { start: usize, end: usize } {
-    var depth: i32 = 0;
-    var open_idx: ?usize = null;
-    for (s, 0..) |ch, i| {
-        if (ch == '{') {
-            if (depth == 0) open_idx = i;
-            depth += 1;
-        } else if (ch == '}') {
-            depth -= 1;
-            if (depth == 0) {
-                return .{ .start = open_idx.?, .end = i };
-            }
-        }
-    }
-    return null;
 }
 
 fn extractVarName(rest: []const u8) []const u8 {
