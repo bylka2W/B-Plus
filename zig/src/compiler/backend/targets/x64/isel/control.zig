@@ -1,4 +1,4 @@
-/// x64 control-flow instruction selection (branch/call/ret/select).
+///выбор инструкций управления потоком для x64: переходы вызовы возвраты и select
 const std = @import("std");
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");
@@ -33,9 +33,9 @@ pub fn selectTrap(ctx: *Ctx) !void {
 
 pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
     const int_arg_regs = [_]i16{ 1, 2, 8, 9 }; // RCX, RDX, R8, R9
-    const float_arg_regs = [_]i16{ 16, 17, 18, 19 }; // XMM0-XMM3
+    const float_arg_regs = [_]i16{ 0, 1, 2, 3 }; // XMM0-XMM3
 
-    // Classify each argument as integer or float.
+    //определяет для каждого аргумента это целое число или float
     var int_idx: usize = 0;
     var float_idx: usize = 0;
     var gpr_src: [14]i16 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
@@ -46,11 +46,9 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
 
     for (0..c.arg_count) |i| {
         const arg = c.args[i];
-        const arg_vreg = switch (arg) { .vreg => |v| v, else => 0 };
-        const dtype = ctx.mfunc.getVRegType(arg_vreg) orelse .i64;
+        const dtype = c.arg_types[i];
         const is_float = dtype.isFloat();
 
-        // Immediate arguments: load directly into the destination register.
         if (arg == .imm) {
             if (is_float) {
                 try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), .{ .imm64 = @bitCast(arg.imm) });
@@ -78,13 +76,11 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
             continue;
         }
 
-        // Load spilled args.
         if (regalloc.isSpilled(ctx.ra, arg)) {
             try spill.loadSpilledOp(ctx, arg, ctx.scratch);
             if (is_float) {
                 xmm_src[arg_count] = ctx.scratch;
-                // Actually we need to move from GPR scratch to XMM.
-                const xs: i16 = 14; // temp XMM, avoid xmm15 (xmmScratch)
+                const xs: i16 = 14;
                 if (dtype == .f64) {
                     try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
                 } else {
@@ -118,17 +114,13 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
         arg_count += 1;
     }
 
-    // Now move GPR args to their destination registers.
-    // Handle conflicts: if src of arg[i] is the same as dst of arg[j], resolve via scratch.
     for (0..arg_count) |i| {
         if (gpr_src[i] == -1) continue;
         const src = gpr_src[i];
         const dst = gpr_dst[i];
         if (dst == -1 or src == dst) continue;
-        // Check if any later arg reads from this dst as source.
         for (i + 1..arg_count) |j| {
             if (gpr_src[j] == dst) {
-                // Conflict: move current src via scratch.
                 try append2(ctx, .MOV_R64_R64, Operand.r(ctx.scratch), Operand.r(src));
                 gpr_src[i] = ctx.scratch;
                 break;
@@ -143,17 +135,14 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
         try append2(ctx, .MOV_R64_R64, Operand.r(dst), Operand.r(src));
     }
 
-    // Move XMM args to their destination registers.
-    // Use scratch XMM (xmm15) for conflicts.
     for (0..arg_count) |i| {
         if (xmm_src[i] == -1) continue;
         const src = xmm_src[i];
         const dst = xmm_dst[i];
         if (dst == -1 or src == dst) continue;
-        // Check conflict.
         for (i + 1..arg_count) |j| {
             if (xmm_src[j] == dst) {
-                const xs: i16 = 15; // xmmScratch
+                const xs: i16 = 15;
                 try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(xs), Operand.xmm(src));
                 xmm_src[i] = xs;
                 break;
@@ -168,43 +157,36 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
         try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(dst), Operand.xmm(src));
     }
 
-    // Reserve shadow space (32 bytes) for the callee on Win64.
     try append2(ctx, .SUB_R64_IMM32, Operand.r(4), Operand.imm(32));
 
-    // Emit the CALL.
     try ctx.call_fixups.append(ctx.mf.allocator, .{ .name = c.name, .disp_pos = 0 });
     try append1(ctx, .CALL_REL32, Operand.imm(0));
 
-    // Restore shadow space.
     try append2(ctx, .ADD_R64_IMM32, Operand.r(4), Operand.imm(32));
 
-    // Collect the return value.
     if (!c.is_void) {
         const dst_spilled = regalloc.isSpilled(ctx.ra, c.dst);
         const dst_vreg = switch (c.dst) { .vreg => |v| v, else => 0 };
         const ret_dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
         if (ret_dtype.isFloat()) {
-            // Float return is in xmm0 (reg 16).
             if (dst_spilled) {
-                // Convert xmm0 bits to GPR scratch, then use storeSpilledOp.
-                if (ret_dtype == .f64) {
-                    try append2(ctx, .SSE_MOVQ_ST, Operand.r(ctx.scratch), Operand.xmm(16));
-                } else {
-                    try append2(ctx, .SSE_MOVD_ST, Operand.r(ctx.scratch), Operand.xmm(16));
+                        if (ret_dtype == .f64) {
+                            try append2(ctx, .SSE_MOVQ_ST, Operand.r(ctx.scratch), Operand.xmm(0));
+                        } else {
+                            try append2(ctx, .SSE_MOVD_ST, Operand.r(ctx.scratch), Operand.xmm(0));
                 }
                 try spill.storeSpilledOp(ctx, c.dst, ctx.scratch);
             } else {
                 const dst = resolveReg(ctx.ra, c.dst);
-                if (dst != 16) {
+                if (dst != 0) {
                     if (ret_dtype == .f64) {
-                        try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(dst), Operand.xmm(16));
+                        try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(dst), Operand.xmm(0));
                     } else {
-                        try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(dst), Operand.xmm(16));
+                        try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(dst), Operand.xmm(0));
                     }
                 }
             }
         } else {
-            // Integer return is in rax (reg 0).
             if (dst_spilled) {
                 try spill.storeSpilledOp(ctx, c.dst, 0);
             } else {
@@ -218,45 +200,40 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
 pub fn selectRet(ctx: *Ctx, r: mir.RetInst) !void {
     switch (r) {
         .void_ret => {
-            // A void entry (main) returns with EAX as the process exit code;
-            // zero it so successful programs exit with code 0.
             try append2(ctx, .XOR_R64_R64, Operand.r(0), Operand.r(0));
         },
         .value => |val| {
-            // Determine the return register based on the value's type.
             const val_vreg = switch (val) { .vreg => |v| v, else => 0 };
             const dtype = ctx.mfunc.getVRegType(val_vreg) orelse .i64;
 
             if (dtype.isFloat()) {
-                // Float return: move to xmm0.
                 const val_spilled = regalloc.isSpilled(ctx.ra, val);
                 if (val_spilled) {
                     try spill.loadSpilledOp(ctx, val, ctx.scratch);
-                    const xs: i16 = if (ctx.scratch == 15) 14 else 15; // avoid scratch conflict
+                    const xs: i16 = if (ctx.scratch == 15) 14 else 15; 
                     if (dtype == .f64) {
                         try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
                     } else {
                         try append2(ctx, .SSE_MOVD_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
                     }
-                    if (xs != 16) {
+                    if (xs != 0) {
                         if (dtype == .f64) {
-                            try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(16), Operand.xmm(xs));
+                            try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(0), Operand.xmm(xs));
                         } else {
-                            try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(16), Operand.xmm(xs));
+                            try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(0), Operand.xmm(xs));
                         }
                     }
                 } else {
                     const val_r = resolveReg(ctx.ra, val);
-                    if (val_r != 16) {
+                    if (val_r != 0) {
                         if (dtype == .f64) {
-                            try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(16), Operand.xmm(val_r));
+                            try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(0), Operand.xmm(val_r));
                         } else {
-                            try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(16), Operand.xmm(val_r));
+                            try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(0), Operand.xmm(val_r));
                         }
                     }
                 }
             } else {
-                // Integer return: move to rax.
                 const val_spilled = regalloc.isSpilled(ctx.ra, val);
                 if (val_spilled) {
                     try spill.loadSpilledOp(ctx, val, 0);

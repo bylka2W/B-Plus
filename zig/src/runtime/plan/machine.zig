@@ -234,9 +234,6 @@ pub const MachineConfig = struct {
     lifecycle: ?LifecycleHooks,
 };
 
-// ──────────────────────────────────────────────
-//  Generational HandleTable with free list
-// ──────────────────────────────────────────────
 
 const MAX_MACHINES = 256;
 

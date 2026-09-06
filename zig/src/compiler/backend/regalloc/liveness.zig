@@ -3,7 +3,6 @@ const mir = @import("../mir/mir.zig");
 const classes = @import("classes.zig");
 const RegClass = classes.RegClass;
 
-// Live Interval 
 
 pub const LiveInterval = struct {
     vreg: u32,
@@ -15,7 +14,6 @@ pub const LiveInterval = struct {
 
 pub const IntervalList = std.ArrayList(LiveInterval);
 
-// CFG / Dominators 
 
 pub const CfgInfo = struct {
     predecessors: std.ArrayList(usize),
@@ -214,8 +212,6 @@ pub fn isDominatedBy(node: usize, dominator: usize, cfg_infos: []const CfgInfo) 
     return false;
 }
 
-// Utilities
-
 pub fn vregOf(op: mir.MOperand) u32 {
     return switch (op) {
         .vreg => |v| v,
@@ -252,8 +248,6 @@ pub fn findNextUse(
     }
     return null;
 }
-
-// Live Interval Computation
 
 const Remat = @import("allocator.zig").Remat;
 
@@ -491,7 +485,6 @@ pub fn computeLiveIntervals(
         }
     }
 
-    // Extend intervals across back-edges
     for (mfunc.blocks.items, 0..) |*blk, bi| {
         if (blk.instrs.items.len > 0) {
             const last = blk.instrs.items[blk.instrs.items.len - 1];
@@ -528,6 +521,7 @@ pub fn computeLiveIntervals(
     }
 
     var it = intervals.iterator();
+    var idx: usize = 0;
     while (it.next()) |kv| {
         var iv = kv.value_ptr.*;
         const len: f64 = @floatFromInt(@max(iv.end - iv.start + 1, 1));
@@ -544,7 +538,6 @@ pub fn computeLiveIntervals(
 
         iv.spill_weight = (uses * (1.0 + max_loop_depth * 10.0)) / len;
 
-        // Apply type-based register class from vreg_info
         if (mfunc.vreg_info.get(iv.vreg)) |info| {
             iv.reg_class = switch (info.class) {
                 .gpr => .gpr64,
@@ -553,5 +546,15 @@ pub fn computeLiveIntervals(
         }
 
         try out_intervals.append(iv);
+        idx += 1;
+    }
+
+    for (out_intervals.items) |*iv| {
+        std.log.err("LIV vreg={d} reg={s} start={d} end={d}", .{ iv.vreg, @tagName(iv.reg_class), iv.start, iv.end });
+    }
+
+    std.log.err("LIVENESS: total intervals={d} vreg_info_count={d}", .{ out_intervals.items.len, mfunc.vreg_info.count() });
+    for (out_intervals.items) |iv| {
+        std.log.err("  interval vreg={d} reg_class={s}", .{ iv.vreg, @tagName(iv.reg_class) });
     }
 }

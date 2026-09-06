@@ -1,4 +1,4 @@
-/// Shared context and helpers for x64 instruction selection sub-modules.
+///общий контекст и вспомогательные функции для модулей выбора инструкций x64
 const std = @import("std");
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");
@@ -117,6 +117,7 @@ pub fn condToJccOp(cc: mir.CondCode) OpCode {
 }
 
 pub fn xmmScratch() i16 { return 15; }
+pub fn xmmScratch2() i16 { return 14; }
 
 pub fn moveGprToXmm(ctx: *Ctx, gpr: i16, xmm: i16, dtype: mir.DataType) !void {
     if (dtype == .f64) {

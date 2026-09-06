@@ -1,7 +1,4 @@
-/// x64 IR verifier.
-/// Validates that every x64 IR instruction has valid operand types
-/// before encoding. Catches opcode/operand mismatches (e.g. CMP_R64_R64
-/// with an immediate operand) that would produce corrupt machine code.
+///проверяет x64 IR
 const std = @import("std");
 const ir = @import("../ir/inst.zig");
 const OpCode = ir.OpCode;
@@ -17,14 +14,12 @@ pub const VerifyError = error{
     InvalidMemoryOperand,
 };
 
-/// Verified x64 MachineFunction — can only be produced by `verifyFunction`.
-/// `encodeFunction` should accept only this type.
 pub const VerifiedX64Function = struct {
     mf: *const ir.MachineFunction,
 };
 
 fn isReg(operand: Operand) bool {
-    return operand.reg >= 0 and operand.reg <= 15;
+    return operand.reg >= 0 and (operand.reg <= 15 or operand.is_xmm);
 }
 
 fn isMem(operand: Operand) bool {
@@ -153,7 +148,6 @@ fn verifyMov64Imm(inst: ir.Instruction) !void {
     try checkRegs(inst, &.{0});
 }
 
-/// Verify a single x64 IR instruction.
 pub fn verifyInst(inst: ir.Instruction) !void {
     switch (inst.op) {
         .MOV_R64_R64, .MOV_R32_R32, .ADD_R64_R64, .ADD_R32_R32,
@@ -237,8 +231,6 @@ pub fn verifyInst(inst: ir.Instruction) !void {
     }
 }
 
-/// Verify all instructions in a MachineFunction.
-/// Returns a `VerifiedX64Function` that can only be created through verification.
 pub fn verifyFunction(mf: *const ir.MachineFunction) !VerifiedX64Function {
     for (mf.blocks.items, 0..) |*block, bi| {
         for (block.instrs.items, 0..) |inst, ii| {
@@ -291,7 +283,6 @@ fn operandFmt(operand: Operand, writer: anytype) !void {
     }
 }
 
-/// Dump a verified x64 IR function to stderr.
 pub fn dumpFunction(vf: VerifiedX64Function) void {
     const mf = vf.mf;
     const stderr = std.io.getStdErr().writer();
@@ -321,7 +312,6 @@ test "verified type barrier" {
     _ = try mf.appendBlock("entry");
     try mf.appendInstr1(0, .RET, .{});
     _ = try verifyFunction(&mf);
-    // compile-time: VerifiedX64Function is the only way to get verified IR
 }
 
 test "catches extra operands" {
@@ -329,7 +319,6 @@ test "catches extra operands" {
     var mf = ir.MachineFunction.init(testing.allocator, "test");
     defer mf.deinit();
     _ = try mf.appendBlock("entry");
-    // CALL_REL32 with 2 operands should fail
     try mf.appendInstr(0, .CALL_REL32, &.{ .{ .imm64 = 0 }, .{ .reg = 0 } });
     try testing.expectError(error.ExtraOperands, verifyFunction(&mf));
 }
@@ -348,7 +337,6 @@ test "catches immediate in register slot" {
     var mf = ir.MachineFunction.init(testing.allocator, "test");
     defer mf.deinit();
     _ = try mf.appendBlock("entry");
-    // MOV_R64_R64 with an immediate as second operand
     try mf.appendInstr(0, .MOV_R64_R64, &.{ .{ .reg = 0 }, Operand.imm(42) });
     try testing.expectError(error.InvalidRegister, verifyFunction(&mf));
 }

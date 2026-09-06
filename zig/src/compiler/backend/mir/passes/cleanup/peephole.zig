@@ -343,7 +343,7 @@ fn handleCall(map: *std.AutoHashMap(u32, VRegVal), block: *mir.MBlock, ip: *usiz
         }
     }
     if (changed) {
-        block.instrs.items[ip.*] = .{ .call = .{ .name = m.name, .args = new_args, .arg_count = m.arg_count, .dst = m.dst, .is_void = m.is_void } };
+        block.instrs.items[ip.*] = .{ .call = .{ .name = m.name, .args = new_args, .arg_count = m.arg_count, .dst = m.dst, .is_void = m.is_void, .arg_types = m.arg_types } };
     }
     if (!m.is_void) {
         if (vreg(m.dst)) |dv| redefineVReg(map, dv);

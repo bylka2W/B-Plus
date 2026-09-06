@@ -11,6 +11,14 @@ pub export fn print_i64(val: i64) void {
     _ = kernel32.WriteFile(handle, s.ptr, @intCast(s.len), &written, null);
 }
 
+pub export fn print_f64(val: f64) void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "{d}\n", .{val}) catch "error";
+    const handle = kernel32.GetStdHandle(windows.STD_OUTPUT_HANDLE) orelse return;
+    var written: windows.DWORD = 0;
+    _ = kernel32.WriteFile(handle, s.ptr, @intCast(s.len), &written, null);
+}
+
 pub export fn read_i64() i64 {
     var buf: [32]u8 = undefined;
     const handle = kernel32.GetStdHandle(windows.STD_INPUT_HANDLE) orelse return 0;

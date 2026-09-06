@@ -1,6 +1,4 @@
-﻿/// x64 instruction selection orchestration.
-/// Routes MIR instructions to the appropriate sub-module for selection.
-const std = @import("std");
+﻿const std = @import("std");
 const mir = @import("../../mir/mir.zig");
 const regalloc = @import("../../regalloc/regalloc.zig");
 const enc = @import("encoder.zig");
@@ -121,5 +119,4 @@ pub fn selectFunction(mfunc: *const mir.MFunction, ra: *const regalloc.RegAllocR
     };
 }
 
-// Legacy re-exports for backward compatibility.
 pub const resolveReg = ctx_mod.resolveReg;

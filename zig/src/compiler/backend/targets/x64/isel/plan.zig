@@ -1,4 +1,4 @@
-/// x64 instruction selection for PLAN state machine operations.
+///выбор инструкций для операций state machine в PLAN
 const std = @import("std");
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");
@@ -65,7 +65,7 @@ pub fn selectTransitionCheck(ctx: *Ctx, m: mir.TransitionCheckInst) !void {
         const event_reg = resolveReg(ctx.ra, m.event);
         try append2(ctx, .CMP_R64_IMM32, Operand.r(event_reg), .{ .imm64 = m.event_id });
     }
-    try emitSetcc(ctx, m.result, 0x94); // sete
+    try emitSetcc(ctx, m.result, 0x94);
 }
 
 pub fn selectGuardEval(ctx: *Ctx, m: mir.GuardEvalInst) !void {

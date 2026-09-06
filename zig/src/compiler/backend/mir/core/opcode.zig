@@ -1,6 +1,8 @@
 const operand = @import("operand.zig");
 const MOperand = operand.MOperand;
 const CondCode = operand.CondCode;
+const value = @import("value.zig");
+const DataType = value.DataType;
 
 pub const MovInst = struct { dst: MOperand, src: MOperand };
 pub const AddInst = struct { dst: MOperand, src: MOperand };
@@ -28,6 +30,7 @@ pub const CallInst = struct {
     arg_count: u32,
     dst: MOperand,
     is_void: bool = false,
+    arg_types: [14]DataType = @splat(.i64),
 };
 pub const AllocaInst = struct { size: u32, dst: MOperand };
 pub const MemSize = enum { u8, u16, u32, u64, f32, f64, xmm128 };

@@ -530,6 +530,8 @@ fn inferExprType(b: *Builder, expr: []const u8) !TypeId {
 
     if (t[0] == '"') return t_ptr;
 
+    if (t[0] == '\'' and t.len >= 3 and t[t.len - 1] == '\'') return t_i64;
+
     if (std.ascii.isDigit(t[0]) or (t.len > 1 and t[0] == '-' and std.ascii.isDigit(t[1]))) {
         if (std.mem.indexOfScalar(u8, t, '.') != null) return t_f64;
         return t_i64;
@@ -719,6 +721,24 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
         return b.emitConstStr(t[1..eq]);
     }
 
+    if (t[0] == '\'' and t.len >= 3 and t[t.len - 1] == '\'') {
+        const inner = t[1 .. t.len - 1];
+        if (inner.len == 1) {
+            return b.emitConstInt(@as(i64, inner[0]));
+        } else if (inner.len == 2 and inner[0] == '\\') {
+            const ch: u8 = switch (inner[1]) {
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                '\\' => '\\',
+                '\'' => '\'',
+                '0' => 0,
+                else => inner[1],
+            };
+            return b.emitConstInt(@as(i64, ch));
+        }
+    }
+
     if (std.ascii.isDigit(t[0]) or (t.len > 1 and t[0] == '-' and std.ascii.isDigit(t[1]))) {
         var is_valid_number = true;
         var seen_dot = false;
@@ -824,10 +844,13 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
 }
 
 fn lowerCallExpr(b: *Builder, name: []const u8, args_str: []const u8) anyerror!ValueId {
-    // Handle print built-in: dispatch to print_i64 (int) or print_str (string)
     const callee_name = if (std.mem.eql(u8, name, "print")) blk: {
         const trimmed = std.mem.trim(u8, args_str, " \t\r\n");
-        break :blk if (trimmed.len > 0 and trimmed[0] == '"') "print_str" else "print_i64";
+        if (trimmed.len > 0 and trimmed[0] == '"') break :blk "print_str";
+        const arg_ty = try inferExprType(b, trimmed);
+        if (arg_ty == t_f64 or arg_ty == t_f32) break :blk "print_f64";
+        if (arg_ty == t_ptr) break :blk "print_str";
+        break :blk "print_i64";
     } else name;
 
     var args = std.ArrayList(ValueId).init(b.alloc);

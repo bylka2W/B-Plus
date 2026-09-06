@@ -1,4 +1,4 @@
-/// x64 memory access instruction selection (load/store/lea/alloca).
+///выбор инструкций доступа к памяти для x64: load store lea и alloca
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");
 const OpCode = enc.OpCode;

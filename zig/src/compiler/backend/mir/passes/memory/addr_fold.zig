@@ -3,34 +3,32 @@ const mir = @import("../../mir.zig");
 const MInst = mir.MInst;
 const MOperand = mir.MOperand;
 
-/// Address Folding Pass
+/// свертки адресов
 ///
-/// Recognizes address arithmetic patterns from BIR→MIR lowering and
-/// synthesizes LEA instructions with [base+index*scale+disp] addressing.
+///распознаёт вычисление адресов при переводе BIR в MIR и собирает из него LEA с адресом вида [base + index * scale + offset]
 ///
-/// Tracks value origins through mov/shl/add. Also propagates known
-/// immediates so that shift amounts and displacement values are recognized.
+///отслеживает откуда берутся значения после mov, shl и add. также запоминает известные числа чтобы правильно определять сдвиги и смещения адресов
 ///
-/// Pattern (base + index*scale + disp):
-///   mov v1, #3           ; index constant → known_imm(3)
-///   mov v5, v2           ; v5 = index (copy(v2))
-///   shl v5, v_shift      ; v5 = index * 4 (scaled(v2, 4))
-///   mov v6, v_base       ; v6 = base (copy(v1))
-///   add v6, v5           ; v6 = base + index*4 (addr(v1, v2, 4, 0))
-///   mov v7, v6           ; v7 = addr (inherited addr)
-///   add v7, v_disp       ; v7 = base + index*4 + disp → lea
+/// схема вычисления адреса: base + index*scale + disp
+///   mov v1, #3           ; сохраняем константу индекса  known_imm(3)
+///   mov v5, v2           ; копируем индекс copy(v2)
+///   shl v5, v_shift      ; умножаем индекс на 4 через сдвиг тобишь scaled(v2, 4)
+///   mov v6, v_base       ; копируем базовый адрес  copy(v1)
+///   add v6, v5           ; складываем base и index*4 addr(v1, v2, 4, 0)
+///   mov v7, v6           ; передаём вычисленный адрес дальше
+///   add v7, v_disp       ; добавляем смещение base + index*4 + disp - lea
 
 const Origin = union(enum) {
-    /// vreg holds a known immediate value (from mov v_r, #imm)
+    /// vreg хранит известное константное значение полученное из mov v_r, #imm
     known_imm: i64,
-    /// vreg holds a copy of another operand (from mov v_r, v_s)
+    /// vreg хранит копию значения другого операнд полученную через mov v_r, v_s
     copy: MOperand,
-    /// vreg holds source * scale
+    /// vreg хранит значение исходного операнда грубо говоря умноженное на scale
     scaled: struct {
         source: MOperand,
         scale: u8,
     },
-    /// vreg holds an address: base + index*scale + disp
+    /// vreg хранит адрес в виде base + index*scale + disp
     addr: struct {
         base: MOperand,
         index: MOperand = .{ .imm = 0 },
@@ -54,7 +52,7 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
     var origin = std.AutoHashMap(u32, Origin).init(allocator);
     defer origin.deinit();
 
-    // Pass 1: Track value origins
+    // отслеживаем происхождение значений
     var i: usize = 0;
     while (i < block.instrs.items.len) {
         const inst = block.instrs.items[i];
@@ -64,7 +62,7 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                 if (vregOf(m.dst)) |dv| {
                     switch (m.src) {
                         .vreg => |sv| {
-                            // mov v_r, v_s: inherit scaled/addr, otherwise track as copy
+                            // mov v_r, v_s: наследуем scaled/addr а то сохраняем как копию
                             if (origin.get(sv)) |o| {
                                 switch (o) {
                                     .scaled, .addr => try origin.put(dv, o),
@@ -112,7 +110,7 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                     continue;
                 };
 
-                // Resolve the source to either an immediate value or a vreg
+               //определяем источник значения это константа или другой vreg
                 const src_imm: ?i32 = blk: {
                     if (m.src == .imm) {
                         break :blk @intCast(m.src.imm);
@@ -128,7 +126,7 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                 };
 
                 if (src_imm) |imm_val| {
-                    // add v_r, known_imm → displacement
+                    // add v_r, known_imm сохраняем значение как смещение адреса
                     const prev = origin.get(dst_v);
                     if (prev) |p| {
                         switch (p) {
@@ -161,7 +159,7 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                                 continue;
                             },
                             .known_imm => {
-                                // constant + constant = constant
+                               // константа плюс константа = константа
                                 try origin.put(dst_v, .{ .known_imm = @intCast(@as(i64, @intCast(p.known_imm)) +% @as(i64, @intCast(imm_val))) });
                                 i += 1;
                                 continue;
@@ -173,7 +171,7 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                     continue;
                 }
 
-                // add v_r, v_s (both vregs, not resolved to immediate)
+                // add v_r, v_s: оба операнда — vreg, не удалось определить их как константы !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                 if (vregOf(m.src)) |sv| {
                     const prev_dst = origin.get(dst_v);
                     const prev_src = origin.get(sv);
@@ -206,7 +204,7 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                 i += 1;
             },
 
-            // LEA + ADD disp folding
+            // Объединение LEA и ADD со смещением
             .lea => {
                 if (i + 1 < block.instrs.items.len) {
                     const next = block.instrs.items[i + 1];
@@ -227,13 +225,13 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
         }
     }
 
-    // Pass 2: Replace add v_r, #imm with lea when v_r has tracked address
+    // Шаг 2 заменяем add v_r, #imm на LEA, если для v_r уже известен адрес
     i = 0;
     while (i < block.instrs.items.len) {
         const inst = block.instrs.items[i];
         if (inst == .add) {
             const a = inst.add;
-            // Only replace when source is an immediate (direct or known_imm vreg)
+           // заменяем только если источник непосредственная константа или vreg с известным константным значением
             const is_imm_src = if (a.src == .imm) true else blk: {
                 if (vregOf(a.src)) |sv| {
                     if (origin.get(sv)) |o| {
@@ -262,7 +260,7 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
         i += 1;
     }
 
-    // Pass 3: Replace add v_r, v_s with lea when v_s has tracked scaled origin
+   // аг 3 Заменяем add v_r, v_s на LEA, если для v_s известно масштабированное значение
     i = 0;
     while (i < block.instrs.items.len) {
         const inst = block.instrs.items[i];

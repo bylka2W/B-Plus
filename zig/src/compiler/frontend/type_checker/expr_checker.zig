@@ -173,7 +173,6 @@ fn checkCall(self: *TypeChecker, c: HirExpr.HirExprKind.CallExpr, span: anytype)
             }
             for (c.args, 0..) |arg, i| {
                 const arg_ty = try self.checkExpr(arg);
-                // Strict type checking - no coercion allowed
                 if (!data.fn_ptr.params[i].eql(arg_ty)) {
                     self.reportError(.{ .type_mismatch = .{
                         .expected = self.builtinTypeName(data.fn_ptr.params[i]),

@@ -51,7 +51,6 @@ pub const EmitCodeResult = struct {
     string_disp_fixups: std.ArrayList(StringDispFixup),
 };
 
-/// Result of the ISEL stage (regalloc + instruction selection).
 pub const IselResult = struct {
     sel: SelectResult,
     ra: regalloc.RegAllocResult,
@@ -68,7 +67,6 @@ pub const IselResult = struct {
     }
 };
 
-/// Stage 1: Regalloc + instruction selection → x64 IR.
 pub fn iselFunction(mfunc: *const mir.MFunction, allocator: std.mem.Allocator) !IselResult {
     const ra = try regalloc.allocRegs(mfunc, allocator);
 
@@ -97,7 +95,6 @@ pub fn iselFunction(mfunc: *const mir.MFunction, allocator: std.mem.Allocator) !
     };
 }
 
-/// Stage 2: Encode x64 IR → machine code bytes (prologue, body, epilogue, fixups).
 pub fn encodeFunction(
     code: *std.ArrayList(u8),
     isel_result: *const IselResult,
@@ -109,7 +106,6 @@ pub fn encodeFunction(
     const sel_result = &isel_result.sel;
     const ra = &isel_result.ra;
     const local_size = isel_result.local_size;
-    // Compute callee-saved regs and frame.
     var fm = frame_mod.FrameManager.init(mfunc.allocator, .win64);
     defer fm.deinit();
 
@@ -122,12 +118,10 @@ pub fn encodeFunction(
     fm.local_size = local_size;
     fm.spill_count = if (ra.spill_frame_size > 0) @max(ra.spill_frame_size / 8, 1) else 0;
 
-    // Emit prologue.
     try fm.emitPrologue(code);
 
-    // Move arguments from win64 arg regs (integer and float).
     const win64_int_arg_regs = [_]i16{ 1, 2, 8, 9 };
-    const win64_float_arg_regs = [_]i16{ 16, 17, 18, 19 };
+    const win64_float_arg_regs = [_]i16{ 0, 1, 2, 3 };
     var int_arg_idx: usize = 0;
     var float_arg_idx: usize = 0;
     for (mfunc.params) |p| {
@@ -157,8 +151,6 @@ pub fn encodeFunction(
         }
     }
 
-    // Encode x64 IR → bytes, emitting epilogue after each block that ends
-    // with a MIR `ret`.
     var block_offsets = std.ArrayListUnmanaged(usize){};
     defer block_offsets.deinit(mfunc.allocator);
     var fixup_positions = std.ArrayListUnmanaged(usize){};
@@ -187,7 +179,6 @@ pub fn encodeFunction(
                 fixup_positions.appendAssumeCapacity(fi.offset);
                 fixup_kinds.appendAssumeCapacity(fi.kind);
             }
-            // Track string constant LEA positions (RIP-relative with base_reg=255)
             if (inst.op == .LEA_R64_MEM and inst.operands.len >= 2) {
                 const mem_op = inst.operands[1];
                 if (mem_op.base_reg == 255) {
@@ -217,7 +208,6 @@ pub fn encodeFunction(
 
     try fm.emitEpilogue(code);
 
-    // Patch fixups, interleaving block and call fixups in instruction order.
     const block_offsets_slice = block_offsets.items;
     var block_fixup_idx: usize = 0;
     var call_fixup_idx: usize = 0;
@@ -242,7 +232,6 @@ pub fn encodeFunction(
     }
 }
 
-/// Full pipeline: iselFunction → verify → (dump) → encodeFunction.
 pub fn emitSingleFunction(
     code: *std.ArrayList(u8),
     call_fixups: *std.ArrayList(isel.CallFixup),
@@ -255,10 +244,8 @@ pub fn emitSingleFunction(
     var isel_result = try iselFunction(mfunc, allocator);
     defer isel_result.deinit();
 
-    // Verify x64 IR — returns VerifiedX64Function as a type barrier.
     const verified = try x64_verify.verifyFunction(&isel_result.sel.mf);
 
-    // Dump verified x64 IR (enable with BPC_DEBUG=1 env var).
     if (isX64DumpEnabled()) x64_verify.dumpFunction(verified);
 
     try encodeFunction(code, &isel_result, mfunc, call_fixups, string_pool, string_disp_fixups);
@@ -372,7 +359,6 @@ pub fn emitCode(mfuncs: []const mir.MFunction) !EmitCodeResult {
         try emitSingleFunction(&code, &all_call_fixups, &string_pool, &string_disp_fixups, mf);
     }
 
-    // Emit the PLAN runtime event dispatch function.
     if (true) {
         const rt_start = code.items.len;
         try name_to_offset.put("__plan_event_dispatch", rt_start);
@@ -382,24 +368,20 @@ pub fn emitCode(mfuncs: []const mir.MFunction) !EmitCodeResult {
         try code.append(0xC3);
     }
 
-    // Append string data after all code, aligned to 4 bytes.
     const string_data_start = code.items.len;
     for (string_pool.items, 0..) |sdata, i| {
         _ = i;
         try code.appendSlice(sdata);
-        try code.append(0); // null terminator
+        try code.append(0);
     }
-    // Align to 4 bytes (not strictly needed for RIP-relative but good practice).
     while (code.items.len % 4 != 0) try code.append(0);
 
-    // Resolve string fixups: patch each LEA's RIP-relative displacement.
     for (string_disp_fixups.items) |sf| {
-        // Compute the exact offset of this string in the code buffer.
         var str_off: usize = string_data_start;
         for (0..sf.str_idx) |j| {
-            str_off += string_pool.items[j].len + 1; // +1 for null terminator
+            str_off += string_pool.items[j].len + 1;
         }
-        const lea_end = sf.disp_pos + 4; // RIP points here after the LEA
+        const lea_end = sf.disp_pos + 4; 
         const disp: i32 = @intCast(@as(i64, @intCast(str_off)) - @as(i64, @intCast(lea_end)));
         @memcpy(code.items[sf.disp_pos..][0..4], &@as([4]u8, @bitCast(disp)));
     }

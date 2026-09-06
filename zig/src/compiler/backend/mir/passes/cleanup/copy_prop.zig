@@ -199,8 +199,9 @@ fn resolve(map: std.AutoHashMap(u32, CopyEntry), op: mir.MOperand) mir.MOperand 
     return .{ .vreg = cur };
 }
 
-/// Like resolve(), but never resolves to a constant — only vreg→vreg.
-/// Used for LEA base/index which must remain register operands.
+///работает как resolve() но на выходе всегда будет только виртуальный регистр а не константа
+///нужно для базового и индексного адресов команды LEA — они не могут быть константами и обязаны оставаться в регистрах
+
 fn resolveVregOnly(map: std.AutoHashMap(u32, CopyEntry), op: mir.MOperand) mir.MOperand {
     if (op != .vreg) return op;
     var cur = op.vreg;

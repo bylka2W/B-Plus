@@ -1,12 +1,9 @@
-/// x64 ABI definitions and helpers for Win64 and SystemV calling conventions.
-/// This module classifies parameters and return values into their physical
-/// register assignments and stack slots according to the target ABI.
+///определения и вспомогательные функцииx64 ABI для Win64 и SystemV
 const std = @import("std");
 const DataType = @import("../../mir/core/value.zig").DataType;
 
 pub const TargetAbi = enum { win64, system_v };
 
-// ── Legacy compat for x64gen ──────────────────────────────────────────────
 
 pub const CallArg = union(enum) {
     imm: i64,
@@ -29,7 +26,6 @@ fn emitMovRegImm64(code: *std.ArrayList(u8), reg: i16, val: i64) !void {
         try code.append(0x33);
         try code.append(@as(u8, @intCast(0xC0 + (reg & 7) * 9)));
     } else {
-        // mov reg, imm64
         try code.append(@as(u8, @intCast(0x48 + ((reg >> 3) & 1))));
         try code.append(0xB8 + @as(u8, @intCast(reg & 7)));
         try code.appendSlice(&@as([8]u8, @bitCast(val)));
@@ -37,7 +33,7 @@ fn emitMovRegImm64(code: *std.ArrayList(u8), reg: i16, val: i64) !void {
 }
 
 pub fn emitCallArgs(buf: *std.ArrayList(u8), args: []const CallArg) !void {
-    const int_regs = [_]i16{ 1, 2, 8, 9 }; // RCX, RDX, R8, R9
+    const int_regs = [_]i16{ 1, 2, 8, 9 };
     for (args, 0..) |arg, i| {
         if (i >= 4) break;
         switch (arg) {
@@ -49,12 +45,10 @@ pub fn emitCallArgs(buf: *std.ArrayList(u8), args: []const CallArg) !void {
             },
         }
     }
-    // sub rsp, 0x20 (shadow space)
     try buf.appendSlice(&.{ 0x48, 0x83, 0xEC, 0x20 });
 }
 
 pub fn emitCallCleanup(buf: *std.ArrayList(u8)) !void {
-    // add rsp, 0x20 (shadow space)
     try buf.appendSlice(&.{ 0x48, 0x83, 0xC4, 0x20 });
 }
 
@@ -85,18 +79,12 @@ pub fn emitFullEpilogue(buf: *std.ArrayList(u8)) !void {
     try buf.append(0xC3); // ret
 }
 
-/// How a value is passed or returned.
 pub const ArgLocation = union(enum) {
-    /// Passed in a general-purpose register (physical register index).
     gpr: i16,
-    /// Passed in an XMM register (physical register index, e.g. 16 = xmm0).
     xmm: i16,
-    /// Passed on the stack at the given byte offset from RSP at the point of
-    /// the CALL instruction (before the caller pushes the return address).
     stack: i32,
 };
 
-/// Classification of a single argument based on its data type.
 pub const ArgClass = enum {
     integer,
     sse,
@@ -106,26 +94,17 @@ pub const ArgClass = enum {
 pub const ShadowSize = 32;
 pub const StackAlignment = 16;
 
-// ── Win64 ──────────────────────────────────────────────────────────────────
-
-/// Win64 integer argument registers: RCX, RDX, R8, R9.
 pub const win64_int_regs = [_]i16{ 1, 2, 8, 9 };
-/// Win64 float argument registers: XMM0–XMM3.
-pub const win64_float_regs = [_]i16{ 16, 17, 18, 19 };
+pub const win64_float_regs = [_]i16{ 0, 1, 2, 3 };
 
-/// Win64 callee-saved GPRs (excluding RBP which is the frame pointer).
-pub const win64_callee_saved_gpr = [_]i16{ 3, 12, 13, 14, 15 }; // RBX, R12-R15
-/// Win64 callee-saved XMMs.
-pub const win64_callee_saved_xmm = [_]i16{ 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 }; // xmm6-xmm15
+pub const win64_callee_saved_gpr = [_]i16{ 3, 12, 13, 14, 15 }; 
 
-/// Classify a data type for Win64.
+pub const win64_callee_saved_xmm = [_]i16{ 6, 7, 8, 9, 10, 11, 12, 13, 14 }; 
+
 pub fn win64Classify(ty: DataType) ArgClass {
     return if (ty.isFloat()) .sse else .integer;
 }
 
-/// Assign physical registers for a list of Win64 parameters.
-/// Returns the ArgLocation for each parameter, and sets `stack_size` to the
-/// number of bytes the caller must reserve for stack-passed arguments.
 pub fn win64AssignArgs(
     types: []const DataType,
     stack_size: *u32,
@@ -133,7 +112,7 @@ pub fn win64AssignArgs(
     var result = std.BoundedArray(ArgLocation, 16){};
     var int_idx: usize = 0;
     var float_idx: usize = 0;
-    var stack_off: i32 = @intCast(ShadowSize); // args start after the shadow space
+    var stack_off: i32 = @intCast(ShadowSize); 
 
     for (types) |ty| {
         const cls = win64Classify(ty);
@@ -163,27 +142,24 @@ pub fn win64AssignArgs(
         }
     }
 
-    // Stack args region must be 16-byte aligned.
     const raw: u32 = @intCast(stack_off);
     const aligned = (raw + 15) & ~@as(u32, 15);
     stack_size.* = aligned - @as(u32, @intCast(ShadowSize));
     return result;
 }
 
-/// Where the return value lives for a Win64 function.
 pub fn win64RetLoc(ty: DataType) ArgLocation {
     if (ty == .void) return .{ .gpr = -1 };
-    if (ty.isFloat()) return .{ .xmm = 16 }; // xmm0
+    if (ty.isFloat()) return .{ .xmm = 0 }; // xmm0
     return .{ .gpr = 0 }; // rax
 }
 
-// ── SystemV (Linux / macOS) ───────────────────────────────────────────────
 
 pub const sysv_int_regs = [_]i16{ 7, 6, 2, 1, 8, 9 }; // RDI, RSI, RDX, RCX, R8, R9
 pub const sysv_float_regs = [_]i16{ 16, 17, 18, 19, 20, 21, 22, 23 }; // xmm0-xmm7
 
 pub const sysv_callee_saved_gpr = [_]i16{ 3, 12, 13, 14, 15 }; // RBX, R12-R15
-pub const sysv_callee_saved_xmm = [_]i16{ 24, 25, 26, 27, 28, 29, 30, 31 }; // xmm8-xmm15
+pub const sysv_callee_saved_xmm = [_]i16{ 8, 9, 10, 11, 12, 13, 14, 15 }; // xmm8-xmm15
 
 pub fn sysvClassify(ty: DataType) ArgClass {
     return if (ty.isFloat()) .sse else .integer;
@@ -233,11 +209,10 @@ pub fn sysvAssignArgs(
 
 pub fn sysvRetLoc(ty: DataType) ArgLocation {
     if (ty == .void) return .{ .gpr = -1 };
-    if (ty.isFloat()) return .{ .xmm = 16 }; // xmm0
+    if (ty.isFloat()) return .{ .xmm = 0 }; // xmm0
     return .{ .gpr = 0 }; // rax
 }
 
-// ── Unified helpers ────────────────────────────────────────────────────────
 
 pub fn assignArgs(abi: TargetAbi, types: []const DataType, stack_size: *u32) std.BoundedArray(ArgLocation, 16) {
     return switch (abi) {

@@ -5,16 +5,12 @@ const classes = @import("classes.zig");
 
 pub const Remat = @import("allocator.zig").Remat;
 
-// Register Allocation Result 
-
 pub const RegAllocResult = struct {
     regs: std.AutoHashMap(u32, i16),
     spills: std.AutoHashMap(u32, i32),
     spill_frame_size: u32,
     remat: std.AutoHashMap(u32, Remat),
 };
-
-// Public API *
 
 pub fn regForOp(ra: *const RegAllocResult, op: mir.MOperand) i16 {
     return switch (op) {

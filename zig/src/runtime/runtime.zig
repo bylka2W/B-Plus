@@ -1,9 +1,6 @@
 const std = @import("std");
 const windows = std.os.windows;
 
-// ═══════════════════════════════════════════════════════════════════
-// 1. Panic Runtime
-// ═══════════════════════════════════════════════════════════════════
 
 pub const PanicCode = enum(u8) {
     INVALID_HANDLE,
@@ -19,14 +16,10 @@ fn panicRuntime(code: PanicCode) noreturn {
     std.process.exit(1);
 }
 
-/// Assert an invariant at runtime. NOT exported — only used inside the 3 validation functions.
 fn assertInvariant(cond: bool, code: PanicCode) void {
     if (!cond) panicRuntime(code);
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// 2. Tier FSM — L1 = hottest, DISK = coldest
-// ═══════════════════════════════════════════════════════════════════
 
 pub const Tier = enum(u8) {
     L1 = 0,
@@ -62,11 +55,8 @@ pub const Tier = enum(u8) {
     }
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// 3. Chunk — atomic unit of migration
-// ═══════════════════════════════════════════════════════════════════
 
-pub const CHUNK_SIZE = 256; // 64KB in production; 256B for testing with small arenas
+pub const CHUNK_SIZE = 256; 
 
 pub const Chunk = struct {
     tier: Tier,
@@ -175,7 +165,7 @@ pub const ChunkStore = struct {
         var ci: u32 = 0;
         while (ci < n) : (ci += 1) {
             const chunk_id = buf[ci];
-            // Invalidate all handles referencing this chunk
+          
             const cap = handles.capacity();
             var si: u32 = 0;
             while (si < cap) : (si += 1) {
@@ -183,19 +173,19 @@ pub const ChunkStore = struct {
                     handles.invalidateSlot(si);
                 }
             }
-            // Mark freed (slot_count = 0, but don't clear — keep metadata for debug)
+           
             cs.chunks[chunk_id].slot_count = 0;
         }
-        // Compact chunks: shift remaining chunks down
+       
         if (n > 0) {
             var write: u32 = buf[0];
             var read: u32 = buf[0] + 1;
             while (read < cs.count) : (read += 1) {
                 if (cs.chunks[read].tier == tier) {
-                    // Skip — these are the ones we're removing
+                    
                     continue;
                 }
-                // Update handle chunk_ids pointing to 'read' to point to 'write'
+                
                 const cap = handles.capacity();
                 var si: u32 = 0;
                 while (si < cap) : (si += 1) {
@@ -211,9 +201,7 @@ pub const ChunkStore = struct {
     }
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// 4. Handle & Metadata (SoA, flat arrays)
-// ═══════════════════════════════════════════════════════════════════
+
 
 pub const SlotState = enum(u8) {
     Free = 0,
@@ -235,8 +223,6 @@ pub const Handle = struct {
 
 pub const HANDLE_INVALID: u32 = 0xFFFFFFFF;
 
-/// Metadata stored as Struct-of-Arrays.
-/// Tier is derived from chunk_id → Chunk.tier, NOT from pointer address.
 pub const MetaStore = struct {
     chunk_ids: []u32,
     offsets: []u32,
@@ -286,8 +272,7 @@ pub const MetaStore = struct {
     }
 };
 
-/// HandleTable = source of truth for slot metadata.
-/// Tier is derived from chunk_id → Chunk.tier, NOT from pointer address.
+
 pub const HandleTable = struct {
     meta: MetaStore,
     free_head: u32,
@@ -305,7 +290,6 @@ pub const HandleTable = struct {
         return ht.meta.capacity();
     }
 
-    // ── Validation ──
 
     pub fn validateHandle(ht: *const HandleTable, handle: Handle) void {
         assertInvariant(handle.isValid(), .INVALID_HANDLE);
@@ -314,7 +298,6 @@ pub const HandleTable = struct {
         assertInvariant(ht.meta.generations[handle.slot] == handle.generation, .INVALID_HANDLE);
     }
 
-    // ── Operations ──
 
     pub fn alloc(ht: *HandleTable, chunk_id: u32, offset: u32, size: u32) Handle {
         const cap = ht.capacity();
@@ -380,9 +363,6 @@ pub const HandleTable = struct {
     }
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// 4. Arena Allocator (bounds-checked bump, integer arith)
-// ═══════════════════════════════════════════════════════════════════
 
 pub const Arena = struct {
     base_addr: usize,
@@ -427,9 +407,6 @@ pub const Arena = struct {
 
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// 5. Ring Buffer Logger
-// ═══════════════════════════════════════════════════════════════════
 
 pub const EventKind = enum(u8) {
     ALLOC,
@@ -486,9 +463,6 @@ pub const RingLogger = struct {
     }
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// 6. TieredRuntime — Stage 2: chunk-based memory physics
-// ═══════════════════════════════════════════════════════════════════
 
 pub const TieredRuntime = struct {
     l1: Arena,
@@ -606,7 +580,7 @@ pub const TieredRuntime = struct {
         };
     }
 
-    // ── Tier derivation ──
+
 
     pub fn tierOfHandle(tr: *const TieredRuntime, handle: Handle) Tier {
         tr.handles.validateHandle(handle);
@@ -614,10 +588,9 @@ pub const TieredRuntime = struct {
         return tr.chunks.chunks[cid].tier;
     }
 
-    // ── Allocation (chunk-aware) ──
+
 
     fn allocInArena(tr: *TieredRuntime, arena: *Arena, size: u32, tier: Tier) Handle {
-        // Find existing chunk with space
         if (tr.chunks.findChunkWithSpace(tier, size)) |chunk_id| {
             const chunk = &tr.chunks.chunks[chunk_id];
             const offset = chunk.used;
@@ -628,7 +601,6 @@ pub const TieredRuntime = struct {
             tr.logger.log(.ALLOC, h.slot, h.generation, size | tier_bits);
             return h;
         }
-        // No chunk with space: allocate a new chunk from arena
         const mem = arena.alloc(CHUNK_SIZE) orelse return Handle.invalid();
         const arena_offset = @as(u32, @intCast(@intFromPtr(mem) - arena.base_addr));
         const chunk_id = tr.chunks.allocChunk(tier, arena.base_addr, arena_offset) orelse return Handle.invalid();
@@ -653,7 +625,6 @@ pub const TieredRuntime = struct {
         return tr.allocInArena(&tr.l3, size, .L3);
     }
 
-    // ── Release ──
 
     pub fn release(tr: *TieredRuntime, handle: Handle) void {
         tr.handles.validateHandle(handle);
@@ -664,7 +635,6 @@ pub const TieredRuntime = struct {
         tr.handles.release(handle, &tr.chunks);
     }
 
-    // ── Access ──
 
     pub fn access(tr: *TieredRuntime, handle: Handle) []u8 {
         tr.handles.validateHandle(handle);
@@ -693,7 +663,6 @@ pub const TieredRuntime = struct {
         return ptr[0..size];
     }
 
-    // ── Chunk migration (tier switch + physical byte copy) ──
 
     pub fn migrateChunk(tr: *TieredRuntime, chunk_id: u32, dst_tier: Tier) MigrationResult {
         if (chunk_id >= tr.chunks.count) return .invalid_handle;
@@ -707,17 +676,14 @@ pub const TieredRuntime = struct {
 
         const src_tier = chunk.tier;
 
-        // Allocate destination memory in the target arena
         const dst_arena = tr.arenaForTier(dst_tier);
         const dst_mem = dst_arena.alloc(CHUNK_SIZE) orelse return .dst_full;
         const dst_arena_offset = @as(u32, @intCast(@intFromPtr(dst_mem) - dst_arena.base_addr));
 
-        // Copy used bytes from source to destination
         const src_ptr = @as([*]u8, @ptrFromInt(chunk.arena_base + chunk.arena_offset));
         const dst_ptr = @as([*]u8, @ptrFromInt(dst_arena.base_addr + dst_arena_offset));
         @memcpy(dst_ptr[0..chunk.used], src_ptr[0..chunk.used]);
 
-        // Update chunk metadata to point to new location
         chunk.arena_base = dst_arena.base_addr;
         chunk.arena_offset = dst_arena_offset;
         chunk.tier = dst_tier;
@@ -755,7 +721,6 @@ pub const TieredRuntime = struct {
         };
     }
 
-    // ── Arena reset ──
 
     fn resetArena(tr: *TieredRuntime, arena: *Arena, tier: Tier) void {
         tr.chunks.releaseHandlesInTier(tier, &tr.handles);
@@ -773,7 +738,6 @@ pub const TieredRuntime = struct {
 
     pub const COMPACT_INTERVAL: u32 = 1000;
 
-    // ── Tick / heat ──
 
     const PROMOTE_THRESH: u32 = 100;
     const DEMOTE_THRESH: u32 = 30;
@@ -808,7 +772,6 @@ pub const TieredRuntime = struct {
             }
         }.lessThan;
 
-        // 1. Decay chunk heat + handle heat
         var ci: u32 = 0;
         while (ci < tr.chunks.count) : (ci += 1) {
             tr.chunks.chunks[ci].heat >>= 1;
@@ -821,7 +784,6 @@ pub const TieredRuntime = struct {
             }
         }
 
-        // 2. Scan all chunks → partial top-K selection (no global buffer)
         var promote_buf: [MIGRATION_BUDGET]u32 = undefined;
         var demote_buf: [MIGRATION_BUDGET]u32 = undefined;
         var np: u32 = 0;
@@ -873,7 +835,6 @@ pub const TieredRuntime = struct {
             }
         }
 
-        // 3. Apply top-K
         var migrated: u32 = 0;
         var i: u32 = 0;
         while (i < np) : (i += 1) {
@@ -891,7 +852,6 @@ pub const TieredRuntime = struct {
         tr.logger.log(.TICK, 0, 0, migrated);
         tr.retired_count = 0;
 
-        // Stage 6: periodic compaction
         if (tr.allocator) |a| {
             if (tr.epoch % COMPACT_INTERVAL == 0) {
                 tr.runCompaction(a);
@@ -901,12 +861,10 @@ pub const TieredRuntime = struct {
 
     fn verifyCompaction(tr: *TieredRuntime, live_ids: []const u32, arena: *const Arena, tier: Tier) void {
         _ = arena;
-        // Debug-only: verify no live chunk overlaps, all have slot_count > 0
         var ci: u32 = 0;
         while (ci < tr.chunks.count) : (ci += 1) {
             const ch = &tr.chunks.chunks[ci];
             if (ch.tier == tier and isLive(ch)) {
-                // Must be in live_ids
                 var found = false;
                 for (live_ids) |id| {
                     if (id == ci) { found = true; break; }
@@ -914,7 +872,6 @@ pub const TieredRuntime = struct {
                 assertInvariant(found, .INVALID_HANDLE);
             }
         }
-        // Verify no overlapping allocations in live set
         for (live_ids, 0..) |a_id, ai| {
             const a = &tr.chunks.chunks[a_id];
             for (live_ids[ai + 1 ..]) |b_id| {
@@ -929,7 +886,6 @@ pub const TieredRuntime = struct {
     }
 
     fn compactArena(tr: *TieredRuntime, arena: *Arena, tier: Tier, allocator: std.mem.Allocator) void {
-        // STEP 1: collect only live chunks (slot_count > 0)
         var live_ids = std.ArrayList(u32).init(allocator);
         defer live_ids.deinit();
         {
@@ -943,7 +899,6 @@ pub const TieredRuntime = struct {
         }
         if (live_ids.items.len == 0) return;
 
-        // STEP 2: snapshot — copy all live data to temp buffer BEFORE reset
         var data = std.ArrayList(u8).init(allocator);
         defer data.deinit();
         var saved_offsets = std.ArrayList(u32).init(allocator);
@@ -956,10 +911,8 @@ pub const TieredRuntime = struct {
             data.appendSlice(src_base[0..ch.used]) catch return;
         }
 
-        // STEP 3: reset arena after all data is safely in temp buffer
         arena.reset();
 
-        // STEP 4: restore — re-allocate chunks sequentially at arena start
         for (live_ids.items, 0..) |cid, idx| {
             const ch = &tr.chunks.chunks[cid];
             const mem = arena.alloc(CHUNK_SIZE) orelse return;
@@ -970,7 +923,6 @@ pub const TieredRuntime = struct {
             @memcpy(dst_base[0..ch.used], data.items[src_start..][0..ch.used]);
         }
 
-        // STEP 5: verify (debug only)
         if (std.debug.runtime_safety) {
             verifyCompaction(tr, live_ids.items, arena, tier);
         }
@@ -981,14 +933,10 @@ pub const TieredRuntime = struct {
             const arena = tr.arenaForTier(tier);
             tr.compactArena(arena, tier, allocator);
         }
-        // Free-list entries remain valid — freed chunks have slot_count == 0
-        // and will have their metadata overwritten on re-allocation.
+
     }
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// 7. RuntimeIntrinsic — flat API for x64gen codegen
-// ═══════════════════════════════════════════════════════════════════
 
 pub const Intrinsic = enum(u16) {
     arena_l1_alloc = 0,
@@ -1040,9 +988,6 @@ pub const INTRINSICS = blk: {
     break :blk sigs;
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// 8. Windows API helpers
-// ═══════════════════════════════════════════════════════════════════
 
 pub fn reserveViaVirtualAlloc(size: usize) ![*]u8 {
     const ptr = windows.VirtualAlloc(null, size, windows.MEM_RESERVE | windows.MEM_COMMIT, windows.PAGE_READWRITE);

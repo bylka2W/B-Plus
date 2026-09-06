@@ -14,10 +14,6 @@ const MachineAllocator = machine.MachineAllocator;
 
 const alloc = MachineAllocator.init();
 
-// ──────────────────────────────────────────────
-//  C ABI exports (stable for UE5 / C++ / DLL)
-// ──────────────────────────────────────────────
-
 export fn bplus_plan_create(
     graph: ?*const plan_ir.PlanGraph,
     functions: ?*const PlanFunctionTable,

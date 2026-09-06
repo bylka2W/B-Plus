@@ -44,8 +44,6 @@ pub fn verifyInst(
         .idiv => |d| {
             try verifyOperand(func, d.dividend, defined_vregs);
             try verifyOperand(func, d.divisor, defined_vregs);
-            try verifyOperand(func, d.quotient, defined_vregs);
-            try verifyOperand(func, d.remainder, defined_vregs);
         },
         .shl, .shr, .sar => |s| {
             try verifyOperand(func, s.dst, defined_vregs);

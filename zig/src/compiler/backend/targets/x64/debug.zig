@@ -1,10 +1,9 @@
-﻿/// Debug and trace utilities for x64 backend.
+﻿///отладочкааааааа 64
 const std = @import("std");
 const mir = @import("../../mir/mir.zig");
 const regalloc = @import("../../regalloc/regalloc.zig");
 const regs = @import("registers.zig");
 
-/// Dump MIR instructions for a block (debug helper).
 pub fn dumpBlock(stdout: anytype, mfunc: *const mir.MFunction, block_idx: usize, block: *const mir.MBlock, ra: *const regalloc.RegAllocResult) void {
     stdout.print("  [EMIT] function '{s}' block b{d} '{s}':\n", .{ mfunc.name, block_idx, block.label });
     for (block.instrs.items, 0..) |inst, ii| {
@@ -32,7 +31,6 @@ pub fn dumpBlock(stdout: anytype, mfunc: *const mir.MFunction, block_idx: usize,
     }
 }
 
-/// Dump all blocks in a function (for functions with backedges).
 pub fn dumpFunction(stdout: anytype, mfunc: *const mir.MFunction) void {
     stdout.print("  [EMIT_DUMP] function '{s}':\n", .{mfunc.name});
     for (mfunc.blocks.items, 0..) |*blk, bi| {
@@ -67,7 +65,6 @@ pub fn dumpFunction(stdout: anytype, mfunc: *const mir.MFunction) void {
     }
 }
 
-/// Check if a function has back-edges (loops).
 pub fn hasBackEdges(mfunc: *const mir.MFunction) bool {
     for (mfunc.blocks.items, 0..) |*b, bi| {
         if (b.instrs.items.len == 0) continue;

@@ -1064,8 +1064,8 @@ pub const AstBuilder = struct {
 
         var iter = node.childNodes();
         while (iter.next()) |child| {
-            if (child.kind() == .match_expr) {
-                // match arm
+            if (child.kind() == .match_expr)
+            {
                 var pat_id: PatId = PatId.INVALID;
                 var arm_body: ?ExprId = null;
                 var arm_iter = child.childNodes();

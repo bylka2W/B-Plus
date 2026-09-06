@@ -1,8 +1,6 @@
 const std = @import("std");
 const mir = @import("../mir/mir.zig");
 
-// ===== Re-exports =====
-
 pub const RegClass = @import("classes.zig").RegClass;
 pub const RegClassInfo = @import("classes.zig").RegClassInfo;
 pub const SCRATCH_REG = @import("classes.zig").SCRATCH_REG;
@@ -18,8 +16,6 @@ pub const spilledMemOp = @import("spill.zig").spilledMemOp;
 pub const loadSpilledOp = @import("spill.zig").loadSpilledOp;
 pub const storeSpilledOp = @import("spill.zig").storeSpilledOp;
 pub const getUsedCalleeSaved = @import("spill.zig").getUsedCalleeSaved;
-
-// ===== Main allocation entry point =====
 
 pub fn allocRegs(mfunc: *const mir.MFunction, allocator: std.mem.Allocator) !RegAllocResult {
     const liveness = @import("liveness.zig");

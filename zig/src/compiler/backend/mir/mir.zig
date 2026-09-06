@@ -1,9 +1,9 @@
-/// ─── MIR public API ───
+///публичный API MIR
 ///
-/// Target-independent machine IR (MIR) layer.
-/// Core types live in `core/`, target-specific backends in `targets/`.
+///независимый от конкретной платформы слой машинного IR.
+///основные типы находятся в `core/`, а код для конкретных платформ — в `targets/`.
 ///
-/// Usage:
+///юзать как 
 ///   const mir = @import("mir.zig");
 ///   var func = mir.MFunction.init(alloc, "foo");
 ///   func.blocks.append(.{ .label = "entry", .instrs = ... });
@@ -62,7 +62,7 @@ pub const MBlock = core.MBlock;
 pub const MFunction = core.MFunction;
 pub const MModule = core.MModule;
 
-/// ─── Passes ───
+///проходы компилятора
 pub const passes = struct {
     pub const ssa_destroy = @import("passes/ssa/ssa_destroy.zig");
     pub const dce = @import("passes/cleanup/dce.zig");
@@ -73,7 +73,7 @@ pub const passes = struct {
     pub const manager = @import("passes/manager.zig");
 };
 
-/// ─── Target API ───
+///API платформы
 pub const target = struct {
     pub const Target = @import("../targets/common/target.zig").Target;
     pub const TargetContext = @import("../targets/common/target.zig").TargetContext;

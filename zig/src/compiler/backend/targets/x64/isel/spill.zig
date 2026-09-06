@@ -1,6 +1,6 @@
-/// x64 spill/reload via x64 IR.
-/// Replaces raw-byte spill emission with proper x64 IR instructions,
-/// so that spill code is verified and encoded through the normal pipeline.
+///spill и reload для x64 через x64 IR
+///заменяет запись spill черезraw bytes на обычные инструкции x64 IR
+///spill код проходит обычную проверку икодирование через стандартный pipeline 
 const mir = @import("../../../mir/mir.zig");
 const regalloc = @import("../../../regalloc/regalloc.zig");
 const ctx_mod = @import("context.zig");

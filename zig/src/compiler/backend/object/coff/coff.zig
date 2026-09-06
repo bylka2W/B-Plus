@@ -10,15 +10,14 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     if (mfuncs.len == 0) return error.NoFunctions;
     const allocator = mfuncs[0].allocator;
 
-    // Emit raw code with fixup list
+    //вывод исходный код вместе со списком исправлений
     var emit = try mir_x64.emitCode(mfuncs);
     defer emit.code.deinit();
     defer emit.name_to_offset.deinit();
     defer emit.call_fixups.deinit();
     defer emit.func_starts.deinit();
 
-    // Build symbol table: one symbol per function*
-    // Build relocations: one per call fixup* 
+    //строит таблицу символов и релокации для функций и вызовов
 
     var relocs = std.ArrayList(Reloc).init(allocator);
     defer relocs.deinit();
@@ -26,11 +25,11 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     var symbols = std.ArrayList(SymInfo).init(allocator);
     defer symbols.deinit();
 
-    // Symbol index map: name → index
+    //карта индексов символов: имя = индекс
     var sym_map = std.StringHashMap(u32).init(allocator);
     defer sym_map.deinit();
 
-    // Add function symbols from func_starts (MIR functions)
+    //добавляет символы функций из func_starts (функции MIR)
     for (emit.func_starts.items, 0..) |offset, i| {
         const name = mfuncs[i].name;
         try sym_map.put(name, @intCast(symbols.items.len));
@@ -42,8 +41,7 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
         });
     }
 
-    // Also emit symbols for runtime stubs that are in name_to_offset
-    // but not in func_starts (e.g. __plan_event_dispatch).
+    //добавляет символы runtime-заглушек, которых нет в func_starts
     {
         var iter = emit.name_to_offset.iterator();
         while (iter.next()) |entry| {
@@ -66,10 +64,11 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
         }
     }
 
-    // Convert call fixups to relocations
-    for (emit.call_fixups.items) |cf| {
+    //преобразует исправления вызовов в релокации
+    for (emit.call_fixups.items) |cf| 
+    {
         const sym_idx = sym_map.get(cf.name) orelse {
-            // External symbol - add as undefined external
+            //добавляет внешний символ как неопределённый внешний символ
             const idx = @as(u32, @intCast(symbols.items.len));
             try sym_map.put(cf.name, idx);
             try symbols.append(.{
@@ -100,7 +99,7 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     const num_syms: u32 = @intCast(symbols.items.len);
     const num_relocs: u16 = @intCast(relocs.items.len);
 
-    // Layout calculation
+    //рассчитывает расположение данных
     const file_hdr_size: u16 = 20;
     const section_tbl_size: u16 = 40;
     const raw_data_start: u32 = file_hdr_size + section_tbl_size;
@@ -108,7 +107,7 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     const reloc_start = raw_data_start + raw_data_size;
     const symtab_start = reloc_start + @as(u32, @intCast(relocs.items.len)) * 10;
 
-    // Build string table and compute name offsets
+    //строит таблицу
     var strtab = std.ArrayList(u8).init(allocator);
     defer strtab.deinit();
     try strtab.appendNTimes(0, 4); // placeholder for length
@@ -125,35 +124,29 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
         }
     }
 
-    // Write string table length
     const strtab_len: u32 = @intCast(strtab.items.len);
     std.mem.writeInt(u32, strtab.items[0..4], strtab_len, .little);
 
-    // Write file header
     try writeFileHeader(&out, num_sections, num_syms, symtab_start);
 
-    // Write .text section header
     try writeSectionHeader(&out, ".text",
-        raw_data_size, // VirtualSize = raw size for object
-        raw_data_size, // SizeOfRawData
+        raw_data_size, //размер виртуальных данных равен размеру исходных данных для объектного файла!!!!! ВАЖНННООООО 15август
+        raw_data_size, 
         raw_data_start,
         reloc_start,
         num_relocs,
-        0x60500020, // CNT_CODE | EXECUTE | READ | INITIALIZED
+        0x60500020, //код - выполнение - чтение - инициализированные данные
     );
 
-    // Write raw .text data (padded to alignment)
     try out.appendSlice(emit.code.items);
     try out.appendNTimes(0, raw_data_size - emit.code.items.len);
 
-    // Write relocations
     for (relocs.items) |r| {
         try out.writer().writeInt(u32, @intCast(r.offset), .little);
         try out.writer().writeInt(u32, r.sym_idx, .little);
         try out.writer().writeInt(u16, @intFromEnum(r.type), .little);
     }
 
-    // Write symbol table
     for (symbols.items, 0..) |si, i| {
         var name_bytes: [8]u8 = .{0} ** 8;
         if (si.name.len > 8) {
@@ -170,23 +163,25 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
         try out.writer().writeByte(0);
     }
 
-    // Write string table
     try out.appendSlice(strtab.items);
 
     return .{ .bytes = out };
 }
 
-const RelocType = enum(u16) {
-    rel32 = 0x0004, // IMAGE_REL_AMD64_REL32
+const RelocType = enum(u16) 
+{
+    rel32 = 0x0004, // IMAGE_REL_AMD64_REL32 !
 };
 
-const Reloc = struct {
+const Reloc = struct 
+{
     offset: usize,
     sym_idx: u32,
     type: RelocType,
 };
 
-const SymInfo = struct {
+const SymInfo = struct 
+{
     name: []const u8,
     offset: usize,
     section_number: i16,

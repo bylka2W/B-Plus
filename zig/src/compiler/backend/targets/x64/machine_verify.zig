@@ -34,10 +34,10 @@ fn getReg(vreg: u32, ra: *const RegAllocResult) ?i16 {
 
 fn isByteAccessible(reg: i16) bool {
     return switch (reg) {
-        4 => false, // RSP - no low byte
-        5 => false, // RBP - no low byte
-        12 => false, // R12 - requires SIB
-        13 => false, // R13 - requires displacement
+        4 => false, // RSP 
+        5 => false, // RBP
+        12 => false, // r12
+        13 => false, // R13
         else => true,
     };
 }

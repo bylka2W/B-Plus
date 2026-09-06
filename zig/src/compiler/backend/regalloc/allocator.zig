@@ -7,14 +7,14 @@ const LiveInterval = liveness.LiveInterval;
 const IntervalList = liveness.IntervalList;
 const CfgInfo = liveness.CfgInfo;
 
-// Rematerialization
+//повтор размещен значения
 
 pub const Remat = union(enum) {
     imm64: i64,
     zero: void,
 };
 
-// Constraints 
+//ограничения!!
 
 pub const ConstrainedReg = struct {
     vreg: u32,
@@ -54,7 +54,7 @@ pub fn applyConstraints(
     }
 }
 
-// Linear Scan with Splitting 
+// скан
 
 pub fn linearScanSplitting(
     initial: []const LiveInterval,
@@ -131,6 +131,9 @@ pub fn linearScanSplitting(
             if (findAvailReg(free_regs, pool)) |reg| {
                 removeReg(free_regs, reg);
                 try regs.put(interval.vreg, reg);
+                if (interval.reg_class == .xmm) {
+                    std.log.info("regalloc: vreg={d} assigned xmm={d}", .{ interval.vreg, reg });
+                }
                 try insertSortedByEnd(active, interval);
                 allocated = true;
             }

@@ -406,7 +406,7 @@ pub fn generateRuntimeCpp(allocator: std.mem.Allocator, pipeline: *const Pipelin
         ++ "}\n\n"
     );
 
-    // GetOutputFormat
+   //получаем формат выходного файла
     try w.writeAll(
         "static EPixelFormat GetOutputFormat(const FString& ResName, EPixelFormat InputFmt)\n"
         ++ "{\n"
@@ -422,7 +422,7 @@ pub fn generateRuntimeCpp(allocator: std.mem.Allocator, pipeline: *const Pipelin
         ++ "}\n\n"
     );
 
-    // GetOutputSizeForName
+    //получаем размер выходных данных по имени
     try w.writeAll(
         "static FIntPoint GetOutputSizeForName(const FString& Name, FIntPoint RenderSize, FIntPoint DisplaySize)\n"
         ++ "{\n"
@@ -442,7 +442,7 @@ pub fn generateRuntimeCpp(allocator: std.mem.Allocator, pipeline: *const Pipelin
     }
     try w.writeAll("\treturn RenderSize;\n}\n\n");
 
-    // ExecutePlan
+    //выполняем план ыыыыы
     try w.writeAll(
         "void FTSSRuntime::ExecutePlan(FRDGBuilder& GraphBuilder, FRDGTextureRef SceneColor, FRDGTextureRef ViewFamilyOutput, FRDGTextureRef Velocity, FRDGTextureRef SceneDepth, FIntPoint DisplaySize, float DownscaleFactor, const FVector4f& InPrevVP0, const FVector4f& InPrevVP1, const FVector4f& InPrevVP2, const FVector4f& InPrevVP3, const FVector4f& InCurrInvVP0, const FVector4f& InCurrInvVP1, const FVector4f& InCurrInvVP2, const FVector4f& InCurrInvVP3, bool bInHasValidPrevFrame)\n"
         ++ "{\n"
@@ -511,7 +511,7 @@ pub fn generateRuntimeCpp(allocator: std.mem.Allocator, pipeline: *const Pipelin
         ++ "\tTextureCache.Add(TEXT(\"SceneDepth\"), SceneDepth);\n\n"
     );
 
-    // Init persistent textures
+    //инициализируем постоянные текстуры 
     try writePersistentInit(w, allocator, pipeline, "History", "HistoryRT", "DisplaySize", "PF_FloatRGBA", "TSS_History");
     try writePersistentInit(w, allocator, pipeline, "LockStatus", "LockHistoryRT", "DisplaySize", "PF_FloatRGBA", "TSS_Lock");
     try writePersistentInit(w, allocator, pipeline, "DilatedMotionVectors", "DilatedVelocityRT", "RenderSize", "PF_G16R16F", "TSS_PrevDilatedMV");
@@ -566,7 +566,7 @@ pub fn generateRuntimeCpp(allocator: std.mem.Allocator, pipeline: *const Pipelin
         ++ "\t}\n\n"
     );
 
-    // Generate passes
+    //генерируем проходы
     try w.writeAll("\t// === Plan/Metal Generated passes ===\n");
     for (pipeline.passes) |pass| {
         try w.writeAll("\t{\n\t\tRDG_EVENT_SCOPE(GraphBuilder, \"TSS_");
@@ -685,7 +685,7 @@ pub fn generateRuntimeCpp(allocator: std.mem.Allocator, pipeline: *const Pipelin
         );
     }
 
-    // Extract persistent textures
+    //извлекаем постоянные текстуры
     try w.writeAll(
         "\tFRDGTextureRef* FinalTex = TextureCache.Find(TEXT(\"Final_Output\"));\n"
         ++ "\tif (FinalTex && *FinalTex) LastFinalOutput = *FinalTex;\n\n"
@@ -702,7 +702,7 @@ pub fn generateRuntimeCpp(allocator: std.mem.Allocator, pipeline: *const Pipelin
         ++ "}\n\n"
     );
 
-    // ExecuteComputePass helper
+    //фуинкция для выполнения compute pass
     try w.writeAll(
         "void FTSSRuntime::ExecuteComputePass(FRDGBuilder& GraphBuilder, const FString& PassName, const FString& ShaderName, TArray<FRDGTextureRef>& Inputs, TArray<FString>& OutputNames, TArray<FRDGTextureRef>& OutputTexs, TArray<FRDGTextureUAV*>& OutputUAVs, FIntPoint DispatchSize, int32 GroupSizeX, bool bLog)\n"
         ++ "{\n"

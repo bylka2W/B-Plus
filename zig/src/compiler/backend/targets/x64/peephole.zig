@@ -1,9 +1,9 @@
-﻿/// x64 peephole optimizations.
-/// These run on the final byte stream or on the MIR before lowering.
+﻿
+
 const std = @import("std");
 const mir = @import("../../mir/mir.zig");
 
-/// Eliminate redundant mov instructions (same dst/src).
+
 pub fn eliminateRedundantMovs(mfunc: *mir.MFunction) void {
     for (mfunc.blocks.items) |*block| {
         var i: usize = 0;
@@ -20,7 +20,7 @@ pub fn eliminateRedundantMovs(mfunc: *mir.MFunction) void {
     }
 }
 
-/// Fold mov+add: mov dst, src; add dst, x  →  add dst, src+x when src is imm.
+
 pub fn foldMovAdd(mfunc: *mir.MFunction) void {
     for (mfunc.blocks.items) |*block| {
         var i: usize = 0;

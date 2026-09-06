@@ -16,6 +16,20 @@ fn sizeToMemSize(size: u32) mir.MemSize {
     };
 }
 
+fn birValDataType(bir_func: *const bir.Function, types: *const bir.types.TypeTable, val: u32) mir.DataType {
+    if (val == 0) return .i64;
+    for (bir_func.param_values, 0..) |pv, i| {
+        if (pv == val) return birTypeToDataType(types, bir_func.params[i].ty);
+    }
+    if (val - 1 >= bir_func.value_info.items.len) return .i64;
+    const vi = &bir_func.value_info.items[val - 1];
+    if (vi.def.block == bir.INVALID_ID or vi.def.idx == bir.INVALID_ID) return .i64;
+    if (vi.def.block >= bir_func.blocks.items.len) return .i64;
+    const def_block = &bir_func.blocks.items[vi.def.block];
+    if (vi.def.idx >= def_block.instrs.items.len) return .i64;
+    return birTypeToDataType(types, def_block.instrs.items[vi.def.idx].ty);
+}
+
 fn birTypeToDataType(types: *const bir.types.TypeTable, ty: bir.types.TypeId) mir.DataType {
     const t = types.get(ty);
     return switch (t.kind) {
@@ -213,20 +227,25 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                                 .data = owned,
                             } });
                         },
-                        else => {
-                            const val = switch (inst.data) {
-                                .const_data => |cd| switch (cd) {
-                                    .int => |v| @as(i64, v),
-                                    .float => |v| @as(i64, @intCast(@as(i64, @intFromFloat(v)))),
-                                    .bool => |v| @as(i64, @intFromBool(v)),
-                                    .undefined, .zero => 0,
-                                },
-                                else => 0,
-                            };
+                else => {
+                    const val = switch (inst.data) {
+                        .const_data => |cd| switch (cd) {
+                            .int => |v| @as(i64, v),
+                            .float => |v| @as(i64, @bitCast(v)),
+                            .bool => |v| @as(i64, @intFromBool(v)),
+                            .undefined, .zero => 0,
+                        },
+                        else => 0,
+                    };
                             try mblock.instrs.append(.{ .mov = .{
                                 .dst = .{ .vreg = result },
                                 .src = .{ .imm = val },
                             } });
+                            const dt = birTypeToDataType(types, inst.ty);
+                            if (dt != .i64) {
+                                try mfunc.putVReg(result, dt);
+                                std.log.info("putVReg vreg={d} dt={s}", .{ result, @tagName(dt) });
+                            }
                         },
                     }
                 },
@@ -351,14 +370,24 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     var args: [14]mir.MOperand = undefined;
                     for (&args) |*a| a.* = .{ .imm = 0 };
                     const count = @min(@as(u32, @intCast(info.args.len)), 14);
-                    for (0..count) |i| args[i] = .{ .vreg = info.args[i] };
+                    var arg_t: [14]mir.DataType = @splat(.i64);
+                    for (0..count) |i| {
+                        args[i] = .{ .vreg = info.args[i] };
+                        arg_t[i] = birValDataType(bir_func, types, info.args[i]);
+                    }
+                    const ret_dt = birTypeToDataType(types, inst.ty);
+                    const is_void = (ret_dt == .void);
                     try mblock.instrs.append(.{ .call = .{
                         .name = try allocator.dupe(u8, info.name),
                         .args = args,
                         .arg_count = count,
-                        .dst = .{ .vreg = result },
-                        .is_void = false,
+                        .dst = if (is_void) .{ .imm = 0 } else .{ .vreg = result },
+                        .is_void = is_void,
+                        .arg_types = arg_t,
                     } });
+                    if (!is_void) {
+                        try mfunc.putVReg(result, ret_dt);
+                    }
                 },
 
                 .alloca => {
@@ -371,6 +400,8 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     if (result == NO_VALUE or inst.operands.len < 1) continue;
                     const load_size = sizeToMemSize(types.sizeOf(inst.ty));
                     try mblock.instrs.append(.{ .load = .{ .dst = .{ .vreg = result }, .ptr = .{ .vreg = inst.operands[0] }, .size = load_size } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
                 },
 
                 .store => {

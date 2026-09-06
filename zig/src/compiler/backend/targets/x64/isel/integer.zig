@@ -39,10 +39,11 @@ pub fn selectMov(ctx: *Ctx, m: mir.MovInst) !void {
         if (dst_is_xmm) {
             try spill.loadSpilledOp(ctx, m.src, ctx.scratch);
             const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
+            const dst_xmm = resolveReg(ctx.ra, m.dst);
             if (dtype == .f64) {
-                try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(@intCast(dst_vreg - 1 + 16)), Operand.r(ctx.scratch));
+                try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(dst_xmm), Operand.r(ctx.scratch));
             } else {
-                try append2(ctx, .SSE_MOVD_LD, Operand.xmm(@intCast(dst_vreg - 1 + 16)), Operand.r(ctx.scratch));
+                try append2(ctx, .SSE_MOVD_LD, Operand.xmm(dst_xmm), Operand.r(ctx.scratch));
             }
         } else {
             try spill.loadSpilledOp(ctx, m.src, ctx.scratch);
@@ -53,12 +54,19 @@ pub fn selectMov(ctx: *Ctx, m: mir.MovInst) !void {
         const dst = resolveReg(ctx.ra, m.dst);
         const src = resolveOp(ctx.ra, m.src);
         if (dst_is_xmm) {
-            if (src.reg >= 0) {
+            if (src_is_xmm) {
                 const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
                 if (dtype == .f64) {
                     try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(dst), Operand.xmm(src.reg));
                 } else {
                     try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(dst), Operand.xmm(src.reg));
+                }
+            } else if (src.reg >= 0) {
+                const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
+                if (dtype == .f64) {
+                    try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(dst), Operand.r(src.reg));
+                } else {
+                    try append2(ctx, .SSE_MOVD_LD, Operand.xmm(dst), Operand.r(src.reg));
                 }
             } else {
                 const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;

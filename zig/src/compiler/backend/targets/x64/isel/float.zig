@@ -1,4 +1,4 @@
-/// x64 floating-point instruction selection (SSE scalar).
+///выбор инструкций для операций с числами с плавающей точкой на x64 через SSE
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");
 const OpCode = enc.OpCode;
@@ -10,6 +10,7 @@ const Ctx = ctx_mod.Ctx;
 const append2 = ctx_mod.append2;
 const resolveReg = ctx_mod.resolveReg;
 const xmmScratch = ctx_mod.xmmScratch;
+const xmmScratch2 = ctx_mod.xmmScratch2;
 const loadFloatOpToXmm = ctx_mod.loadFloatOpToXmm;
 const moveGprToXmm = ctx_mod.moveGprToXmm;
 
@@ -18,12 +19,18 @@ pub fn selectFBinOp(ctx: *Ctx, f: mir.FloatBinOp, ss_op: OpCode, sd_op: OpCode) 
     const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
     const sse_op: OpCode = if (dtype == .f64) sd_op else ss_op;
     const xs = xmmScratch();
+    const xs2 = xmmScratch2();
     const dst_spilled = regalloc.isSpilled(ctx.ra, f.dst);
 
     if (dst_spilled) {
         try loadFloatOpToXmm(ctx, f.a, xs, dtype);
-        try loadFloatOpToXmm(ctx, f.b, xs, dtype);
-        try append2(ctx, sse_op, Operand.xmm(xs), Operand.xmm(xs));
+        try loadFloatOpToXmm(ctx, f.b, xs2, dtype);
+        try append2(ctx, sse_op, Operand.xmm(xs), Operand.xmm(xs2));
+        if (dtype == .f64) {
+            try append2(ctx, .SSE_MOVQ_ST, Operand.r(ctx.scratch), Operand.xmm(xs));
+        } else {
+            try append2(ctx, .SSE_MOVD_ST, Operand.r(ctx.scratch), Operand.xmm(xs));
+        }
         try spill.storeSpilledOp(ctx, f.dst, ctx.scratch);
     } else {
         const dst = resolveReg(ctx.ra, f.dst);
