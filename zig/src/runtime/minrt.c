@@ -113,6 +113,21 @@ static void bplus_pause(void) {
     ReadFile(in, &ch, 1, &read, NULL);
 }
 
+__declspec(dllexport) int puts(const char *s) {
+    if (s == 0) return -1;
+    int len = 0;
+    while (s[len]) len++;
+
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (handle == INVALID_HANDLE_VALUE || handle == NULL) return -1;
+    DWORD written;
+    if (len > 0) {
+        WriteFile(handle, s, len, &written, NULL);
+    }
+    WriteFile(handle, "\n", 1, &written, NULL);
+    return len + 1;
+}
+
 __declspec(dllexport) void bplus_start(void) {
     int code = (int)main();
     if (!launched_by_bpc()) {

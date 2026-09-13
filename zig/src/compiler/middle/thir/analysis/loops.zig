@@ -46,10 +46,8 @@ pub fn findNaturalLoops(allocator: Allocator, cfg: *const cfg_mod.Cfg) !LoopNest
     var loops = std.ArrayList(NaturalLoop).init(allocator);
     defer loops.deinit();
 
-    // Find back edges: edge (from → to) where to dominates from
     for (cfg.edges) |edge| {
         if (cfg.dominates(edge.to, edge.from)) {
-            // This is a back edge. Build the natural loop.
             const loop_blocks = try buildNaturalLoop(allocator, cfg, edge.from, edge.to);
             try loops.append(.{
                 .header = edge.to,
@@ -71,8 +69,6 @@ fn buildNaturalLoop(
     latch: BlockId,
     header: BlockId,
 ) ![]const BlockId {
-    // The natural loop = header + all blocks that can reach latch
-    // without going through header.
 
     var in_loop = std.AutoHashMap(u32, void).init(allocator);
     defer in_loop.deinit();
@@ -80,7 +76,6 @@ fn buildNaturalLoop(
     var worklist = std.ArrayList(BlockId).init(allocator);
     defer worklist.deinit();
 
-    // Start with latch and header
     try in_loop.put(header.index, {});
     try in_loop.put(latch.index, {});
     try worklist.append(latch);
@@ -88,7 +83,6 @@ fn buildNaturalLoop(
     while (worklist.items.len > 0) {
         const current = worklist.orderedRemove(0);
 
-        // Add all predecessors of current that are not yet in the loop
         if (current.index < cfg.predecessors.len) {
             for (cfg.predecessors[current.index]) |pred| {
                 if (!in_loop.contains(pred.index)) {
@@ -99,7 +93,6 @@ fn buildNaturalLoop(
         }
     }
 
-    // Collect blocks
     var blocks = std.ArrayList(BlockId).init(allocator);
     defer blocks.deinit();
 

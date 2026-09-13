@@ -61,7 +61,6 @@ pub const VerifyResult = struct {
     }
 };
 
-// ─── Public API — run all checks ───
 
 pub fn verifyModule(module: *bir.Module, allocator: Allocator) !VerifyResult {
     var errs = std.ArrayList(VerifyError).init(allocator);
@@ -124,7 +123,6 @@ fn addError(errs: *std.ArrayList(VerifyError), comptime fmt: []const u8, args: a
     });
 }
 
-// ─── PassContract ───
 
 pub const PassContract = struct {
     module: *bir.Module,
@@ -154,7 +152,6 @@ pub const PassContract = struct {
     }
 };
 
-// ─── CFG Checks ───
 
 fn checkCFGSymmetry(func: *bir.Function, cfg: *const bir_cfg.CFG, func_id: FunctionId, errs: *std.ArrayList(VerifyError)) !void {
     _ = cfg;
@@ -199,7 +196,6 @@ fn checkEntryBlock(func: *bir.Function, cfg: *const bir_cfg.CFG, func_id: Functi
     }
 }
 
-// ─── Block Structure ───
 
 fn checkBlockStructure(block: *bir.BasicBlock, bid: BlockId, nblocks: usize, func_id: FunctionId, errs: *std.ArrayList(VerifyError)) !void {
     const n = block.instrs.items.len;
@@ -263,7 +259,6 @@ fn checkTerminator(inst: bir.Inst, bid: BlockId, nblocks: usize, func_id: Functi
     }
 }
 
-// ─── Dominator Tree Checks ───
 
 fn checkDominatorTree(dt: *const bir_dominators.DominatorTree, n: usize, func_id: FunctionId, errs: *std.ArrayList(VerifyError)) !void {
     if (n == 0) return;
@@ -306,7 +301,6 @@ fn dominates(dt: *const bir_dominators.DominatorTree, a: BlockId, b: BlockId) bo
     return false;
 }
 
-// ─── Instruction Checks ───
 
 fn checkInst(module: *bir.Module, func: *bir.Function, _: *bir.BasicBlock, bid: BlockId, inst: *const bir.Inst, idx: u32, cfg: *const bir_cfg.CFG, dom_tree: *const bir_dominators.DominatorTree, dom_frontier: *const bir_dominators.DominanceFrontier, func_id: FunctionId, errs: *std.ArrayList(VerifyError)) !void {
     try checkValueDef(func, inst, bid, idx, func_id, errs);
@@ -392,7 +386,6 @@ fn checkPhi(func: *bir.Function, inst: *const bir.Inst, bid: BlockId, cfg: *cons
     }
 }
 
-// ─── Type Consistency (TypeVerifier) ───
 
 fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const bir.Inst, func_id: FunctionId, bid: BlockId, idx: u32, errs: *std.ArrayList(VerifyError)) !void {
     const ops = inst.operands;
@@ -400,13 +393,11 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
 
 
     switch (inst.op) {
-        // ── VOID ops (no meaningful result type) ──
         .br, .cond_br, .ret, .unreachable_op, .branch_on_bit,
         .barrier, .groupshared_barrier,
         .fence,
         .texture_store => {},
 
-        // ── Integer arithmetic — operands == result == integer ──
         .add, .sub, .mul, .div, .mod, .max, .min, .neg,
         .shl, .shr, .shra,
         .or_op, .and_op, .xor_op, .not => {
@@ -421,7 +412,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Float arithmetic — operands == result == float ──
         .fadd, .fsub, .fmul, .fdiv, .fmod, .fneg, .sqrt, .rsqrt, .exp, .log, .sin, .cos,
         .floor, .ceil, .frac, .abs, .saturate, .fma, .lerp => {
             if (result_ty == INVALID_TYPE) return;
@@ -435,7 +425,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Integer comparison — operands int same, result i1 ──
         .eq, .ne, .lt, .le, .gt, .ge => {
             if (ops.len >= 1 and ops[0] != bir.NO_VALUE) {
                 const op0_ty = getTypeOfValue(module, func, ops[0]) orelse return;
@@ -449,7 +438,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Float comparison — operands float same, result i1 ──
         .feq, .fne, .flt, .fle, .fgt, .fge => {
             if (ops.len >= 1 and ops[0] != bir.NO_VALUE) {
                 const op0_ty = getTypeOfValue(module, func, ops[0]) orelse return;
@@ -463,7 +451,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Select — cond bool, true/false same type ──
         .select => {
             if (result_ty == INVALID_TYPE) return;
             if (ops.len >= 1 and ops[0] != bir.NO_VALUE) {
@@ -486,7 +473,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Phi — all incoming values same type as result ──
         .phi => {
             if (result_ty == INVALID_TYPE) return;
             if (inst.data != .phi_incoming) return;
@@ -499,7 +485,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Cast — cast_info.from == operand, cast_info.to == result ──
         .cast, .bitcast, .sext, .zext, .trunc, .fptosi, .sitofp, .fpext, .fptrunc => {
             const ci = switch (inst.data) {
                 .cast_info => |c| c,
@@ -516,7 +501,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Load — ptr operand, pointee type == result type ──
         .load => {
             if (result_ty == INVALID_TYPE) return;
             if (ops.len >= 1 and ops[0] != bir.NO_VALUE) {
@@ -532,7 +516,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Store — ptr operand, value operand type matches pointee ──
         .store => {
             if (ops.len >= 1 and ops[0] != bir.NO_VALUE) {
                 const ptr_ty = getTypeOfValue(module, func, ops[0]) orelse return;
@@ -544,14 +527,12 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Alloca — result is pointer ──
         .alloca => {
             if (result_ty != INVALID_TYPE and !isPtrKind(module, result_ty)) {
                 try addError(errs, "alloca result type must be a pointer", .{}, .type_mismatch, func_id, bid, idx, inst.result);
             }
         },
 
-        // ── GEP — result is pointer, indices are integers ──
         .getelementptr => {
             if (result_ty == INVALID_TYPE) return;
             if (!isPtrKind(module, result_ty)) {
@@ -564,7 +545,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Ptr offset — ptr + int → same ptr type ──
         .ptr_offset => {
             if (result_ty == INVALID_TYPE) return;
             if (!isPtrKind(module, result_ty)) {
@@ -578,7 +558,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Ptr <-> int conversions ──
         .ptr_to_int => {
             if (result_ty == INVALID_TYPE) return;
             if (!isIntType(module, result_ty)) {
@@ -605,7 +584,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Vector ops — all operands same vector type, result same ──
         .vector_add, .vector_sub, .vector_mul, .vector_div,
         .vector_reflect, .vector_refract => {
             if (result_ty == INVALID_TYPE) return;
@@ -619,7 +597,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Vector dot product — result is scalar (not vector) ──
         .vector_dot => {
             if (result_ty == INVALID_TYPE) return;
             if (!isScalarType(module, result_ty)) return;
@@ -644,13 +621,11 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             if (!isScalarType(module, result_ty)) return;
         },
 
-        // ── Splat — scalar → vector ──
         .splat => {
             if (result_ty == INVALID_TYPE) return;
             if (!isVectorType(module, result_ty)) return;
         },
 
-        // ── Extract element — vector → scalar ──
         .extract_element => {
             if (result_ty == INVALID_TYPE) return;
             if (isVectorType(module, result_ty)) return;
@@ -663,18 +638,15 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Insert element — vector, scalar → vector ──
         .insert_element => {
             if (result_ty == INVALID_TYPE) return;
             if (!isVectorType(module, result_ty)) return;
         },
 
-        // ── Composite ──
         .composite => {
             if (result_ty == INVALID_TYPE) return;
         },
 
-        // ── Extract ──
         .extract => {
             if (result_ty == INVALID_TYPE) return;
             if (ops.len >= 1 and ops[0] != bir.NO_VALUE) {
@@ -683,7 +655,6 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Insert ──
         .insert => {
             if (result_ty == INVALID_TYPE) return;
             if (ops.len >= 2 and ops[1] != bir.NO_VALUE) {
@@ -692,34 +663,26 @@ fn checkTypeConsistency(module: *bir.Module, func: *bir.Function, inst: *const b
             }
         },
 
-        // ── Shuffle ──
         .shuffle => {
             if (result_ty == INVALID_TYPE) return;
         },
 
-        // ── Const ──
         .@"const" => {},
 
-        // ── Call ──
         .call => {},
 
-        // ── Resource ──
         .resource => {},
 
-        // ── Matrix ops ──
         .matrix_mul, .matrix_transpose, .matrix_inverse, .matrix_determinant => {},
 
-        // ── Atomic ──
         .atomic_add, .atomic_sub, .atomic_min, .atomic_max,
         .atomic_and, .atomic_or, .atomic_xor, .atomic_xchg, .atomic_cmpxchg => {},
 
-        // ── Texture ──
         .texture_sample, .texture_load, .texture_gather,
         .texture_query_dimensions, .texture_query_lod => {
             if (result_ty == INVALID_TYPE) return;
         },
 
-        // ── GPU intrinsics ──
         .thread_id, .block_id, .thread_count, .block_count,
         .wave_get_lane_index, .wave_is_first_lane, .wave_read_lane_first,
         .wave_active_all_equal,
@@ -847,7 +810,6 @@ fn isValidLoadStoreSpace(module: *bir.Module, tid: TypeId) bool {
     };
 }
 
-// ─── Phi Placement (DF-based) ───
 
 fn checkPhiPlacement(func: *bir.Function, inst: *const bir.Inst, bid: BlockId, dom_frontier: *const bir_dominators.DominanceFrontier, func_id: FunctionId, errs: *std.ArrayList(VerifyError)) !void {
     const incoming = inst.data.phi_incoming;
@@ -882,7 +844,6 @@ fn checkPhiPlacement(func: *bir.Function, inst: *const bir.Inst, bid: BlockId, d
     }
 }
 
-// ─── Data Ref Checks ───
 
 fn checkDataRefsDefined(func: *bir.Function, inst: *const bir.Inst, use_bid: BlockId, dom_tree: *const bir_dominators.DominatorTree, cfg: *const bir_cfg.CFG, func_id: FunctionId, errs: *std.ArrayList(VerifyError)) !void {
     switch (inst.data) {
@@ -989,7 +950,6 @@ fn checkPhiValueDefined(func: *bir.Function, val: ValueId, pred_block: BlockId, 
     }
 }
 
-// ─── Use-Def Symmetry ───
 
 fn checkUseDefSymmetry(func: *bir.Function, func_id: FunctionId, errs: *std.ArrayList(VerifyError)) !void {
     const vi_len = func.value_info.items.len;
@@ -1028,7 +988,6 @@ fn checkUseDefSymmetry(func: *bir.Function, func_id: FunctionId, errs: *std.Arra
     }
 }
 
-// ─── MemorySSA Verification ───
 
 pub fn verifyMemorySSA(allocator: Allocator, func: *bir.Function, func_id: FunctionId, cfg: *const bir_cfg.CFG, dom_tree: *const bir_dominators.DominatorTree, errs: *std.ArrayList(VerifyError)) !void {
     var mssa = try bir_memory_ssa.build(allocator, func, cfg, dom_tree);
@@ -1062,7 +1021,6 @@ pub fn verifyMemorySSA(allocator: Allocator, func: *bir.Function, func_id: Funct
                         try addError(errs, "load at ({},{}) reaching def ({},{}) does not dominate the load", .{ bid, idx, reaching.block, reaching.idx }, .mssa_invalid_reaching_def, func_id, bid, idx, inst.result);
                     }
 
-                    // Check that reaching def forms a valid SSA chain: def dominates all uses
                     const stored_val = mssa.getStoredValue(reaching) orelse bir.NO_VALUE;
                     if (stored_val != bir.NO_VALUE and stored_val <= func.value_info.items.len) {
                         const sv_vi = func.getValueInfo(stored_val);
@@ -1096,7 +1054,6 @@ pub fn verifyMemorySSA(allocator: Allocator, func: *bir.Function, func_id: Funct
         }
     }
 
-    // Check no cycles in reaching def chains
     var visited = std.AutoHashMap(bir_memory_ssa.MemOpKey, void).init(allocator);
     defer visited.deinit();
 

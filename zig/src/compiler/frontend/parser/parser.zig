@@ -324,7 +324,8 @@ pub const Parser = struct {
                 p.advance();
                 try p.expect(.lparen);
                 var params = std.ArrayList(ast.KernelParam).init(p.allocator);
-                errdefer params.deinit();
+                var params_owned = false;
+                errdefer if (!params_owned) params.deinit();
                 while (!p.peek(.rparen)) {
                     const pname = try p.allocator.dupe(u8, p.identText()); p.advance();
                     try p.expect(.colon);
@@ -336,7 +337,10 @@ pub const Parser = struct {
                 var ret: ?[]const u8 = null;
                 if (p.peek(.arrow)) { p.advance(); ret = try p.allocator.dupe(u8, p.identText()); p.advance(); }
                 try program.metal.extern_cpp_fns.append(.{ .name = fn_name, .parameters = params, .return_type = ret });
-                try p.expect(.semicolon);
+                params_owned = true;
+                if (p.peek(.semicolon)) p.advance();
+                while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
+                if (p.peek(.newline)) p.advance();
             } else if (p.peek(.kw_import)) {
                 const imp = try p.parseImport();
                 try program.metal.imports.append(imp);
@@ -729,7 +733,7 @@ pub const Parser = struct {
             p.cur_tok = save_tok;
             return null;
         }
-        p.advance(); // (
+        p.advance();
 
         var params = std.ArrayList(ast.KernelParam).init(p.allocator);
         errdefer params.deinit();
@@ -754,7 +758,7 @@ pub const Parser = struct {
             p.cur_tok = save_tok;
             return null;
         }
-        p.advance(); // )
+        p.advance();
         p.consumeNewlines();
 
         var ret_type: ?[]const u8 = null;

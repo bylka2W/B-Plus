@@ -45,13 +45,11 @@ pub const VerifyContext = struct {
             return;
         }
 
-        // Check entry block exists
         if (!body.entry.isValid() or body.entry.index >= body.blocks.len) {
             try self.errors.append(error.InvalidBlock);
             return;
         }
 
-        // Verify each block
         for (body.blocks, 0..) |block, i| {
             try self.verifyBlock(block, BlockId.new(@intCast(i)), body.blocks.len);
         }

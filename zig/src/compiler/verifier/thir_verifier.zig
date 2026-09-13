@@ -27,7 +27,6 @@ pub const ThirVerifier = struct {
     }
 
     pub fn verify(self: *ThirVerifier, module: *thir.ThirModule) !VerifiedTHIR {
-        // Run structural verification (existing verify.zig)
         {
             var ctx = thir_verify.VerifyContext.init(self.allocator, module);
             defer ctx.deinit();
@@ -39,7 +38,6 @@ pub const ThirVerifier = struct {
             }
         }
 
-        // Verify value references are in bounds
         for (module.functions.items) |*func| {
             const body = func.body orelse continue;
             for (body.blocks, 0..) |block, bi| {

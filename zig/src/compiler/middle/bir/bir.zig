@@ -1,6 +1,5 @@
 const std = @import("std");
 
-// ─── IR submodule imports ───
 pub const value = @import("core/value.zig");
 pub const types = @import("core/types.zig");
 pub const instruction = @import("core/instruction.zig");
@@ -8,7 +7,6 @@ pub const block = @import("core/block.zig");
 pub const function = @import("core/function.zig");
 pub const module = @import("core/module.zig");
 
-// ─── IR namespace (LLVM-style: bir.ir.Module, bir.ir.Type, etc.) ───
 pub const ir = struct {
     pub const ValueId = value.ValueId;
     pub const BlockId = value.BlockId;
@@ -52,7 +50,6 @@ pub const ir = struct {
     pub const Module = module.Module;
 };
 
-// ─── Flat re-exports (backward compat: bir.ValueId, bir.Module, etc.) ───
 pub const ValueId = ir.ValueId;
 pub const BlockId = ir.BlockId;
 pub const FunctionId = ir.FunctionId;
@@ -98,10 +95,8 @@ pub const SmState = ir.SmState;
 pub const StateMachine = ir.StateMachine;
 pub const Module = ir.Module;
 
-// ─── Analysis infrastructure ───
 pub const AnalysisManager = @import("analysis/manager.zig").AnalysisManager;
 
-// ─── Pass infrastructure ───
 pub const AnalysisKind = @import("optimizer/pass_types.zig").AnalysisKind;
 pub const PreservedAnalyses = @import("optimizer/pass_types.zig").PreservedAnalyses;
 pub const ChangeSet = @import("optimizer/pass_types.zig").ChangeSet;

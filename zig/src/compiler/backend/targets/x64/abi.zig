@@ -1,4 +1,3 @@
-///определения и вспомогательные функцииx64 ABI для Win64 и SystemV
 const std = @import("std");
 const DataType = @import("../../mir/core/value.zig").DataType;
 
@@ -53,30 +52,28 @@ pub fn emitCallCleanup(buf: *std.ArrayList(u8)) !void {
 }
 
 pub fn emitFullPrologue(buf: *std.ArrayList(u8)) !void {
-    try emitPushR64(buf, 5); // RBP
-    try emitPushR64(buf, 3); // RBX
-    try emitPushR64(buf, 6); // RSI
-    try emitPushR64(buf, 7); // RDI
-    try emitPushR64(buf, 15); // R15
-    try emitPushR64(buf, 14); // R14
-    try emitPushR64(buf, 13); // R13
-    try emitPushR64(buf, 12); // R12
-    // sub rsp, 0x28
+    try emitPushR64(buf, 5);
+    try emitPushR64(buf, 3);
+    try emitPushR64(buf, 6);
+    try emitPushR64(buf, 7);
+    try emitPushR64(buf, 15);
+    try emitPushR64(buf, 14);
+    try emitPushR64(buf, 13);
+    try emitPushR64(buf, 12);
     try buf.appendSlice(&.{ 0x48, 0x81, 0xEC, 0x28, 0x00, 0x00, 0x00 });
 }
 
 pub fn emitFullEpilogue(buf: *std.ArrayList(u8)) !void {
-    // add rsp, 0x28
     try buf.appendSlice(&.{ 0x48, 0x81, 0xC4, 0x28, 0x00, 0x00, 0x00 });
-    try emitPopR64(buf, 12); // R12
-    try emitPopR64(buf, 13); // R13
-    try emitPopR64(buf, 14); // R14
-    try emitPopR64(buf, 15); // R15
-    try emitPopR64(buf, 7); // RDI
-    try emitPopR64(buf, 6); // RSI
-    try emitPopR64(buf, 3); // RBX
-    try emitPopR64(buf, 5); // RBP
-    try buf.append(0xC3); // ret
+    try emitPopR64(buf, 12);
+    try emitPopR64(buf, 13);
+    try emitPopR64(buf, 14);
+    try emitPopR64(buf, 15);
+    try emitPopR64(buf, 7);
+    try emitPopR64(buf, 6);
+    try emitPopR64(buf, 3);
+    try emitPopR64(buf, 5);
+    try buf.append(0xC3);
 }
 
 pub const ArgLocation = union(enum) {
@@ -150,16 +147,16 @@ pub fn win64AssignArgs(
 
 pub fn win64RetLoc(ty: DataType) ArgLocation {
     if (ty == .void) return .{ .gpr = -1 };
-    if (ty.isFloat()) return .{ .xmm = 0 }; // xmm0
-    return .{ .gpr = 0 }; // rax
+    if (ty.isFloat()) return .{ .xmm = 0 };
+    return .{ .gpr = 0 };
 }
 
 
-pub const sysv_int_regs = [_]i16{ 7, 6, 2, 1, 8, 9 }; // RDI, RSI, RDX, RCX, R8, R9
-pub const sysv_float_regs = [_]i16{ 16, 17, 18, 19, 20, 21, 22, 23 }; // xmm0-xmm7
+pub const sysv_int_regs = [_]i16{ 7, 6, 2, 1, 8, 9 };
+pub const sysv_float_regs = [_]i16{ 16, 17, 18, 19, 20, 21, 22, 23 };
 
-pub const sysv_callee_saved_gpr = [_]i16{ 3, 12, 13, 14, 15 }; // RBX, R12-R15
-pub const sysv_callee_saved_xmm = [_]i16{ 8, 9, 10, 11, 12, 13, 14, 15 }; // xmm8-xmm15
+pub const sysv_callee_saved_gpr = [_]i16{ 3, 12, 13, 14, 15 };
+pub const sysv_callee_saved_xmm = [_]i16{ 8, 9, 10, 11, 12, 13, 14, 15 };
 
 pub fn sysvClassify(ty: DataType) ArgClass {
     return if (ty.isFloat()) .sse else .integer;
@@ -209,8 +206,8 @@ pub fn sysvAssignArgs(
 
 pub fn sysvRetLoc(ty: DataType) ArgLocation {
     if (ty == .void) return .{ .gpr = -1 };
-    if (ty.isFloat()) return .{ .xmm = 0 }; // xmm0
-    return .{ .gpr = 0 }; // rax
+    if (ty.isFloat()) return .{ .xmm = 0 };
+    return .{ .gpr = 0 };
 }
 
 
@@ -247,10 +244,10 @@ test "win64 integer arg assignment" {
     var stack_size: u32 = 0;
     const locs = win64AssignArgs(&types, &stack_size);
     try std.testing.expectEqual(@as(usize, 4), locs.len);
-    try std.testing.expectEqual(@as(i16, 1), locs.buffer[0].gpr); // RCX
-    try std.testing.expectEqual(@as(i16, 2), locs.buffer[1].gpr); // RDX
-    try std.testing.expectEqual(@as(i16, 8), locs.buffer[2].gpr); // R8
-    try std.testing.expectEqual(@as(i16, 9), locs.buffer[3].gpr); // R9
+    try std.testing.expectEqual(@as(i16, 1), locs.buffer[0].gpr);
+    try std.testing.expectEqual(@as(i16, 2), locs.buffer[1].gpr);
+    try std.testing.expectEqual(@as(i16, 8), locs.buffer[2].gpr);
+    try std.testing.expectEqual(@as(i16, 9), locs.buffer[3].gpr);
     try std.testing.expectEqual(@as(u32, 0), stack_size);
 }
 
@@ -259,10 +256,10 @@ test "win64 mixed int+float arg assignment" {
     var stack_size: u32 = 0;
     const locs = win64AssignArgs(&types, &stack_size);
     try std.testing.expectEqual(@as(usize, 4), locs.len);
-    try std.testing.expectEqual(@as(i16, 1), locs.buffer[0].gpr); // RCX
-    try std.testing.expectEqual(@as(i16, 16), locs.buffer[1].xmm); // xmm0
-    try std.testing.expectEqual(@as(i16, 8), locs.buffer[2].gpr); // R8
-    try std.testing.expectEqual(@as(i16, 17), locs.buffer[3].xmm); // xmm1
+    try std.testing.expectEqual(@as(i16, 1), locs.buffer[0].gpr);
+    try std.testing.expectEqual(@as(i16, 16), locs.buffer[1].xmm);
+    try std.testing.expectEqual(@as(i16, 8), locs.buffer[2].gpr);
+    try std.testing.expectEqual(@as(i16, 17), locs.buffer[3].xmm);
 }
 
 test "win64 5th int arg goes to stack" {
@@ -270,7 +267,7 @@ test "win64 5th int arg goes to stack" {
     var stack_size: u32 = 0;
     const locs = win64AssignArgs(&types, &stack_size);
     try std.testing.expectEqual(@as(usize, 5), locs.len);
-    try std.testing.expectEqual(@as(i16, 9), locs.buffer[3].gpr); // R9
+    try std.testing.expectEqual(@as(i16, 9), locs.buffer[3].gpr);
     try std.testing.expect(locs.buffer[4] == .stack);
     try std.testing.expect(stack_size > 0);
 }
@@ -282,10 +279,10 @@ test "win64 void return" {
 
 test "win64 int return" {
     const loc = win64RetLoc(.i64);
-    try std.testing.expectEqual(@as(i16, 0), loc.gpr); // rax
+    try std.testing.expectEqual(@as(i16, 0), loc.gpr);
 }
 
 test "win64 float return" {
     const loc = win64RetLoc(.f64);
-    try std.testing.expectEqual(@as(i16, 16), loc.xmm); // xmm0
+    try std.testing.expectEqual(@as(i16, 16), loc.xmm);
 }

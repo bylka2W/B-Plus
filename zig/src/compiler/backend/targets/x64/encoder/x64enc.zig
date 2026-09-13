@@ -3,10 +3,10 @@ const Allocator = std.mem.Allocator;
 
 pub const SimdPrefix = enum(u8) {
     none = 0,
-    ps = 0,       // packed single (none)
-    ss = 0xF3,    // scalar single
-    sd = 0xF2,    // scalar double
-    pd = 0x66,    // packed double
+    ps = 0,
+    ss = 0xF3,
+    sd = 0xF2,
+    pd = 0x66,
 };
 
 pub const OpCode = enum(u16) {
@@ -98,69 +98,62 @@ pub const OpCode = enum(u16) {
     NOP,
     INT3,
     UD2,
-    // SSE packed single (no prefix)
-    SSE_MOVUPS_LD, // 0F 10: xmm1 <- xmm2/m128
-    SSE_MOVUPS_ST, // 0F 11: xmm2/m128 <- xmm1
-    SSE_MOVAPS_LD, // 0F 28: xmm1 <- xmm2/m128 (aligned)
-    SSE_MOVAPS_ST, // 0F 29: xmm2/m128 <- xmm1 (aligned)
-    SSE_ADDPS,     // 0F 58: xmm1 += xmm2/m128
-    SSE_SUBPS,     // 0F 5C: xmm1 -= xmm2/m128
-    SSE_MULPS,     // 0F 59: xmm1 *= xmm2/m128
-    SSE_DIVPS,     // 0F 5E: xmm1 /= xmm2/m128
-    SSE_MINPS,     // 0F 5D: xmm1 = min(xmm1, xmm2/m128)
-    SSE_MAXPS,     // 0F 5F: xmm1 = max(xmm1, xmm2/m128)
-    SSE_SQRTPS,    // 0F 51: xmm1 = sqrt(xmm2/m128)
-    SSE_SHUFPS,    // 0F C6: xmm1 = shuffle(xmm1, xmm2/m128, imm8)
-    SSE_MOVLHPS,   // 0F 16: xmm1 <- low xmm2 -> high xmm1
-    SSE_HADDPS,    // F2 0F 7C: xmm1 = xmm1[0]+xmm1[1], xmm1[2]+xmm1[3], xmm2[0]+xmm2[1], xmm2[2]+xmm2[3] (SSE3)
-    SSE_DPPS,      // 66 0F 3A 40: xmm1 = dot(xmm1, xmm2, imm8) (SSE4.1)
-    // SSE scalar single (prefix F3)
-    SSE_MOVSS_LD,  // F3 0F 10: xmm1 <- xmm2/m32
-    SSE_MOVSS_ST,  // F3 0F 11: xmm2/m32 <- xmm1
-    SSE_ADDSS,     // F3 0F 58: xmm1 += xmm2/m32
-    SSE_SUBSS,     // F3 0F 5C: xmm1 -= xmm2/m32
-    SSE_MULSS,     // F3 0F 59: xmm1 *= xmm2/m32
-    SSE_DIVSS,     // F3 0F 5E: xmm1 /= xmm2/m32
-    SSE_MINSS,     // F3 0F 5D: xmm1 = min(xmm1, xmm2/m32)
-    SSE_MAXSS,     // F3 0F 5F: xmm1 = max(xmm1, xmm2/m32)
-    SSE_CVTSI2SS,  // F3 0F 2A: xmm1 <- int2float(r32/m32)
-    SSE_CVTTSS2SI, // F3 0F 2C: r32 <- float2int_trunc(xmm2/m32)
-    SSE_CVTSI2SD,  // F2 0F 2A: xmm1 <- int2double(r32/m32)
-    SSE_CVTTSD2SI, // F2 0F 2C: r32 <- double2int_trunc(xmm2/m32)
-    SSE_CVTSS2SD,  // F2 0F 5A: xmm1 = cvt_single_to_double(xmm2/m32)
-    SSE_CVTSD2SS,  // F3 0F 5A: xmm1 = cvt_double_to_single(xmm2/m64)
-    SETCC_R8,      // 0F 9x: reg8 <- condition (operand[1].imm64 = cc byte)
-    SSE_UCOMISS,   // 0F 2E: compare scalar single, set flags (no NaN exception)
-    SSE_UCOMISD,   // 66 0F 2E: compare scalar double, set flags
-    SSE_SQRTSS,    // F3 0F 51: xmm1 = sqrt(xmm2/m32) (scalar)
-    SSE_RSQRTSS,   // F3 0F 52: xmm1 = 1/sqrt(xmm2/m32) (scalar, approximate)
-    SSE_SQRTSD,    // F2 0F 51: xmm1 = sqrt(xmm2/m64) (scalar double)
-    SSE_ROUNDSS,   // 66 0F 3A 0A: xmm1 = round(xmm2, imm8) SSE4.1, imm8[1:0]=1==floor
-    // SSE with 66 prefix
-    SSE_MOVD_LD,   // 66 0F 6E: xmm <- r32/m32
-    SSE_MOVD_ST,   // 66 0F 7E: r32/m32 <- xmm
-    SSE_MOVQ_LD,   // F3 0F 7E: xmm <- r64/m64 (MOVQ)
-    SSE_MOVQ_ST,   // 66 0F D6: r64/m64 <- xmm (MOVQ)
-    SSE_MOVSD_LD,  // F2 0F 10: xmm <- xmm/m64 (scalar double load)
-    SSE_MOVSD_ST,  // F2 0F 11: xmm/m64 <- xmm (scalar double store)
-    SSE_XORPS,     // 0F 57: xmm1 ^= xmm2/m128
-    // SSE scalar double (prefix F2)
-    SSE_ADDSD,     // F2 0F 58: xmm1 += xmm2/m64
-    SSE_SUBSD,     // F2 0F 5C: xmm1 -= xmm2/m64
-    SSE_MULSD,     // F2 0F 59: xmm1 *= xmm2/m64
-    SSE_DIVSD,     // F2 0F 5E: xmm1 /= xmm2/m64
-    SSE_MINSD,     // F2 0F 5D: xmm1 = min(xmm1, xmm2/m64)
-    SSE_MAXSD,     // F2 0F 5F: xmm1 = max(xmm1, xmm2/m64)
-    // Integer conversion
-    MOVSX_R64_R32, // REX.W 0F 63 /r: sign-extend dword to qword
-    // SSE conversion with 64-bit integer source
-    SSE_CVTSI2SS_64,  // F3 REX.W 0F 2A: xmm1 <- int64→float32
-    SSE_CVTSI2SD_64,  // F2 REX.W 0F 2A: xmm1 <- int64→float64
-    SSE_CVTTSS2SI_64, // F3 REX.W 0F 2C: r64 <- float32→int64_trunc
-    SSE_CVTTSD2SI_64, // F2 REX.W 0F 2C: r64 <- float64→int64_trunc
-    // Conditional move
-    CMOV_R64_R64,     // REX.W 0F 4x /r: r64 ← r/m64 if cc (operand[2].imm64 = cc byte)
-    CMOV_R64_MEM,     // REX.W 0F 4x /r: r64 ← [mem64] if cc (operand[1] = mem, operand[2].imm64 = cc byte)
+    SSE_MOVUPS_LD,
+    SSE_MOVUPS_ST,
+    SSE_MOVAPS_LD,
+    SSE_MOVAPS_ST,
+    SSE_ADDPS,
+    SSE_SUBPS,
+    SSE_MULPS,
+    SSE_DIVPS,
+    SSE_MINPS,
+    SSE_MAXPS,
+    SSE_SQRTPS,
+    SSE_SHUFPS,
+    SSE_MOVLHPS,
+    SSE_HADDPS,
+    SSE_DPPS,
+    SSE_MOVSS_LD,
+    SSE_MOVSS_ST,
+    SSE_ADDSS,
+    SSE_SUBSS,
+    SSE_MULSS,
+    SSE_DIVSS,
+    SSE_MINSS,
+    SSE_MAXSS,
+    SSE_CVTSI2SS,
+    SSE_CVTTSS2SI,
+    SSE_CVTSI2SD,
+    SSE_CVTTSD2SI,
+    SSE_CVTSS2SD,
+    SSE_CVTSD2SS,
+    SETCC_R8,
+    SSE_UCOMISS,
+    SSE_UCOMISD,
+    SSE_SQRTSS,
+    SSE_RSQRTSS,
+    SSE_SQRTSD,
+    SSE_ROUNDSS,
+    SSE_MOVD_LD,
+    SSE_MOVD_ST,
+    SSE_MOVQ_LD,
+    SSE_MOVQ_ST,
+    SSE_MOVSD_LD,
+    SSE_MOVSD_ST,
+    SSE_XORPS,
+    SSE_ADDSD,
+    SSE_SUBSD,
+    SSE_MULSD,
+    SSE_DIVSD,
+    SSE_MINSD,
+    SSE_MAXSD,
+    MOVSX_R64_R32,
+    SSE_CVTSI2SS_64,
+    SSE_CVTSI2SD_64,
+    SSE_CVTTSS2SI_64,
+    SSE_CVTTSD2SI_64,
+    CMOV_R64_R64,
+    CMOV_R64_MEM,
 };
 
 pub const Operand = struct {
@@ -719,7 +712,6 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             try code.append(0x0F);
             try code.append(0x0B);
         },
-        // SSE packed single (no simd_prefix)
         .SSE_MOVUPS_LD => try emitSseOp(code, 0, 0x10, operands[0].reg, operands[1]),
         .SSE_MOVUPS_ST => try emitSseOp(code, 0, 0x11, operands[1].reg, operands[0]),
         .SSE_MOVAPS_LD => try emitSseOp(code, 0, 0x28, operands[0].reg, operands[1]),
@@ -737,7 +729,6 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             try emitSseOp(code, 0, 0xC6, operands[0].reg, operands[1]);
             try code.append(@as(u8, @intCast(operands[2].imm64 & 0xFF)));
         },
-        // SSE scalar single (prefix F3)
         .SSE_MOVSS_LD  => try emitSseOp(code, 0xF3, 0x10, operands[0].reg, operands[1]),
         .SSE_MOVSS_ST  => try emitSseOp(code, 0xF3, 0x11, operands[0].reg, operands[1]),
         .SSE_ADDSS     => try emitSseOp(code, 0xF3, 0x58, operands[0].reg, operands[1]),
@@ -791,7 +782,6 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             try code.append(modrm);
             try code.append(@as(u8, @intCast(operands[2].imm64 & 0xFF)));
         },
-        // SSE with 66 prefix
         .SSE_MOVD_LD   => try emitSseOp(code, 0x66, 0x6E, operands[0].reg, operands[1]),
         .SSE_MOVD_ST   => try emitSseOp(code, 0x66, 0x7E, operands[1].reg, operands[0]),
         .SSE_MOVQ_LD   => try emitMovqXmmGpr(code, operands[0].reg, operands[1]),
@@ -799,7 +789,6 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
         .SSE_MOVSD_LD  => try emitSseOp(code, 0xF2, 0x10, operands[0].reg, operands[1]),
         .SSE_MOVSD_ST  => try emitSseOp(code, 0xF2, 0x11, operands[0].reg, operands[1]),
         .SSE_XORPS     => try emitSseOp(code, 0, 0x57, operands[0].reg, operands[1]),
-        // SSE scalar double (prefix F2)
         .SSE_ADDSD     => try emitSseOp(code, 0xF2, 0x58, operands[0].reg, operands[1]),
         .SSE_SUBSD     => try emitSseOp(code, 0xF2, 0x5C, operands[0].reg, operands[1]),
         .SSE_MULSD     => try emitSseOp(code, 0xF2, 0x59, operands[0].reg, operands[1]),
@@ -839,8 +828,6 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
             const dst_reg = operands[0].reg;
             const m = operands[1];
             const cc = @as(u8, @intCast(operands[2].imm64 & 0xF));
-            // CMOVcc r64, m64: REX.W 0F 4x ModRM
-            // Use emitModrmSibDisp with prefix=0x0F, op=0x40|cc
             try emitModrmSibDisp(code, 0x48, 0x40 | cc, dst_reg, m, 0x0F);
         },
     }
@@ -868,8 +855,6 @@ fn emitSseOpRexW(code: *std.ArrayList(u8), simd_prefix: u8, opcode: u8, operands
 }
 
 fn emitMovqXmmGpr(code: *std.ArrayList(u8), dst_xmm: i16, src: Operand) !void {
-    // movq xmm, r/m64 (GPR -> XMM): 66 REX.W 0F 6E /r
-    // Отличается от F3 0F 7E (movq xmm, xmm): тут источник — регистр общего назначения
     try code.append(0x66);
     try emitModrmSibDisp(code, 0x48, 0x6E, dst_xmm, src, 0x0F);
 }
@@ -884,25 +869,23 @@ fn prefetchRipRel(code: *std.ArrayList(u8), reg: u8) !void {
 
 fn emitModrmSibDisp(code: *std.ArrayList(u8), rex_base: u8, op: u8, reg: i16, m: Operand, prefix: u8) !void {
     var rex = rex_base;
-    if (reg >= 8) rex |= 0x04; // REX.R
+    if (reg >= 8) rex |= 0x04;
     if (m.reg >= 8) {
-        rex |= 0x01; // REX.B for register-direct
+        rex |= 0x01;
     } else if (m.base_reg >= 0 and m.base_reg != 255) {
-        if (m.base_reg >= 8) rex |= 0x01; // REX.B for base register
+        if (m.base_reg >= 8) rex |= 0x01;
     }
-    if (m.index_reg >= 8) rex |= 0x02; // REX.X for index register
+    if (m.index_reg >= 8) rex |= 0x02;
     if (rex != 0) try code.append(0x40 | rex);
     if (prefix != 0) try code.append(prefix);
 
     try code.append(op);
 
     if (m.reg >= 0) {
-        // Register-direct: mod=11
         const modrm: u8 = 0xC0 | (@as(u8, @intCast(reg & 7)) << 3) | @as(u8, @intCast(m.reg & 7));
         try code.append(modrm);
-    } else if (m.index_reg >= 0 and m.index_reg != 4) {
-        // SIB addressing: [base + index*scale + disp]
-        const mod: u8 = if (m.disp == 0 and m.base_reg != 5) 0 else if (m.disp >= -128 and m.disp <= 127) 1 else 2;
+    } else if (m.index_reg >= 0 and (m.index_reg & 7) != 4) {
+        const mod: u8 = if (m.disp == 0 and (m.base_reg & 7) != 5) 0 else if (m.disp >= -128 and m.disp <= 127) 1 else 2;
         const modrm: u8 = mod << 6 | (@as(u8, @intCast(reg & 7)) << 3) | 4;
         try code.append(modrm);
         const scale_enc: u8 = switch (m.scale) { 1 => 0, 2 => 1, 4 => 2, 8 => 3, else => 0 };
@@ -915,18 +898,16 @@ fn emitModrmSibDisp(code: *std.ArrayList(u8), rex_base: u8, op: u8, reg: i16, m:
             try code.appendSlice(&disp_bytes);
         }
     } else if (m.base_reg == 255) {
-        // RIP-relative
         try code.append(0x05 | (@as(u8, @intCast(reg & 7)) << 3));
         const disp_bytes: [4]u8 = @bitCast(m.disp);
         try code.appendSlice(&disp_bytes);
     } else if (m.base_reg >= 0) {
-        const mod: u8 = if (m.disp == 0 and m.base_reg != 5) 0 else if (m.disp >= -128 and m.disp <= 127) 1 else 2;
+        const mod: u8 = if (m.disp == 0 and (m.base_reg & 7) != 5) 0 else if (m.disp >= -128 and m.disp <= 127) 1 else 2;
         const b = @as(u8, @intCast(m.base_reg & 7));
         if (b == 4) {
-            // RSP/R12 as base requires SIB byte
             const modrm: u8 = mod << 6 | (@as(u8, @intCast(reg & 7)) << 3) | 4;
             try code.append(modrm);
-            try code.append(0x24); // [rsp]
+            try code.append(0x24);
             if (mod == 1) {
                 try code.append(@as(u8, @bitCast(@as(i8, @intCast(m.disp)))));
             } else if (mod == 2) {
@@ -944,7 +925,6 @@ fn emitModrmSibDisp(code: *std.ArrayList(u8), rex_base: u8, op: u8, reg: i16, m:
             }
         }
     } else {
-        // Absolute displacement with no base (mod=00, rm=101)
         try code.append(0x04 | (@as(u8, @intCast(reg & 7)) << 3));
         const disp_bytes: [4]u8 = @bitCast(m.disp);
         try code.appendSlice(&disp_bytes);
@@ -1114,7 +1094,7 @@ fn decodeOne(bytes: []const u8) !DecodedInst {
     if (needs_modrm and mr.mod != 3) {
         if (mr.rm == 4) {
             if (pos >= bytes.len) return error.EndOfStream;
-            pos += 1; // skip SIB
+            pos += 1;
         }
         if (mr.mod == 1) { if (pos >= bytes.len) return error.EndOfStream; pos += 1; }
         else if (mr.mod == 2 or (mr.mod == 0 and mr.rm == 5)) { if (pos + 4 > bytes.len) return error.EndOfStream; pos += 4; }

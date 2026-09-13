@@ -68,17 +68,31 @@ pub const IselResult = struct {
 };
 
 pub fn iselFunction(mfunc: *const mir.MFunction, allocator: std.mem.Allocator) !IselResult {
-    const ra = try regalloc.allocRegs(mfunc, allocator);
+    var ra = try regalloc.allocRegs(mfunc, allocator);
+
+    var used_callee_saved = std.ArrayList(i16).init(allocator);
+    defer used_callee_saved.deinit();
+    regalloc.getUsedCalleeSaved(&ra, &used_callee_saved);
+    const push_base: u32 = if (used_callee_saved.items.len > 0)
+        (1 + @as(u32, @intCast(used_callee_saved.items.len))) * 8
+    else
+        8;
+
+    var spill_it = ra.spills.iterator();
+    while (spill_it.next()) |kv| {
+        try ra.spills.put(kv.key_ptr.*, kv.value_ptr.* - @as(i32, @intCast(push_base)));
+    }
 
     var alloca_offsets = OffsetMap.init(allocator);
     errdefer alloca_offsets.deinit();
     var local_size: u32 = 0;
+    const alloca_base: u32 = push_base + ra.spill_frame_size;
     for (mfunc.blocks.items) |*block| {
         for (block.instrs.items) |inst| {
             if (inst == .alloca) {
                 const aligned = (inst.alloca.size + 15) & ~@as(u32, 15);
                 local_size += aligned;
-                const off: i32 = -@as(i32, @intCast(local_size));
+                const off: i32 = -@as(i32, @intCast(alloca_base + local_size));
                 try alloca_offsets.put(switch (inst.alloca.dst) { .vreg => |v| v, else => 0 }, off);
             }
         }
@@ -115,7 +129,11 @@ pub fn encodeFunction(
     for (used_callee_saved.items) |reg| {
         try fm.callee_saved_gprs.append(reg);
     }
-    fm.local_size = local_size;
+    const push_base: u32 = if (used_callee_saved.items.len > 0)
+        (1 + @as(u32, @intCast(used_callee_saved.items.len))) * 8
+    else
+        8;
+    fm.local_size = local_size + push_base;
     fm.spill_count = if (ra.spill_frame_size > 0) @max(ra.spill_frame_size / 8, 1) else 0;
 
     try fm.emitPrologue(code);
@@ -302,7 +320,9 @@ pub fn emitCode(mfuncs: []const mir.MFunction) !EmitCodeResult {
         }
     }
 
-    for (mfuncs) |*mf| try mir_optimizer.optimize(@constCast(mf));
+    if (!isNoOptEnabled()) {
+        for (mfuncs) |*mf| try mir_optimizer.optimize(@constCast(mf));
+    }
 
     if (settings.debug_ir) {
         for (mfuncs) |*mf| {
@@ -398,6 +418,12 @@ pub fn emitCode(mfuncs: []const mir.MFunction) !EmitCodeResult {
 
 fn isX64DumpEnabled() bool {
     const val = std.process.getEnvVarOwned(std.heap.page_allocator, "BPC_DEBUG") catch return false;
+    defer std.heap.page_allocator.free(val);
+    return val.len > 0;
+}
+
+fn isNoOptEnabled() bool {
+    const val = std.process.getEnvVarOwned(std.heap.page_allocator, "BPC_NO_OPT") catch return false;
     defer std.heap.page_allocator.free(val);
     return val.len > 0;
 }

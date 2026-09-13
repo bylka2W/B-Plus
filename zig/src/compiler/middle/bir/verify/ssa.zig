@@ -87,7 +87,6 @@ pub fn verifySSA(
 
                 const vi = &func.value_info.items[op_val - 1];
                 if (vi.def.block == INVALID_ID) {
-                    // Allow function parameters (they have no defining instruction)
                     var is_param = false;
                     for (func.param_values) |pv| {
                         if (pv == op_val) { is_param = true; break; }
@@ -267,7 +266,6 @@ pub fn verifyPhis(
 
                 const inc_vi = &func.value_info.items[inc.value - 1];
                 if (inc_vi.def.block == INVALID_ID) {
-                    // Allow function parameters
                     var is_param = false;
                     for (func.param_values) |pv| {
                         if (pv == inc.value) { is_param = true; break; }

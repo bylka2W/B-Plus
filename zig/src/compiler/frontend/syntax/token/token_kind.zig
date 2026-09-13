@@ -1,9 +1,7 @@
 pub const TokenKind = enum(u16) {
-    // Special
     eof = 0,
     error_token,
 
-    // Literals
     int_literal,
     float_literal,
     string_literal,
@@ -14,11 +12,9 @@ pub const TokenKind = enum(u16) {
     false_literal,
     null_literal,
 
-    // Identifiers
     identifier,
     underscore,
 
-    // Keywords
     kw_fn,
     kw_let,
     kw_var,
@@ -91,7 +87,6 @@ pub const TokenKind = enum(u16) {
     kw_atomic,
     kw_volatile,
 
-    // Declarations
     kw_state,
     kw_entry,
     kw_kernel,
@@ -100,13 +95,11 @@ pub const TokenKind = enum(u16) {
     kw_forward,
     kw_use,
 
-    // Transitions
     kw_on,
     kw_always,
     kw_fire,
     kw_machine,
 
-    // Runtime
     kw_run,
     kw_print,
     kw_free,
@@ -116,15 +109,12 @@ pub const TokenKind = enum(u16) {
     kw_enter,
     kw_exit,
 
-    // Ownership
     kw_owned,
     kw_borrowed,
 
-    // FFI
     kw_metal,
     kw_cxx,
 
-    // Delimiters
     lparen,
     rparen,
     lbrace,
@@ -136,7 +126,6 @@ pub const TokenKind = enum(u16) {
     rangle,
     rangleq,
 
-    // Punctuation
     comma,
     semicolon,
     colon,
@@ -154,7 +143,6 @@ pub const TokenKind = enum(u16) {
     question,
     excl_mark,
 
-    // Operators
     plus,
     minus,
     star,
@@ -188,16 +176,13 @@ pub const TokenKind = enum(u16) {
     pipe_pipe,
     plus_plus,
 
-    // Whitespace
     newline,
     whitespace,
     tab,
 
-    // Comments
     line_comment,
     block_comment,
 
-    // Doc comments
     doc_comment_single,
     doc_comment_multi,
 

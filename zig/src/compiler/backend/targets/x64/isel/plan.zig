@@ -1,4 +1,3 @@
-///выбор инструкций для операций state machine в PLAN
 const std = @import("std");
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");

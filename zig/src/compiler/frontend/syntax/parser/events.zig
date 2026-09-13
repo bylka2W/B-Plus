@@ -166,7 +166,6 @@ pub fn buildFromEvents(tree: *GreenTree, events: []const Event, root_kind: Synta
                 try node_stack.items[node_stack.items.len - 1].children.append(.{ .node = n.node });
             },
             .error_event => {
-                // errors tracked separately
             },
         }
     }

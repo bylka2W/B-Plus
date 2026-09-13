@@ -137,7 +137,11 @@ pub const ExpressionParser = struct {
         }
 
         if (kind == .lbrace) {
-            self.parseBlockExpr(stream);
+            if (self.isArrayLiteralAhead(stream)) {
+                self.parseArrayLiteral(stream);
+            } else {
+                self.parseBlockExpr(stream);
+            }
             return;
         }
 
@@ -212,6 +216,23 @@ pub const ExpressionParser = struct {
                 if (stream.at(.identifier)) self.eatToken(stream);
                 self.events.finishNode();
             },
+            .float_literal => {
+                const text = stream.current().text;
+                if (text.len >= 2 and text[0] == '.') {
+                    var all_digits = true;
+                    for (text[1..]) |c| {
+                        if (c < '0' or c > '9') {
+                            all_digits = false;
+                            break;
+                        }
+                    }
+                    if (all_digits) {
+                        _ = self.events.startNode(.member_expr);
+                        self.eatToken(stream);
+                        self.events.finishNode();
+                    }
+                }
+            },
             .question => {
                 _ = self.events.startNode(.try_expr);
                 self.eatToken(stream);
@@ -258,12 +279,59 @@ pub const ExpressionParser = struct {
         self.events.finishNode();
     }
 
+    fn isArrayLiteralAhead(self: *ExpressionParser, stream: anytype) bool {
+        _ = self;
+        const start = stream.positionAsU32();
+        defer stream.setPosition(start);
+
+        var depth: u32 = 0;
+        while (!stream.at(.eof)) {
+            const kind = stream.current().kind;
+            if (kind == .lbrace) {
+                depth += 1;
+            } else if (kind == .rbrace) {
+                if (depth == 0) break;
+                depth -= 1;
+                if (depth == 0) return false;
+            } else if (kind == .semicolon and depth == 1) {
+                return false;
+            } else if (kind == .comma and depth == 1) {
+                return true;
+            }
+            _ = stream.advance();
+            stream.skipTrivia();
+        }
+        return false;
+    }
+
+    fn parseArrayLiteral(self: *ExpressionParser, stream: anytype) void {
+        _ = self.events.startNode(.array_literal_expr);
+        self.eatToken(stream); // {
+        while (!stream.at(.rbrace) and !stream.at(.eof)) {
+            self.parseExpression(stream);
+            if (stream.at(.comma)) self.eatToken(stream);
+        }
+        if (stream.at(.rbrace)) self.eatToken(stream);
+        self.events.finishNode();
+    }
+
     fn parseForExpr(self: *ExpressionParser, stream: anytype) void {
         _ = self.events.startNode(.for_expr);
         self.eatToken(stream);
-        if (stream.at(.identifier)) self.eatToken(stream);
-        if (stream.at(.kw_in)) self.eatToken(stream);
-        self.parseExpression(stream);
+        const is_clause = stream.at(.identifier) and stream.peek(1).kind == .eq;
+        if (is_clause) {
+            self.eatToken(stream);
+            self.eatToken(stream);
+            self.parseExpression(stream);
+            if (stream.at(.semicolon)) self.eatToken(stream);
+            self.parseExpression(stream);
+            if (stream.at(.semicolon)) self.eatToken(stream);
+            self.parseExpression(stream);
+        } else {
+            if (stream.at(.identifier)) self.eatToken(stream);
+            if (stream.at(.kw_in)) self.eatToken(stream);
+            self.parseExpression(stream);
+        }
         if (stream.at(.lbrace)) {
             self.parseBlockExpr(stream);
         }

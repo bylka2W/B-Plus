@@ -18,7 +18,6 @@ pub const PlaceId = ids.ThirPlaceId;
 pub const NO_VALUE = ValueId.INVALID;
 pub const INVALID_BLOCK = BlockId.INVALID;
 
-// ─── Literals ───
 pub const Literal = union(enum) {
     int: i64,
     float: f64,
@@ -27,7 +26,6 @@ pub const Literal = union(enum) {
     unit: void,
 };
 
-// ─── Binary operations ───
 pub const BinOp = enum {
     add, sub, mul, div, mod,
     eq, ne, lt, le, gt, ge,
@@ -35,12 +33,10 @@ pub const BinOp = enum {
     bitwise_and, bitwise_or, bitwise_xor, shl, shr,
 };
 
-// ─── Unary operations ───
 pub const UnOp = enum {
     negate, not, bitwise_not,
 };
 
-// ─── Cast kinds ───
 pub const CastKind = enum {
     int_extend_signed,
     int_extend_unsigned,
@@ -60,14 +56,12 @@ pub const CastKind = enum {
     unsize,
 };
 
-// ─── Storage class ───
 pub const Storage = enum {
     stack,
     local_reg,
     spill,
 };
 
-// ─── Value definition site ───
 pub const ValueDef = struct {
     ty: TypeId,
     storage: Storage,
@@ -76,7 +70,6 @@ pub const ValueDef = struct {
     span: SourceSpan = .{},
 };
 
-// ─── Place descriptor (for let-binding storage) ───
 pub const PlaceDesc = struct {
     ty: TypeId,
     storage: Storage,
@@ -84,7 +77,6 @@ pub const PlaceDesc = struct {
     span: SourceSpan,
 };
 
-// ─── Place (lvalue) ───
 pub const Place = struct {
     local: ValueId,
     projections: []const Projection,
@@ -102,7 +94,6 @@ pub const ThirCase = struct {
     target: BlockId,
 };
 
-// ─── THIR Expressions ───
 pub const ThirExpr = struct {
     span: SourceSpan,
     ty: TypeId,
@@ -228,7 +219,6 @@ pub const ThirExpr = struct {
     };
 };
 
-// ─── THIR Statements ───
 pub const ThirStmt = struct {
     span: SourceSpan,
     kind: Kind,
@@ -290,7 +280,6 @@ pub const ThirStmt = struct {
     };
 };
 
-// ─── Basic Block ───
 pub const BasicBlock = struct {
     label: []const u8,
     stmts: []const ThirStmt,
@@ -316,7 +305,6 @@ pub const BasicBlock = struct {
     };
 };
 
-// ─── THIR Function ───
 pub const ThirFunction = struct {
     name: SymbolId,
     name_str: []const u8,
@@ -348,7 +336,6 @@ pub const ThirFunction = struct {
     };
 };
 
-// ─── THIR Struct ───
 pub const ThirStruct = struct {
     name: SymbolId,
     def_id: DefId,
@@ -360,7 +347,6 @@ pub const ThirStruct = struct {
     };
 };
 
-// ─── THIR Enum ───
 pub const ThirEnum = struct {
     name: SymbolId,
     def_id: DefId,
@@ -373,7 +359,6 @@ pub const ThirEnum = struct {
     };
 };
 
-// ─── THIR Module ───
 pub const ThirModule = struct {
     allocator: Allocator,
     functions: std.ArrayList(ThirFunction),

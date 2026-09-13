@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ast = @import("../../frontend/ast.zig");
 const bir = @import("bir.zig");
@@ -69,11 +69,8 @@ pub fn lowerProgram(allocator: Allocator, program: *const ast.ProgramNode) !bir.
     var module = bir.Module.init(allocator);
     errdefer module.deinit();
 
-    // Инициализируем типы ДО первого прохода
     try ensureTypes(&module);
 
-    // Первый проход: собираем сигнатуры всех функций (имя -> тип возврата),
-    // чтобы при снижении тела каждой функции мы знали тип возврата остальных.
     var func_sig_map = std.StringHashMap(TypeId).init(allocator);
     defer func_sig_map.deinit();
     for (program.metal.func_defs.items) |func| {
@@ -104,21 +101,15 @@ const VarInfo = struct {
     is_param: bool = false,
 };
 
-/// Infer function return type from its body's return statements.
-/// Pre-scans body lines for `return expr` and uses simple literal inference.
-/// Falls back to t_i64 (B+ default) if no return found or can't infer.
 fn inferReturnType(module: *bir.Module, func: ast.EntryDecl) TypeId {
     _ = module;
     for (func.body_lines.items) |line| {
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
         if (!std.mem.startsWith(u8, trimmed, "return")) continue;
         const rest = std.mem.trim(u8, trimmed["return".len..], " \t\r\n");
-        if (rest.len == 0) continue; // bare `return` → void, keep scanning
-        // String literal
+        if (rest.len == 0) continue;
         if (rest[0] == '"') return t_ptr;
-        // Boolean literals
         if (std.mem.eql(u8, rest, "true") or std.mem.eql(u8, rest, "false")) return t_i1;
-        // Numeric literal
         var is_num = true;
         var has_dot = false;
         for (rest, 0..) |ch, i| {
@@ -129,7 +120,6 @@ fn inferReturnType(module: *bir.Module, func: ast.EntryDecl) TypeId {
         if (is_num and rest.len > 0) {
             return if (has_dot) t_f64 else t_i64;
         }
-        // For variables/expressions/function calls, default to i64
         return t_i64;
     }
     return t_void;
@@ -142,7 +132,6 @@ fn lowerFunction(
     func_sig_map: *const std.StringHashMap(TypeId),
 ) !void {
     try ensureTypes(module);
-    // B+ design: return type is optional. Infer from return expressions if not declared.
     const ret_type = if (func.return_type) |rt| try mapType(module, rt) else inferReturnType(module, func);
     const func_id = try module.addFunction(func.name, ret_type, .internal);
 
@@ -169,7 +158,6 @@ fn lowerFunction(
         .func_return_types = std.StringHashMap(TypeId).init(allocator),
         .loop_stack = std.ArrayList(LoopCtx).init(allocator),
     };
-    // Заполняем карту возвратов всех функций, чтобы вызовы знали типы
     var sig_it = func_sig_map.iterator();
     while (sig_it.next()) |entry| {
         try b.func_return_types.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -306,7 +294,6 @@ fn lowerStateEntry(
 
     for (state.variables.items) |v| {
         const resolved_type = v.type_name orelse blk: {
-            // Auto-infer from default value (B+ rules: int → i64, float → f64)
             if (v.default_value) |dv| {
                 if (dv.len > 0) {
                     var is_num = true;
@@ -479,8 +466,6 @@ const Builder = struct {
     }
 };
 
-/// Resolve the correct BIR Op for a binary operation based on operand types.
-/// Returns the BIR op or error if the operation is not valid for the given types.
 fn resolveBinOp(op_str: []const u8, ty: TypeId) !Op {
     const is_float = (ty == t_f32 or ty == t_f64);
     const is_int = (ty == t_i64 or ty == t_i32 or ty == t_i16 or ty == t_i8 or
@@ -536,6 +521,21 @@ fn resolveBinOp(op_str: []const u8, ty: TypeId) !Op {
     }
     if (std.mem.eql(u8, op_str, "||")) {
         if (is_bool) return .or_op;
+    }
+    if (std.mem.eql(u8, op_str, "&")) {
+        if (is_int or is_bool) return .and_op;
+    }
+    if (std.mem.eql(u8, op_str, "|")) {
+        if (is_int or is_bool) return .or_op;
+    }
+    if (std.mem.eql(u8, op_str, "^")) {
+        if (is_int or is_bool) return .xor_op;
+    }
+    if (std.mem.eql(u8, op_str, "<<")) {
+        if (is_int) return .shl;
+    }
+    if (std.mem.eql(u8, op_str, ">>")) {
+        if (is_int) return .shr;
     }
     std.log.err("type mismatch: operator '{s}' is not valid for this type", .{op_str});
     return BIRError.TypeError;
@@ -679,7 +679,6 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
         const lhs = std.mem.trim(u8, line[0..eq_idx], " \t\r\n");
         const rhs = std.mem.trim(u8, line[eq_idx + 1 ..], " \t\r\n");
         if (lhs.len > 0 and rhs.len > 0) {
-            // Check if this is a type annotation: name:type = value
             if (std.mem.indexOfScalar(u8, lhs, ':')) |colon_idx| {
                 const var_name = std.mem.trim(u8, lhs[0..colon_idx], " \t\r\n");
                 const type_name = std.mem.trim(u8, lhs[colon_idx + 1 ..], " \t\r\n");
@@ -701,7 +700,6 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
                     return;
                 }
             }
-            // Auto-infer: if variable doesn't exist, create it with inferred type
             if (b.getVar(lhs) == null) {
                 const val = try lowerExpr(b, rhs);
                 const inferred_type = try inferExprType(b, rhs);
@@ -820,6 +818,20 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
         return try b.emitNot(inner);
     }
 
+    if (t[0] == '~' and t.len > 1) {
+        const rest = t[1..];
+        const inner_expr = if (rest[0] == '(') blk: {
+            if (findParenEnd(rest, 0)) |pend| {
+                if (pend == rest.len - 1) break :blk std.mem.trim(u8, rest[1..pend], " \t\r\n");
+            }
+            break :blk rest;
+        } else rest;
+        const inner = try lowerExpr(b, inner_expr);
+        const ty = try inferExprType(b, inner_expr);
+        const minus_one = try b.emitConstInt(-1);
+        return b.emitOp(.xor_op, ty, &.{ inner, minus_one }, .{ .none = {} });
+    }
+
     if (std.mem.indexOfScalar(u8, t, '(')) |pp| {
         if (pp > 0) {
             const nm = std.mem.trim(u8, t[0..pp], " \t\r\n");
@@ -829,19 +841,17 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
         }
     }
 
-    const op_strs = [_][]const u8{ "||", "&&", "==", "!=", "<=", ">=", "<", ">", "+", "-", "*", "/", "%" };
+    const op_strs = [_][]const u8{ "||", "&&", "==", "!=", "<<", ">>", "<=", ">=", "<", ">", "+", "-", "*", "/", "%", "&", "|", "^" };
     for (op_strs) |op_str| {
         if (findBinOp(t, op_str)) |parts| {
             const l = try lowerExpr(b, parts.left);
             const r = try lowerExpr(b, parts.right);
             const lty = try inferExprType(b, parts.left);
             const rty = try inferExprType(b, parts.right);
-            // Both operands must have the same type
             if (lty != rty) {
                 std.log.err("type mismatch: binary operand types must match (got different types)", .{});
                 return BIRError.TypeError;
             }
-            // Resolve correct BIR op for the type
             const bir_op = try resolveBinOp(op_str, lty);
             return b.emitOp(bir_op, lty, &.{ l, r }, .{ .none = {} });
         }
@@ -915,12 +925,10 @@ fn lowerIf(b: *Builder, line: []const u8) anyerror!void {
 
     try b.emitCondBr(cond_val, then_id, else_id);
 
-    // Lower then body
     b.blk = then_id;
     try lowerBodyStr(b, body_str, ';');
     const then_term = b.terminated();
 
-    // Lower else body
     b.blk = else_id;
     const after_body = std.mem.trim(u8, rest[cb.body_end + 1 ..], " \t\r\n");
     if (after_body.len > 0 and std.mem.startsWith(u8, after_body, "else")) {
@@ -938,22 +946,17 @@ fn lowerIf(b: *Builder, line: []const u8) anyerror!void {
     const else_term = b.terminated();
 
     if (then_term and else_term) {
-        // Both branches terminate — no merge needed, no continuation
-        // Point b.blk to a terminated block so no more code is emitted
         b.blk = else_id;
     } else if (then_term and !else_term) {
-        // Only then terminates — else needs to jump to merge
         const merge_id = try b.newBlock("if_merge");
         try b.emitBr(merge_id);
         b.blk = merge_id;
     } else if (!then_term and else_term) {
-        // Only else terminates — then needs to jump to merge
         const merge_id = try b.newBlock("if_merge");
         b.blk = then_id;
         try b.emitBr(merge_id);
         b.blk = merge_id;
     } else {
-        // Neither terminates — both jump to merge
         const merge_id = try b.newBlock("if_merge");
         b.blk = then_id;
         try b.emitBr(merge_id);
@@ -980,7 +983,6 @@ fn lowerWhile(b: *Builder, line: []const u8) anyerror!void {
     if (cond_val == NO_VALUE) return;
     try b.emitCondBr(cond_val, body_id, exit_id);
 
-    //пушим контекст цикла чтобы break/continue знали куда прыгать
     try b.loop_stack.append(.{ .header_id = header_id, .exit_id = exit_id });
     defer _ = b.loop_stack.pop();
 
@@ -992,13 +994,11 @@ fn lowerWhile(b: *Builder, line: []const u8) anyerror!void {
 }
 
 fn lowerFor(b: *Builder, line: []const u8) anyerror!void {
-    //for i = 0; i < n; i = i + 1 { body }
     const rest = std.mem.trim(u8, line[4..], " \t\r\n");
     const cb = findBraceBlock(rest) orelse return;
     const header_str = std.mem.trim(u8, rest[0..cb.body_start - 1], " \t\r\n");
     const body_str = std.mem.trim(u8, rest[cb.body_start..cb.body_end], " \t\r\n");
 
-    //разбиваем по точке с запятой: init; cond; update
     var parts: [3][]const u8 = .{ "", "", "" };
     var part_idx: usize = 0;
     var depth: i32 = 0;
@@ -1021,7 +1021,6 @@ fn lowerFor(b: *Builder, line: []const u8) anyerror!void {
     const cond_str = parts[1];
     const update_str = parts[2];
 
-    //init
     if (init_str.len > 0) try lowerStmt(b, init_str);
 
     const header_id = try b.newBlock("for_header");
@@ -1031,7 +1030,6 @@ fn lowerFor(b: *Builder, line: []const u8) anyerror!void {
 
     try b.emitBr(header_id);
 
-    //условие
     b.blk = header_id;
     if (cond_str.len > 0) {
         const cond_val = try lowerExpr(b, cond_str);
@@ -1041,7 +1039,6 @@ fn lowerFor(b: *Builder, line: []const u8) anyerror!void {
         try b.emitBr(body_id);
     }
 
-    //тело цикла
     try b.loop_stack.append(.{ .header_id = update_id, .exit_id = exit_id });
     defer _ = b.loop_stack.pop();
 
@@ -1049,7 +1046,6 @@ fn lowerFor(b: *Builder, line: []const u8) anyerror!void {
     try lowerBodyStr(b, body_str, ';');
     if (!b.terminated()) try b.emitBr(update_id);
 
-    //update
     b.blk = update_id;
     if (update_str.len > 0) try lowerStmt(b, update_str);
     if (!b.terminated()) try b.emitBr(header_id);
@@ -1075,7 +1071,48 @@ fn lowerContinue(b: *Builder) anyerror!void {
     try b.emitBr(ctx.header_id);
 }
 
-fn lowerBodyStr(b: *Builder, body: []const u8, sep: u8) anyerror!void {
+fn isContinuationChar(c: u8) bool {
+    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '&' or c == '|' or c == '^' or c == '<' or c == '>';
+}
+
+fn mergeContinuations(alloc: Allocator, body: []const u8, sep: u8) ![]u8 {
+    var merged = std.ArrayList(u8).init(alloc);
+    var depth: i32 = 0;
+    var in_str = false;
+    var i: usize = 0;
+    while (i < body.len) {
+        const c = body[i];
+        if (c == '"') in_str = !in_str;
+        if (in_str or (c != sep and c != '{' and c != '}' and c != '(' and c != ')')) {
+            try merged.append(c);
+            i += 1;
+            continue;
+        }
+        if (c == '(' or c == '{') depth += 1;
+        if (c == ')' or c == '}') depth -= 1;
+        if (c == sep and depth == 0) {
+            var prev = i;
+            while (prev > 0 and (body[prev - 1] == ' ' or body[prev - 1] == '\t' or body[prev - 1] == '\r' or body[prev - 1] == '\n' or body[prev - 1] == sep)) : (prev -= 1) {}
+            var next = i + 1;
+            while (next < body.len and (body[next] == ' ' or body[next] == '\t' or body[next] == '\r' or body[next] == '\n')) : (next += 1) {}
+            const prev_is_op = prev > 0 and isContinuationChar(body[prev - 1]);
+            const next_is_op = next < body.len and isContinuationChar(body[next]);
+            if (prev_is_op or next_is_op) {
+                try merged.append(' ');
+            } else {
+                try merged.append(sep);
+            }
+            i += 1;
+            continue;
+        }
+        try merged.append(c);
+        i += 1;
+    }
+    return merged.items;
+}
+
+fn lowerBodyStr(b: *Builder, body_input: []const u8, sep: u8) anyerror!void {
+    const body = try mergeContinuations(b.alloc, body_input, sep);
     var pos: usize = 0;
     while (pos < body.len) {
         while (pos < body.len and (body[pos] == ' ' or body[pos] == '\t' or body[pos] == '\r' or body[pos] == '\n')) : (pos += 1) {}
@@ -1107,14 +1144,20 @@ fn lowerBodyStr(b: *Builder, body: []const u8, sep: u8) anyerror!void {
                 var stmt = std.mem.trim(u8, body[start..pos], " \t\r\n");
                 pos += 1;
                 start = pos;
-                //для for/while/if
                 const is_ctrl = stmt.len > 2 and (std.mem.startsWith(u8, stmt, "for ") or std.mem.startsWith(u8, stmt, "for(") or std.mem.startsWith(u8, stmt, "while ") or std.mem.startsWith(u8, stmt, "while(") or std.mem.startsWith(u8, stmt, "if ") or std.mem.startsWith(u8, stmt, "if("));
                 if (is_ctrl) {
+                    const glue: u8 = if (std.mem.startsWith(u8, stmt, "for ") or std.mem.startsWith(u8, stmt, "for(")) ';' else ' ';
                     var brace_depth: i32 = 0;
                     for (stmt) |ch| { if (ch == '{') brace_depth += 1; if (ch == '}') brace_depth -= 1; }
                     var found_open = std.mem.indexOfScalar(u8, stmt, '{') != null;
+                    var pending_body: bool = false;
                     while (pos < body.len) {
-                        if (found_open and brace_depth <= 0) break;
+                        if (found_open and brace_depth <= 0 and !pending_body) {
+                            var ahead = pos;
+                            while (ahead < body.len and (body[ahead] == ' ' or body[ahead] == '\t' or body[ahead] == '\r' or body[ahead] == '\n' or body[ahead] == sep)) : (ahead += 1) {}
+                            const is_else = ahead + 4 <= body.len and std.mem.eql(u8, body[ahead .. ahead + 4], "else");
+                            if (!is_else) break;
+                        }
                         while (pos < body.len and (body[pos] == ' ' or body[pos] == '\t' or body[pos] == '\r' or body[pos] == '\n')) : (pos += 1) {}
                         if (pos >= body.len) break;
                         const part_start = pos;
@@ -1128,9 +1171,11 @@ fn lowerBodyStr(b: *Builder, body: []const u8, sep: u8) anyerror!void {
                             pos += 1;
                         }
                         const part = std.mem.trim(u8, body[part_start..pos], " \t\r\n");
-                        if (part.len > 0) stmt = std.mem.concat(b.alloc, u8, &.{ stmt, ";", part }) catch stmt;
+                        if (part.len > 0) {
+                            stmt = std.mem.concat(b.alloc, u8, &.{ stmt, &.{glue}, part }) catch stmt;
+                            pending_body = std.mem.startsWith(u8, part, "else");
+                        }
                         if (!found_open) found_open = std.mem.indexOfScalar(u8, stmt, '{') != null;
-                        if (found_open and brace_depth <= 0) break;
                         if (pos < body.len and body[pos] == sep) { pos += 1; }
                     }
                 }
@@ -1183,8 +1228,8 @@ fn findBinOp(expr: []const u8, op: []const u8) ?BinParts {
         if (i + op.len >= expr.len) return null;
         if (std.mem.eql(u8, op, "=") and i + 1 < expr.len and expr[i + 1] == '=') continue;
         if (std.mem.eql(u8, op, "!") and i + 1 < expr.len and expr[i + 1] == '=') continue;
-        if (std.mem.eql(u8, op, "<") and i + 1 < expr.len and expr[i + 1] == '=') continue;
-        if (std.mem.eql(u8, op, ">") and i + 1 < expr.len and expr[i + 1] == '=') continue;
+        if (std.mem.eql(u8, op, "<") and i + 1 < expr.len and (expr[i + 1] == '=' or expr[i + 1] == '<')) continue;
+        if (std.mem.eql(u8, op, ">") and i + 1 < expr.len and (expr[i + 1] == '=' or expr[i + 1] == '>')) continue;
         if (std.mem.eql(u8, op, "&") and i + 1 < expr.len and expr[i + 1] == '&') continue;
         if (std.mem.eql(u8, op, "|") and i + 1 < expr.len and expr[i + 1] == '|') continue;
         const left = std.mem.trim(u8, expr[0..i], " \t\r\n");

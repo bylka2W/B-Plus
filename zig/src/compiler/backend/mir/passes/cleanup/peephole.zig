@@ -15,6 +15,18 @@ pub fn optimize(mfunc: *mir.MFunction) !void {
 
         var i: usize = 0;
         while (i < block.instrs.items.len) {
+            if (isPhDbg()) {
+                const stderr = std.io.getStdErr().writer();
+                stderr.print(";PH [pre {d}] {s} ", .{ i, @tagName(block.instrs.items[i]) }) catch {};
+                var it = map.iterator();
+                while (it.next()) |e| {
+                    switch (e.value_ptr.*) {
+                        .copy => |c| stderr.print("[v{d}=v{d}] ", .{ e.key_ptr.*, c }) catch {},
+                        .constant => |c| stderr.print("[v{d}={d}] ", .{ e.key_ptr.*, c }) catch {},
+                    }
+                }
+                stderr.print("\n", .{}) catch {};
+            }
             const inst = block.instrs.items[i];
             switch (inst) {
                 .mov => try handleMov(&map, block, &i),
@@ -243,12 +255,22 @@ fn handleIDiv(map: *std.AutoHashMap(u32, VRegVal), block: *mir.MBlock, ip: *usiz
 
     const new_divisor = resolveConstOp(map, m.divisor);
 
-    if (new_divisor == .imm and new_divisor.imm == 1) {
-        _ = block.instrs.orderedRemove(ip.*);
-        return;
+    const qv = vreg(m.quotient);
+    const rv = vreg(m.remainder);
+
+    if (new_divisor == .imm and new_divisor.imm == 1 and qv != null) {
+        if (rv == null or rv.? != qv.?) {
+            block.instrs.items[ip.*] = .{ .mov = .{ .dst = m.quotient, .src = m.dividend } };
+            if (rv != null) {
+                try block.instrs.insert(ip.* + 1, .{ .mov = .{ .dst = m.remainder, .src = .{ .imm = 0 } } });
+            }
+            ip.* += 1;
+            return;
+        }
     }
 
-    redefineVReg(map, vreg(m.quotient) orelse return);
+    if (qv != null) redefineVReg(map, qv.?);
+    if (rv != null) redefineVReg(map, rv.?);
 
     if (!operandEq(new_divisor, m.divisor)) {
         block.instrs.items[ip.*] = .{ .idiv = .{ .dividend = m.dividend, .divisor = new_divisor, .quotient = m.quotient, .remainder = m.remainder } };
@@ -322,6 +344,18 @@ fn handleRet(map: *std.AutoHashMap(u32, VRegVal), block: *mir.MBlock, ip: *usize
     switch (m) {
         .void_ret => {},
         .value => |v| {
+            if (isPhDbg()) {
+                const stderr = std.io.getStdErr().writer();
+                stderr.print("; PH ret v{d}: ", .{switch (v.operand) { .vreg => |vr| vr, else => 0 }}) catch {};
+                var it = map.iterator();
+                while (it.next()) |e| {
+                    switch (e.value_ptr.*) {
+                        .copy => |c| stderr.print("[v{d}=v{d}] ", .{ e.key_ptr.*, c }) catch {},
+                        .constant => |c| stderr.print("[v{d}={d}] ", .{ e.key_ptr.*, c }) catch {},
+                    }
+                }
+                stderr.print("\n", .{}) catch {};
+            }
             const new_val = resolveConstOp(map, v.operand);
             if (!operandEq(new_val, v.operand)) {
                 block.instrs.items[ip.*] = .{ .ret = .{ .value = .{ .operand = new_val, .dtype = v.dtype } } };
@@ -329,6 +363,12 @@ fn handleRet(map: *std.AutoHashMap(u32, VRegVal), block: *mir.MBlock, ip: *usize
         },
     }
     ip.* += 1;
+}
+
+fn isPhDbg() bool {
+    const val = std.process.getEnvVarOwned(std.heap.page_allocator, "BPC_DEBUG_PH") catch return false;
+    defer std.heap.page_allocator.free(val);
+    return val.len > 0;
 }
 
 fn handleCall(map: *std.AutoHashMap(u32, VRegVal), block: *mir.MBlock, ip: *usize) !void {

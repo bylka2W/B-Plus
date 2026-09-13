@@ -1,4 +1,3 @@
-///выбор инструкций для операций с числами с плавающей точкой на x64 через SSE
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");
 const OpCode = enc.OpCode;

@@ -220,7 +220,6 @@ pub const ThirToBir = struct {
             }
         }
 
-        // Map param THIR values to BIR param values (SSA, no allocas)
         for (0..func.params.len) |i| {
             const thir_vid = ThirValueId.new(@intCast(i));
             const bir_val = self.module.getFunction(func_id).param_values[i];
@@ -701,7 +700,6 @@ const Builder = struct {
                     ptr = try self.emitOp(.getelementptr, current_ty, &.{ ptr, idx }, .{ .none = {} });
                 },
                 .deref => {
-                    // ptr already holds the address — no-op for Place semantics
                 },
                 .downcast => |_| {},
             }

@@ -1,4 +1,3 @@
-//MIR core: универсальные типы
 
 pub const operand = @import("operand.zig");
 pub const opcode = @import("opcode.zig");

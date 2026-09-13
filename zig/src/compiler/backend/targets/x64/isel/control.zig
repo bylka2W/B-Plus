@@ -1,4 +1,3 @@
-///выбор инструкций управления потоком для x64: переходы вызовы возвраты и select
 const std = @import("std");
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");
@@ -32,10 +31,9 @@ pub fn selectTrap(ctx: *Ctx) !void {
 }
 
 pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
-    const int_arg_regs = [_]i16{ 1, 2, 8, 9 }; // RCX, RDX, R8, R9
-    const float_arg_regs = [_]i16{ 0, 1, 2, 3 }; // XMM0-XMM3
+    const int_arg_regs = [_]i16{ 1, 2, 8, 9 };
+    const float_arg_regs = [_]i16{ 0, 1, 2, 3 };
 
-    //определяет для каждого аргумента это целое число или float
     var int_idx: usize = 0;
     var float_idx: usize = 0;
     var gpr_src: [14]i16 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };

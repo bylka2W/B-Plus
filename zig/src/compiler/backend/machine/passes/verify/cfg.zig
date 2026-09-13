@@ -28,9 +28,6 @@ pub fn verifyCFG(func: *const machine.MFunction) VerifyError!void {
         };
         if (!has_term) return error.BlockNotTerminated;
 
-        // Collect successors from every branch in the block: MIR lowers
-        // cond_br to `jcc` followed by `jmp`, so looking only at the last
-        // instruction misses the jcc target.
         for (blk.instrs.items) |inst| {
             switch (inst) {
                 .jmp => |j| {

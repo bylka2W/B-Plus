@@ -24,7 +24,6 @@ const PreservedAnalyses = bir.PreservedAnalyses;
 const NO_VALUE = bir.NO_VALUE;
 const INVALID_ID = bir.INVALID_ID;
 
-// ─── Public pass constants (facade) ───
 
 pub const Mem2RegPass = bir_mem2reg.Mem2RegPass;
 pub const CFGSimplifyPass = bir_cfgsimplify.CFGSimplifyPass;
@@ -34,7 +33,6 @@ pub const UnrollPass = bir_unroll.UnrollPass;
 pub const IVStrengthReducePass = bir_ivopt.IVStrengthReducePass;
 pub const LICMPass = bir_licm.LICMPass;
 
-// ─── Dead Code Elimination ───
 
 pub const DCEPass = bir.Pass{
     .name = "dead-code-elimination",
@@ -112,7 +110,6 @@ fn isTerminator(op: Op) bool {
     };
 }
 
-// ─── Constant Folding ───
 
 pub const ConstantFoldingPass = bir.Pass{
     .name = "constant-folding",
@@ -244,7 +241,6 @@ fn foldConstantOp(func: *bir.Function, inst: *const Inst) ?ConstData {
     }
 }
 
-// ─── Common Subexpression Elimination ───
 
 pub const CSEPass = bir.Pass{
     .name = "cse",
@@ -424,7 +420,6 @@ fn replaceAllUsesWith(func: *bir.Function, old_val: bir.ValueId, new_val: bir.Va
     old_vi.uses.clearRetainingCapacity();
 }
 
-// ─── Global Value Numbering ───
 
 pub const GVNPass = bir.Pass{
     .name = "gvn",
@@ -603,7 +598,6 @@ fn computeVNKey(inst: *const Inst, vn_map: *const std.AutoHashMap(bir.ValueId, u
     return hasher.final();
 }
 
-// ─── Memory optimization passes ───
 
 pub const ForwardStoreToLoadPass = bir.Pass{
     .name = "forward-store-to-load",
@@ -700,7 +694,6 @@ fn runDeadStoreElimination(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
     return PreservedAnalyses.none();
 }
 
-// ─── Algebraic Simplification (InstCombine) ───
 
 pub const InstCombinePass = bir.Pass{
     .name = "instcombine",
@@ -717,7 +710,7 @@ fn runInstCombine(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
             for (func.blocks.items) |*block| {
                 var i: usize = 0;
                 while (i < block.instrs.items.len) {
-                    const idx = i; // snapshot index
+                    const idx = i;
                     const inst = &block.instrs.items[idx];
                     if (try simplifyBinaryInt(func, inst) or
                         try simplifyUnaryInt(func, inst) or
@@ -726,8 +719,6 @@ fn runInstCombine(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
                         changed = true;
                     } else if (try strengthReduceArith(func, inst, block, idx)) {
                         changed = true;
-                        // If a const was inserted before this instruction,
-                        // the instruction moved to idx+1. Don't skip it.
                         if (block.instrs.items.len > idx + 1) {
                             continue;
                         }
@@ -1027,7 +1018,6 @@ fn strengthReduceArith(func: *bir.Function, inst: *bir.Inst, block: *bir.BasicBl
 
     switch (inst.op) {
         .mul => {
-            // x * -1 → neg x
             for (inst.operands, 0..) |operand, idx| {
                 const other = if (idx == 0) inst.operands[1] else inst.operands[0];
                 if (getConstValue(func, operand)) |c| {
@@ -1039,7 +1029,6 @@ fn strengthReduceArith(func: *bir.Function, inst: *bir.Inst, block: *bir.BasicBl
                     }
                 }
             }
-            // x * 2^n (n >= 1) → x << n
             for (inst.operands, 0..) |operand, idx| {
                 const other = if (idx == 0) inst.operands[1] else inst.operands[0];
                 if (getConstValue(func, operand)) |c| {
@@ -1048,7 +1037,6 @@ fn strengthReduceArith(func: *bir.Function, inst: *bir.Inst, block: *bir.BasicBl
                         if (n > 1 and n & (n - 1) == 0) {
                             const shift: i64 = @intCast(@ctz(n));
                             const shift_val = try insertConstBefore(func, block, inst_idx, shift);
-                            // insertConstBefore shifted inst to inst_idx + 1
                             const moved = &block.instrs.items[inst_idx + 1];
                             moved.op = .shl;
                             moved.operands = try func.allocator.dupe(bir.ValueId, &.{ other, shift_val });
@@ -1060,14 +1048,12 @@ fn strengthReduceArith(func: *bir.Function, inst: *bir.Inst, block: *bir.BasicBl
             }
         },
         .div => {
-            // x / 1 → x
             if (getConstValue(func, inst.operands[1])) |c| {
                 if (c == .int and c.int == 1) {
                     replaceAllUsesWith(func, inst.result, inst.operands[0]);
                     return true;
                 }
             }
-            // x / 2^n → x >> n
             const dividend = inst.operands[0];
             if (getConstValue(func, inst.operands[1])) |c| {
                 if (c == .int and c.int > 1) {
@@ -1085,14 +1071,12 @@ fn strengthReduceArith(func: *bir.Function, inst: *bir.Inst, block: *bir.BasicBl
             }
         },
         .mod => {
-            // x % 1 → 0
             if (getConstValue(func, inst.operands[1])) |c| {
                 if (c == .int and c.int == 1) {
                     replaceAllUsesWith(func, inst.result, try makeConst(func, 0));
                     return true;
                 }
             }
-            // x % 2^n → x & (2^n - 1)
             const dividend = inst.operands[0];
             if (getConstValue(func, inst.operands[1])) |c| {
                 if (c == .int and c.int > 1) {
@@ -1148,7 +1132,6 @@ fn makeConst(func: *bir.Function, val: i64) !bir.ValueId {
         .operands = ops,
         .data = .{ .const_data = .{ .int = val } },
     };
-    // Insert before terminator (last instruction) to avoid ExtraTerminator
     const last_idx = block.instrs.items.len;
     if (last_idx > 0) {
         const last = block.instrs.items[last_idx - 1];
@@ -1187,7 +1170,6 @@ fn makeConstBool(func: *bir.Function, val: bool) !bir.ValueId {
     return vid;
 }
 
-// ─── Optimizer Pipeline ───
 
 pub const VerifyPass = bir.Pass{
     .name = "verify",

@@ -1,13 +1,10 @@
-﻿const std = @import("std");
+const std = @import("std");
 const Allocator = std.mem.Allocator;
 const bir = @import("../../bir.zig");
 const NO_VALUE = bir.NO_VALUE;
 
 pub const Edge = struct { from: bir.BlockId, to: bir.BlockId };
 
-/// Lightweight CFG wrapper: preds/succs live in BasicBlock directly.
-/// buildCFG populates block.preds and block.succs + computes RPO.
-/// Consumers access edges via blocks.items[id].preds / .succs.
 pub const CFG = struct {
     allocator: Allocator,
     entry: bir.BlockId,
@@ -19,7 +16,6 @@ pub const CFG = struct {
 };
 
 pub fn buildCFG(allocator: Allocator, func: *bir.Function) !CFG {
-    // Clear and rebuild preds/succs
     for (func.blocks.items) |*block| {
         block.preds.clearRetainingCapacity();
         block.succs.clearRetainingCapacity();
@@ -135,7 +131,6 @@ fn getRPOPos(cfg: *const CFG, bid: bir.BlockId) ?usize {
     return null;
 }
 
-// ─── Validation ───
 
 pub const ValidationError = error{
     EntryHasPredecessor,
@@ -192,7 +187,6 @@ fn isTerminator(op: bir.Op) bool {
     };
 }
 
-// ─── CFG Mutation Helpers ───
 
 pub fn getExitBlocks(cfg: *const CFG, func: *const bir.Function) std.ArrayList(bir.BlockId) {
     var exits = std.ArrayList(bir.BlockId).init(cfg.allocator);

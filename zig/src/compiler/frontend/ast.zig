@@ -95,7 +95,7 @@ pub const StructDef = struct {
 
 pub const VariableNode = struct {
     name: []const u8,
-    type_name: ?[]const u8,  // null = auto-infer type from value
+    type_name: ?[]const u8,
     default_value: ?[]const u8,
     is_fast_path: bool,
     cache_policy: ?[]const u8,
@@ -211,7 +211,6 @@ pub const ProgramNode = struct {
     pub fn deinit(self: *ProgramNode) void {
         const a = self.allocator;
 
-        // Metal
         for (self.metal.imports.items) |*imp| a.free(imp.path);
         self.metal.imports.deinit();
         for (self.metal.enums.items) |*e| e.members.deinit();
@@ -237,7 +236,6 @@ pub const ProgramNode = struct {
         self.metal.func_defs.deinit();
         self.metal.forwarders.deinit();
         for (self.metal.extern_cpp_fns.items) |*ef| {
-            a.free(ef.name);
             for (ef.parameters.items) |*p| { a.free(p.name); a.free(p.type_name); }
             ef.parameters.deinit();
             if (ef.return_type) |rt| a.free(rt);
@@ -245,7 +243,6 @@ pub const ProgramNode = struct {
         self.metal.extern_cpp_fns.deinit();
         self.metal.directives.deinit();
 
-        // Plan
         for (self.plan.states.items) |*s| {
             s.variables.deinit();
             s.transitions.deinit();
@@ -260,7 +257,6 @@ pub const ProgramNode = struct {
         self.plan.fire_events.deinit();
         if (self.plan.initial_state) |is| a.free(is);
 
-        // Metal
         for (self.metal.entries.items) |*e| {
             for (e.body_lines.items) |line| a.free(line);
             e.body_lines.deinit();

@@ -1,4 +1,3 @@
-///общий контекст и вспомогательные функции для модулей выбора инструкций x64
 const std = @import("std");
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");

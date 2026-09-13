@@ -126,8 +126,6 @@ pub fn findLoops(allocator: Allocator, _: *const bir_cfg.CFG, func: *const Funct
 
     for (raw_loops.items) |*lp| lp.depth = computeDepth(raw_loops.items, lp.header);
 
-    // Pre-allocate the arrays that LoopInfo will own.
-    // These may fail; raw_loops errdefer still covers loop bodies.
     const block_map = try allocator.alloc(?usize, n);
     errdefer allocator.free(block_map);
     for (0..n) |j| block_map[j] = null;
@@ -154,8 +152,6 @@ pub fn findLoops(allocator: Allocator, _: *const bir_cfg.CFG, func: *const Funct
     }
 
     const top_level_slice = try top_level.toOwnedSlice();
-    // raw_loops.toOwnedSlice() is the LAST fallible call — after this,
-    // all memory is owned by the returned LoopInfo or is already freed.
     const loops = try raw_loops.toOwnedSlice();
 
     return LoopInfo{

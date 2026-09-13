@@ -7,21 +7,26 @@ const mir_copy_prop = @import("cleanup/copy_prop.zig");
 const mir_verify = @import("verify.zig");
 const mir_addr_fold = @import("memory/addr_fold.zig");
 
-fn hasBackedge(mfunc: *const mir.MFunction) bool {
-    for (mfunc.blocks.items, 0..) |*block, bi| {
-        if (block.instrs.items.len == 0) continue;
-        const last = block.instrs.items[block.instrs.items.len - 1];
-        switch (last) {
-            .jcc => |j| { if (j.target <= bi) return true; },
-            .jmp => |j| { if (j.target <= bi) return true; },
-            else => {},
-        }
-    }
-    return false;
+fn envDebug(mfunc: *mir.MFunction) bool {
+    const val = std.process.getEnvVarOwned(mfunc.allocator, "BPC_DEBUG") catch return false;
+    defer mfunc.allocator.free(val);
+    return val.len > 0;
 }
 
 fn dumpMIR(mfunc: *const mir.MFunction, label: []const u8) void {
     std.debug.print("\n  [DUMP] {s} - function '{s}':\n", .{ label, mfunc.name });
+    for (mfunc.blocks.items, 0..) |block, bi| {
+        std.debug.print("    b{d} '{s}':\n", .{ bi, block.label });
+        for (block.instrs.items, 0..) |inst, ii| {
+            std.debug.print("      {d}: ", .{ii});
+            dumpInst(inst);
+            std.debug.print("\n", .{});
+        }
+    }
+}
+
+fn manager_dumpMIR_fmt(mfunc: *const mir.MFunction, label: []const u8, iter: usize) void {
+    std.debug.print("\n  [DUMP] {s} #{d} - function '{s}':\n", .{ label, iter, mfunc.name });
     for (mfunc.blocks.items, 0..) |block, bi| {
         std.debug.print("    b{d} '{s}':\n", .{ bi, block.label });
         for (block.instrs.items, 0..) |inst, ii| {
@@ -115,12 +120,15 @@ fn dumpOp(op: mir.MOperand) void {
     }
 }
 
+pub var debug_now: bool = false;
+
 pub fn optimize(mfunc: *mir.MFunction) !void {
-    const debug = blk: {
-        const val = std.process.getEnvVarOwned(mfunc.allocator, "BPC_DEBUG") catch { break :blk false; };
+    const debug = (debug_now) or blk: {
+        const val = std.process.getEnvVarOwned(mfunc.allocator, "BPC_DEBUG") catch break :blk false;
         defer mfunc.allocator.free(val);
-        break :blk hasBackedge(mfunc) and val.len > 0;
+        break :blk val.len > 0;
     };
+    defer debug_now = false;
 
     try mir_ssa_destroy.destroySSA(mfunc);
     try mir_verify.verifyNoPhis(mfunc);
@@ -137,10 +145,13 @@ pub fn optimize(mfunc: *mir.MFunction) !void {
     try mir_copy_prop.propagateCopies(mfunc);
     if (debug) dumpMIR(mfunc, "after copy_prop #1");
 
-    for (0..3) |_| {
+    for (0..3) |iter| {
         try mir_dce.dce(mfunc);
+        if (debug) manager_dumpMIR_fmt(mfunc, "loop dce", iter);
         try mir_peephole.optimize(mfunc);
+        if (debug) manager_dumpMIR_fmt(mfunc, "loop peephole", iter);
         try mir_copy_prop.propagateCopies(mfunc);
+        if (debug) manager_dumpMIR_fmt(mfunc, "loop copy_prop", iter);
     }
     try mir_dce.dce(mfunc);
     if (debug) dumpMIR(mfunc, "FINAL");

@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const bir = @import("../bir.zig");
 const mir = @import("../../../backend/mir/mir.zig");
 const settings = @import("../../../../compiler/settings.zig");
@@ -94,11 +94,10 @@ pub fn lowerStateMachine(allocator: std.mem.Allocator, mod: *const bir.Module, s
     errdefer mfunc.deinit();
     var next_vreg: u32 = 1;
 
-    const state_slot = allocVreg(&next_vreg);  // vreg 1 = state slot
+    const state_slot = allocVreg(&next_vreg);
 
     const init_st = &sm.states.items[sm.initial_state_idx];
 
-    // Block 0: entry — state_init, enter initial state, call entry function
     {
         var block = mir.MBlock{ .label = try allocator.dupe(u8, "entry"), .instrs = std.ArrayList(mir.MInst).init(allocator) };
         errdefer { allocator.free(block.label); block.instrs.deinit(); }
@@ -115,7 +114,6 @@ pub fn lowerStateMachine(allocator: std.mem.Allocator, mod: *const bir.Module, s
         try mfunc.blocks.append(block);
     }
 
-    // Block 1: event_loop — dispatch event, check transitions via cmp+jcc
     {
         var block = mir.MBlock{ .label = try allocator.dupe(u8, "event_loop"), .instrs = std.ArrayList(mir.MInst).init(allocator) };
         errdefer { allocator.free(block.label); block.instrs.deinit(); }
@@ -127,10 +125,9 @@ pub fn lowerStateMachine(allocator: std.mem.Allocator, mod: *const bir.Module, s
         try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = size_val }, .src = .{ .imm = 0 } } });
         try block.instrs.append(.{ .event_dispatch = .{ .dst = .{ .vreg = event_val }, .buf = .{ .vreg = buf_val }, .size = .{ .vreg = size_val } } });
 
-        // For each transition: cmp event, event_id → jcc to transition block
         for (sm.transitions.items, 0..) |t, ti| {
             const block_idx: u32 = @as(u32, @intCast(2 + ti));
-            _ = try allocator.dupe(u8, "");  // keep errdefer happy — no free needed
+            _ = try allocator.dupe(u8, "");
             try block.instrs.append(.{ .cmp = .{ .cc = .eq, .a = .{ .vreg = event_val }, .b = .{ .imm = @as(i64, @intCast(t.event_id)) } } });
             try block.instrs.append(.{ .jcc = .{ .cc = .eq, .target = block_idx } });
         }
@@ -139,7 +136,6 @@ pub fn lowerStateMachine(allocator: std.mem.Allocator, mod: *const bir.Module, s
         try mfunc.blocks.append(block);
     }
 
-    // Blocks 2+: transition blocks — state_exit, state_enter, call action, jmp back
     for (sm.transitions.items, 0..) |t, ti| {
         var block = mir.MBlock{ .label = try std.fmt.allocPrint(allocator, "trans_{d}", .{ti}), .instrs = std.ArrayList(mir.MInst).init(allocator) };
         errdefer { allocator.free(block.label); block.instrs.deinit(); }
@@ -189,7 +185,6 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
     var mfunc = mir.MFunction.init(allocator, bir_func.name);
     errdefer mfunc.deinit();
 
-    // Map BIR param values to MIR param vregs (so x64 codegen emits MOVs from ABI registers)
     {
         const mir_params = try allocator.alloc(mir.MOperand, bir_func.param_values.len);
         for (bir_func.param_values, 0..) |pv, i| {
@@ -513,6 +508,27 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     const rhs = inst.operands[1];
                     try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
                     try mblock.instrs.append(.{ .@"or" = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = rhs } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .xor_op => {
+                    if (result == NO_VALUE or inst.operands.len < 2) continue;
+                    const lhs = inst.operands[0];
+                    const rhs = inst.operands[1];
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
+                    try mblock.instrs.append(.{ .xor = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = rhs } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .shl, .shr, .shra => {
+                    if (result == NO_VALUE or inst.operands.len < 2) continue;
+                    const lhs = inst.operands[0];
+                    const rhs = inst.operands[1];
+                    try mblock.instrs.append(.{ .mov = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = lhs } } });
+                    const shift_inst: mir.MInst = if (inst.op == .shl) .{ .shl = .{ .dst = .{ .vreg = result }, .amount = .{ .vreg = rhs }, .uses_cl = false } } else if (inst.op == .shr) .{ .shr = .{ .dst = .{ .vreg = result }, .amount = .{ .vreg = rhs }, .uses_cl = false } } else .{ .sar = .{ .dst = .{ .vreg = result }, .amount = .{ .vreg = rhs }, .uses_cl = false } };
+                    try mblock.instrs.append(shift_inst);
                     const dt = birTypeToDataType(types, inst.ty);
                     try mfunc.putVReg(result, dt);
                 },

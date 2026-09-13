@@ -18,7 +18,6 @@ pub const Target = struct
 {
     name: []const u8,
 
-    ///переводит инструкцию MIR в инструкции конкретной платформы
     lowerInst: *const fn (
         ctx: *TargetContext,
         inst: mir.MInst,

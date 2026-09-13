@@ -1,4 +1,3 @@
-/// кодирования перехода x64
 const std = @import("std");
 const OpCode = @import("encoder.zig").OpCode;
 const Operand = @import("encoder.zig").Operand;

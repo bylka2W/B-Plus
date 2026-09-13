@@ -33,7 +33,6 @@ pub fn computeReachability(allocator: Allocator, function: *const thir.ThirFunct
 
     if (body.blocks.len == 0) return result;
 
-    // BFS from entry block
     var queue = std.ArrayList(BlockId).init(allocator);
     defer queue.deinit();
 

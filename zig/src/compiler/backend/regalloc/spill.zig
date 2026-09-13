@@ -45,6 +45,16 @@ pub fn spilledMemOp(ra: *const RegAllocResult, op: mir.MOperand) x64.Operand {
     return x64.Operand{ .base_reg = 5, .disp = off };
 }
 
+pub fn memOpForOperand(ra: *const RegAllocResult, op: mir.MOperand) ?x64.Operand {
+    const vreg = switch (op) {
+        .vreg => |v| v,
+        else => return null,
+    };
+    if (ra.remat.contains(vreg)) return null;
+    const off = ra.spills.get(vreg) orelse return null;
+    return x64.Operand{ .base_reg = 5, .disp = off };
+}
+
 pub fn loadSpilledOp(code: *std.ArrayList(u8), ra: *const RegAllocResult, op: mir.MOperand, scratch: i16) !void {
     const vreg = switch (op) {
         .vreg => |v| v,

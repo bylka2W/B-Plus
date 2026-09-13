@@ -267,6 +267,133 @@ pub fn computeLiveIntervals(
     var use_counts = std.AutoHashMap(u32, u32).init(allocator);
     defer use_counts.deinit();
 
+    var def_counts = std.AutoHashMap(u32, u32).init(allocator);
+    defer def_counts.deinit();
+
+    for (mfunc.blocks.items) |*block| {
+        for (block.instrs.items) |inst| {
+            var w: [2]u32 = .{ 0, 0 };
+            var wc: usize = 0;
+            switch (inst) {
+                .mov => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .add => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .sub => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .imul => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .idiv => |d| {
+                    w[0] = vregOf(d.quotient);
+                    w[1] = vregOf(d.remainder);
+                    wc = 2;
+                },
+                .@"and" => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .@"or" => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .xor => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .shl, .shr, .sar => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .not_op, .neg_op => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .setcc => |s| {
+                    w[0] = vregOf(s.dst);
+                    wc = 1;
+                },
+                .alloca => |a| {
+                    w[0] = vregOf(a.dst);
+                    wc = 1;
+                },
+                .load => |l| {
+                    w[0] = vregOf(l.dst);
+                    wc = 1;
+                },
+                .lea => |l| {
+                    w[0] = vregOf(l.dst);
+                    wc = 1;
+                },
+                .string_const => |s| {
+                    w[0] = vregOf(s.dst);
+                    wc = 1;
+                },
+                .call => |c| {
+                    if (!c.is_void) {
+                        w[0] = vregOf(c.dst);
+                        wc = 1;
+                    }
+                },
+                .phi => |p| {
+                    w[0] = vregOf(p.dst);
+                    wc = 1;
+                },
+                .sext_op, .zext_op, .trunc_op => |c| {
+                    w[0] = vregOf(c.dst);
+                    wc = 1;
+                },
+                .select => |s| {
+                    w[0] = vregOf(s.dst);
+                    wc = 1;
+                },
+                .fadd, .fsub, .fmul, .fdiv => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .fneg_op, .fsqrt_op => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .fcmp => |c| {
+                    w[0] = vregOf(c.dst);
+                    wc = 1;
+                },
+                .sitofp, .fptosi, .fpext, .fptrunc => |c| {
+                    w[0] = vregOf(c.dst);
+                    wc = 1;
+                },
+                .event_dispatch => |m| {
+                    w[0] = vregOf(m.dst);
+                    wc = 1;
+                },
+                .transition_check => |m| {
+                    w[0] = vregOf(m.result);
+                    wc = 1;
+                },
+                .guard_eval => |m| {
+                    w[0] = vregOf(m.result);
+                    wc = 1;
+                },
+                else => {},
+            }
+            var k: usize = 0;
+            while (k < wc) : (k += 1) {
+                if (w[k] != 0) {
+                    const gop = try def_counts.getOrPut(w[k]);
+                    if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
+                }
+            }
+        }
+    }
+
     var pos: usize = 0;
 
     for (mfunc.blocks.items) |*block| {
@@ -285,10 +412,14 @@ pub fn computeLiveIntervals(
                         try hints.put(vregOf(m.src), vregOf(m.dst));
                     }
                     if (vregOf(m.dst) != 0 and m.src == .imm) {
-                        if (m.src.imm == 0) {
-                            try remat_candidates.put(vregOf(m.dst), .zero);
-                        } else {
-                            try remat_candidates.put(vregOf(m.dst), .{ .imm64 = m.src.imm });
+                        const dst_vreg = vregOf(m.dst);
+                        const def_count = def_counts.get(dst_vreg) orelse 1;
+                        if (def_count == 1) {
+                            if (m.src.imm == 0) {
+                                try remat_candidates.put(dst_vreg, .zero);
+                            } else {
+                                try remat_candidates.put(dst_vreg, .{ .imm64 = m.src.imm });
+                            }
                         }
                     }
                 },

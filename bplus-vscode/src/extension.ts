@@ -71,7 +71,7 @@ class BplusLspClient {
         this.proc = cp.spawn(lspPath, [], { stdio: ["pipe", "pipe", "pipe"] });
         this.proc.stdout!.on("data", (d: Buffer) => this.onData(d));
         this.proc.stderr!.on("data", (d: Buffer) => console.error("[bplus-lsp]", d.toString()));
-        this.proc.on("error", () => { /* server missing; surface via warning in startLsp */ });
+        this.proc.on("error", () => {});
         this.request("initialize", { processId: process.pid, rootUri: null, capabilities: {} })
             .then(() => this.notify("initialized", {}))
             .catch(() => {});
@@ -160,7 +160,7 @@ class BplusLspClient {
 }
 
 function uriToPath(uri: string): string {
-    return uri.replace(/^file:\/\//, "");
+    return uri.replace(/^file:\/\
 }
 function uriToUri(uri: string): vscode.Uri {
     return vscode.Uri.parse(uri);

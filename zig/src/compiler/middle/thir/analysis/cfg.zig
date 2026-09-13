@@ -5,7 +5,6 @@ const ValueId = thir.ValueId;
 const BlockId = thir.BlockId;
 const INVALID_BLOCK = thir.INVALID_BLOCK;
 
-// ─── Edge types ───
 pub const EdgeKind = enum {
     normal,
     true_branch,
@@ -20,7 +19,6 @@ pub const Edge = struct {
     kind: EdgeKind,
 };
 
-// ─── CFG ───
 pub const Cfg = struct {
     allocator: Allocator,
     block_count: u32,
@@ -58,7 +56,6 @@ pub const Cfg = struct {
         self.allocator.free(self.dominated_by);
     }
 
-    /// Does block a dominate block b?
     pub fn dominates(self: *const Cfg, a: BlockId, b: BlockId) bool {
         if (a.index == b.index) return true;
         var current = b;
@@ -72,7 +69,6 @@ pub const Cfg = struct {
         return false;
     }
 
-    /// Is block a reachable from entry?
     pub fn isReachable(self: *const Cfg, block: BlockId) bool {
         for (self.reverse_post_order) |rpo_block| {
             if (rpo_block.index == block.index) return true;
@@ -81,7 +77,6 @@ pub const Cfg = struct {
     }
 };
 
-// ─── Build ───
 
 pub fn buildCfg(allocator: Allocator, func: *const thir.ThirFunction) !Cfg {
     const body = func.body orelse return emptyCfg(allocator);
@@ -90,7 +85,6 @@ pub fn buildCfg(allocator: Allocator, func: *const thir.ThirFunction) !Cfg {
     if (n == 0) return emptyCfg(allocator);
     if (!body.entry.isValid() or body.entry.index >= n) return emptyCfg(allocator);
 
-    // Build successor/predecessor/edge lists
     var succ_lists = try allocator.alloc(std.ArrayList(BlockId), n);
     errdefer {
         for (succ_lists) |*s| s.deinit();
@@ -143,7 +137,6 @@ pub fn buildCfg(allocator: Allocator, func: *const thir.ThirFunction) !Cfg {
         }
     }
 
-    // Convert to owned slices
     var pred_slices = try allocator.alloc([]const BlockId, n);
     errdefer allocator.free(pred_slices);
     for (pred_lists, 0..) |*p, i| {
@@ -156,7 +149,6 @@ pub fn buildCfg(allocator: Allocator, func: *const thir.ThirFunction) !Cfg {
         succ_slices[i] = try s.toOwnedSlice();
     }
 
-    // Free the temporary ArrayList arrays (contents transferred to slices above)
     for (succ_lists) |*s| s.deinit();
     allocator.free(succ_lists);
     for (pred_lists) |*p| p.deinit();
@@ -164,15 +156,12 @@ pub fn buildCfg(allocator: Allocator, func: *const thir.ThirFunction) !Cfg {
 
     const edges = try edge_list.toOwnedSlice();
 
-    // Compute reverse post order (only reachable blocks)
     const rpo = try computeRpo(allocator, body.entry, succ_slices);
     errdefer if (rpo.len > 0) allocator.free(rpo);
 
-    // Compute immediate dominators using iterative algorithm
     const idom = try computeIdom(allocator, rpo, pred_slices, n);
     errdefer if (idom.len > 0) allocator.free(idom);
 
-    // Build dominator tree children
     const tree_children = try buildDominatorTree(allocator, idom, n);
     errdefer {
         for (tree_children) |list| {
@@ -181,7 +170,6 @@ pub fn buildCfg(allocator: Allocator, func: *const thir.ThirFunction) !Cfg {
         allocator.free(tree_children);
     }
 
-    // Build dominated_by lists
     const dominated_by = try buildDominatedBy(allocator, tree_children, n);
 
     return Cfg{
@@ -211,9 +199,6 @@ fn emptyCfg(allocator: Allocator) Cfg {
     };
 }
 
-// ─── RPO computation ───
-// Postorder: visit children first, then append self.
-// RPO: reverse postorder = reverse of postorder.
 
 fn computeRpo(allocator: Allocator, entry: BlockId, succs: []const []const BlockId) ![]const BlockId {
     var visited = std.AutoHashMap(u32, void).init(allocator);
@@ -224,7 +209,6 @@ fn computeRpo(allocator: Allocator, entry: BlockId, succs: []const []const Block
 
     try dfsPostorder(entry, succs, &visited, &postorder);
 
-    // Reverse to get RPO
     std.mem.reverse(BlockId, postorder.items);
     return try postorder.toOwnedSlice();
 }
@@ -238,22 +222,17 @@ fn dfsPostorder(
     if (visited.contains(current.index)) return;
     try visited.put(current.index, {});
 
-    // Visit successors first (postorder)
     if (current.index < succs.len) {
         for (succs[current.index]) |succ| {
             try dfsPostorder(succ, succs, visited, postorder);
         }
     }
 
-    // Then append self
     try postorder.append(current);
 }
 
-// ─── Immediate dominator computation ───
-// Cooper-Harvey-Kennedy iterative algorithm.
 
 fn computeIdom(allocator: Allocator, rpo: []const BlockId, preds: []const []const BlockId, n: u32) ![]const BlockId {
-    // idom[entry] = entry; idom[x] = UNDEFINED for all others
     var idom = try allocator.alloc(BlockId, n);
     for (idom) |*d| d.* = INVALID_BLOCK;
     idom[rpo[0].index] = rpo[0];
@@ -261,13 +240,11 @@ fn computeIdom(allocator: Allocator, rpo: []const BlockId, preds: []const []cons
     var changed = true;
     while (changed) {
         changed = false;
-        // Skip entry block (index 0 in RPO)
         var i: usize = 1;
         while (i < rpo.len) : (i += 1) {
             const b = rpo[i];
             var new_idom: BlockId = INVALID_BLOCK;
 
-            // Find first predecessor with computed idom
             if (b.index < preds.len) {
                 for (preds[b.index]) |p| {
                     if (idom[p.index].isValid()) {
@@ -278,7 +255,6 @@ fn computeIdom(allocator: Allocator, rpo: []const BlockId, preds: []const []cons
             }
 
             if (new_idom.isValid()) {
-                // Intersect with other predecessors
                 if (b.index < preds.len) {
                     for (preds[b.index]) |p| {
                         if (idom[p.index].isValid() and p.index != new_idom.index) {
@@ -322,7 +298,6 @@ fn rpoIndex(rpo: []const BlockId, block: BlockId) usize {
     return std.math.maxInt(usize);
 }
 
-// ─── Dominator tree construction ───
 
 fn buildDominatorTree(allocator: Allocator, idom: []const BlockId, n: u32) ![]const []const BlockId {
     var children = try allocator.alloc(std.ArrayList(BlockId), n);
@@ -389,7 +364,6 @@ fn collectDominated(
     }
 }
 
-// ─── Dominance frontier ───
 
 pub const DominanceFrontier = struct {
     df: []const []const BlockId,
@@ -419,10 +393,8 @@ pub fn computeDF(allocator: Allocator, cfg: *const Cfg) !DominanceFrontier {
     for (0..cfg.block_count) |i| {
         const b = BlockId.new(@intCast(i));
 
-        // If b has multiple predecessors, it is a join point
         if (b.index < cfg.predecessors.len and cfg.predecessors[b.index].len >= 2) {
             for (cfg.predecessors[b.index]) |p| {
-                // Walk up dominator tree from p until we reach idom(b)
                 var runner = p;
                 while (runner.isValid() and runner.index != cfg.idom[b.index].index) {
                     try df_lists[runner.index].append(b);
@@ -443,7 +415,6 @@ pub fn computeDF(allocator: Allocator, cfg: *const Cfg) !DominanceFrontier {
     return .{ .df = result };
 }
 
-// ─── Loop detection ───
 
 pub const LoopInfo = struct {
     header: BlockId,
@@ -455,7 +426,6 @@ pub fn findLoops(allocator: Allocator, cfg: *const Cfg) ![]const LoopInfo {
     defer loops.deinit();
 
     for (cfg.edges) |edge| {
-        // A back edge: target dominates source
         if (cfg.dominates(edge.to, edge.from)) {
             try loops.append(.{
                 .header = edge.to,
@@ -467,7 +437,6 @@ pub fn findLoops(allocator: Allocator, cfg: *const Cfg) ![]const LoopInfo {
     return try loops.toOwnedSlice();
 }
 
-// ─── Tests ───
 
 test "Cfg: empty function" {
     const func = thir.ThirFunction{
@@ -516,12 +485,10 @@ test "Cfg: linear chain entry -> b1 -> exit" {
     try std.testing.expectEqual(@as(u32, 2), cfg.block_count);
     try std.testing.expectEqual(@as(usize, 2), cfg.reverse_post_order.len);
 
-    // idom[entry] = entry
     try std.testing.expectEqual(BlockId.new(0), cfg.idom[0]);
 }
 
 test "Cfg: if-merge diamond" {
-    // entry -> then, entry -> else, then -> merge, else -> merge
     const blocks = [_]thir.BasicBlock{
         .{ .label = "entry", .stmts = &.{}, .terminator = .{ .cond_br = .{ .cond = ValueId.new(0), .then = BlockId.new(1), .else_ = BlockId.new(2) } } },
         .{ .label = "then", .stmts = &.{}, .terminator = .{ .br = BlockId.new(3) } },
@@ -552,19 +519,16 @@ test "Cfg: if-merge diamond" {
 
     try std.testing.expectEqual(@as(u32, 4), cfg.block_count);
 
-    // idom[then] = entry, idom[else] = entry, idom[merge] = entry
     try std.testing.expectEqual(BlockId.new(0), cfg.idom[1]);
     try std.testing.expectEqual(BlockId.new(0), cfg.idom[2]);
     try std.testing.expectEqual(BlockId.new(0), cfg.idom[3]);
 
-    // entry dominates all
     try std.testing.expect(cfg.dominates(BlockId.new(0), BlockId.new(1)));
     try std.testing.expect(cfg.dominates(BlockId.new(0), BlockId.new(2)));
     try std.testing.expect(cfg.dominates(BlockId.new(0), BlockId.new(3)));
 }
 
 test "Cfg: loop header dominates body" {
-    // entry -> header, header -> body, body -> header, header -> exit
     const blocks = [_]thir.BasicBlock{
         .{ .label = "entry", .stmts = &.{}, .terminator = .{ .br = BlockId.new(1) } },
         .{ .label = "header", .stmts = &.{}, .terminator = .{ .cond_br = .{ .cond = ValueId.new(0), .then = BlockId.new(2), .else_ = BlockId.new(3) } } },
@@ -593,11 +557,8 @@ test "Cfg: loop header dominates body" {
     var cfg = try buildCfg(std.testing.allocator, &func);
     defer cfg.deinit();
 
-    // header dominates body
     try std.testing.expect(cfg.dominates(BlockId.new(1), BlockId.new(2)));
-    // entry dominates header
     try std.testing.expect(cfg.dominates(BlockId.new(0), BlockId.new(1)));
-    // entry dominates body
     try std.testing.expect(cfg.dominates(BlockId.new(0), BlockId.new(2)));
 }
 
@@ -662,7 +623,6 @@ test "Cfg: edges have correct kinds" {
     var cfg = try buildCfg(std.testing.allocator, &func);
     defer cfg.deinit();
 
-    // Should have 5 edges: entry->then, entry->else, then->merge, else->merge
     try std.testing.expectEqual(@as(usize, 4), cfg.edges.len);
     try std.testing.expectEqual(EdgeKind.true_branch, cfg.edges[0].kind);
     try std.testing.expectEqual(EdgeKind.false_branch, cfg.edges[1].kind);

@@ -1,4 +1,3 @@
-///проверяет x64 IR
 const std = @import("std");
 const ir = @import("../ir/inst.zig");
 const OpCode = ir.OpCode;

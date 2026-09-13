@@ -2,12 +2,10 @@ const token_kind_mod = @import("../token/token_kind.zig");
 const TokenKind = token_kind_mod.TokenKind;
 
 pub const SyntaxKind = enum(u16) {
-    // Special
     token = 0,
     error_token = 1,
     eof = 2,
 
-    // Literals
     int_literal = 10,
     float_literal = 11,
     string_literal = 12,
@@ -20,11 +18,9 @@ pub const SyntaxKind = enum(u16) {
     null_literal = 19,
     multiline_string_literal = 20,
 
-    // Identifiers
     identifier = 50,
     underscore = 51,
 
-    // Keywords (token-level)
     kw_fn = 60,
     kw_let = 61,
     kw_var = 62,
@@ -66,19 +62,16 @@ pub const SyntaxKind = enum(u16) {
     kw_void = 98,
     kw_bool = 99,
 
-    // Keywords — state machine
     kw_state = 314,
     kw_entry = 315,
     kw_on = 316,
     kw_always = 317,
     kw_parallel = 318,
 
-    // Keywords — GPU / compute
     kw_kernel = 319,
     kw_pipeline = 320,
     kw_forward = 321,
 
-    // Keywords — runtime
     kw_run = 322,
     kw_print = 323,
     kw_free = 324,
@@ -88,16 +81,13 @@ pub const SyntaxKind = enum(u16) {
     kw_enter = 328,
     kw_exit = 329,
 
-    // Keywords — ownership
     kw_owned = 330,
     kw_borrowed = 331,
 
-    // Keywords — modules / FFI
     kw_use = 332,
     kw_metal = 333,
     kw_cxx = 334,
 
-    // Keywords — missing from original (bitwise/logic)
     kw_i8 = 335,
     kw_i16 = 336,
     kw_i32 = 337,
@@ -129,7 +119,6 @@ pub const SyntaxKind = enum(u16) {
     kw_fire = 363,
     kw_machine = 364,
 
-    // Whitespace & Trivia
     whitespace = 100,
     newline = 101,
     line_comment = 102,
@@ -137,7 +126,6 @@ pub const SyntaxKind = enum(u16) {
     line_doc_comment = 104,
     block_doc_comment = 105,
 
-    // Punctuation tokens
     lparen = 120,
     rparen = 121,
     lbrace = 122,
@@ -162,7 +150,6 @@ pub const SyntaxKind = enum(u16) {
     tilde = 141,
     dollar = 142,
 
-    // Operator tokens
     plus = 150,
     minus = 151,
     star = 152,
@@ -195,7 +182,6 @@ pub const SyntaxKind = enum(u16) {
     pipe_pipe = 179,
     plus_plus = 180,
 
-    // Expressions (CST nodes)
     literal_expr = 200,
     identifier_expr = 201,
     binary_expr = 202,
@@ -220,8 +206,8 @@ pub const SyntaxKind = enum(u16) {
     try_expr = 221,
     await_expr = 222,
     type_cast = 223,
+    array_literal_expr = 224,
 
-    // Statements (CST nodes)
     expr_stmt = 300,
     let_stmt = 301,
     var_stmt = 302,
@@ -237,7 +223,6 @@ pub const SyntaxKind = enum(u16) {
     defer_stmt = 312,
     errdefer_stmt = 313,
 
-    // Declarations (CST nodes)
     fn_decl = 400,
     struct_decl = 401,
     enum_decl = 402,
@@ -247,7 +232,6 @@ pub const SyntaxKind = enum(u16) {
     import_decl = 406,
     export_decl = 407,
 
-    // Types (CST nodes)
     type_ref = 500,
     named_type = 501,
     pointer_type = 502,
@@ -258,7 +242,6 @@ pub const SyntaxKind = enum(u16) {
     optional_type = 507,
     error_type = 508,
 
-    // Patterns (CST nodes)
     identifier_pat = 600,
     wildcard_pat = 601,
     tuple_pat = 602,
@@ -266,7 +249,6 @@ pub const SyntaxKind = enum(u16) {
     range_pat = 604,
     literal_pat = 605,
 
-    // Items / Top level
     source_file = 700,
     function_item = 701,
     struct_item = 702,
@@ -287,7 +269,6 @@ pub const SyntaxKind = enum(u16) {
     type_param = 717,
     use_item = 718,
 
-    // Misc
     list = 800,
     tuple = 801,
     _,

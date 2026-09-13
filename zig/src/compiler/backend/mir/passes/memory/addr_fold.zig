@@ -3,32 +3,14 @@ const mir = @import("../../mir.zig");
 const MInst = mir.MInst;
 const MOperand = mir.MOperand;
 
-/// свертки адресов
-///
-///распознаёт вычисление адресов при переводе BIR в MIR и собирает из него LEA с адресом вида [base + index * scale + offset]
-///
-///отслеживает откуда берутся значения после mov, shl и add. также запоминает известные числа чтобы правильно определять сдвиги и смещения адресов
-///
-/// схема вычисления адреса: base + index*scale + disp
-///   mov v1, #3           ; сохраняем константу индекса  known_imm(3)
-///   mov v5, v2           ; копируем индекс copy(v2)
-///   shl v5, v_shift      ; умножаем индекс на 4 через сдвиг тобишь scaled(v2, 4)
-///   mov v6, v_base       ; копируем базовый адрес  copy(v1)
-///   add v6, v5           ; складываем base и index*4 addr(v1, v2, 4, 0)
-///   mov v7, v6           ; передаём вычисленный адрес дальше
-///   add v7, v_disp       ; добавляем смещение base + index*4 + disp - lea
 
 const Origin = union(enum) {
-    /// vreg хранит известное константное значение полученное из mov v_r, #imm
     known_imm: i64,
-    /// vreg хранит копию значения другого операнд полученную через mov v_r, v_s
     copy: MOperand,
-    /// vreg хранит значение исходного операнда грубо говоря умноженное на scale
     scaled: struct {
         source: MOperand,
         scale: u8,
     },
-    /// vreg хранит адрес в виде base + index*scale + disp
     addr: struct {
         base: MOperand,
         index: MOperand = .{ .imm = 0 },
@@ -52,7 +34,6 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
     var origin = std.AutoHashMap(u32, Origin).init(allocator);
     defer origin.deinit();
 
-    // отслеживаем происхождение значений
     var i: usize = 0;
     while (i < block.instrs.items.len) {
         const inst = block.instrs.items[i];
@@ -60,9 +41,9 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
         switch (inst) {
             .mov => |m| {
                 if (vregOf(m.dst)) |dv| {
+                    invalidateAliases(&origin, dv);
                     switch (m.src) {
                         .vreg => |sv| {
-                            // mov v_r, v_s: наследуем scaled/addr а то сохраняем как копию
                             if (origin.get(sv)) |o| {
                                 switch (o) {
                                     .scaled, .addr => try origin.put(dv, o),
@@ -83,7 +64,9 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
 
             .shl => |s| {
                 if (vregOf(s.dst)) |dv| {
+                    invalidateAliases(&origin, dv);
                     const shift_amt = resolveShiftAmount(s.amount, &origin) orelse {
+                        _ = origin.remove(dv);
                         i += 1;
                         continue;
                     };
@@ -109,8 +92,8 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                     i += 1;
                     continue;
                 };
+                invalidateAliases(&origin, dst_v);
 
-               //определяем источник значения это константа или другой vreg
                 const src_imm: ?i32 = blk: {
                     if (m.src == .imm) {
                         break :blk @intCast(m.src.imm);
@@ -126,7 +109,6 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                 };
 
                 if (src_imm) |imm_val| {
-                    // add v_r, known_imm сохраняем значение как смещение адреса
                     const prev = origin.get(dst_v);
                     if (prev) |p| {
                         switch (p) {
@@ -159,7 +141,6 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                                 continue;
                             },
                             .known_imm => {
-                               // константа плюс константа = константа
                                 try origin.put(dst_v, .{ .known_imm = @intCast(@as(i64, @intCast(p.known_imm)) +% @as(i64, @intCast(imm_val))) });
                                 i += 1;
                                 continue;
@@ -171,7 +152,6 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                     continue;
                 }
 
-                // add v_r, v_s: оба операнда — vreg, не удалось определить их как константы !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                 if (vregOf(m.src)) |sv| {
                     const prev_dst = origin.get(dst_v);
                     const prev_src = origin.get(sv);
@@ -204,8 +184,11 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                 i += 1;
             },
 
-            // Объединение LEA и ADD со смещением
             .lea => {
+                if (vregOf(block.instrs.items[i].lea.dst)) |ldv| {
+                    invalidateAliases(&origin, ldv);
+                    _ = origin.remove(ldv);
+                }
                 if (i + 1 < block.instrs.items.len) {
                     const next = block.instrs.items[i + 1];
                     if (next == .add and next.add.src == .imm) {
@@ -221,17 +204,21 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
                 i += 1;
             },
 
-            else => i += 1,
+            else => {
+                if (dstOf(inst)) |dv| {
+                    invalidateAliases(&origin, dv);
+                    _ = origin.remove(dv);
+                }
+                i += 1;
+            },
         }
     }
 
-    // Шаг 2 заменяем add v_r, #imm на LEA, если для v_r уже известен адрес
     i = 0;
     while (i < block.instrs.items.len) {
         const inst = block.instrs.items[i];
         if (inst == .add) {
             const a = inst.add;
-           // заменяем только если источник непосредственная константа или vreg с известным константным значением
             const is_imm_src = if (a.src == .imm) true else blk: {
                 if (vregOf(a.src)) |sv| {
                     if (origin.get(sv)) |o| {
@@ -260,7 +247,6 @@ fn foldBlock(block: *mir.MBlock, allocator: std.mem.Allocator) !void {
         i += 1;
     }
 
-   // аг 3 Заменяем add v_r, v_s на LEA, если для v_s известно масштабированное значение
     i = 0;
     while (i < block.instrs.items.len) {
         const inst = block.instrs.items[i];
@@ -298,6 +284,48 @@ fn vregOf(op: MOperand) ?u32 {
         .vreg => |v| v,
         else => null,
     };
+}
+
+fn dstOf(inst: MInst) ?u32 {
+    return switch (inst) {
+        .mov => |m| vregOf(m.dst),
+        .add => |m| vregOf(m.dst),
+        .sub => |m| vregOf(m.dst),
+        .imul => |m| vregOf(m.dst),
+        .idiv => |m| vregOf(m.quotient),
+        .@"and" => |m| vregOf(m.dst),
+        .@"or" => |m| vregOf(m.dst),
+        .xor => |m| vregOf(m.dst),
+        .shl => |m| vregOf(m.dst),
+        .shr => |m| vregOf(m.dst),
+        .sar => |m| vregOf(m.dst),
+        .not_op, .neg_op => |m| vregOf(m.dst),
+        .lea => |m| vregOf(m.dst),
+        .load => |m| vregOf(m.dst),
+        .alloca => |m| vregOf(m.dst),
+        .string_const => |m| vregOf(m.dst),
+        else => null,
+    };
+}
+
+fn invalidateAliases(origin: *std.AutoHashMap(u32, Origin), target: u32) void {
+    var keys: [256]u32 = undefined;
+    var count: usize = 0;
+    var it = origin.iterator();
+    while (it.next()) |e| {
+        const o = e.value_ptr.*;
+        const refs_target = switch (o) {
+            .copy => |c| vregOf(c) == target,
+            .scaled => |s| vregOf(s.source) == target,
+            .addr => |a| vregOf(a.base) == target or vregOf(a.index) == target,
+            else => false,
+        };
+        if (refs_target) {
+            keys[count] = e.key_ptr.*;
+            count += 1;
+        }
+    }
+    for (0..count) |i| _ = origin.remove(keys[i]);
 }
 
 fn resolveShiftAmount(amount: MOperand, origin: *const std.AutoHashMap(u32, Origin)) ?u8 {

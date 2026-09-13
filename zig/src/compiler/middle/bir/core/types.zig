@@ -115,7 +115,6 @@ pub const TypeTable = struct {
     }
 
     pub fn add(self: *TypeTable, kind: Type.Kind) !TypeId {
-        // Deduplicate: return existing ID if this kind already exists
         for (self.types.items, 0..) |t, i| {
             if (std.meta.eql(t.kind, kind)) return @intCast(i);
         }
@@ -164,7 +163,7 @@ pub const TypeTable = struct {
         const t = self.types.items[id];
         return switch (t.kind) {
             .void => 0,
-            .scalar => |sk| scalarBitSize(sk) / 8,
+            .scalar => |sk| if (sk == .i1) 8 else scalarBitSize(sk) / 8,
             .vector => |v| (scalarBitSize(v.scalar) / 8) * v.len,
             .matrix => |m| (scalarBitSize(m.scalar) / 8) * m.rows * m.cols,
             .pointer => 8,

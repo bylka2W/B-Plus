@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const parser = @import("../../compiler/frontend/parser/parser.zig");
 const coff = @import("../../compiler/backend/object/coff/coff.zig");
 const sema_mod = @import("../../compiler/frontend/sema/sema.zig");
@@ -7,7 +7,6 @@ const ver_pipeline = @import("../../compiler/middle/pipeline/pipeline.zig");
 const linker = @import("../../linker/linker.zig");
 const minrt_obj_bytes = @embedFile("../../runtime/minrt.obj");
 
-// --- v1: per-case return expectations ---
 pub const Expect = union(enum) {
     null_val: void,
     int_val: i64,
@@ -23,7 +22,6 @@ pub const CaseDesc = struct {
 pub const BuildType = enum { dll };
 pub const ResetMode = enum { per_case, per_test };
 
-// --- v2: Frame Snapshot Engine ---
 
 const FieldType = enum(u32) {
     INT = 0,
@@ -164,7 +162,6 @@ const DynLib = struct {
     }
 };
 
-// --- Parser helpers (reused from v1) ---
 
 fn countIndent(line: []const u8) usize {
     var n: usize = 0;
@@ -270,7 +267,6 @@ fn parseExpect(src: []const u8, pos: *usize) !Expect {
     return error.UnknownExpectKeyword;
 }
 
-// --- v2: Frame expect parser ---
 
 fn parseFrameExpect(src: []const u8, pos: *usize) !ExpectEntry {
     const kw = parseIdentifier(src, pos);
@@ -278,8 +274,7 @@ fn parseFrameExpect(src: []const u8, pos: *usize) !ExpectEntry {
         if (!expectChar(src, pos, '.')) return error.ExpectedDotAfterState;
         const field_name = parseIdentifier(src, pos);
         if (!expectChar(src, pos, '=')) return error.ExpectedEqInStateExpect;
-        if (expectChar(src, pos, '=')) {} // allow ==
-        // Determine if value is int or float by looking ahead for '.'
+        if (expectChar(src, pos, '=')) {}
         const val_pos = pos.*;
         skipSpaces(src, pos);
         var is_float = false;
@@ -307,14 +302,13 @@ fn parseFrameExpect(src: []const u8, pos: *usize) !ExpectEntry {
         if (!expectChar(src, pos, ']')) return error.ExpectedCloseBracket;
         const x = try std.fmt.parseInt(u32, x_str, 10);
         const y = try std.fmt.parseInt(u32, y_str, 10);
-        // Check for == or тЙИ
         skipSpaces(src, pos);
         if (pos.* < src.len and src[pos.*] == '=') {
             pos.* += 1;
             if (pos.* < src.len and src[pos.*] == '=') pos.* += 1;
             const val = @as(f32, @floatCast(try parseFloatValue(src, pos)));
             return ExpectEntry{ .image_pixel = .{ .name = img_name, .x = x, .y = y, .value = val } };
-        } else if (pos.* < src.len and src[pos.*] == 0x2248) { // тЙИ
+        } else if (pos.* < src.len and src[pos.*] == 0x2248) {
             pos.* += 1;
             const val = @as(f32, @floatCast(try parseFloatValue(src, pos)));
             const eps: f32 = 0.0001;
@@ -343,7 +337,6 @@ fn parseFrameDecl(src: []const u8, pos: *usize) !u32 {
     return idx;
 }
 
-// --- Main parser ---
 
 pub fn parseTestDesc(allocator: std.mem.Allocator, text: []const u8) !TestDesc {
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -371,7 +364,6 @@ pub fn parseTestDesc(allocator: std.mem.Allocator, text: []const u8) !TestDesc {
         const content = std.mem.trimLeft(u8, line, " \t");
 
         if (indent == 0) {
-            // Flush pending case/frame
             if (case_name) |cn| {
                 try cases.append(CaseDesc{
                     .name = cn,
@@ -399,12 +391,10 @@ pub fn parseTestDesc(allocator: std.mem.Allocator, text: []const u8) !TestDesc {
             test_name = try parseQuotedString(content, &pos);
             if (!expectChar(content, &pos, ':')) return error.ExpectedColonAfterTest;
         } else if (indent == 4) {
-            // Check for frame keyword
             var pos: usize = 0;
             const kw = parseIdentifier(content, &pos);
             if (std.mem.eql(u8, kw, "frame")) {
                 parse_frames = true;
-                // Flush pending case
                 if (case_name) |cn| {
                     try cases.append(CaseDesc{
                         .name = cn,
@@ -415,7 +405,6 @@ pub fn parseTestDesc(allocator: std.mem.Allocator, text: []const u8) !TestDesc {
                 }
                 case_name = null;
                 case_expect = null;
-                // Flush pending frame
                 if (frame_idx) |fi| {
                     try frames.append(FrameDesc{
                         .index = fi,
@@ -479,7 +468,6 @@ pub fn parseTestDesc(allocator: std.mem.Allocator, text: []const u8) !TestDesc {
         }
     }
 
-    // Flush final case/frame
     if (case_name) |cn| {
         try cases.append(CaseDesc{
             .name = cn,
@@ -517,7 +505,6 @@ pub fn parseTestDesc(allocator: std.mem.Allocator, text: []const u8) !TestDesc {
     };
 }
 
-// --- Compilation ---
 
 fn compileDll(allocator: std.mem.Allocator, source_path: []const u8, dll_path: []const u8) !void {
     return compileDllEx(allocator, source_path, dll_path);
@@ -577,7 +564,6 @@ fn compileDllEx(allocator: std.mem.Allocator, source_path: []const u8, dll_path:
     tmp_dir.deleteFile(rt_obj_name) catch {};
 }
 
-// --- v1: per-case return expectation helpers ---
 
 fn formatExpect(e: Expect, allocator: std.mem.Allocator) ![]const u8 {
     return switch (e) {
@@ -609,7 +595,6 @@ fn matchesExpect(val: i64, expect: Expect) bool {
     };
 }
 
-// --- v2: Snapshot capture ---
 
 const FIELD_RECORD_SIZE = 48;
 
@@ -652,7 +637,6 @@ fn captureState(state_base: [*]u8, fields: []const FieldEntry, allocator: std.me
                 break :blk .{ .image = ImageView{ .data = data, .stride = hdr.stride, .width = hdr.width, .height = hdr.height } };
             },
         };
-        // Dup name so HashMap owns keys independently from fields[] lifetime
         const key = try allocator.dupe(u8, f.name);
         try map.put(key, val);
     }
@@ -671,7 +655,6 @@ fn getSnapshotValue(snap: *const Snapshot, name: []const u8) ?SnapshotValue {
     return snap.fields.get(name);
 }
 
-// --- v2: Diff engine ---
 
 fn diffExpect(expect: ExpectEntry, snap: *const Snapshot, allocator: std.mem.Allocator) !ExpectResult {
     const desc = switch (expect) {
@@ -750,7 +733,6 @@ fn diffExpect(expect: ExpectEntry, snap: *const Snapshot, allocator: std.mem.All
     };
 }
 
-// --- v2: State diff engine ---
 
 const StateDiff = struct {
     field: []const u8,
@@ -768,7 +750,6 @@ fn snapshotValueEql(a: SnapshotValue, b: SnapshotValue) bool {
 
 fn diffSnapshots(before: *const Snapshot, after: *const Snapshot, allocator: std.mem.Allocator) ![]StateDiff {
     var list = std.ArrayList(StateDiff).init(allocator);
-    // Fields in after that differ from before
     var it = after.fields.iterator();
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
@@ -779,11 +760,9 @@ fn diffSnapshots(before: *const Snapshot, after: *const Snapshot, allocator: std
                 try list.append(StateDiff{ .field = name, .before = bv, .after = after_val });
             }
         } else {
-            // New field
             try list.append(StateDiff{ .field = name, .before = .{ .int = 0 }, .after = after_val });
         }
     }
-    // Fields in before that disappeared from after
     var it2 = before.fields.iterator();
     while (it2.next()) |entry| {
         const name = entry.key_ptr.*;
@@ -803,7 +782,6 @@ fn formatDiffValue(val: SnapshotValue, allocator: std.mem.Allocator) ![]const u8
     };
 }
 
-// --- v2: Timeline / Call Transition Model ---
 
 const CallSnapshot = struct {
     frame_index: u32,
@@ -814,9 +792,7 @@ const CallSnapshot = struct {
 };
 
 fn freeCallSnapshot(cs: *CallSnapshot, allocator: std.mem.Allocator) void {
-    // Free diffs array (field strings owned by snapshot, not freed here)
     allocator.free(cs.diffs);
-    // Free snapshot keys and HashMap
     var it = cs.after.fields.iterator();
     while (it.next()) |entry| allocator.free(entry.key_ptr.*);
     cs.after.fields.deinit();
@@ -867,11 +843,9 @@ fn runFrames(allocator: std.mem.Allocator, lib: *DynLib, frames: []const FrameDe
     var call_snapshots = std.ArrayList(CallSnapshot).init(allocator);
     var causal_edges = std.ArrayList(CausalEdge).init(allocator);
 
-    // Look up introspection exports
     const get_state_fn = (try lib.lookup("bpc_get_state")) orelse return error.MissingBpcGetState;
     const enum_fields_fn = (try lib.lookup("bpc_enum_fields")) orelse return error.MissingBpcEnumFields;
 
-    // Read field table once (it's constant after DLL load)
     const table_ptr_raw = enum_fields_fn();
     const table_ptr: [*]u8 = @ptrFromInt(@as(usize, @intCast(table_ptr_raw)));
     const fields = try readFieldTable(table_ptr, allocator);
@@ -880,11 +854,10 @@ fn runFrames(allocator: std.mem.Allocator, lib: *DynLib, frames: []const FrameDe
         allocator.free(fields);
     }
 
-    // Capture initial state before any frames
     const initial_ptr_raw = get_state_fn();
     const initial_base: [*]u8 = @ptrFromInt(@as(usize, @intCast(initial_ptr_raw)));
     var prev_snap = try captureState(initial_base, fields, allocator);
-    var own_prev = true; // we own prev_snap (it's the initial snapshot)
+    var own_prev = true;
 
     for (frames) |frame| {
         try writer.print("  FRAME {}:\n", .{frame.index});
@@ -902,15 +875,12 @@ fn runFrames(allocator: std.mem.Allocator, lib: *DynLib, frames: []const FrameDe
 
             _ = func();
 
-            // Capture state after this call
             const state_ptr_raw = get_state_fn();
             const state_base: [*]u8 = @ptrFromInt(@as(usize, @intCast(state_ptr_raw)));
             var after_call = try captureState(state_base, fields, allocator);
 
-            // Diffs attributed to THIS export
             const diffs = try diffSnapshots(&prev_snap, &after_call, allocator);
 
-            // Store as atomic CallSnapshot
             try call_snapshots.append(CallSnapshot{
                 .frame_index = frame.index,
                 .call_index = @as(u32, @intCast(call_i)),
@@ -919,19 +889,17 @@ fn runFrames(allocator: std.mem.Allocator, lib: *DynLib, frames: []const FrameDe
                 .diffs = diffs,
             });
 
-            // Print per-call timeline with its diffs
             try writer.print("    CALL {s}\n", .{call_name});
             if (diffs.len > 0) {
                 try printFrameDiffs(diffs, writer, allocator);
             }
 
-            // Advance: free prev_snap only if we own it (initial or orphaned)
             if (own_prev) {
                 var it = prev_snap.fields.iterator();
                 while (it.next()) |entry| allocator.free(entry.key_ptr.*);
                 prev_snap.fields.deinit();
             }
-            prev_snap = after_call; // now owned by call_snapshots (last entry)
+            prev_snap = after_call;
             own_prev = false;
         }
 
@@ -944,7 +912,6 @@ fn runFrames(allocator: std.mem.Allocator, lib: *DynLib, frames: []const FrameDe
             break;
         }
 
-        // Diff expects against final frame state (prev_snap = last call's after)
         for (frame.expects) |exp| {
             const er = try diffExpect(exp, &prev_snap, allocator);
             try expect_results.append(er);
@@ -968,7 +935,6 @@ fn runFrames(allocator: std.mem.Allocator, lib: *DynLib, frames: []const FrameDe
         });
     }
 
-    // Build causal graph from CallSnapshot diffs
     for (call_snapshots.items) |cs| {
         for (cs.diffs) |diff| {
             try causal_edges.append(CausalEdge{
@@ -981,19 +947,15 @@ fn runFrames(allocator: std.mem.Allocator, lib: *DynLib, frames: []const FrameDe
         }
     }
 
-    // Print causal graph after all frames
     if (causal_edges.items.len > 0) {
         try printCausalGraph(causal_edges.items, writer, allocator);
     }
 
-    // Cleanup: free call_snapshots (diffs first, then snapshots)
     for (call_snapshots.items) |*cs| freeCallSnapshot(cs, allocator);
     call_snapshots.deinit();
-    // Free causal edges
     for (causal_edges.items) |ce| allocator.free(ce.field);
     causal_edges.deinit();
 
-    // Free prev_snap if we still own it (should only happen with 0 frames)
     if (own_prev) {
         var it = prev_snap.fields.iterator();
         while (it.next()) |entry| allocator.free(entry.key_ptr.*);
@@ -1003,7 +965,6 @@ fn runFrames(allocator: std.mem.Allocator, lib: *DynLib, frames: []const FrameDe
     return frame_results.toOwnedSlice();
 }
 
-// --- Main test entry point ---
 
 pub fn runTest(allocator: std.mem.Allocator, source_full: []const u8, desc: TestDesc, writer: anytype) !TestResult {
     const dll_path = try std.fmt.allocPrint(allocator, "{s}.dll", .{source_full});
@@ -1011,7 +972,6 @@ pub fn runTest(allocator: std.mem.Allocator, source_full: []const u8, desc: Test
 
     const has_frames = desc.frames.len > 0;
 
-    // Step 1: compile
     try writer.print("  COMPILE: ", .{});
     compileDllEx(allocator, source_full, dll_path) catch |err| {
         try writer.print("FAIL ({any})\n", .{err});
@@ -1019,7 +979,6 @@ pub fn runTest(allocator: std.mem.Allocator, source_full: []const u8, desc: Test
     };
     try writer.print("OK\n", .{});
 
-    // Step 2: load
     try writer.print("  LOAD: ", .{});
     var lib = DynLib.open(dll_path) catch |err| {
         try writer.print("FAIL ({any})\n", .{err});
@@ -1028,8 +987,6 @@ pub fn runTest(allocator: std.mem.Allocator, source_full: []const u8, desc: Test
     try writer.print("OK\n", .{});
 
     if (has_frames) {
-        // --- v2: Frame-based test ---
-        // Set up trace buffer if trace export exists
         var trace_buf: ?[]u8 = null;
         const trace_slot: ?*align(1) u64 = if (try lib.lookup("bpc_get_trace_buf_slot")) |get_slot| blk: {
             const addr = get_slot();
@@ -1056,7 +1013,6 @@ pub fn runTest(allocator: std.mem.Allocator, source_full: []const u8, desc: Test
             try writer.print("    trace buf ptr={any}\n", .{@intFromPtr(buf.ptr)});
         }
 
-        // Print trace slot info (buffer is zeroed and ready for frame events)
 
         const frame_results = runFrames(allocator, &lib, desc.frames, writer) catch {
             if (trace_buf) |b| std.heap.page_allocator.free(b);
@@ -1064,7 +1020,6 @@ pub fn runTest(allocator: std.mem.Allocator, source_full: []const u8, desc: Test
             return TestResult{ .name = desc.name, .status = .@"error", .compile_ok = true, .load_ok = true, .cases = &.{}, .frames = &.{} };
         };
 
-        // Print trace event count if tracing was active
         if (trace_buf) |buf| {
             if (trace_slot) |slot| {
                 const bytes_written = slot.* - @intFromPtr(buf.ptr);
@@ -1077,7 +1032,6 @@ pub fn runTest(allocator: std.mem.Allocator, source_full: []const u8, desc: Test
         }
 
         lib.close();
-        // Determine overall status from frame results
         var any_fail = false;
         for (frame_results) |fr| {
             for (fr.expects) |er| {
@@ -1093,7 +1047,6 @@ pub fn runTest(allocator: std.mem.Allocator, source_full: []const u8, desc: Test
             .frames = frame_results,
         };
     } else {
-        // --- v1: Case-based test ---
         var case_results = std.ArrayList(CaseResult).init(allocator);
         var any_fail = false;
 

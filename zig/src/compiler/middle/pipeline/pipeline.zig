@@ -15,6 +15,7 @@ const bir_cpu = @import("../bir/lowering/cpu.zig");
 const mir_lower = @import("../../backend/machine/lowering/mir_lower.zig");
 const machine = @import("../../backend/machine/machine.zig");
 const thir = @import("../thir/thir.zig");
+const hir_dump = @import("../../frontend/hir/dump.zig");
 const plan_to_bir = @import("../../plan/lowering/plan_to_bir.zig");
 
 pub const PipelineError = error{
@@ -87,7 +88,6 @@ pub fn runVerifiedPipeline(allocator: Allocator, program: *const ast.ProgramNode
 }
 
 pub fn runVerifiedPipelineReport(allocator: Allocator, program: *const ast.ProgramNode, sema_result: *const sema_mod.SemaResult, type_engine: *TypeEngine, reporter: ?*const CheckReporter) !VerifiedPipelineResult {
-    // 1. Build HIR from AST
     var arena = hir_arena_mod.HirArena.init(allocator);
     defer arena.deinit();
 
@@ -98,17 +98,14 @@ pub fn runVerifiedPipelineReport(allocator: Allocator, program: *const ast.Progr
         try converter.convert();
     }
 
-    // 2. Verify HIR → VerifiedHIR
     const verified_hir = try verifier.hir_verifier.verifyHIR(&arena);
     _ = verified_hir;
     reportStage(reporter, "HIR");
 
-    // 2.5. Inject Plan entry functions into HIR before THIR lowering
     if (plan_to_bir.hasStateItems(&arena)) {
         try plan_to_bir.addEntryFunctions(&arena);
     }
 
-    // 3. Lower HIR → THIR
     var thir_module = thir.ThirModule.init(allocator);
     defer thir_module.deinit();
 
@@ -129,13 +126,11 @@ pub fn runVerifiedPipelineReport(allocator: Allocator, program: *const ast.Progr
         try ctx.lowerItem(@intCast(i));
     }
 
-    // 4. Verify THIR → VerifiedTHIR
     var thir_verifier = verifier.thir_verifier.ThirVerifier.init(allocator);
     defer thir_verifier.deinit();
     var verified_thir = try thir_verifier.verify(&thir_module);
     reportStage(reporter, "THIR");
 
-    // 5. Lower THIR → BIR (reads THIR bodies — ctx arena must be alive)
     const thir_mod = verified_thir.getModule();
     var thir_to_bir_lower = thir_to_bir.ThirToBir.init(allocator, thir_mod, &arena.types, &arena.items);
     defer thir_to_bir_lower.deinit();
@@ -143,15 +138,11 @@ pub fn runVerifiedPipelineReport(allocator: Allocator, program: *const ast.Progr
     bir_module.* = try thir_to_bir_lower.lower();
     errdefer bir_module.deinit();
 
-    // 5.5. Create Plan runtime main function
     if (plan_to_bir.hasStateItems(&arena)) {
         try plan_to_bir.createRuntimeMain(bir_module);
     }
 
-    // ctx.deinit() and arena.deinit() fire here via defer
-    // Order: ctx.deinit() (THIR body arena) → arena.deinit() (HIR arena)
 
-    // 6. Verify BIR → VerifiedBIR
     var bir_verifier = verifier.bir_verifier.BirVerifier.init(allocator);
     const verified_bir = try bir_verifier.verify(bir_module);
     reportStage(reporter, "BIR");

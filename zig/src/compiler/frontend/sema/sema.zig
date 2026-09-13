@@ -26,34 +26,26 @@ fn inferTypeFromValue(allocator: Allocator, default_value: []const u8) ![]const 
             }
         }
         
-        // String literal → string
         if (default_value[0] == '"' and default_value[default_value.len - 1] == '"') {
             return try allocator.dupe(u8, "string");
         }
         
-        // Boolean literals
         if (std.mem.eql(u8, default_value, "true") or std.mem.eql(u8, default_value, "false")) {
             return try allocator.dupe(u8, "bool");
         }
     }
     
-    // Default to i64 if can't infer (B+ default integer)
     return try allocator.dupe(u8, "i64");
 }
 
-/// Infer function return type from its body's return statements.
-/// Scans body lines for `return expr` and infers type from the expression.
-/// Falls back to "i64" (B+ default) if no return found or can't infer.
 fn inferReturnTypeName(func: ast.EntryDecl) []const u8 {
     for (func.body_lines.items) |line| {
         const trimmed = std.mem.trim(u8, line, " \t\r\n");
         if (!std.mem.startsWith(u8, trimmed, "return")) continue;
         const rest = std.mem.trim(u8, trimmed["return".len..], " \t\r\n");
-        if (rest.len == 0) continue; // bare `return` → void, keep scanning
-        // Try simple literal inference
+        if (rest.len == 0) continue;
         if (rest[0] == '"') return "string";
         if (std.mem.eql(u8, rest, "true") or std.mem.eql(u8, rest, "false")) return "bool";
-        // Numeric literal
         var is_num = true;
         var has_dot = false;
         for (rest, 0..) |ch, i| {
@@ -64,7 +56,6 @@ fn inferReturnTypeName(func: ast.EntryDecl) []const u8 {
         if (is_num and rest.len > 0) {
             return if (has_dot) "f64" else "i64";
         }
-        // For variables/expressions, default to i64
         return "i64";
     }
     return "void";
@@ -154,7 +145,6 @@ pub const SemaResult = struct {
 
 pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, file_path: []const u8) !SemaResult {
 
-    // ── Rich AST data stores (kept for detailed type info) ──
     var defined_funcs = std.StringHashMap(ast.EntryDecl).init(allocator);
     defer defined_funcs.deinit();
 
@@ -164,11 +154,9 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
     var defined_enums = std.StringHashMap(ast.EnumDecl).init(allocator);
     defer defined_enums.deinit();
 
-    // ── Symbol Table: replaces local_vars, local_var_types, defined_states ──
     var symtab = try scope_mod.ScopeTable.init(allocator);
     defer symtab.deinit();
 
-    // Register global symbols in root scope
     for (program.plan.states.items) |state| {
         if (symtab.isDefinedInCurrentScope(state.name)) {
             const ln = findLineNumber(src, state.name);
@@ -189,6 +177,16 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
         try defined_funcs.put(func.name, func);
     }
 
+    for (program.metal.extern_cpp_fns.items) |ext| {
+        if (symtab.isDefinedInCurrentScope(ext.name)) {
+            const ln = findLineNumber(src, ext.name);
+            std.log.err("{s}:{d}: error: duplicate function definition '{s}'", .{ file_path, ln, ext.name });
+            return SemaError.DuplicateDefinition;
+        }
+        const rt = ext.return_type orelse "void";
+        try symtab.define(ext.name, .function, ast.TypeId.fromName(rt), ext.return_type);
+    }
+
     {
         var struct_it = program.metal.struct_defs.iterator();
         while (struct_it.next()) |entry| {
@@ -207,7 +205,6 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
         try defined_enums.put(en.name, en);
     }
 
-    // ── Pass 2: Validate imports ──
     for (program.metal.imports.items) |imp| {
         const file = std.fs.cwd().openFile(imp.path, .{}) catch {
             const ln = findLineNumber(src, imp.path);
@@ -217,7 +214,6 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
         file.close();
     }
 
-    // ── Pass 3: Validate transitions & state bodies ──
     for (program.plan.states.items) |state| {
         for (state.transitions.items) |trans| {
             if (symtab.lookup(trans.target) == null) {
@@ -231,12 +227,10 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
         }
     }
 
-    // ── Pass 4: Validate function bodies & return counts ──
     for (program.metal.func_defs.items) |func| {
         try validateFuncBody(allocator, func, &symtab, &defined_funcs, &defined_structs, &defined_enums, file_path, src);
     }
 
-    // ── Build SemaResult with collected typed context ──
     var result = SemaResult{
         .allocator = allocator,
         .typed_vars = std.ArrayList(TypedVarInfo).init(allocator),
@@ -259,7 +253,6 @@ pub fn analyze(allocator: Allocator, program: ast.ProgramNode, src: []const u8, 
         try result.defined_enum_names.append(try allocator.dupe(u8, en.name));
     }
 
-    // Collect typed variables from symtab by walking all scopes
     try collectTypedVars(&symtab, &result);
 
     return result;
@@ -291,7 +284,6 @@ fn defineVarsFromStatement(
     file_path: []const u8,
     src: []const u8,
 ) !void {
-    // for init; cond; update { body } — define init variable
     if (std.mem.startsWith(u8, s, "for ") or std.mem.startsWith(u8, s, "for(")) {
         const rest = if (s[3] == ' ') s[4..] else s[4..];
         const header = if (std.mem.indexOfScalar(u8, rest, '{')) |brace| rest[0..brace] else rest;
@@ -322,7 +314,6 @@ fn defineVarsFromStatement(
         return;
     }
 
-    // var x:i32 = 10 (old syntax)
     if (std.mem.startsWith(u8, s, "var ")) {
         const rest = s["var ".len..];
         const name = extractVarName(rest);
@@ -337,7 +328,6 @@ fn defineVarsFromStatement(
         return;
     }
 
-    // x = 10 or x:i64 = 10 (auto-infer)
     if (std.mem.indexOfScalar(u8, s, '=')) |eq_idx| {
         const lhs = std.mem.trim(u8, s[0..eq_idx], " \t\r\n");
         if (std.mem.indexOfScalar(u8, lhs, ':')) |colon_idx| {
@@ -368,11 +358,9 @@ fn validateFuncBody(
     file_path: []const u8,
     src: []const u8,
 ) !void {
-    // Push a new scope for this function
     try parent_symtab.pushScope();
     defer parent_symtab.popScope();
 
-    // Register parameters in the function scope
     for (func.params.items) |param| {
         const type_id = ast.TypeId.fromName(param.type_name);
         try parent_symtab.define(param.name, .param, type_id, param.type_name);
@@ -386,7 +374,6 @@ fn validateFuncBody(
 
         if (std.mem.startsWith(u8, trimmed, "return")) return_count += 1;
 
-        //scan for top-level statements at depth 0
         var scan_depth: i32 = 0;
         var scan_pos: usize = 0;
         var scan_start: usize = 0;
@@ -408,7 +395,6 @@ fn validateFuncBody(
                         if (!is_ctrl) {
                             try validateBodyLine(allocator, s, parent_symtab, defined_funcs, defined_structs, defined_enums, file_path, src);
                         } else {
-                            //skip for/while/if body: scan to matching }
                             var skip_braces: i32 = 0;
                             var found_open = std.mem.indexOfScalar(u8, s, '{') != null;
                             for (s) |ch| { if (ch == '{') skip_braces += 1; if (ch == '}') skip_braces -= 1; }
@@ -452,9 +438,6 @@ fn validateFuncBody(
             }
         }
     }
-    // B+ design: return type is optional. If function has return statements
-    // but no explicit return type, the type is inferred from return expressions.
-    // No error needed here — the BIR frontend handles inference.
 }
 
 fn validateBody(
@@ -469,13 +452,10 @@ fn validateBody(
     file_path: []const u8,
     src: []const u8,
 ) !void {
-    // Push a new scope for the state entry body
     try parent_symtab.pushScope();
     defer parent_symtab.popScope();
 
-    // Register state variables
     for (state_vars) |v| {
-        // Auto-infer type if not specified
         const resolved_type_name = if (v.type_name) |tn| tn 
             else if (v.default_value) |dv| try inferTypeFromValue(allocator, dv)
             else "i32";
@@ -596,7 +576,6 @@ fn validateBodyLine(
 
     try validateVarRefs(line, symtab, defined_structs, defined_enums, file_path, src);
 
-    // Phase 1: Type checking
     try checkTypeAssignment(line, symtab, defined_structs, defined_enums, defined_funcs, file_path, src);
     try checkBinaryTypeMismatch(line, symtab, defined_structs, defined_enums, defined_funcs, file_path, src);
 }
@@ -636,7 +615,6 @@ fn validateVarRefs(
 
             if (after_ident.len > 0 and after_ident[0] == '(') continue;
 
-            // Dot access: EnumName.Value or var.field
             if (after_ident.len > 0 and after_ident[0] == '.') {
                 var dot_j: usize = 1;
                 while (dot_j < after_ident.len and (after_ident[dot_j] == ' ' or after_ident[dot_j] == '\t')) : (dot_j += 1) {}
@@ -648,7 +626,6 @@ fn validateVarRefs(
                     field_name = after_ident[val_start..dot_j];
                 }
 
-                // Enum value access: EnumName.Value
                 if (defined_enums.get(ident)) |enum_def| {
                     if (field_name.len > 0) {
                         var found = false;
@@ -666,7 +643,6 @@ fn validateVarRefs(
                     }
                 }
 
-                // Struct field access: var.field
                 if (symtab.lookup(ident)) |sym_entry| {
                     if (sym_entry.type_name) |vtype| {
                         if (defined_structs.get(vtype)) |struct_def| {
@@ -875,7 +851,6 @@ fn isOperator(ident: []const u8) bool {
     return false;
 }
 
-// ── Phase 1: Type Inference & Type Checking ──
 
 fn inferTypeFromLiteral(text: []const u8) ast.TypeId {
     const trimmed = std.mem.trim(u8, text, " \t\r\n");
@@ -908,23 +883,19 @@ fn inferTypeFromExpr(
     const literal = inferTypeFromLiteral(trimmed);
     if (literal != .unknown) return literal;
 
-    // Parenthesized expression: (expr)
     if (trimmed.len >= 2 and trimmed[0] == '(' and trimmed[trimmed.len - 1] == ')') {
         return inferTypeFromExpr(trimmed[1 .. trimmed.len - 1], symtab, defined_structs, defined_enums, defined_funcs);
     }
 
-    // Unary minus: -expr
     if (trimmed[0] == '-' and trimmed.len > 1 and std.ascii.isDigit(trimmed[1])) {
         return inferTypeFromLiteral(trimmed[1..]);
     }
 
-    // Check if it's a known variable via symbol table
     if (symtab.lookup(trimmed)) |sym_entry| {
         if (sym_entry.type_id != .unknown) return sym_entry.type_id;
         if (sym_entry.type_name) |tn| return ast.TypeId.fromName(tn);
     }
 
-    // Function call: look up return type from defined_funcs
     if (findFunctionCall(trimmed)) |call_info| {
         if (defined_funcs.get(call_info.name)) |func_def| {
             if (func_def.return_type) |rt| {
@@ -938,7 +909,6 @@ fn inferTypeFromExpr(
         return .unknown;
     }
 
-    // Dot access: EnumName.Value or var.field
     if (std.mem.indexOfScalar(u8, trimmed, '.')) |dot_idx| {
         if (dot_idx > 0 and dot_idx + 1 < trimmed.len) {
             const obj_name = std.mem.trim(u8, trimmed[0..dot_idx], " \t\r\n");
@@ -960,7 +930,6 @@ fn inferTypeFromExpr(
         }
     }
 
-    // Check for binary expression (a + b, a - b, etc.)
     const ops = [_][]const u8{ "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=" };
     for (ops) |op| {
         if (findBinOp(trimmed, op)) |parts| {
@@ -1014,7 +983,6 @@ fn checkTypeAssignment(
 ) !void {
     const trimmed = std.mem.trim(u8, line, " \t\r\n");
 
-    // "var x: Type = expr" — check if expr type matches Type
     if (std.mem.startsWith(u8, trimmed, "var ")) {
         const rest = trimmed["var ".len..];
         const vtype = extractVarType(rest);
@@ -1035,7 +1003,6 @@ fn checkTypeAssignment(
         }
     }
 
-    // "x = expr" — check if expr type matches x's declared type
     if (!std.mem.startsWith(u8, trimmed, "var ")) {
         if (std.mem.indexOfScalar(u8, trimmed, '=')) |eq_idx| {
             const lhs = std.mem.trim(u8, trimmed[0..eq_idx], " \t\r\n");
@@ -1061,7 +1028,6 @@ fn checkTypeAssignment(
     }
 }
 
-// ── Phase 1: Function argument type checking ──
 
 fn splitArgs(allocator: Allocator, args_str: []const u8) std.ArrayList([]const u8) {
     var result = std.ArrayList([]const u8).init(allocator);
@@ -1118,7 +1084,6 @@ fn checkFuncArgTypes(
     }
 }
 
-// ── Phase 1: Binary operation type mismatch checking ──
 
 fn checkBinaryTypeMismatch(
     line: []const u8,

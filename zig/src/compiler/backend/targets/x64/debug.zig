@@ -1,4 +1,3 @@
-﻿///отладочкааааааа 64
 const std = @import("std");
 const mir = @import("../../mir/mir.zig");
 const regalloc = @import("../../regalloc/regalloc.zig");

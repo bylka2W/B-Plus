@@ -13,6 +13,7 @@ pub const regForOp = @import("spill.zig").regForOp;
 pub const isSpilled = @import("spill.zig").isSpilled;
 pub const isRemat = @import("spill.zig").isRemat;
 pub const spilledMemOp = @import("spill.zig").spilledMemOp;
+pub const memOpForOperand = @import("spill.zig").memOpForOperand;
 pub const loadSpilledOp = @import("spill.zig").loadSpilledOp;
 pub const storeSpilledOp = @import("spill.zig").storeSpilledOp;
 pub const getUsedCalleeSaved = @import("spill.zig").getUsedCalleeSaved;
@@ -68,8 +69,7 @@ pub fn allocRegs(mfunc: *const mir.MFunction, allocator: std.mem.Allocator) !Reg
     const sorted = try liveness.sortIntervals(intervals, allocator);
     defer allocator.free(sorted);
 
-    try allocator_mod.applyConstraints(sorted, &constraints, &regs);
-    try allocator_mod.linearScanSplitting(sorted, call_positions.items, &use_points, &hints, &regs, &spills, &remat, &remat_candidates, allocator);
+    try allocator_mod.linearScanSplitting(sorted, call_positions.items, &hints, &regs, &spills, &remat, &remat_candidates, allocator);
 
     var max_spill: u32 = 0;
     var it = spills.valueIterator();

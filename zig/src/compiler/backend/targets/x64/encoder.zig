@@ -1,4 +1,3 @@
-/// x64 инструкция
 const std = @import("std");
 const ir = @import("ir/inst.zig");
 

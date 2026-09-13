@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const ast = @import("compiler/frontend/ast.zig");
 const parser = @import("compiler/frontend/parser/parser.zig");
 const pe = @import("compiler/backend/object/pe/pe.zig");
@@ -29,8 +29,6 @@ const minrt_obj_bytes = @embedFile("runtime/minrt.obj");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // Leak reports suppressed — BIR/MIR data structures are intentionally
-    // not freed; the OS reclaims all memory at process exit.
     const allocator = gpa.allocator();
 
     const args = try std.process.argsAlloc(allocator);
@@ -90,7 +88,6 @@ pub fn main() !void {
         src = stripped;
     }
 
-    // Test command: parse .bpt, run tests, report
     if (std.mem.eql(u8, command, "test")) {
         const test_text = try std.fs.cwd().readFileAlloc(allocator, input_path, std.math.maxInt(u32));
         defer allocator.free(test_text);
@@ -104,7 +101,6 @@ pub fn main() !void {
             }
             return err;
         };
-        // Resolve source path relative to .bpt directory
         const source_full = try std.fs.path.join(allocator, &.{ dir, desc.source });
         defer allocator.free(source_full);
 
@@ -127,17 +123,14 @@ pub fn main() !void {
         std.process.exit(if (result.status == .pass) 0 else 1);
     }
 
-    // HLSL mode: generate HLSL shader text
     if (std.mem.eql(u8, command, "hlsl")) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        // Pipeline description → BIR → HLSL
         {
             const pipeline_gen_m = @import("compiler/backend/mir/pipeline_gen.zig");
             const pipeline = pipeline_gen_m.parsePipeline(arena_alloc, src) catch {
-                // Old hlslgen fallback removed — use BIR pipeline
                 const stderr = std.io.getStdErr().writer();
                 try stderr.writeAll("Pipeline parse failed and legacy HLSLgen is removed. Use BIR pipeline.\n");
                 std.process.exit(1);
@@ -165,7 +158,6 @@ pub fn main() !void {
         }
     }
 
-    // IR mode: lower pipeline to BIR and dump it
     if (std.mem.eql(u8, command, "ir")) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
@@ -190,7 +182,6 @@ pub fn main() !void {
         return;
     }
 
-    // CFG mode: dump control flow graph for pipeline
     if (std.mem.eql(u8, command, "cfg")) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
@@ -220,7 +211,6 @@ pub fn main() !void {
         return;
     }
 
-    // DOM mode: dump dominator tree for pipeline
     if (std.mem.eql(u8, command, "dom")) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
@@ -250,7 +240,6 @@ pub fn main() !void {
         return;
     }
 
-    // LOOPS mode: dump loop hierarchy
     if (std.mem.eql(u8, command, "loops")) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
@@ -283,7 +272,6 @@ pub fn main() !void {
         return;
     }
 
-    // MIR mode: B+ source → BIR → MIR → x64 COFF object
     if (std.mem.eql(u8, command, "mir")) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
@@ -310,13 +298,11 @@ pub fn main() !void {
 
         const mfuncs = try bir_cpu.lowerModuleToMir(arena_alloc, &bir_module);
 
-        // Wrap in MIR module for Machine IR lowering
         var mir_funcs_list = std.ArrayList(mir.MFunction).init(arena_alloc);
         try mir_funcs_list.appendSlice(mfuncs);
         var mir_mod = mir.MModule{ .functions = mir_funcs_list, .allocator = arena_alloc };
         const mach_mod = try mir_lower.lowerModule(&mir_mod, arena_alloc);
 
-        // Dump Machine IR
         {
             const stdout = std.io.getStdOut().writer();
             for (mach_mod.functions.items) |mach_func| {
@@ -330,8 +316,6 @@ pub fn main() !void {
             }
         }
 
-        // Dump MIR instructions per block
-        // This is the path from main.zig pipeline, not used by bplus.zig
 
         const coff_result = try coff.emitCoff(mfuncs);
         defer coff_result.bytes.deinit();
@@ -348,7 +332,6 @@ pub fn main() !void {
         return;
     }
 
-    // LINK mode: link a COFF object file into an executable
     if (std.mem.eql(u8, command, "link")) {
         const linker = @import("linker/linker.zig");
 
@@ -356,7 +339,6 @@ pub fn main() !void {
         const base = input_path[0..ext_idx];
         const out_path = output_path orelse try std.fmt.allocPrint(allocator, "{s}.exe", .{base});
 
-        // Write embedded runtime object to a temp file
         const tmp_dir = std.fs.cwd();
         const rt_obj_name = ".bpc_minrt.obj";
         try tmp_dir.writeFile(.{ .sub_path = rt_obj_name, .data = minrt_obj_bytes });
@@ -371,7 +353,6 @@ pub fn main() !void {
             .extra_objs = &.{rt_obj_name},
         });
 
-        // Link succeeded: drop the import library / .exp that lld-link may emit.
         const base_ext = std.mem.lastIndexOfScalar(u8, out_path, '.') orelse out_path.len;
         std.fs.cwd().deleteFile(try std.fmt.allocPrint(allocator, "{s}.lib", .{out_path[0..base_ext]})) catch {};
         std.fs.cwd().deleteFile(try std.fmt.allocPrint(allocator, "{s}.exp", .{out_path[0..base_ext]})) catch {};
@@ -381,7 +362,6 @@ pub fn main() !void {
         return;
     }
 
-    // BPL mode: lower B+ source to BIR and dump
     if (std.mem.eql(u8, command, "bpl")) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
@@ -417,7 +397,6 @@ pub fn main() !void {
     var program = try p.parse();
     defer program.deinit();
 
-    // ── Semantic analysis pass ──
     const sema_result_main = sema_mod.analyze(allocator, program, src, input_path) catch |err| {
         std.log.err("semantic analysis failed: {}", .{err});
         std.process.exit(1);
@@ -427,7 +406,6 @@ pub fn main() !void {
     const is_dll = std.mem.eql(u8, command, "dll");
     const is_run = std.mem.eql(u8, command, "run");
 
-    // For .b+ files: use bir_bplus_frontend path (B+ native syntax: x = 10 without var)
     const is_bplus_file = std.mem.endsWith(u8, input_path, ".b+");
     if (is_bplus_file and (is_run or is_dll)) {
         var bir_module = try bir_bplus_frontend.lowerProgram(allocator, &program);
@@ -491,7 +469,6 @@ pub fn main() !void {
         return;
     }
 
-    // Verified pipeline: HIR → THIR → BIR(SSA) → MIR → COFF → link → PE/DLL
     var type_engine = type_sys.TypeEngine.init(allocator);
     defer type_engine.deinit();
 
@@ -518,17 +495,14 @@ pub fn main() !void {
     };
     defer if (output_path == null) allocator.free(out_path);
 
-    // Write COFF to temp file
     const tmp_dir = std.fs.cwd();
     const obj_name = try std.fmt.allocPrint(allocator, ".bpc_{s}.obj", .{std.fs.path.stem(input_path)});
     defer allocator.free(obj_name);
     try tmp_dir.writeFile(.{ .sub_path = obj_name, .data = coff_result.bytes.items });
 
-    // Write embedded runtime object
     const rt_obj_name = ".bpc_minrt.obj";
     try tmp_dir.writeFile(.{ .sub_path = rt_obj_name, .data = minrt_obj_bytes });
 
-    // Link with lld-link (EXE or DLL)
     const linker = @import("linker/linker.zig");
     try linker.link(allocator, .{
         .obj_path = obj_name,
@@ -540,7 +514,6 @@ pub fn main() !void {
         .extra_objs = &.{rt_obj_name},
     });
 
-    // Clean up temp artifacts
     const base_ext = std.mem.lastIndexOfScalar(u8, out_path, '.') orelse out_path.len;
     const lib_path = try std.fmt.allocPrint(allocator, "{s}.lib", .{out_path[0..base_ext]});
     defer allocator.free(lib_path);
@@ -556,7 +529,6 @@ pub fn main() !void {
         child.stdin_behavior = .Inherit;
         child.stdout_behavior = .Inherit;
         child.stderr_behavior = .Inherit;
-        // Mark launch so the runtime wrapper does not pause for a key.
         var env = try std.process.getEnvMap(allocator);
         defer env.deinit();
         try env.put("BPC_RUN", "1");

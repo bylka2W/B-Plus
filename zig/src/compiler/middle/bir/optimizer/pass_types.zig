@@ -1,7 +1,5 @@
 const std = @import("std");
 
-/// Analysis identifiers (bitmask-based).
-/// Dependencies: cfg → (post_dominators) → dominators → loops → scalar_evolution
 pub const AnalysisKind = enum(u8) {
     cfg,
     dominators,
@@ -17,8 +15,6 @@ pub const AnalysisKind = enum(u8) {
         return comptime std.meta.stringToEnum(AnalysisKind, name) orelse @compileError("unknown analysis: " ++ name);
     }
 
-    /// Returns true if preserving `this` implies preserving `other`
-    /// (e.g. preserving dominators implies preserving cfg).
     pub fn implies(self: AnalysisKind, other: AnalysisKind) bool {
         return switch (self) {
             .call_graph => other == .call_graph,
@@ -36,7 +32,6 @@ pub const AnalysisKind = enum(u8) {
 
 const BitMask = u16;
 
-/// PreservedAnalyses bitmask.
 pub const PreservedAnalyses = struct {
     mask: BitMask = 0,
 
@@ -61,7 +56,6 @@ pub const PreservedAnalyses = struct {
     }
 };
 
-/// Legacy ChangeSet (kept for backward compat, new Pass API uses PreservedAnalyses directly).
 pub const ChangeSet = struct {
     changed: bool = false,
     preserved: PreservedAnalyses = PreservedAnalyses.none(),

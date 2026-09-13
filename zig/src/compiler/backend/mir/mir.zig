@@ -1,12 +1,3 @@
-///публичный API MIR
-///
-///независимый от конкретной платформы слой машинного IR.
-///основные типы находятся в `core/`, а код для конкретных платформ — в `targets/`.
-///
-///юзать как 
-///   const mir = @import("mir.zig");
-///   var func = mir.MFunction.init(alloc, "foo");
-///   func.blocks.append(.{ .label = "entry", .instrs = ... });
 
 pub const core = @import("core/mir.zig");
 
@@ -62,7 +53,6 @@ pub const MBlock = core.MBlock;
 pub const MFunction = core.MFunction;
 pub const MModule = core.MModule;
 
-///проходы компилятора
 pub const passes = struct {
     pub const ssa_destroy = @import("passes/ssa/ssa_destroy.zig");
     pub const dce = @import("passes/cleanup/dce.zig");
@@ -73,7 +63,6 @@ pub const passes = struct {
     pub const manager = @import("passes/manager.zig");
 };
 
-///API платформы
 pub const target = struct {
     pub const Target = @import("../targets/common/target.zig").Target;
     pub const TargetContext = @import("../targets/common/target.zig").TargetContext;

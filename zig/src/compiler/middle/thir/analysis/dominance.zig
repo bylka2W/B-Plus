@@ -47,8 +47,6 @@ pub fn isValueReachableAt(
     value_def_block: BlockId,
     use_block: BlockId,
 ) bool {
-    // A value is reachable at use_block if value_def_block dominates use_block,
-    // OR if use_block is in the dominance frontier of value_def_block.
     if (dom_tree.dominates(value_def_block, use_block)) return true;
 
     const df_blocks = df.get(value_def_block);
@@ -58,7 +56,6 @@ pub fn isValueReachableAt(
     return false;
 }
 
-// ─── Tests ───
 
 fn makeFunction(blocks: []const thir.BasicBlock, entry: BlockId) thir.ThirFunction {
     return .{
@@ -101,14 +98,11 @@ test "DominanceTree: linear chain" {
     var tree = try buildDominatorTree(std.testing.allocator, &func);
     defer tree.deinit();
 
-    // entry dominates all
     try std.testing.expect(tree.dominates(BlockId.new(0), BlockId.new(1)));
     try std.testing.expect(tree.dominates(BlockId.new(0), BlockId.new(2)));
 
-    // b1 dominates b2
     try std.testing.expect(tree.dominates(BlockId.new(1), BlockId.new(2)));
 
-    // b2 does not dominate b1
     try std.testing.expect(!tree.dominates(BlockId.new(2), BlockId.new(1)));
 }
 
@@ -124,12 +118,10 @@ test "DominanceTree: diamond does not dominate merge" {
     var tree = try buildDominatorTree(std.testing.allocator, &func);
     defer tree.deinit();
 
-    // entry dominates all
     try std.testing.expect(tree.dominates(BlockId.new(0), BlockId.new(1)));
     try std.testing.expect(tree.dominates(BlockId.new(0), BlockId.new(2)));
     try std.testing.expect(tree.dominates(BlockId.new(0), BlockId.new(3)));
 
-    // then does NOT dominate merge (else is alternative path)
     try std.testing.expect(!tree.dominates(BlockId.new(1), BlockId.new(3)));
     try std.testing.expect(!tree.dominates(BlockId.new(2), BlockId.new(3)));
 }
@@ -146,14 +138,9 @@ test "DominanceTree: loop header dominates body" {
     var tree = try buildDominatorTree(std.testing.allocator, &func);
     defer tree.deinit();
 
-    // header dominates body
     try std.testing.expect(tree.dominates(BlockId.new(1), BlockId.new(2)));
-    // entry dominates header
     try std.testing.expect(tree.dominates(BlockId.new(0), BlockId.new(1)));
-    // entry dominates body
     try std.testing.expect(tree.dominates(BlockId.new(0), BlockId.new(2)));
-    // header does NOT dominate exit (exit reachable without going through body)
-    // Actually: exit is reachable from header via else branch, so header dominates exit
     try std.testing.expect(tree.dominates(BlockId.new(1), BlockId.new(3)));
 }
 
@@ -183,12 +170,8 @@ test "DominanceTree: idom values" {
     var tree = try buildDominatorTree(std.testing.allocator, &func);
     defer tree.deinit();
 
-    // idom(entry) = entry
     try std.testing.expectEqual(BlockId.new(0), tree.idom(BlockId.new(0)));
-    // idom(then) = entry
     try std.testing.expectEqual(BlockId.new(0), tree.idom(BlockId.new(1)));
-    // idom(else) = entry
     try std.testing.expectEqual(BlockId.new(0), tree.idom(BlockId.new(2)));
-    // idom(merge) = entry
     try std.testing.expectEqual(BlockId.new(0), tree.idom(BlockId.new(3)));
 }

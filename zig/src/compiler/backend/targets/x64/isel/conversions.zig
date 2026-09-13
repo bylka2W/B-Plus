@@ -1,4 +1,3 @@
-/// x64 type conversion instruction selection (sext/zext/trunc/sitofp/fptosi/fpext/fptrunc).
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");
 const OpCode = enc.OpCode;

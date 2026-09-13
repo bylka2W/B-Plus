@@ -16,7 +16,6 @@ pub const SCCPPass = bir.Pass{
     .run = runSCCP,
 };
 
-// ─── Lattice: Top (undefined) | Const | Bottom (overdefined) ───
 
 const Lattice = union(enum) {
     top: void,
@@ -44,7 +43,6 @@ const Lattice = union(enum) {
     }
 };
 
-// ─── SCCP Solver ───
 
 const InstOfEntry = struct { block: BlockId, idx: u32 };
 
@@ -53,18 +51,14 @@ const SCCPSolver = struct {
     func: *bir.Function,
     cfg: *const bir_cfg.CFG,
 
-    // Value lattice: indexed by ValueId - 1
     lattice: std.ArrayList(Lattice),
 
-    // Block executability
     executable: std.ArrayList(bool),
 
-    // Worklists
     value_worklist: std.ArrayList(ValueId),
     edge_worklist: std.ArrayList(bir_cfg.Edge),
     term_worklist: std.ArrayList(BlockId),
 
-    // Instructions that need re-evaluation, indexed by ValueId - 1
     inst_of: std.ArrayList(InstOfEntry),
 
     fn init(allocator: Allocator, func: *bir.Function, cfg: *const bir_cfg.CFG) !SCCPSolver {
@@ -82,7 +76,6 @@ const SCCPSolver = struct {
         try executable.resize(func.blocks.items.len);
         for (executable.items) |*e| e.* = false;
 
-        // Map value definitions to instructions
         for (func.blocks.items, 0..) |*block, bi| {
             for (block.instrs.items, 0..) |inst, ii| {
                 if (inst.result != NO_VALUE and inst.result <= num_values) {
@@ -91,7 +84,6 @@ const SCCPSolver = struct {
             }
         }
 
-        // Mark parameters as bottom (we don't know their values)
         for (func.param_values) |pv| {
             if (pv != NO_VALUE and pv <= num_values) {
                 lattice.items[pv - 1] = .{ .bottom = {} };
@@ -179,7 +171,6 @@ const SCCPSolver = struct {
                 self.value_worklist.append(user_val) catch {};
             }
         }
-        // Also re-evaluate terminators that might use this value
         for (self.func.blocks.items, 0..) |*block, bi| {
             if (block.instrs.items.len == 0) continue;
             const last = block.instrs.items[block.instrs.items.len - 1];
@@ -201,7 +192,6 @@ const SCCPSolver = struct {
                 }
             }
         }
-        // Defer terminator edge addition until terminator is evaluated
         self.term_worklist.append(bid) catch {};
     }
 
@@ -351,7 +341,6 @@ const SCCPSolver = struct {
     }
 };
 
-// ─── Apply results ───
 
 fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
     var changed = false;
@@ -373,7 +362,6 @@ fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
             const lat = solver.lattice.items[inst.result - 1];
 
             if (lat == .int_const and inst.op != .@"const") {
-                // Fold to constant
                 inst.deinit(func.allocator);
                 const ops = try func.allocator.dupe(ValueId, &.{});
                 inst.op = .@"const";
@@ -397,8 +385,6 @@ fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
         }
     }
 
-    // Remove unreachable blocks and remap all block references
-    // Step 1: Build remap table (old_index -> new_index, or null for removed)
     var remap = std.ArrayList(?usize).init(func.allocator);
     defer remap.deinit();
     try remap.resize(func.blocks.items.len);
@@ -413,7 +399,6 @@ fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
         }
     }
 
-    // Step 2: Fix terminators in executable predecessors (cond_br → br)
     for (func.blocks.items) |*block| {
         if (block.instrs.items.len == 0) continue;
         const last = &block.instrs.items[block.instrs.items.len - 1];
@@ -434,7 +419,6 @@ fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
         }
     }
 
-    // Step 3: Clean phi incoming — remove entries that reference dead blocks
     for (func.blocks.items) |*block| {
         for (block.instrs.items) |*inst| {
             if (inst.op != .phi) continue;
@@ -449,11 +433,10 @@ fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
         }
     }
 
-    // Step 4: Remove dead blocks from the list
     var wi: usize = func.blocks.items.len;
     while (wi > 0) {
         wi -= 1;
-        if (wi == 0) continue; // never remove entry
+        if (wi == 0) continue;
         if (remap.items[wi] == null) {
             func.blocks.items[wi].deinit(func.allocator);
             _ = func.blocks.orderedRemove(wi);
@@ -461,7 +444,6 @@ fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
         }
     }
 
-    // Step 5: Remap all block references in terminators, phi incoming, and value_info
     for (func.blocks.items) |*block| {
         if (block.instrs.items.len == 0) continue;
         const last = &block.instrs.items[block.instrs.items.len - 1];
@@ -488,8 +470,6 @@ fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
         }
     }
 
-    // Step 6: Remap value_info def positions — block indices shifted after removal
-    // Also rebuild def for folded constants since instruction ops changed
     for (func.value_info.items) |*vi| {
         const old_block = vi.def.block;
         if (old_block < func.blocks.items.len + remap.items.len) {
@@ -497,7 +477,7 @@ fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
                 if (remap.items[old_block]) |new_blk| {
                     vi.def.block = @intCast(new_blk);
                 } else {
-                    vi.def.block = 0; // was in dead block, mark as entry (safe)
+                    vi.def.block = 0;
                 }
             }
         }
@@ -512,7 +492,6 @@ fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
     return changed;
 }
 
-// ─── Pass entry point ───
 
 fn runSCCP(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
     const module = ctx.module;

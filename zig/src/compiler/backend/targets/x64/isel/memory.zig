@@ -1,4 +1,3 @@
-///выбор инструкций доступа к памяти для x64: load store lea и alloca
 const mir = @import("../../../mir/mir.zig");
 const enc = @import("../encoder.zig");
 const OpCode = enc.OpCode;
@@ -28,11 +27,22 @@ pub fn selectAlloca(ctx: *Ctx, a: mir.AllocaInst, alloca_offsets: OffsetMap) !vo
 
 pub fn selectLea(ctx: *Ctx, l: mir.LeaInst) !void {
     const dst_spilled = regalloc.isSpilled(ctx.ra, l.dst);
-    const base_reg = resolveReg(ctx.ra, l.base);
-    const index_reg: i16 = if (l.index == .vreg or l.index == .phys)
+
+    var base_reg: i16 = resolveReg(ctx.ra, l.base);
+    if (base_reg < 0 and (l.base == .vreg or l.base == .phys)) {
+        try spill.loadSpilledOp(ctx, l.base, regalloc.SCRATCH_REG_2);
+        base_reg = regalloc.SCRATCH_REG_2;
+    }
+
+    var index_reg: i16 = if (l.index == .vreg or l.index == .phys)
         resolveReg(ctx.ra, l.index)
     else
         -1;
+    if (index_reg < 0 and (l.index == .vreg or l.index == .phys)) {
+        try spill.loadSpilledOp(ctx, l.index, ctx.scratch);
+        index_reg = ctx.scratch;
+    }
+
     const addr_op = Operand{
         .base_reg = base_reg,
         .index_reg = index_reg,

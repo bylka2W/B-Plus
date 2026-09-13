@@ -53,7 +53,6 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
 
         const export_base_rva = section_rva + @as(u32, @intCast(code.len));
 
-        //сортирует экспортируемые символы по имени для ENPT, чтобы GetProcAddress мог использовать бинарный поиск
         var indices = try allocator.alloc(usize, n);
         defer allocator.free(indices);
         for (0..n) |i| indices[i] = i;
@@ -64,7 +63,6 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
             }
         }.lessThan);
 
-        //смещения RVA форвардеров для каждого экспортируемого символа в порядке ординалов
         var forwarder_rvas = try allocator.alloc(u32, n);
         defer allocator.free(forwarder_rvas);
         {
@@ -79,7 +77,6 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
             }
         }
 
-        //смещения строк имён в отсортированном порядке
         var name_offs = try allocator.alloc(u32, n);
         defer allocator.free(name_offs);
         {
@@ -91,9 +88,9 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
         }
 
         
-        try ed.appendNTimes(0, 4);  //характеристики
-        try ed.appendNTimes(0, 4);  // дата создания
-        try ed.appendNTimes(0, 2);  //глана версия
+        try ed.appendNTimes(0, 4);
+        try ed.appendNTimes(0, 4);
+        try ed.appendNTimes(0, 2);
         try ed.appendNTimes(0, 2); 
         const dll_name_rva = export_base_rva + dll_name_off;
         try ed.appendSlice(&@as([4]u8, @bitCast(dll_name_rva)));  
@@ -104,7 +101,6 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
         try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + enpt_off))); 
         try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + eot_off)));  
 
-        //таблица адресов экспорта в порядке ординалов
         for (exports, 0..) |e, i| {
             if (e.forward_to) |_| {
                 try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + forwarder_rvas[i])));
@@ -126,7 +122,6 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
             try ed.appendSlice(exports[si].name);
             try ed.append(0);
         }
-        // DLL name
         while (ed.items.len < dll_name_off) try ed.append(0);
         try ed.appendSlice("TSS.dll");
         try ed.append(0);
@@ -158,7 +153,6 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
 
     try pe.appendNTimes(0, 64);
 
-    //сигнатура PE-файла
     try pe.appendSlice(&[_]u8{ 0x50, 0x45, 0x00, 0x00 });
 
     const characteristics: u16 = if (is_dll) 0x2022 else 0x0022;
@@ -200,7 +194,6 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
     try pe.appendNTimes(0, 4);
     try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 16))));
 
-    //таблицы данных
     var imp_rva_val: u32 = 0;
     var imp_size_val: u32 = 0;
     if (import_dir_rva != 0) {
@@ -217,7 +210,6 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
     try pe.appendSlice(&@as([4]u8, @bitCast(imp_size_val)));
     for (0..14) |_| try pe.appendNTimes(0, 8);
 
-    //таблица секций txt
     const sname = ".text\x00\x00\x00";
     try pe.appendSlice(sname);
     try pe.appendSlice(&@as([4]u8, @bitCast(total_code_size)));

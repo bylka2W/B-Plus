@@ -1,6 +1,3 @@
-///spill и reload для x64 через x64 IR
-///заменяет запись spill черезraw bytes на обычные инструкции x64 IR
-///spill код проходит обычную проверку икодирование через стандартный pipeline 
 const mir = @import("../../../mir/mir.zig");
 const regalloc = @import("../../../regalloc/regalloc.zig");
 const ctx_mod = @import("context.zig");

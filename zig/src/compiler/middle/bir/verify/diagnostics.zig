@@ -8,37 +8,31 @@ const TypeId = bir.TypeId;
 const Op = bir.Op;
 
 pub const ErrorCode = enum {
-    // Module-level
     duplicate_function_name,
     invalid_function_id,
 
-    // Function-level
     empty_function,
     missing_entry_block,
     block_has_no_terminator,
     instruction_after_terminator,
     invalid_block_id,
 
-    // CFG
     successor_out_of_range,
     predecessor_symmetry_broken,
     entry_block_has_predecessor,
     unreachable_block,
 
-    // SSA
     value_defined_twice,
     value_used_before_def,
     value_does_not_dominate_use,
     phi_value_does_not_dominate_pred,
 
-    // Phi
     phi_incoming_count_mismatch,
     phi_incoming_block_not_predecessor,
     phi_incoming_value_type_mismatch,
     phi_duplicate_incoming_block,
     phi_not_at_block_start,
 
-    // Type system
     type_mismatch,
     type_operand_count_mismatch,
     type_not_integer,
@@ -47,7 +41,6 @@ pub const ErrorCode = enum {
     type_not_comparable,
     type_not_numeric,
 
-    // Instruction
     invalid_operand_count,
     alloca_type_void,
     const_type_void,
@@ -55,19 +48,16 @@ pub const ErrorCode = enum {
     binary_requires_two_operands,
     terminator_not_last,
 
-    // Memory
     load_type_mismatch,
     store_type_mismatch,
     store_target_not_pointer,
     alloca_result_not_used,
 
-    // Calls
     call_argument_count_mismatch,
     call_argument_type_mismatch,
     call_callee_not_function,
     call_return_type_mismatch,
 
-    // Use-def
     use_def_symmetry_broken,
     data_ref_use_def_symmetry_broken,
 };

@@ -26,6 +26,7 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                             continue;
                         }
                         _ = map.remove(d);
+                        invalidatePointers(&map, d);
                         if (resolved_src == .vreg) {
                             try map.put(d, .{ .vreg = resolved_src.vreg });
                         } else if (resolved_src == .imm) {
@@ -41,6 +42,9 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                 .add, .sub, .imul, .idiv, .@"and", .@"or", .xor => {
                     replaceOpWithResolved(map, &block.instrs.items[i]);
                     if (dstOf(block.instrs.items[i])) |dv| invalidatePointers(&map, dv);
+                    if (block.instrs.items[i] == .idiv) {
+                        if (vregOf(block.instrs.items[i].idiv.remainder)) |rv| invalidatePointers(&map, rv);
+                    }
                     i += 1;
                 },
                 .cmp => {
@@ -76,7 +80,10 @@ pub fn propagateCopies(mfunc: *mir.MFunction) !void {
                 .ret => {
                     const r = &block.instrs.items[i].ret;
                     if (r.* == .value) {
-                        r.* = .{ .value = .{ .operand = resolve(map, r.value.operand), .dtype = r.value.dtype } };
+                        const rv = vregOf(r.value.operand);
+                        if (rv != null and map.get(rv.?) != null) {
+                            r.* = .{ .value = .{ .operand = resolve(map, r.value.operand), .dtype = r.value.dtype } };
+                        }
                     }
                     i += 1;
                 },
@@ -199,8 +206,6 @@ fn resolve(map: std.AutoHashMap(u32, CopyEntry), op: mir.MOperand) mir.MOperand 
     return .{ .vreg = cur };
 }
 
-///работает как resolve() но на выходе всегда будет только виртуальный регистр а не константа
-///нужно для базового и индексного адресов команды LEA — они не могут быть константами и обязаны оставаться в регистрах
 
 fn resolveVregOnly(map: std.AutoHashMap(u32, CopyEntry), op: mir.MOperand) mir.MOperand {
     if (op != .vreg) return op;

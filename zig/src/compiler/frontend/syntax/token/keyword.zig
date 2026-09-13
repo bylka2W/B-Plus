@@ -76,7 +76,6 @@ pub const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "atomic", .kw_atomic },
     .{ "volatile", .kw_volatile },
 
-    // State machine
     .{ "state", .kw_state },
     .{ "entry", .kw_entry },
     .{ "on", .kw_on },
@@ -85,12 +84,10 @@ pub const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "fire", .kw_fire },
     .{ "machine", .kw_machine },
 
-    // GPU / compute
     .{ "kernel", .kw_kernel },
     .{ "pipeline", .kw_pipeline },
     .{ "forward", .kw_forward },
 
-    // Runtime
     .{ "run", .kw_run },
     .{ "print", .kw_print },
     .{ "free", .kw_free },
@@ -100,16 +97,13 @@ pub const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "enter", .kw_enter },
     .{ "exit", .kw_exit },
 
-    // Ownership
     .{ "owned", .kw_owned },
     .{ "borrowed", .kw_borrowed },
 
-    // Modules / FFI
     .{ "use", .kw_use },
     .{ "metal", .kw_metal },
     .{ "cxx", .kw_cxx },
 
-    // Russian aliases — state machine
     .{ "состояние", .kw_state },
     .{ "вход", .kw_entry },
     .{ "на", .kw_on },
@@ -118,12 +112,10 @@ pub const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "пуск", .kw_fire },
     .{ "автомат", .kw_machine },
 
-    // Russian aliases — GPU / compute
     .{ "ядро", .kw_kernel },
     .{ "конвейер", .kw_pipeline },
     .{ "метал", .kw_metal },
 
-    // Russian aliases — general
     .{ "фн", .kw_fn },
     .{ "структура", .kw_struct },
     .{ "перечисление", .kw_enum },
@@ -133,12 +125,10 @@ pub const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "пер", .kw_var },
     .{ "внешний", .kw_extern },
 
-    // Russian aliases — control flow
     .{ "если", .kw_if },
     .{ "иначе", .kw_else },
     .{ "вернуть", .kw_return },
 
-    // Russian aliases — runtime
     .{ "запуск", .kw_run },
     .{ "печать", .kw_print },
     .{ "освободить", .kw_free },
@@ -148,11 +138,9 @@ pub const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "войти", .kw_enter },
     .{ "выйти", .kw_exit },
 
-    // Russian aliases — ownership
     .{ "владение", .kw_owned },
     .{ "заимствовано", .kw_borrowed },
 
-    // Russian aliases — literals
     .{ "истина", .kw_true },
     .{ "ложь", .kw_false },
 });

@@ -1,6 +1,5 @@
 const std = @import("std");
 
-//класы регистров
 
 pub const RegClass = enum {
     gpr64,
@@ -31,12 +30,11 @@ pub const RegClassInfo = struct {
     callee_saved: []const i16,
 };
 
-pub const available_gpr64 = [_]i16{ 0, 1, 2, 3, 6, 7, 8, 9, 12, 13, 14, 15 };
+pub const available_gpr64 = [_]i16{ 3, 6, 7, 12, 13, 14, 15 };
 pub const callee_saved_gpr64 = [_]i16{ 3, 6, 7, 12, 13, 14, 15 };
 pub const available_xmm = [_]i16{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 };
 pub const callee_saved_xmm_win64 = [_]i16{ 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
 
-//резерв рег
 
 pub const SCRATCH_REG: i16 = 11;
 pub const SCRATCH_REG_2: i16 = 10;

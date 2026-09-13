@@ -10,14 +10,12 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     if (mfuncs.len == 0) return error.NoFunctions;
     const allocator = mfuncs[0].allocator;
 
-    //вывод исходный код вместе со списком исправлений
     var emit = try mir_x64.emitCode(mfuncs);
     defer emit.code.deinit();
     defer emit.name_to_offset.deinit();
     defer emit.call_fixups.deinit();
     defer emit.func_starts.deinit();
 
-    //строит таблицу символов и релокации для функций и вызовов
 
     var relocs = std.ArrayList(Reloc).init(allocator);
     defer relocs.deinit();
@@ -25,23 +23,20 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     var symbols = std.ArrayList(SymInfo).init(allocator);
     defer symbols.deinit();
 
-    //карта индексов символов: имя = индекс
     var sym_map = std.StringHashMap(u32).init(allocator);
     defer sym_map.deinit();
 
-    //добавляет символы функций из func_starts (функции MIR)
     for (emit.func_starts.items, 0..) |offset, i| {
         const name = mfuncs[i].name;
         try sym_map.put(name, @intCast(symbols.items.len));
         try symbols.append(.{
             .name = name,
             .offset = offset,
-            .section_number = 1, // .text
-            .storage_class = 0x02, // IMAGE_SYM_CLASS_EXTERNAL
+            .section_number = 1,
+            .storage_class = 0x02,
         });
     }
 
-    //добавляет символы runtime-заглушек, которых нет в func_starts
     {
         var iter = emit.name_to_offset.iterator();
         while (iter.next()) |entry| {
@@ -64,18 +59,16 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
         }
     }
 
-    //преобразует исправления вызовов в релокации
     for (emit.call_fixups.items) |cf| 
     {
         const sym_idx = sym_map.get(cf.name) orelse {
-            //добавляет внешний символ как неопределённый внешний символ
             const idx = @as(u32, @intCast(symbols.items.len));
             try sym_map.put(cf.name, idx);
             try symbols.append(.{
                 .name = cf.name,
                 .offset = 0,
-                .section_number = 0, // undefined external
-                .storage_class = 0x02, // IMAGE_SYM_CLASS_EXTERNAL
+                .section_number = 0,
+                .storage_class = 0x02,
             });
             try relocs.append(.{
                 .offset = cf.disp_pos,
@@ -91,7 +84,6 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
         });
     }
 
-    // Build output
     var out = std.ArrayList(u8).init(allocator);
     errdefer out.deinit();
 
@@ -99,7 +91,6 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     const num_syms: u32 = @intCast(symbols.items.len);
     const num_relocs: u16 = @intCast(relocs.items.len);
 
-    //рассчитывает расположение данных
     const file_hdr_size: u16 = 20;
     const section_tbl_size: u16 = 40;
     const raw_data_start: u32 = file_hdr_size + section_tbl_size;
@@ -107,10 +98,9 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     const reloc_start = raw_data_start + raw_data_size;
     const symtab_start = reloc_start + @as(u32, @intCast(relocs.items.len)) * 10;
 
-    //строит таблицу
     var strtab = std.ArrayList(u8).init(allocator);
     defer strtab.deinit();
-    try strtab.appendNTimes(0, 4); // placeholder for length
+    try strtab.appendNTimes(0, 4);
 
     var name_offsets = std.ArrayList(u32).init(allocator);
     defer name_offsets.deinit();
@@ -130,12 +120,12 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     try writeFileHeader(&out, num_sections, num_syms, symtab_start);
 
     try writeSectionHeader(&out, ".text",
-        raw_data_size, //размер виртуальных данных равен размеру исходных данных для объектного файла!!!!! ВАЖНННООООО 15август
+        raw_data_size,
         raw_data_size, 
         raw_data_start,
         reloc_start,
         num_relocs,
-        0x60500020, //код - выполнение - чтение - инициализированные данные
+        0x60500020,
     );
 
     try out.appendSlice(emit.code.items);
@@ -170,7 +160,7 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
 
 const RelocType = enum(u16) 
 {
-    rel32 = 0x0004, // IMAGE_REL_AMD64_REL32 !
+    rel32 = 0x0004,
 };
 
 const Reloc = struct 

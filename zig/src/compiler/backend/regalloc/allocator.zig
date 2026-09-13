@@ -7,14 +7,12 @@ const LiveInterval = liveness.LiveInterval;
 const IntervalList = liveness.IntervalList;
 const CfgInfo = liveness.CfgInfo;
 
-//повтор размещен значения
 
 pub const Remat = union(enum) {
     imm64: i64,
     zero: void,
 };
 
-//ограничения!!
 
 pub const ConstrainedReg = struct {
     vreg: u32,
@@ -54,12 +52,10 @@ pub fn applyConstraints(
     }
 }
 
-// скан
 
 pub fn linearScanSplitting(
     initial: []const LiveInterval,
     call_positions: []const usize,
-    use_points: *const std.AutoHashMap(u32, std.ArrayList(usize)),
     hints: *const std.AutoHashMap(u32, u32),
     regs: *std.AutoHashMap(u32, i16),
     spills: *std.AutoHashMap(u32, i32),
@@ -137,46 +133,22 @@ pub fn linearScanSplitting(
         }
 
         if (!allocated) {
-            const victim_idx = findBestSpillCandidate(active, use_points, interval.start);
+            const victim_idx = findBestSpillCandidate(active, regs, interval.start);
             const victim = active.items[victim_idx];
             const victim_reg = regs.get(victim.vreg) orelse continue;
 
-            const split_point = chooseSplitPoint(victim, interval.start, use_points);
+            _ = regs.remove(victim.vreg);
 
-            if (split_point < victim.end) {
-                _ = regs.remove(victim.vreg);
-
-                try worklist.append(.{
-                    .vreg = victim.vreg,
-                    .start = split_point,
-                    .end = victim.end,
-                    .reg_class = victim.reg_class,
-                    .spill_weight = victim.spill_weight,
-                });
-
-                try regs.put(interval.vreg, victim_reg);
-                active.items[victim_idx] = .{
-                    .vreg = victim.vreg,
-                    .start = victim.start,
-                    .end = split_point,
-                    .reg_class = victim.reg_class,
-                    .spill_weight = victim.spill_weight,
-                };
-                try insertSortedByEnd(active, interval);
+            if (remat_candidates.get(victim.vreg)) |r| {
+                try remat.put(victim.vreg, r);
             } else {
-                _ = regs.remove(victim.vreg);
-
-                if (remat_candidates.get(victim.vreg)) |r| {
-                    try remat.put(victim.vreg, r);
-                } else {
-                    next_spill_off -= 8;
-                    try spills.put(victim.vreg, next_spill_off);
-                }
-
-                try regs.put(interval.vreg, victim_reg);
-                _ = active.orderedRemove(victim_idx);
-                try insertSortedByEnd(active, interval);
+                next_spill_off -= 8;
+                try spills.put(victim.vreg, next_spill_off);
             }
+
+            try regs.put(interval.vreg, victim_reg);
+            _ = active.orderedRemove(victim_idx);
+            try insertSortedByEnd(active, interval);
         }
     }
 
@@ -202,29 +174,17 @@ pub fn linearScanSplitting(
     }
 }
 
-fn chooseSplitPoint(
-    victim: LiveInterval,
-    current_start: usize,
-    use_points: *const std.AutoHashMap(u32, std.ArrayList(usize)),
-) usize {
-    const next_use = liveness.findNextUse(use_points, victim.vreg, current_start);
-    if (next_use) |nu| {
-        if (nu > victim.start) return nu;
-    }
-    return victim.end;
-}
-
 fn findBestSpillCandidate(
     active: *const std.ArrayList(LiveInterval),
-    use_points: *const std.AutoHashMap(u32, std.ArrayList(usize)),
+    regs: *const std.AutoHashMap(u32, i16),
     current_start: usize,
 ) usize {
-    _ = use_points;
     _ = current_start;
     var best_idx: usize = 0;
     var best_weight: f64 = std.math.inf(f64);
 
     for (active.items, 0..) |act, i| {
+        if (!regs.contains(act.vreg)) continue;
         if (act.spill_weight < best_weight) {
             best_weight = act.spill_weight;
             best_idx = i;

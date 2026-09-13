@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const Allocator = std.mem.Allocator;
 const bir_cfg = @import("cfg/cfg.zig");
 const bir_dominators = @import("dominator/dominator.zig");
@@ -10,7 +10,6 @@ const ir = @import("../core/module.zig");
 const Module = ir.Module;
 const FunctionId = @import("../core/value.zig").FunctionId;
 
-/// Per-function cached analysis results.
 const PerFunctionEntry = struct {
     allocator: Allocator,
     cfg: ?bir_cfg.CFG = null,
@@ -71,7 +70,6 @@ pub const AnalysisManager = struct {
         return entry;
     }
 
-    /// Ensure CFG is built for the given function. Returns cached if available.
     fn ensureCFG(self: *AnalysisManager, entry: *PerFunctionEntry, func_id: FunctionId) !*const bir_cfg.CFG {
         if (entry.cfg) |*c| return c;
         const func = self.module.getFunctionMut(func_id);
@@ -79,7 +77,6 @@ pub const AnalysisManager = struct {
         return &entry.cfg.?;
     }
 
-    /// Ensure DominatorTree + DominanceFrontier for the given function.
     fn ensureDom(self: *AnalysisManager, entry: *PerFunctionEntry, func_id: FunctionId) !*const DominanceAnalysis {
         if (entry.dom) |*d| return d;
         const cfg = try self.ensureCFG(entry, func_id);
@@ -90,7 +87,6 @@ pub const AnalysisManager = struct {
         return &entry.dom.?;
     }
 
-    /// Ensure LoopInfo for the given function.
     fn ensureLoop(self: *AnalysisManager, entry: *PerFunctionEntry, func_id: FunctionId) !*const LoopAnalysis {
         if (entry.loop) |*l| return l;
         const dom = try self.ensureDom(entry, func_id);
@@ -101,7 +97,6 @@ pub const AnalysisManager = struct {
         return &entry.loop.?;
     }
 
-    // ─── Public query API ───
 
     pub fn getCFG(self: *AnalysisManager, func_id: FunctionId) !*const bir_cfg.CFG {
         const entry = try self.getOrCreateEntry(func_id);
@@ -126,9 +121,7 @@ pub const AnalysisManager = struct {
         return &loop.info;
     }
 
-    // ─── Invalidation ───
 
-    /// Invalidate all cached analyses for a single function.
     pub fn invalidate(self: *AnalysisManager, func_id: FunctionId) void {
         if (self.cache.fetchRemove(func_id)) |kv| {
             kv.value.deinit();
@@ -136,7 +129,6 @@ pub const AnalysisManager = struct {
         }
     }
 
-    /// Invalidate all cached analyses across all functions.
     pub fn invalidateAll(self: *AnalysisManager) void {
         var it = self.cache.valueIterator();
         while (it.next()) |entry| {
@@ -146,11 +138,6 @@ pub const AnalysisManager = struct {
         self.cache.clearRetainingCapacity();
     }
 
-    /// Selective invalidation based on PreservedAnalyses.
-    /// Respects analysis dependencies:
-    ///   - invalidating .cfg invalidates .dominators and .loops
-    ///   - invalidating .dominators invalidates .loops
-    ///   - invalidating .loops does NOT invalidate .dominators or .cfg
     pub fn invalidatePreserved(self: *AnalysisManager, preserved: PreservedAnalyses) void {
         const invalid_cfg = !preserved.isPreserved(.cfg);
         const invalid_dom = !preserved.isPreserved(.dominators);
