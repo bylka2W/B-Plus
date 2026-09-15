@@ -1004,10 +1004,13 @@ pub const Parser = struct {
     fn parseEnum(p: *Parser) !ast.EnumDecl {
         try p.expect(.kw_enum);
         const name = p.identText(); p.advance();
+        p.consumeNewlines();
         try p.expect(.lbrace);
         var members = std.ArrayList([]const u8).init(p.allocator);
         errdefer members.deinit();
         while (!p.peek(.rbrace)) {
+            p.consumeNewlines();
+            if (p.peek(.rbrace)) break;
             const m = p.identText(); p.advance();
             try members.append(m);
             if (p.peek(.comma)) p.advance();

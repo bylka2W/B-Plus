@@ -408,7 +408,10 @@ pub fn main() !void {
 
     const is_bplus_file = std.mem.endsWith(u8, input_path, ".b+");
     if (is_bplus_file and (is_run or is_dll)) {
-        var bir_module = try bir_bplus_frontend.lowerProgram(allocator, &program);
+        var bir_module = bir_bplus_frontend.lowerProgram(allocator, &program) catch {
+            std.log.err("compilation failed", .{});
+            std.process.exit(1);
+        };
 
         const mfuncs = try bir_cpu.lowerModuleToMir(allocator, &bir_module);
 

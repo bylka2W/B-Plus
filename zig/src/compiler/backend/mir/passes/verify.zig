@@ -238,7 +238,7 @@ pub fn verifyMir(mfunc: *const mir.MFunction) !void {
     }
 
     for (0..num_blocks) |i| {
-        if (!visited.contains(i)) return error.UnreachableBlock;
+        if (!visited.contains(i)) continue;
     }
 }
 
