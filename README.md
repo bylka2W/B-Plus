@@ -4,9 +4,9 @@
 > Все примеры кода ниже — это **язык B+** (расширение `.b+`), а не Rust.
 > Блоки помечены `rust` только для подсветки синтаксиса на GitHub/в редакторах.
 
-> [English version ↓](#b-v465-alfa--compiled-plan--metal-language-frontend--hir--bir--mir--targets)
+> [English version ↓]((#b-v464-beta--compiled-b-language-frontend--hir--bir--mir--targets))
 
-> 📖 [docs.html — наглядная документация](https://htmlpreview.github.io/?https://github.com/bylka2W/B-Plus/blob/main/docs.html)
+> 📖 [docs.html — наглядная документация](https://htmlpreview.github.io/?https://github.com/bylka2W/B-Plus/blob/main/html/docs.html)
 
 **B+** компилирует `.plan` / `.metal` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
 Никаких ассемблеров, линкеров, LLVM — весь кодогенератор и оптимизатор написаны с нуля на Zig.
