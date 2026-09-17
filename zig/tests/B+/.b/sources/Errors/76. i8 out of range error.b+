@@ -1,0 +1,5 @@
+fn main()
+{
+    x: i8 = 128
+    print(x)
+}

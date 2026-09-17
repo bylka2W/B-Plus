@@ -1,0 +1,9 @@
+fn main()
+{
+    a: i32 = 10
+    b: string = "hello"
+
+    x = a + b
+
+    print(x)
+}

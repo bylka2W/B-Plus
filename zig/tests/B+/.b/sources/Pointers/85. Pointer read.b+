@@ -1,0 +1,8 @@
+fn main()
+{
+    x = 10
+
+    p = &x
+
+    print(*p)
+}

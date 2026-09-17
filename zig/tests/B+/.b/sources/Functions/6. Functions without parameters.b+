@@ -1,0 +1,10 @@
+fn getNumber()
+{
+    return 42
+}
+
+fn main()
+{
+    x = getNumber()
+    print(x)
+}

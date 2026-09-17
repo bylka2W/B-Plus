@@ -1,0 +1,11 @@
+fn main()
+{
+    x = 2
+
+    match x
+    {
+        1 => print(10)
+        2 => print(20)
+        3 => print(30)
+    }
+}

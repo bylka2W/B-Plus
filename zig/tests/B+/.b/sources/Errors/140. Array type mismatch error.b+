@@ -1,0 +1,6 @@
+fn main()
+{
+    numbers: i32 = {10, 20, 30}
+
+    print(numbers)
+}

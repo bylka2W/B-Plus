@@ -1,0 +1,10 @@
+fn main()
+{
+    a = 10
+    b = "hello"
+
+    if a == b
+    {
+        print(1)
+    }
+}

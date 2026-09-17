@@ -1,0 +1,20 @@
+struct Device
+{
+    enabled: bool
+    value: i64
+}
+
+fn main()
+{
+    device = Device{}
+
+    device.enabled = true
+    device.value = 50
+
+    if device.enabled
+    {
+        device.value += 50
+    }
+
+    print(device.value)
+}

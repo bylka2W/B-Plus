@@ -1,0 +1,24 @@
+fn main()
+{
+    a = true
+    b = false
+    c = true
+    d = false
+    e = true
+    f = true
+
+    result =
+        (a && !b)
+        && (c || d)
+        && (e && f)
+        || (!a && b)
+
+    if result
+    {
+        print("PASS")
+    }
+    else
+    {
+        print("FAIL")
+    }
+}

@@ -1,0 +1,44 @@
+struct Player
+{
+    health: i64
+    damage: i64
+}
+
+struct Enemy
+{
+    health: i64
+    armor: i64
+}
+
+fn attack(player, enemy)
+{
+    damage = player.damage - enemy.armor
+
+    if damage < 0
+    {
+        damage = 0
+    }
+
+    enemy.health -= damage
+}
+
+fn main()
+{
+    player = Player{}
+    enemy = Enemy{}
+
+    player.health = 100
+    player.damage = 30
+
+    enemy.health = 100
+    enemy.armor = 10
+
+    for i = 0;
+        i < 5;
+        i = i + 1
+    {
+        attack(player, enemy)
+    }
+
+    print(enemy.health)
+}

@@ -1,0 +1,22 @@
+fn factorial(n)
+{
+    if n <= 1
+    {
+        return 1
+    }
+
+    return n * factorial(n - 1)
+}
+
+fn calculate(n)
+{
+    a = factorial(n)
+    b = factorial(n - 1)
+
+    return a + b
+}
+
+fn main()
+{
+    print(calculate(10))
+}

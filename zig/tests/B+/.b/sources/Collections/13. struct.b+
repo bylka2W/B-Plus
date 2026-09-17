@@ -1,0 +1,16 @@
+struct User
+{
+    name: string
+    age: i32
+}
+
+fn main()
+{
+    user = User{}
+
+    user.name = "Gnom"
+    user.age = 20
+
+    print(user.name)
+    print(user.age)
+}

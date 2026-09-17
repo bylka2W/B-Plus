@@ -1,0 +1,11 @@
+fn main()
+{
+    a = 5
+    b = 20
+    enabled = true
+
+    if (a > 10 || b > 10) && enabled
+    {
+        print("PASS")
+    }
+}

@@ -1,0 +1,6 @@
+fn main()
+{
+    const value = 10
+
+    value += 5
+}

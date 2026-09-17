@@ -1,0 +1,19 @@
+struct User
+{
+    age: i32
+}
+
+fn birthday(user)
+{
+    user.age = user.age + 1
+}
+
+fn main()
+{
+    user = User{}
+    user.age = 20
+
+    birthday(user)
+
+    print(user.age)
+}

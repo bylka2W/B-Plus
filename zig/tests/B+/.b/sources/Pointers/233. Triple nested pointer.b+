@@ -1,0 +1,12 @@
+fn main()
+{
+    value = 10
+
+    p = &value
+    pp = &p
+    ppp = &pp
+
+    ***ppp = 999
+
+    print(value)
+}

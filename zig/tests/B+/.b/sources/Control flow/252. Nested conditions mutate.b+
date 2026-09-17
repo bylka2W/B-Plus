@@ -1,0 +1,22 @@
+fn main()
+{
+    x = 10
+    result = 0
+
+    if x > 0
+    {
+        result = result + 10
+
+        if x > 5
+        {
+            result = result + 20
+
+            if x > 8
+            {
+                result = result + 30
+            }
+        }
+    }
+
+    print(result)
+}

@@ -1,0 +1,14 @@
+fn main()
+{
+    age = 25
+    enabled = true
+    blocked = false
+
+    if age >= 18
+       && age <= 60
+       && enabled
+       && !blocked
+    {
+        print(1)
+    }
+}

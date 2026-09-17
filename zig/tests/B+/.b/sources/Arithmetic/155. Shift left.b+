@@ -1,0 +1,8 @@
+fn main()
+{
+    x = 1
+
+    result = x << 4
+
+    print(result)
+}

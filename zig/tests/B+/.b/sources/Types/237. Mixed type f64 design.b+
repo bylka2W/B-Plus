@@ -1,0 +1,17 @@
+fn calculate(a: i64, b: f64) -> f64
+{
+    x = a
+    y = b
+
+    return x * y + 10.5
+}
+
+fn main()
+{
+    a: i64 = 20
+    b: f64 = 3.5
+
+    result = calculate(a, b)
+
+    print(result)
+}

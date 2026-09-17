@@ -1,0 +1,10 @@
+fn main()
+{
+    value = 10
+
+    p = &value
+
+    *p = 99
+
+    print(value)
+}

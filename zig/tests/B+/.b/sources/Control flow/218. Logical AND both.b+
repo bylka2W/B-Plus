@@ -1,0 +1,10 @@
+fn main()
+{
+    a = true
+    b = true
+
+    if a && b
+    {
+        print("both")
+    }
+}

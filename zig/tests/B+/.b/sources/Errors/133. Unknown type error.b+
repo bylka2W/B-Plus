@@ -1,0 +1,6 @@
+fn main()
+{
+    x: UnknownType = 10
+
+    print(x)
+}

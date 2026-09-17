@@ -1,0 +1,13 @@
+fn set_value(p)
+{
+    *p = 100
+}
+
+fn main()
+{
+    x = 10
+
+    set_value(&x)
+
+    print(x)
+}

@@ -1,0 +1,6 @@
+fn main()
+{
+    name: string = "Gnom"
+
+    print(name)
+}

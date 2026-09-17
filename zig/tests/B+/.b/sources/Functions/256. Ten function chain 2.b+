@@ -1,0 +1,54 @@
+fn f1(x)
+{
+    return x + 1
+}
+
+fn f2(x)
+{
+    return f1(x) * 2
+}
+
+fn f3(x)
+{
+    return f2(x) + 3
+}
+
+fn f4(x)
+{
+    return f3(x) * 4
+}
+
+fn f5(x)
+{
+    return f4(x) - 5
+}
+
+fn f6(x)
+{
+    return f5(x) * 6
+}
+
+fn f7(x)
+{
+    return f6(x) + 7
+}
+
+fn f8(x)
+{
+    return f7(x) * 8
+}
+
+fn f9(x)
+{
+    return f8(x) - 9
+}
+
+fn f10(x)
+{
+    return f9(x) * 10
+}
+
+fn main()
+{
+    print(f10(1))
+}

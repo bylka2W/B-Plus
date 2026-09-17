@@ -1,0 +1,21 @@
+fn main()
+{
+    age = 25
+    enabled = true
+
+    if age >= 18
+    {
+        if enabled
+        {
+            print(100)
+        }
+        else
+        {
+            print(200)
+        }
+    }
+    else
+    {
+        print(300)
+    }
+}

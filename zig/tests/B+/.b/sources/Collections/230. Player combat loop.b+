@@ -1,0 +1,53 @@
+struct Player
+{
+    health: i64
+    damage: i64
+    armor: i64
+}
+
+fn attack(player)
+{
+    return player.damage
+}
+
+fn take_damage(player, damage)
+{
+    real_damage = damage - player.armor
+
+    if real_damage < 0
+    {
+        real_damage = 0
+    }
+
+    player.health -= real_damage
+}
+
+fn alive(player)
+{
+    return player.health > 0
+}
+
+fn main()
+{
+    player = Player{}
+
+    player.health = 100
+    player.damage = 25
+    player.armor = 5
+
+    for i = 0;
+        i < 10;
+        i = i + 1
+    {
+        damage = attack(player)
+
+        take_damage(player, damage)
+
+        if !alive(player)
+        {
+            break
+        }
+    }
+
+    print(player.health)
+}

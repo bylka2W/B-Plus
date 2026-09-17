@@ -1,0 +1,19 @@
+enum Color
+{
+    Red
+    Green
+    Blue
+}
+
+fn main()
+{
+    color = Color.Red
+
+    match color
+    {
+        Color.Red
+        {
+            print(1)
+        }
+    }
+}

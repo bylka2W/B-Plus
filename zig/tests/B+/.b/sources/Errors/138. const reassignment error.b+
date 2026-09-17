@@ -1,0 +1,6 @@
+fn main()
+{
+    const value = 100
+
+    value = 200
+}

@@ -1,0 +1,8 @@
+fn main()
+{
+    value = 123
+
+    p = &value
+
+    print(*p)
+}

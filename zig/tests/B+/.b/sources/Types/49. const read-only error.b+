@@ -1,0 +1,8 @@
+fn main()
+{
+    const max = 100
+
+    max = 200
+
+    print(max)
+}

@@ -1,0 +1,22 @@
+fn main()
+{
+    a: i8 = -10
+    b: u8 = 200
+    c: i16 = -300
+    d: u16 = 600
+    e: i32 = -50000
+    f: u32 = 50000
+    g: i64 = -100000
+    h: u64 = 100000
+    x: f64 = 3.14
+
+    print(a)
+    print(b)
+    print(c)
+    print(d)
+    print(e)
+    print(f)
+    print(g)
+    print(h)
+    print(x)
+}

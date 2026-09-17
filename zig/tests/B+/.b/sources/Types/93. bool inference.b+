@@ -1,0 +1,9 @@
+fn main()
+{
+    x = true
+
+    if x
+    {
+        print(1)
+    }
+}

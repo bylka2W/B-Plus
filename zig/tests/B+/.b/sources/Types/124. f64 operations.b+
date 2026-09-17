@@ -1,0 +1,10 @@
+fn main()
+{
+    a: f64 = 10.5
+    b: f64 = 2.5
+
+    print(a + b)
+    print(a - b)
+    print(a * b)
+    print(a / b)
+}

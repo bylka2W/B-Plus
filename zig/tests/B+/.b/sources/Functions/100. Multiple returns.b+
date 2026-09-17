@@ -1,0 +1,15 @@
+fn check(x)
+{
+    if x > 10
+    {
+        return 100
+    }
+
+    return 200
+}
+
+fn main()
+{
+    print(check(20))
+    print(check(5))
+}

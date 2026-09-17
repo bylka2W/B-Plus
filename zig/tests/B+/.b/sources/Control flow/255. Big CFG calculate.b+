@@ -1,0 +1,41 @@
+fn calculate(x)
+{
+    result = 0
+
+    if x > 0
+    {
+        result = result + 10
+
+        if x > 10
+        {
+            result = result + 20
+        }
+        else
+        {
+            result = result + 30
+        }
+    }
+    else
+    {
+        result = result - 10
+
+        if x < -10
+        {
+            result = result - 20
+        }
+        else
+        {
+            result = result - 30
+        }
+    }
+
+    return result
+}
+
+fn main()
+{
+    print(calculate(20))
+    print(calculate(5))
+    print(calculate(-5))
+    print(calculate(-20))
+}

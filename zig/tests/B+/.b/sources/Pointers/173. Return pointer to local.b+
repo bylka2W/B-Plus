@@ -1,0 +1,13 @@
+fn get_pointer()
+{
+    x = 42
+
+    return &x
+}
+
+fn main()
+{
+    p = get_pointer()
+
+    print(*p)
+}

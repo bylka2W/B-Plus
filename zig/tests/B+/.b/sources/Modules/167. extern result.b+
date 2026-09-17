@@ -1,0 +1,8 @@
+extern fn puts(s: string) -> i32
+
+fn main()
+{
+    result = puts("hello")
+
+    print(result)
+}

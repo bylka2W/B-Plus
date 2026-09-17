@@ -1,0 +1,42 @@
+struct Device
+{
+    id: i64
+    value: i64
+    enabled: bool
+}
+
+fn update(device)
+{
+    if device.enabled
+    {
+        device.value += 10
+    }
+}
+
+fn calculate(device)
+{
+    result = device.value * 2
+    return result
+}
+
+fn main()
+{
+    device = Device{}
+
+    device.id = 100
+    device.value = 5
+    device.enabled = true
+
+    for i = 0;
+        i < 10;
+        i = i + 1
+    {
+        update(device)
+    }
+
+    result = calculate(device)
+
+    print(device.id)
+    print(device.value)
+    print(result)
+}

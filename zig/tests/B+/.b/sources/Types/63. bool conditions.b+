@@ -1,0 +1,15 @@
+fn main()
+{
+    a = true
+    b = false
+
+    if a
+    {
+        print(1)
+    }
+
+    if !b
+    {
+        print(2)
+    }
+}

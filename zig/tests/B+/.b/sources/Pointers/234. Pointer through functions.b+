@@ -1,0 +1,23 @@
+fn level3(p)
+{
+    *p = 300
+}
+
+fn level2(p)
+{
+    level3(p)
+}
+
+fn level1(p)
+{
+    level2(p)
+}
+
+fn main()
+{
+    value = 10
+
+    level1(&value)
+
+    print(value)
+}

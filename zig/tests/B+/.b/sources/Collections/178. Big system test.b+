@@ -1,0 +1,25 @@
+struct Device
+{
+    id: i64
+    enabled: bool
+}
+
+fn enable(device)
+{
+    device.enabled = true
+}
+
+fn main()
+{
+    device = Device{}
+
+    device.id = 100
+    device.enabled = false
+
+    enable(device)
+
+    if device.enabled
+    {
+        print(device.id)
+    }
+}

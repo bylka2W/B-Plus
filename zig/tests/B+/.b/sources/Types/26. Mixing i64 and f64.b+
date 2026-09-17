@@ -1,0 +1,9 @@
+fn main()
+{
+    a: i64 = 10
+    b: f64 = 2.5
+
+    c = a + b
+
+    print(c)
+}

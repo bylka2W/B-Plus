@@ -1,0 +1,17 @@
+struct User
+{
+    age: i32
+}
+
+fn getAge(user)
+{
+    return user.age
+}
+
+fn main()
+{
+    user = User{}
+    user.age = 25
+
+    print(getAge(user))
+}

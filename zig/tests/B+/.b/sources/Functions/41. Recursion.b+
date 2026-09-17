@@ -1,0 +1,16 @@
+fn count(n)
+{
+    if n <= 0
+    {
+        return 0
+    }
+
+    print(n)
+
+    return count(n - 1)
+}
+
+fn main()
+{
+    count(5)
+}

@@ -1,0 +1,9 @@
+fn main()
+{
+    const multiplier = 10
+
+    x = 5
+    result = x * multiplier
+
+    print(result)
+}

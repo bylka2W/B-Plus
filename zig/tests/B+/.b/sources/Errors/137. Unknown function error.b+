@@ -1,0 +1,6 @@
+fn main()
+{
+    result = unknownFunction(10)
+
+    print(result)
+}

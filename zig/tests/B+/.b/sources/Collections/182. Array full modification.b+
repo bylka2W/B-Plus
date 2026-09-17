@@ -1,0 +1,12 @@
+fn main()
+{
+    numbers = {10, 20, 30}
+
+    numbers.0 = 100
+    numbers.1 = 200
+    numbers.2 = 300
+
+    print(numbers.0)
+    print(numbers.1)
+    print(numbers.2)
+}

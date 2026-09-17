@@ -1,0 +1,10 @@
+fn main()
+{
+    a: i64 = 10
+    b: f64 = 10.0
+
+    if a == b
+    {
+        print("equal")
+    }
+}

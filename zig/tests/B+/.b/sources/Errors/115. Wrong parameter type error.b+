@@ -1,0 +1,11 @@
+fn square(x: i32) -> i32
+{
+    return x * x
+}
+
+fn main()
+{
+    x: f64 = 10.5
+
+    print(square(x))
+}

@@ -1,0 +1,7 @@
+fn main()
+{
+    text = "hello"
+    x = text * 5
+
+    print(x)
+}

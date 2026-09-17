@@ -1,0 +1,9 @@
+fn getNumber() -> i64
+{
+    return 10.5
+}
+
+fn main()
+{
+    print(getNumber())
+}

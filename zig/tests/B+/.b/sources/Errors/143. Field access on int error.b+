@@ -1,0 +1,6 @@
+fn main()
+{
+    x = 10
+
+    print(x.foo)
+}

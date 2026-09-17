@@ -1,0 +1,15 @@
+fn main()
+{
+    a = 10
+    b = 20
+    c = false
+
+    if a < b && c
+    {
+        print("FAIL")
+    }
+    else
+    {
+        print("PASS")
+    }
+}

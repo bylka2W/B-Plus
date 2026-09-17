@@ -1,0 +1,11 @@
+fn add(a: f64, b: f64) -> f64
+{
+    return a + b
+}
+
+fn main()
+{
+    x: f64 = add(1.5, 2.5)
+
+    print(x)
+}

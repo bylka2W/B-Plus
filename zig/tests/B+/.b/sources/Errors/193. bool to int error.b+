@@ -1,0 +1,8 @@
+fn main()
+{
+    enabled = true
+
+    x = enabled + 10
+
+    print(x)
+}

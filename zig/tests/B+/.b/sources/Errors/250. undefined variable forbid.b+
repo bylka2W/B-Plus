@@ -1,0 +1,7 @@
+fn main()
+{
+    a = 10
+    b = a + unknown_value
+
+    print(b)
+}

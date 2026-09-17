@@ -1,0 +1,6 @@
+fn main()
+{
+    const limit = 100
+
+    limit = 200
+}

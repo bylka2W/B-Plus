@@ -1,0 +1,57 @@
+struct Device
+{
+    value: i64
+    limit: i64
+}
+
+fn clamp(device)
+{
+    if device.value > device.limit
+    {
+        device.value = device.limit
+    }
+
+    if device.value < 0
+    {
+        device.value = 0
+    }
+}
+
+fn process(device, count)
+{
+    for i = 0;
+        i < count;
+        i = i + 1
+    {
+        device.value = device.value + 7
+
+        if device.value > device.limit
+        {
+            clamp(device)
+        }
+
+        if device.value % 3 == 0
+        {
+            device.value = device.value + 1
+        }
+
+        if device.value > device.limit
+        {
+            break
+        }
+    }
+}
+
+fn main()
+{
+    device = Device{}
+
+    device.value = 0
+    device.limit = 100
+
+    process(device, 1000)
+
+    clamp(device)
+
+    print(device.value)
+}

@@ -1,0 +1,8 @@
+fn main()
+{
+    a: u8 = 0
+    b: u8 = 255
+
+    print(a)
+    print(b)
+}

@@ -1,0 +1,9 @@
+fn half(x: f64) -> f64
+{
+    return x / 2.0
+}
+
+fn main()
+{
+    print(half(10.0))
+}

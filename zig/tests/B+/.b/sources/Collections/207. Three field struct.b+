@@ -1,0 +1,19 @@
+struct User
+{
+    age: i64
+    height: f64
+    enabled: bool
+}
+
+fn main()
+{
+    user = User{}
+
+    user.age = 20
+    user.height = 180.5
+    user.enabled = true
+
+    print(user.age)
+    print(user.height)
+    print(user.enabled)
+}

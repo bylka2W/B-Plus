@@ -1,0 +1,25 @@
+fn square(x)
+{
+    return x * x
+}
+
+fn cube(x)
+{
+    return x * x * x
+}
+
+fn transform(x)
+{
+    a = square(x)
+    b = cube(a)
+    c = square(b)
+
+    return c
+}
+
+fn main()
+{
+    result = transform(2)
+
+    print(result)
+}

@@ -1,0 +1,6 @@
+fn main()
+{
+    result = calculate_something(10)
+
+    print(result)
+}

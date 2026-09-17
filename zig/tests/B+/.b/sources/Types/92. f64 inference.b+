@@ -1,0 +1,5 @@
+fn main()
+{
+    x = 12.5
+    print(x)
+}

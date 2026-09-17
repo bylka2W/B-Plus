@@ -1,0 +1,52 @@
+struct Machine
+{
+    id: i64
+    counter: i64
+    enabled: bool
+}
+
+fn process(machine)
+{
+    if !machine.enabled
+    {
+        return
+    }
+
+    for i = 0;
+        i < 10;
+        i = i + 1
+    {
+        if i % 2 == 0
+        {
+            machine.counter += i
+        }
+        else
+        {
+            machine.counter -= i
+        }
+
+        if machine.counter < 0
+        {
+            machine.counter = 0
+        }
+    }
+}
+
+fn main()
+{
+    machine = Machine{}
+
+    machine.id = 42
+    machine.counter = 100
+    machine.enabled = true
+
+    for i = 0;
+        i < 100;
+        i = i + 1
+    {
+        process(machine)
+    }
+
+    print(machine.id)
+    print(machine.counter)
+}

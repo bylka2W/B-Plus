@@ -1,0 +1,15 @@
+fn add_value(p, value)
+{
+    *p = *p + value
+}
+
+fn main()
+{
+    x = 100
+
+    add_value(&x, 50)
+    add_value(&x, 25)
+    add_value(&x, 5)
+
+    print(x)
+}

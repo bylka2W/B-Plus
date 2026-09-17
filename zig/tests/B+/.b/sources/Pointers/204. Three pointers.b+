@@ -1,0 +1,14 @@
+fn main()
+{
+    a = 10
+    b = 20
+    c = 30
+
+    pa = &a
+    pb = &b
+    pc = &c
+
+    print(*pa)
+    print(*pb)
+    print(*pc)
+}

@@ -1,0 +1,13 @@
+fn add(a: i64, b: i64) -> i64
+{
+    return a + b
+}
+
+fn main()
+{
+    x: f64 = 10.5
+
+    result = add(x, 20)
+
+    print(result)
+}

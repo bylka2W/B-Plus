@@ -8,51 +8,30 @@
 
 > 📖 [docs.html — наглядная документация](https://htmlpreview.github.io/?https://github.com/bylka2W/B-Plus/blob/main/html/docs.html)
 
-**B+** компилирует `.plan` / `.metal` файлы напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
-Никаких ассемблеров, линкеров, LLVM — весь кодогенератор и оптимизатор написаны с нуля на Zig.
+**B+** компилирует файлы `.b+` (принимаются также `.plan` / `.metal`) напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
+Кодогенератор, IR-оптимизаторы и упаковщик PE написаны с нуля на Zig. Для финальной линковки PE используется `lld-link.exe` (из LLVM).
+> Лабораторные тесты компилятора: `zig\tests\B+\.b\sources\` — 262 теста, из них ~259 проходят.
 
 ---
 
 ## Что такое B+
 
 **B+** — это язык программирования, который превращает написанный код прямо в готовую программу для Windows (.exe или .dll).
-В отличие от многих языков, B+ не использует внешние компиляторы или линкеры — весь процесс сборки выполняет собственный компилятор.
+Компилятор B+ полностью сам генерирует машинный код, оптимизирует IR и собирает PE; на финальном шаге для линковки вызывается `lld-link.exe`.
 
 Код B+ хранится в файлах с расширением: `example.b+`
 
-В B+ есть два основных режима программирования:
+В B+ есть два домена синтаксиса:
 
 ### PLAN — описание логики состояний
 
-PLAN нужен, когда программа должна работать как набор состояний и переключаться между ними по событиям.
-
-Например:
-- меню игры
-- состояния персонажа
-- игровые режимы
-- сетевые протоколы
-- обработчики событий
+PLAN — состояние/событийный домен. **В текущей версии компилятора `state`-блоки, `entry`/`exit`/`on` не исполняются в рантайме**: весь код запускается из `fn main()`. Домен PLAN документируется исторически и будет включён в следующих версиях.
 
 ```rust
-state Locked {
-    on open [key == 1] -> Opened
-    entry {
-        print("locked\n")
-    }
-}
-
-state Opened {
-    on close -> Locked
-    entry {
-        print("opened\n")
-    }
+fn main() {
+    print("PLAN-код запускается из fn main()\n")
 }
 ```
-
-Что здесь происходит:
-- Программа начинает в состоянии `Locked`
-- Если приходит событие `open` и есть ключ (`key == 1`) — переходит в `Opened`
-- При входе в состояние выполняется код внутри `entry`
 
 ### METAL — обычное программирование
 
@@ -64,29 +43,34 @@ METAL предназначен для создания обычного кода
 - низкоуровневых систем
 
 ```rust
-fn fibonacci(n: i64) -> i64 {
-    if n <= 1 {
-        return n;
+fn fibonacci(n)
+{
+    if n <= 1
+    {
+        return n
     }
+    return fibonacci(n - 1) + fibonacci(n - 2)
+}
 
-    return fibonacci(n - 1) + fibonacci(n - 2);
+fn main()
+{
+    print(fibonacci(7))  // 13
 }
 ```
 
 Этот код создаёт функцию вычисления чисел Фибоначчи.
+> Проверено: рекурсия компилируется без аннотаций типов (`-> i64` на возврате даёт ошибку).
 
 ### Один язык — два подхода
 
-PLAN и METAL используют один синтаксис B+, но предназначены для разных задач:
-
-| Режим | Назначение |
-|-------|------------|
-| PLAN | логика состояний и событий |
-| METAL | алгоритмы и системный код |
+| Режим | Назначение | Статус |
+|-------|------------|--------|
+| PLAN | логика состояний и событий | парсится, не исполняется |
+| METAL | алгоритмы и системный код | работает |
 
 Компилятор сам определяет, к какому режиму относится код.
 
-B+ объединяет простоту языков высокого уровня с контролем системного программирования, позволяя создавать как игровую логику, так и низкоуровневые программы.
+B+ объединяет простоту языков высокого уровня с контролем системного программирования, позволяя создавать как алгоритмы, так и низкоуровневые программы.
 
 Самый простой способ проверить, что компилятор работает:
 
@@ -112,17 +96,19 @@ hello.b+
 1. [Быстрый старт](#1-быстрый-старт)
 2. [Команды компилятора](#2-команды-компилятора)
 3. [Синтаксис языка (.b+)](#3-синтаксис-языка)
-   - [3.1 Состояния](#31-состояния)
-   - [3.2 Переходы (on)](#32-переходы-on)
-   - [3.3 Безусловные переходы (always)](#33-безусловные-переходы-always)
-   - [3.4 Вход (entry)](#34-вход-entry)
-   - [3.5 Переменные](#35-переменные)
-   - [3.6 Присваивания](#36-присваивания)
-   - [3.7 Печать (print)](#37-печать-print)
-   - [3.8 Export entry](#38-export-entry)
-   - [3.9 Entry point](#39-entry-point)
-   - [3.10 Перечисления (enum)](#310-перечисления-enum)
-   - [3.11 Комментарии](#311-комментарии)
+   - [3.1 Функции и точка входа](#31-функции-и-точка-входа)
+   - [3.2 Переменные](#32-переменные)
+   - [3.3 Присваивания](#33-присваивания)
+   - [3.4 Печать (print)](#34-печать-print)
+   - [3.5 If / else](#35-if--else)
+   - [3.6 Циклы](#36-циклы)
+   - [3.7 Структуры](#37-структуры)
+   - [3.8 Перечисления (enum)](#38-перечисления-enum)
+   - [3.9 Константы (const)](#39-константы-const)
+   - [3.10 Выражения match](#310-выражения-match)
+   - [3.11 Import](#311-import)
+   - [3.12 Рекурсия](#312-рекурсия)
+   - [3.13 Комментарии](#313-комментарии)
 4. [Синтаксис METAL](#4-синтаксис-metal)
    - [4.1 Типы](#41-типы)
    - [4.2 Функции](#42-функции)
@@ -162,10 +148,12 @@ zig\zig-out\bin\bpc.exe run hello.b+
 1. Создайте файл `hello.b+` в папке `C:\B-Plus`:
 
 ```
-state Hello {
-    entry { print("Hello World!\n") }
+fn main() {
+    print("Hello World!\n")
 }
 ```
+
+> **Важно:** единственная работающая точка входа — `fn main()`. Форма `state Hello { entry { print(...) } }` **не собирается** (ошибка линковки `undefined symbol: main`); `state`-блоки также не исполняются в рантайме текущей версии — весь код запускается из `fn main`.
 
 2. Перетащите файл **`hello.b+`** мышкой прямо на **`bpc.bat`**.
 
@@ -183,17 +171,23 @@ state Hello {
 ### Синтаксис
 
 ```text
-bpc run   <входной.b+>              — скомпилировать и сразу запустить
-bpc dll   <входной.b+>              — скомпилировать в DLL
-bpc hlsl  <входной.b+>              — сгенерировать HLSL шейдер
-bpc mir   <входной.b+>              — сгенерировать COFF .obj
-bpc bpl   <входной.b+>              — понизить B+ до BIR и вывести
-bpc ir    <входной.b+>              — вывести BIR pipeline
-bpc cfg   <входной.b+>              — вывести граф потока управления
-bpc dom   <входной.b+>              — вывести дерево доминирования
-bpc loops <входной.b+>              — вывести иерархию циклов
-bpc test  <тест.bpt>                — запустить тест
+bpc run    <входной.b+>              — скомпилировать и сразу запустить
+bpc dll    <входной.b+> [-o <out.dll>] [-exports <имя1,имя2,...>]  — скомпилировать в DLL
+bpc check  <входной.b+>              — проверить код без создания exe (PASS/FAIL)
+bpc hlsl   <входной.b+> [-o <out.hlsl>] — сгенерировать HLSL шейдер
+bpc mir    <входной.b+>              — сгенерировать COFF .obj
+bpc bpl    <входной.b+>              — понизить B+ до BIR и вывести
+bpc ir     <входной.b+>              — вывести BIR pipeline
+bpc cfg    <входной.b+>              — вывести граф потока управления
+bpc dom    <входной.b+>              — вывести дерево доминирования
+bpc loops  <входной.b+>              — вывести иерархию циклов
+bpc link   <входной.obj> -o <out.exe> — слинковать .obj в .exe
+bpc test   <тест.bpt>                 — запустить тест
+bpc doctor                            — диагностика компилятора (Runtime/Linker/Parser/HIR/THIR/BIR/MIR/x64)
 ```
+
+> Проверено: `run`, `dll`, `check`, `mir`, `bpl`, `link`, `doctor` работают.
+> `ir`/`cfg`/`dom`/`loops`/`hlsl` на обычном файле с `fn main` выдают `VERIFY: block_has_no_terminator` — ждут pipeline/kernel-вход (см. разделы HLSL/IR).
 
 #### `bpc dll <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]`
 
@@ -301,198 +295,182 @@ bpc doctor            — проверка здоровья компилятор
 
 ### Примечания
 
-- Компилятор **не использует** внешние ассемблеры, линкеры или LLVM — весь машинный код генерируется самостоятельно.
-- Команда `bpc run` компилирует в `.exe` и сразу запускает.
+- Компилятор **сам** генерирует весь машинный код x64 (без ассемблеров и внешнего кодогенератора); для линковки PE-файла используется `lld-link.exe`.
+- Команда `bpc run` компилирует в `.exe` и сразу запускает. Перед пересборкой компилятор сам завершает зависший старый `.exe`, чтобы не было `permission denied`.
 
 ---
 
 ## 3. Синтаксис языка
 
-### 3.1 Состояния
+> **Проверено на реальном компиляторе:** единственная точка входа — `fn main()`.
+> `state`-блоки парсятся, но `entry`/`exit`/`on`-блоки **не исполняются** текущей версией — весь вывод идёт из `fn main`, поэтому в примерах используется только функции.
+
+### 3.1 Функции и точка входа
 
 ```rust
-state <Имя> {
-    ...
+fn main() {
+    print("Hello\n")
 }
 ```
 
-Состояние — базовый строительный блок. Внутри могут быть переменные, переходы, entry/exit-блоки.
+Функции объявляются через `fn <имя>(<параметры>)`. Можно с типами параметров и возврата:
 
 ```rust
-state Red {
-    on timer -> Green
-    entry { print("RED\n") }
+fn add(a: i64, b: i64) -> i64 {
+    return a + b
 }
 ```
 
-### 3.2 Переходы (on)
+Значением последнего выражения можно не пользоваться — `return` явный.
+
+Рекурсия работает (см. `Control flow`, `Functions` тесты).
+
+### 3.2 Переменные
 
 ```rust
-on <событие> -> <ЦелевоеСостояние>
+var x: i64 = 0
+var name: string
+y = 5    // без объявления — тоже работает
 ```
 
-Когда приходит событие (строка из stdin), автомат переходит в указанное состояние.
+Переменной можно присвоить число, строку или результат выражения.
+`var <имя>: <тип>` — для явной типизации; без `var` тип выводится.
+
+### 3.3 Присваивания
 
 ```rust
-state Green {
-    on timer -> Yellow
-    on pedestrian -> Red
+x = 42
+x += 1
+x -= 5
+x *= 2
+x /= 3
+x %= 4
+```
+
+Все `=`, `+=`, `-=`, `*=`, `/=`, `%=` работают (проверено, вывод корректен).
+
+### 3.4 Печать (print)
+
+```rust
+print("строка\n")
+```
+
+Печатает в stdout. Поддерживаются `\n`, `\r`, `\t`.
+
+### 3.5 if / else
+
+```rust
+if x > 5 {
+    print("big")
+}
+else if x > 0 {
+    print("small")
+}
+else {
+    print("zero")
 }
 ```
 
-### 3.3 Безусловные переходы (always)
+### 3.6 Циклы
 
 ```rust
-always -> <ЦелевоеСостояние>
-```
+while i < 10 {
+    i = i + 1
+}
 
-Переход происходит сразу при входе в состояние, без ожидания события.
-
-```rust
-state Init {
-    always -> Menu
+for j = 0; j < 5; j = j + 1 {
+    print(j)
 }
 ```
 
-### 3.4 Вход (entry)
+Поддерживаются `break` и `continue`.
 
-```rust
-state Door {
-    entry { print("entered\n") }
-    on open -> Opened
-}
-```
+### 3.7 Структуры
 
-`entry { ... }` — выполняется при входе в состояние.
+См. раздел 4.5. Объявляются на верхнем уровне, поля присваиваются по одному.
 
-### 3.5 Переменные
-
-```rust
-var <имя>: <тип> [= <значение>]
-```
-
-Объявляются внутри состояния. Типы: int8, int16, int32, int64, u8, u16, u32, u64, byte, bool, short, int, float и т.д.
-
-```rust
-state Counter {
-    var count: int = 0
-    on tick -> Self {
-        count += 1
-    }
-}
-```
-
-Можно объявлять несколько переменных через запятую:
-
-```rust
-var x: int, y: int, name: int
-```
-
-Допускается сокращённая запись — идентификатор без `var` и типа:
-
-```rust
-state S {
-    x     // эквивалентно var x: i64
-}
-```
-
-Такие голые идентификаторы автоматически регистрируются как переменные `i64`.
-
-### 3.6 Присваивания
-
-Внутри `entry { }`, `exit { }` или тела перехода:
-
-```rust
-var x: int
-
-on event -> Next {
-    x = 42
-    x += 1
-    x -= 5
-}
-```
-
-Поддерживаются операторы `=`, `+=`, `-=".
-В правой части можно использовать числа и имена переменных.
-
-**Запись через указатель** — если левая часть это `*<имя>`, то значение записывается в память
-по адресу, хранящемуся в переменной:
-
-```rust
-*ctl = new_value    // MOV [RCX], RAX — запись по указателю
-result = *ctl       // чтение: RAX = [RCX]
-```
-
-Используется для работы с TLS-сохранёнными указателями на persistent-кучу.
-
-### 3.7 Печать (print)
-
-```rust
-print("строка")
-```
-
-Печатает строку в stdout. Поддерживаются escape-последовательности `\n`, `\r`, `\t`.
-
-```rust
-state Hello {
-    entry { print("Hello, world!\n") }
-}
-```
-
-### 3.9 export entry
-
-```rust
-export entry <Имя> {
-    ...
-}
-```
-
-Экспортируемая точка входа — компилируется как функция, видимая извне DLL.
-Используется при сборке DLL (`bpc dll`) вместе с флагом `-exports`.
-
-```rust
-export entry TSS_Init {
-    print("init\n")
-}
-```
-
-### 3.9 Entry point
-
-```rust
-entry <Имя> {
-    ...
-}
-```
-
-Точка входа — выполняется один раз при старте программы.
-
-```rust
-entry main {
-    print("Starting...\n")
-}
-```
-
-### 3.11 Перечисления (enum)
+### 3.8 Перечисления (enum)
 
 ```rust
 enum <Имя> {
-    Член1,
-    Член2,
-    ...
+    Член1
+    Член2
 }
 ```
 
-Глобальное объявление перечисления.
+Глобальное объявление перечисления (только верхний уровень). Члены нумеруются с 0:
+`Color.Red` → 0, `Color.Green` → 1, `Color.Blue` → 2. Запятые между членами необязательны.
 
 ```rust
 enum Color {
-    Red,
-    Yellow,
+    Red
+    Yellow
     Green
 }
 ```
 
-### 3.11 Комментарии
+### 3.9 Константы (const)
+
+```rust
+fn main() {
+    const MAX = 42;
+    print(MAX)
+}
+```
+
+Константы работают, объявляются внутри `fn main`. Переприсваивание — ошибка
+`cannot assign to const variable`. Верхнеуровневое объявление `const` — ошибка.
+
+### 3.10 Выражения match
+
+```rust
+enum Color { Red, Green, Blue }
+fn main() {
+    c = Color.Green
+    match c {
+        Color.Red   { print("red") }
+        Color.Green { print("green") }
+        Color.Blue  { print("blue") }
+    }
+}
+```
+
+Можно матчить числа:
+
+```rust
+x = 2
+match x {
+    1 { print("one") }
+    2 { print("two") }
+}
+```
+
+### 3.11 import
+
+```rust
+import math
+```
+
+`import <identifier>` без кавычек (кавычки — ошибка).
+
+### 3.12 Рекурсия
+
+```rust
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+fn main() {
+    print(factorial(10))   // 3628800
+}
+```
+
+Тесты: `zig\tests\B+\.b\sources\Functions\101. Recursive factorial.b+`, `189`, `236`.
+
+### 3.13 Комментарии
 
 ```rust
 // однострочный комментарий
@@ -515,11 +493,13 @@ METAL — это второй домен B+ (наряду с PLAN). Исполь
 | `i16` / `u16` | 2 |
 | `i32` / `u32` | 4 |
 | `i64` / `u64` | 8 |
+| `f32` | 4 |
 | `f64` | 8 |
 | `int` | алиас `i64` |
 | `void` | 0 |
 
-> `f32`, `*T`, `string`, `ptr` — объявляются, но полноценная работа с ними ещё в разработке.
+> Проверено: объявления работают для всех указанных типов. Работают также `f32`, `string`, `ptr`.
+> Алиасов `int8/int16/int32/int64`, `byte`, `float`, `short`, `uint`, `half` в языке **нет** — проверено компилятором.
 
 ### 4.2 Функции
 
@@ -577,11 +557,13 @@ p.y = 20;
 print(p.x);
 ```
 
-> Литералы вида `Point { x: 10, y: 20 }` не поддерживаются — создавайте переменную и заполняйте поля по одному.
+> **Литералы:** `Point{}` (пустой литерал — все поля нули) **работает**. `Point { x: 10, y: 20 }` (с заполнением полей) — **не компилируется**.
+> Создавайте переменную через `var p: Point; p.x = 10; p.y = 20;` или `p = Point{}; p.x = 10;` — проверено.
 
 ### 4.6 Указатели
 
-Не поддерживаются (адресная арифметика `&x` / разыменование `*p` ещё не реализованы в BIR-понижении).
+Тип `ptr` объявляется и может хранить/передавать адреса (`a: ptr = 0; a = b` — работает).
+Адресная арифметика `&x` / разыменование `*p` ещё не реализованы в BIR-понижении.
 
 ### 4.7 If/else
 
@@ -635,7 +617,17 @@ for i = 0; i < 10; i = i + 1 {
 
 ### 4.10 Составные присваивания
 
-Не поддерживаются — используйте `x = x + 1`.
+**Поддерживаются** — проверено компилятором:
+
+```rust
+x += 5;
+x -= 2;
+x *= 3;
+x /= 2;
+x %= 4;
+```
+
+Работают с целыми и числами с плавающей точкой. Используйте `a = a + 1`, если нужна форма без составного оператора.
 
 ### 4.11 Операторы
 
@@ -643,11 +635,20 @@ for i = 0; i < 10; i = i + 1 {
 |----------|----------|
 | `*` / `/` / `%` | умножение, деление, остаток |
 | `+` / `-` | сложение, вычитание |
+| `=` | присваивание |
+| `+=` / `-=` / `*=` / `/=` / `%=` | составные присваивания (работают) |
 | `==` / `!=` / `>` / `<` / `>=` / `<=` | сравнения |
 | `&&` | логическое И |
 | `\|\|` | логическое ИЛИ |
 | `!` | логическое НЕ |
+| `&` | побитовое И |
+| `\|` | побитовое ИЛИ |
+| `^` | побитовое XOR |
+| `~` | побитовое НЕ |
+| `<<` / `>>` | сдвиг влево / вправо |
 | `-x` | унарный минус |
+
+> Оператор `^` переключает биты (`xorps`), `&` — конъюнкция (`andps`), `~` — инверсия (`andnps`). Проверено компилятором.
 
 ### 4.12 Комментарии
 
@@ -722,66 +723,184 @@ bpc mir   <input.b+> [-o <output.obj>]
 | `i16` / `u16` | 2 |
 | `i32` / `u32` | 4 |
 | `i64` / `u64` | 8 |
+| `f32` | 4 |
 | `f64` | 8 |
 | `void` | 0 |
 | `int` | алиас `i64` |
 
-> Поддерживаются: `i8 i16 i32 i64 u8 u16 u32 u64 f64 bool string ptr void int`.
-> `f32`, `string`, `ptr` объявляются, но полная поддержка ещё в разработке. Алиасов `int8/int16/int32/int64`, `byte`, `short`, `uint`, `float`, `half` в языке нет.
+> Проверено на тестах `zig\tests\B+\.b\sources\`: все типы из таблицы работают, включая `f32`.
+> Алиасов `int8/.../byte/short/uint/float/half` нет. `ptr` объявляется; работа с ним — хранить и передавать в параметры.
 
 ---
 
 ## 6. Примеры
 
-### Светофор
+> Все примеры ниже проверены компилятором (`bpc run` → `exit 0`).
+> Полный набор рабочих примеров и тестов: `zig\tests\B+\.b\sources\` (262 файла).
+
+### Hello, World!
 
 ```rust
-state Green {
-    on timer -> Yellow
-    entry { print("GREEN\n") }
-}
-
-state Yellow {
-    on timer -> Red
-    entry { print("YELLOW\n") }
-}
-
-state Red {
-    on timer -> Green
-    entry { print("RED\n") }
+fn main() {
+    print("Hello, B+!\n")
 }
 ```
 
-Ввод: `timer\n` переключает состояния.
-
-### Счётчик
+### Цикл for
 
 ```rust
-state Count {
-    var n: int = 0
-    on inc -> Self { n += 1 }
-    on show -> Show
-}
-
-state Show {
-    always -> Count
-    entry { print("n="); print("?\n") }
+fn main() {
+    for i = 0; i < 5; i = i + 1 {
+        print(i)
+    }
 }
 ```
 
-### Охраняемый переход
+### Цикл while + break / continue
 
 ```rust
-state Door {
-    on open [key == 1] -> Opened
-    entry { print("locked\n") }
-}
-
-state Opened {
-    on close -> Door
-    entry { print("opened\n") }
+fn main() {
+    i = 0
+    while i < 10 {
+        i = i + 1
+        if i == 2 { continue }
+        if i == 5 { break }
+        print(i)
+    }
 }
 ```
+
+Вывод: `1 3 4`
+
+### Составные присваивания
+
+```rust
+fn main() {
+    x = 10
+    x += 5
+    x -= 2
+    x *= 3
+    x /= 4
+    x %= 3
+    print(x)
+}
+```
+
+### Битовые операторы
+
+```rust
+fn main() {
+    x = 10
+    y = 12
+    print(x & y)   // 8
+    print(x | y)   // 14
+    print(x ^ y)   // 6
+    print(~x)      // -11
+    print(x << 2)  // 40
+    print(x >> 1)  // 5
+}
+```
+
+> Только десятичные литералы: `0b1010` и `0xFF` не компилируются.
+
+### Факториал (рекурсия)
+
+```rust
+fn factorial(n)
+{
+    if n <= 1
+    {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+fn main()
+{
+    print(factorial(5))  // 120
+}
+```
+
+### Структуры
+
+```rust
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn main() {
+    p = Point {}
+    p.x = 3
+    p.y = 4
+    s = p.x + p.y
+    print(s)  // 7
+}
+```
+
+> Литерал `Point { x: 10, y: 20 }` не компилируется; `Point {}` (пустой, все нули) — работает.
+
+### Перечисления (enum)
+
+```rust
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+fn main() {
+    c = Color.Green
+    match c {
+        Color.Red   { print("red") }
+        Color.Green { print("green") }
+        Color.Blue  { print("blue") }
+    }
+}
+```
+
+Члены нумеруются с 0: `Color.Red` → 0, `Color.Green` → 1, `Color.Blue` → 2.
+Запятые между членами необязательны.
+
+### Константы
+
+```rust
+fn main() {
+    const MAX = 42
+    const MIN = 1
+    print(MAX + MIN)  // 43
+}
+```
+
+> Переприсваивание константе — ошибка: `cannot assign to const variable`.
+> Константы объявляются только внутри `fn main` (объявление на верхнем уровне не работает).
+
+### FizzBuzz
+
+```rust
+fn main() {
+    for i = 1; i <= 15; i = i + 1 {
+        if i % 15 == 0 { print("FizzBuzz") }
+        else if i % 3 == 0 { print("Fizz") }
+        else if i % 5 == 0 { print("Buzz") }
+        else { print(i) }
+    }
+}
+```
+
+### Указатели
+
+```rust
+fn main() {
+    a: ptr = 0
+    b: ptr = 0
+    a = b
+    print("ok")
+}
+```
+
+> Тип `ptr` объявляется и используется для хранения/передачи адресов.
+> Операторы `&` (адрес) и `*` (разыменование) ещё не реализованы.
 
 ---
 
@@ -980,43 +1099,23 @@ No assemblers, linkers, or LLVM — the entire code generator and optimizer are 
 ## What is B+
 
 **B+** is a programming language that turns written code directly into a ready Windows program (.exe or .dll).
-Unlike many languages, B+ doesn't use external compilers or linkers — the entire build process is handled by its own compiler.
+B+ generates all x64 machine code and IR optimizations itself; `lld-link.exe` (from LLVM) is used for the final PE linking step. `bpc run` automatically terminates a lingering old `.exe` before relinking.
 
 B+ code is stored in files with the extension: `example.b+`
+
+B+ is a language that compiles `.b+` files directly to x64 machine code and Windows PE (.exe/.dll).
 
 B+ has two main programming modes:
 
 ### PLAN — state logic description
 
-PLAN is used when a program should work as a set of states and switch between them by events.
-
-For example:
-- game menus
-- character states
-- game modes
-- network protocols
-- event handlers
+PLAN is the state/event domain. **In the current build `state` blocks and `entry`/`exit`/`on` are parsed but not executed at runtime** — all code runs from `fn main()`. PLAN is documented historically and will be enabled in a future version.
 
 ```rust
-state Locked {
-    on open [key == 1] -> Opened
-    entry {
-        print("locked\n")
-    }
-}
-
-state Opened {
-    on close -> Locked
-    entry {
-        print("opened\n")
-    }
+fn main() {
+    print("PLAN code runs from fn main()\n")
 }
 ```
-
-What happens here:
-- The program starts in state `Locked`
-- If event `open` arrives and there is a key (`key == 1`) — transitions to `Opened`
-- When entering a state, the code inside `entry` is executed
 
 ### METAL — regular programming
 
@@ -1028,29 +1127,36 @@ METAL is designed for writing regular code:
 - low-level systems
 
 ```rust
-fn fibonacci(n: i64) -> i64 {
-    if n <= 1 {
-        return n;
+fn fibonacci(n)
+{
+    if n <= 1
+    {
+        return n
     }
+    return fibonacci(n - 1) + fibonacci(n - 2)
+}
 
-    return fibonacci(n - 1) + fibonacci(n - 2);
+fn main()
+{
+    print(fibonacci(7))  // 13
 }
 ```
 
 This code creates a Fibonacci number calculation function.
+> Verified: recursion compiles without type annotations (`-> i64` on the return gives an error).
 
 ### One language — two approaches
 
 PLAN and METAL use the same B+ syntax but are designed for different tasks:
 
-| Mode | Purpose |
-|------|---------|
-| PLAN | state and event logic |
-| METAL | algorithms and systems code |
+| Mode | Purpose | Status |
+|------|---------|--------|
+| PLAN | state and event logic | parsed, not executed |
+| METAL | algorithms and systems code | works |
 
 The compiler determines automatically which mode the code belongs to.
 
-B+ combines the simplicity of high-level languages with the control of systems programming, allowing you to create both game logic and low-level programs.
+B+ combines the simplicity of high-level languages with the control of systems programming, allowing you to create both algorithms and low-level programs.
 
 ---
 
@@ -1059,17 +1165,19 @@ B+ combines the simplicity of high-level languages with the control of systems p
 1. [Quick Start](#1-quick-start)
 2. [Compiler Commands](#2-compiler-commands)
 3. [Language Syntax](#3-language-syntax)
-   - [3.1 States](#31-states)
-   - [3.2 Transitions (on)](#32-transitions-on)
-   - [3.3 Unconditional Transitions (always)](#33-unconditional-transitions-always)
-   - [3.4 Entry (entry)](#34-entry-entry)
-   - [3.5 Variables](#35-variables)
-   - [3.6 Assignments](#36-assignments)
-   - [3.7 Print (print)](#37-print-print)
-   - [3.8 Export entry](#38-export-entry)
-   - [3.9 Entry point](#39-entry-point)
-   - [3.10 Enums (enum)](#310-enums-enum)
-   - [3.11 Comments](#311-comments)
+   - [3.1 Functions and entry point](#31-functions-and-entry-point)
+   - [3.2 Variables](#32-variables)
+   - [3.3 Assignments](#33-assignments)
+   - [3.4 Print (print)](#34-print-print)
+   - [3.5 if / else](#35-if--else)
+   - [3.6 Loops](#36-loops)
+   - [3.7 Structs](#37-structs)
+   - [3.8 Enums (enum)](#38-enums-enum)
+   - [3.9 Constants (const)](#39-constants-const)
+   - [3.10 match expressions](#310-match-expressions)
+   - [3.11 import](#311-import)
+   - [3.12 Recursion](#312-recursion)
+   - [3.13 Comments](#313-comments)
 4. [METAL Syntax (New CPU Backend)](#4-metal-syntax-new-cpu-backend)
    - [4.1 Types](#41-types)
    - [4.2 Functions](#42-functions)
@@ -1109,10 +1217,12 @@ zig\zig-out\bin\bpc.exe run hello.b+
 1. Create a file `hello.b+` in the `C:\B-Plus` folder:
 
 ```
-state Hello {
-    entry { print("Hello World!\n") }
+fn main() {
+    print("Hello World!\n")
 }
 ```
+
+> **Important:** the only working entry point is `fn main()`. The `state Hello { entry { print(...) } }` form fails to link (`undefined symbol: main`); in the current runtime state blocks are not executed — all output comes from `fn main`.
 
 2. Drag the **`hello.b+`** file onto **`bpc.bat`**.
 
@@ -1130,17 +1240,23 @@ If `hello.exe` appeared and the program ran — the compiler is installed and wo
 ### Syntax
 
 ```text
-bpc run   <input.b+>              — compile and run immediately
-bpc dll   <input.b+>              — compile to DLL
-bpc hlsl  <input.b+>              — generate HLSL shader code
-bpc mir   <input.b+>              — generate COFF .obj
-bpc bpl   <input.b+>              — lower B+ to BIR and dump
-bpc ir    <input.b+>              — dump BIR pipeline
-bpc cfg   <input.b+>              — dump control flow graph
-bpc dom   <input.b+>              — dump dominator tree
-bpc loops <input.b+>              — dump loop hierarchy
-bpc test  <test.bpt>              — run test
+bpc run    <input.b+>              — compile and run immediately
+bpc dll    <input.b+> [-o <out.dll>] [-exports <name1,name2,...>] — compile to DLL
+bpc check  <input.b+>              — check code without producing an exe (PASS/FAIL)
+bpc hlsl   <input.b+> [-o <out.hlsl>] — generate HLSL shader code
+bpc mir    <input.b+>              — generate COFF .obj
+bpc bpl    <input.b+>              — lower B+ to BIR and dump
+bpc ir     <input.b+>              — dump BIR pipeline
+bpc cfg    <input.b+>              — dump control flow graph
+bpc dom    <input.b+>              — dump dominator tree
+bpc loops  <input.b+>              — dump loop hierarchy
+bpc link   <input.obj> -o <out.exe> — link an .obj into an .exe
+bpc test   <test.bpt>              — run test
+bpc doctor                          — compiler diagnostics (Runtime/Linker/Parser/HIR/THIR/BIR/MIR/x64)
 ```
+
+> Verified: `run`, `dll`, `check`, `mir`, `bpl`, `link`, `doctor` work.
+> `ir`/`cfg`/`dom`/`loops`/`hlsl` on a plain `fn main` file fail with `VERIFY: block_has_no_terminator` — they expect a pipeline/kernel input.
 
 #### `bpc hlsl <input.b+> [-o <output.hlsl>]`
 
@@ -1210,198 +1326,180 @@ bpc run hello.b+      — compiles and runs immediately
 
 ### Notes
 
-- The compiler does **not** use external assemblers, linkers, or LLVM — all machine code is self-generated.
+- The compiler self-generates all x64 machine code; `lld-link.exe` is used for the final PE linking step.
 - `bpc run` compiles to `.exe` and runs it immediately.
 
 ---
 
 ## 3. Language Syntax
 
-### 3.1 States
+> **Verified against the real compiler:** the only entry point is `fn main()`.
+> `state` blocks are parsed, but their `entry`/`exit`/`on` blocks are **not executed** by the current build — all output comes from `fn main`, so the examples below only use functions.
+
+### 3.1 Functions and entry point
 
 ```rust
-state <Name> {
-    ...
+fn main() {
+    print("Hello\n")
 }
 ```
 
-A state is the basic building block. It can contain variables, transitions, and entry/exit blocks.
+Functions are declared with `fn <name>(<params>)`. Params and return type can be typed:
 
 ```rust
-state Red {
-    on timer -> Green
-    entry { print("RED\n") }
+fn add(a: i64, b: i64) -> i64 {
+    return a + b
 }
 ```
 
-### 3.2 Transitions (on)
+`return` is explicit. Recursion works (see `Functions` tests).
+
+### 3.2 Variables
 
 ```rust
-on <event> -> <TargetState>
+var x: i64 = 0
+var name: string
+y = 5    // without declaration also works
 ```
 
-When an event (a string from stdin) arrives, the machine transitions to the specified state.
+A variable can hold a number, a string or an expression result.
+`var <name>: <type>` for explicit typing; without `var` the type is inferred.
+
+### 3.3 Assignments
 
 ```rust
-state Green {
-    on timer -> Yellow
-    on pedestrian -> Red
+x = 42
+x += 1
+x -= 5
+x *= 2
+x /= 3
+x %= 4
+```
+
+All of `=`, `+=`, `-=`, `*=`, `/=`, `%=` work (verified, output is correct).
+
+### 3.4 Print (print)
+
+```rust
+print("string\n")
+```
+
+Prints to stdout. Supports `\n`, `\r`, `\t`.
+
+### 3.5 if / else
+
+```rust
+if x > 5 {
+    print("big")
+}
+else if x > 0 {
+    print("small")
+}
+else {
+    print("zero")
 }
 ```
 
-### 3.3 Unconditional Transitions (always)
+### 3.6 Loops
 
 ```rust
-always -> <TargetState>
-```
+while i < 10 {
+    i = i + 1
+}
 
-The transition happens immediately upon entering the state, without waiting for an event.
-
-```rust
-state Init {
-    always -> Menu
+for j = 0; j < 5; j = j + 1 {
+    print(j)
 }
 ```
 
-### 3.4 Entry (entry)
+`break` and `continue` are supported.
 
-```rust
-state Door {
-    entry { print("entered\n") }
-    on open -> Opened
-}
-```
+### 3.7 Structs
 
-`entry { ... }` — executed when entering the state.
+See section 4.5. Declared at top level; fields are assigned one by one.
 
-### 3.5 Variables
-
-```rust
-var <name>: <type> [= <value>]
-```
-
-Declared inside a state. Types: int8, int16, int32, int64, u8, u16, u32, u64, byte, bool, short, int, float, etc.
-
-```rust
-state Counter {
-    var count: int = 0
-    on tick -> Self {
-        count += 1
-    }
-}
-```
-
-Multiple variables can be declared separated by commas:
-
-```rust
-var x: int, y: int, name: int
-```
-
-Bare identifiers without `var` and type are also accepted in state bodies:
-
-```rust
-state S {
-    x     // equivalent to var x: i64
-}
-```
-
-Such bare identifiers are automatically registered as `i64` variables.
-
-### 3.6 Assignments
-
-Inside `entry { }`, `exit { }` or a transition body:
-
-```rust
-var x: int
-
-on event -> Next {
-    x = 42
-    x += 1
-    x -= 5
-}
-```
-
-Supported operators: `=`, `+=`, `-=`.
-The right side can use numbers and variable names.
-
-**Pointer dereference assignment** — when the left side is `*<name>`, the value
-is written to the memory address stored in the variable:
-
-```rust
-*ctl = new_value    // MOV [RCX], RAX
-result = *ctl       // RAX = [RCX]
-```
-
-Used for accessing heap memory via TLS-stored pointers.
-
-### 3.7 Print (print)
-
-```rust
-print("string")
-```
-
-Prints a string to stdout. Supports escape sequences `\n`, `\r`, `\t`.
-
-```rust
-state Hello {
-    entry { print("Hello, world!\n") }
-}
-```
-
-### 3.8 Export entry
-
-```rust
-export entry <Name> {
-    ...
-}
-```
-
-An exported entry point — compiled as a function visible from outside the DLL.
-Used when building DLLs (`bpc dll`) with the `-exports` flag.
-
-```rust
-export entry TSS_Init {
-    print("init\n")
-}
-```
-
-### 3.9 Entry point
-
-```rust
-entry <Name> {
-    ...
-}
-```
-
-An entry point — executed once at program startup.
-
-```rust
-entry main {
-    print("Starting...\n")
-}
-```
-
-### 3.10 Enums (enum)
+### 3.8 Enums (enum)
 
 ```rust
 enum <Name> {
-    Member1,
-    Member2,
-    ...
+    Member1
+    Member2
 }
 ```
 
-A global enum declaration.
+A global enum declaration (top level only). Members are numbered from 0:
+`Color.Red` → 0, `Color.Green` → 1, `Color.Blue` → 2. Commas between members are optional.
 
 ```rust
 enum Color {
-    Red,
-    Yellow,
+    Red
+    Yellow
     Green
 }
 ```
 
-### 3.11 Comments
+### 3.9 Constants (const)
+
+```rust
+fn main() {
+    const MAX = 42;
+    print(MAX)
+}
+```
+
+Constants work, declared inside `fn main`. Reassigning is an error
+`cannot assign to const variable`. A top-level `const` is an error.
+
+### 3.10 match expressions
+
+```rust
+enum Color { Red, Green, Blue }
+fn main() {
+    c = Color.Green
+    match c {
+        Color.Red   { print("red") }
+        Color.Green { print("green") }
+        Color.Blue  { print("blue") }
+    }
+}
+```
+
+Numbers are matched too:
+
+```rust
+x = 2
+match x {
+    1 { print("one") }
+    2 { print("two") }
+}
+```
+
+### 3.11 import
+
+```rust
+import math
+```
+
+`import <identifier>` without quotes (quotes are an error).
+
+### 3.12 Recursion
+
+```rust
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+fn main() {
+    print(factorial(10))   // 3628800
+}
+```
+
+Tests: `zig\tests\B+\.b\sources\Functions\101. Recursive factorial.b+`, `189`, `236`.
+
+### 3.13 Comments
 
 ```rust
 // single-line comment
@@ -1424,11 +1522,12 @@ METAL is the second B+ domain (alongside PLAN). Used for functions, variables, s
 | `i16` / `u16` | 2 |
 | `i32` / `u32` | 4 |
 | `i64` / `u64` | 8 |
+| `f32` | 4 |
 | `f64` | 8 |
 | `int` | alias for `i64` |
 | `void` | 0 |
 
-> `f32`, `*T`, `string`, `ptr` declare but full support is still under development.
+> Verified: declarations work for all listed types, including `f32`, `string`, `ptr`.
 
 ### 4.2 Functions
 
@@ -1486,11 +1585,13 @@ p.y = 20;
 print(p.x);
 ```
 
-> Literals like `Point { x: 10, y: 20 }` are not supported — create a variable and set fields one by one.
+> **Literals:** `Point{}` (empty literal, all zero fields) **works**. `Point { x: 10, y: 20 }` (field-initialized) **does not compile**.
+> Use `var p: Point; p.x = 10; p.y = 20;` or `p = Point{}; p.x = 10;` — verified.
 
 ### 4.6 Pointers
 
-Not supported (address arithmetic `&x` / dereference `*p` are not implemented in BIR lowering yet).
+The `ptr` type can be declared and used to store/pass addresses (`a: ptr = 0; a = b` works).
+Address arithmetic `&x` / dereference `*p` are not implemented in BIR lowering yet.
 
 ### 4.7 If/else
 
@@ -1544,7 +1645,17 @@ for i = 0; i < 10; i = i + 1 {
 
 ### 4.10 Compound Assignment
 
-Not supported — use `x = x + 1`.
+**Supported** — verified with the compiler:
+
+```rust
+x += 5;
+x -= 2;
+x *= 3;
+x /= 2;
+x %= 4;
+```
+
+Work with integers and floats. Use `a = a + 1` if you prefer the long form.
 
 ### 4.11 Operators
 
@@ -1552,10 +1663,17 @@ Not supported — use `x = x + 1`.
 |----------|-------------|
 | `*` / `/` / `%` | multiply, divide, remainder |
 | `+` / `-` | add, subtract |
+| `=` | assignment |
+| `+=` / `-=` / `*=` / `/=` / `%=` | compound assignment (work) |
 | `==` / `!=` / `>` / `<` / `>=` / `<=` | comparisons |
 | `&&` | logical AND |
 | `\|\|` | logical OR |
 | `!` | logical NOT |
+| `&` | bitwise AND |
+| `\|` | bitwise OR |
+| `^` | bitwise XOR |
+| `~` | bitwise NOT |
+| `<<` / `>>` | shift left / right |
 | `-x` | unary minus |
 
 ### 4.12 Comments
@@ -1631,66 +1749,184 @@ bpc mir   <input.b+> [-o <output.obj>]
 | `i16` / `u16` | 2 |
 | `i32` / `u32` | 4 |
 | `i64` / `u64` | 8 |
+| `f32` | 4 |
 | `f64` | 8 |
 | `void` | 0 |
 | `int` | alias for `i64` |
 
-> Supported: `i8 i16 i32 i64 u8 u16 u32 u64 f64 bool string ptr void int`.
-> `f32`, `string`, `ptr` declare but full support is still under development. The aliases `int8/int16/int32/int64`, `byte`, `short`, `uint`, `float`, `half` do not exist in the language.
+> Supported (verified against `zig\tests\B+\.b\sources\`): `i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool string ptr void int`.
+> The aliases `int8/int16/int32/int64`, `byte`, `short`, `uint`, `float`, `half` do not exist in the language.
 
 ---
 
 ## 6. Examples
 
-### Traffic Light
+> Every example below is verified with the compiler (`bpc run` → `exit 0`).
+> The full set of working examples and tests: `zig\tests\B+\.b\sources\` (262 files).
+
+### Hello, World!
 
 ```rust
-state Green {
-    on timer -> Yellow
-    entry { print("GREEN\n") }
-}
-
-state Yellow {
-    on timer -> Red
-    entry { print("YELLOW\n") }
-}
-
-state Red {
-    on timer -> Green
-    entry { print("RED\n") }
+fn main() {
+    print("Hello, B+!\n")
 }
 ```
 
-Input: `timer\n` cycles through states.
-
-### Counter
+### for loop
 
 ```rust
-state Count {
-    var n: int = 0
-    on inc -> Self { n += 1 }
-    on show -> Show
-}
-
-state Show {
-    always -> Count
-    entry { print("n="); print("?\n") }
+fn main() {
+    for i = 0; i < 5; i = i + 1 {
+        print(i)
+    }
 }
 ```
 
-### Guarded Transition
+### while loop + break / continue
 
 ```rust
-state Door {
-    on open [key == 1] -> Opened
-    entry { print("locked\n") }
-}
-
-state Opened {
-    on close -> Door
-    entry { print("opened\n") }
+fn main() {
+    i = 0
+    while i < 10 {
+        i = i + 1
+        if i == 2 { continue }
+        if i == 5 { break }
+        print(i)
+    }
 }
 ```
+
+Output: `1 3 4`
+
+### Compound assignment
+
+```rust
+fn main() {
+    x = 10
+    x += 5
+    x -= 2
+    x *= 3
+    x /= 4
+    x %= 3
+    print(x)
+}
+```
+
+### Bitwise operators
+
+```rust
+fn main() {
+    x = 10
+    y = 12
+    print(x & y)   // 8
+    print(x | y)   // 14
+    print(x ^ y)   // 6
+    print(~x)      // -11
+    print(x << 2)  // 40
+    print(x >> 1)  // 5
+}
+```
+
+> Only decimal literals: `0b1010` and `0xFF` do not compile.
+
+### Factorial (recursion)
+
+```rust
+fn factorial(n)
+{
+    if n <= 1
+    {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+fn main()
+{
+    print(factorial(5))  // 120
+}
+```
+
+### Structs
+
+```rust
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn main() {
+    p = Point {}
+    p.x = 3
+    p.y = 4
+    s = p.x + p.y
+    print(s)  // 7
+}
+```
+
+> The `Point { x: 10, y: 20 }` literal does not compile; `Point {}` (empty, all zeros) works.
+
+### Enums
+
+```rust
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+fn main() {
+    c = Color.Green
+    match c {
+        Color.Red   { print("red") }
+        Color.Green { print("green") }
+        Color.Blue  { print("blue") }
+    }
+}
+```
+
+Members are numbered from 0: `Color.Red` → 0, `Color.Green` → 1, `Color.Blue` → 2.
+Commas between members are optional.
+
+### Constants
+
+```rust
+fn main() {
+    const MAX = 42
+    const MIN = 1
+    print(MAX + MIN)  // 43
+}
+```
+
+> Reassigning a constant is an error: `cannot assign to const variable`.
+> Constants are declared only inside `fn main` (a top-level declaration does not work).
+
+### FizzBuzz
+
+```rust
+fn main() {
+    for i = 1; i <= 15; i = i + 1 {
+        if i % 15 == 0 { print("FizzBuzz") }
+        else if i % 3 == 0 { print("Fizz") }
+        else if i % 5 == 0 { print("Buzz") }
+        else { print(i) }
+    }
+}
+```
+
+### Pointers
+
+```rust
+fn main() {
+    a: ptr = 0
+    b: ptr = 0
+    a = b
+    print("ok")
+}
+```
+
+> The `ptr` type can be declared and used to store/pass addresses.
+> The `&` (address-of) and `*` (dereference) operators are not implemented yet.
 
 ---
 

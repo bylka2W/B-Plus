@@ -1,0 +1,33 @@
+struct Device
+{
+    id: i64
+    value: i64
+    enabled: bool
+}
+
+fn update(device, amount)
+{
+    if device.enabled
+    {
+        device.value += amount
+    }
+}
+
+fn main()
+{
+    device = Device{}
+
+    device.id = 100
+    device.value = 0
+    device.enabled = true
+
+    for i = 0;
+        i < 10;
+        i = i + 1
+    {
+        update(device, i)
+    }
+
+    print(device.id)
+    print(device.value)
+}

@@ -13,12 +13,19 @@ zig-cache/
 *.ilk
 *.bin
 
-#тесты — не пушиться
-zig/tests/
-*.b+
-*.bpt
-*.py
-*.txt
+#тесты
+zig/tests/bugfix/
+zig/tests/fuzz/
+zig/tests/programs/
+zig/tests/regressions/
+zig/tests/runtime/
+zig/tests/safety/
+zig/tests/semantic/
+zig/tests/unit/
+zig/tests/B+/zig-cache/
+zig/tests/B+/.zig-cache/
+# B+ language test sources — пушить
+!zig/tests/B+/.b/sources/
 !zig/src/**/*.zig
 
 #IDE

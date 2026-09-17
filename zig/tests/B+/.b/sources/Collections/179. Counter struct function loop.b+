@@ -1,0 +1,24 @@
+struct Counter
+{
+    value: i64
+}
+
+fn increment(counter)
+{
+    counter.value = counter.value + 1
+}
+
+fn main()
+{
+    counter = Counter{}
+    counter.value = 0
+
+    for i = 0;
+        i < 5;
+        i = i + 1
+    {
+        increment(counter)
+    }
+
+    print(counter.value)
+}

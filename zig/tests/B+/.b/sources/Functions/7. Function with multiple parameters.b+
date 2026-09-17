@@ -1,0 +1,9 @@
+fn calculate(a, b, c)
+{
+    return a + b * c
+}
+
+fn main()
+{
+    print(calculate(2, 3, 4))
+}

@@ -1,0 +1,8 @@
+fn main()
+{
+    a: i64 = 0
+
+    result = ~a
+
+    print(result)
+}

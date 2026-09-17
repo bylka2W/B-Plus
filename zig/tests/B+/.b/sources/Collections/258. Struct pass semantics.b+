@@ -1,0 +1,24 @@
+struct Player
+{
+    health: i64
+    damage: i64
+}
+
+fn attack(player)
+{
+    player.health = player.health - player.damage
+}
+
+fn main()
+{
+    player = Player{}
+
+    player.health = 100
+    player.damage = 25
+
+    attack(player)
+    attack(player)
+    attack(player)
+
+    print(player.health)
+}

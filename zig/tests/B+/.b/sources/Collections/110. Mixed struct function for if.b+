@@ -1,0 +1,31 @@
+struct Player
+{
+    hp: i32
+}
+
+fn damage(player, amount)
+{
+    player.hp = player.hp - amount
+}
+
+fn main()
+{
+    player = Player{}
+    player.hp = 100
+
+    for i = 0;
+        i < 5;
+        i = i + 1
+    {
+        damage(player, 10)
+    }
+
+    if player.hp == 50
+    {
+        print("PASS")
+    }
+    else
+    {
+        print("FAIL")
+    }
+}

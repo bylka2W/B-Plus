@@ -1,0 +1,10 @@
+fn getName() -> string
+{
+    return "Gnom"
+}
+
+fn main()
+{
+    name = getName()
+    print(name)
+}

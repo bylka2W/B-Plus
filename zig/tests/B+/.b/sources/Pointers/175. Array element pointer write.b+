@@ -1,0 +1,10 @@
+fn main()
+{
+    numbers = {10, 20, 30}
+
+    p = &numbers.1
+
+    *p = 99
+
+    print(numbers.1)
+}

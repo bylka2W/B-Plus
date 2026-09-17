@@ -1,0 +1,11 @@
+fn sum(a, b, c)
+{
+    return a + b + c
+}
+
+fn main()
+{
+    x = sum(10, 20, 30)
+
+    print(x)
+}

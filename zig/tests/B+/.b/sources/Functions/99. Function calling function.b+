@@ -1,0 +1,14 @@
+fn double(x)
+{
+    return x * 2
+}
+
+fn triple(x)
+{
+    return double(x) + x
+}
+
+fn main()
+{
+    print(triple(10))
+}

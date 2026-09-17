@@ -1,0 +1,15 @@
+struct User
+{
+    name: string
+    age: i64
+}
+
+fn main()
+{
+    user = User{}
+
+    user.name = "Gnom"
+    user.height = 180
+
+    print(user.height)
+}

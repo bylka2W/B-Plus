@@ -438,15 +438,25 @@ pub fn main() !void {
         try tmp_dir.writeFile(.{ .sub_path = rt_obj_name, .data = minrt_obj_bytes });
 
         const linker = @import("linker/linker.zig");
-        try linker.link(allocator, .{
-            .obj_path = obj_name,
-            .output_path = out_path_result,
-            .entry = "bplus_start",
-            .subsystem = "console",
-            .mode = if (is_dll) .dll else .exe,
-            .libs = &.{"kernel32.lib"},
-            .extra_objs = &.{rt_obj_name},
-        });
+        var link_attempts: u8 = 0;
+        while (link_attempts < 5) : (link_attempts += 1) {
+            linker.link(allocator, .{
+                .obj_path = obj_name,
+                .output_path = out_path_result,
+                .entry = "bplus_start",
+                .subsystem = "console",
+                .mode = if (is_dll) .dll else .exe,
+                .libs = &.{"kernel32.lib"},
+                .extra_objs = &.{rt_obj_name},
+            }) catch |err| {
+                if (link_attempts < 4) {
+                    std.time.sleep(50 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+            break;
+        }
 
         _ = tmp_dir.deleteFile(obj_name) catch {};
         _ = tmp_dir.deleteFile(rt_obj_name) catch {};

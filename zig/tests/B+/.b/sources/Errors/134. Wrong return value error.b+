@@ -1,0 +1,9 @@
+fn getNumber() -> i32
+{
+    return "hello"
+}
+
+fn main()
+{
+    print(getNumber())
+}

@@ -1,0 +1,7 @@
+fn main()
+{
+    x: i32 = 10
+    x = "hello"
+
+    print(x)
+}

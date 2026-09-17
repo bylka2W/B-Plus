@@ -1,0 +1,6 @@
+import math
+
+fn main()
+{
+    print(123)
+}

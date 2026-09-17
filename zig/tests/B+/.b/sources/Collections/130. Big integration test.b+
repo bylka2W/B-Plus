@@ -1,0 +1,39 @@
+struct Player
+{
+    hp: i32
+    damage: i32
+}
+
+fn attack(player)
+{
+    player.hp = player.hp - player.damage
+}
+
+fn alive(player)
+{
+    return player.hp > 0
+}
+
+fn main()
+{
+    player = Player{}
+
+    player.hp = 100
+    player.damage = 25
+
+    for i = 0;
+        i < 3;
+        i = i + 1
+    {
+        attack(player)
+    }
+
+    if alive(player)
+    {
+        print(player.hp)
+    }
+    else
+    {
+        print("dead")
+    }
+}

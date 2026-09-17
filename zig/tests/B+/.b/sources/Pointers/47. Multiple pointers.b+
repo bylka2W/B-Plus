@@ -1,0 +1,10 @@
+fn main()
+{
+    x = 10
+    p = &x
+    q = p
+
+    *q = 30
+
+    print(x)
+}

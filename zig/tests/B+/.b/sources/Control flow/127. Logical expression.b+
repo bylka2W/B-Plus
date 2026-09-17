@@ -1,0 +1,11 @@
+fn main()
+{
+    a = 10
+    b = 20
+    c = true
+
+    if a < b && c
+    {
+        print("PASS")
+    }
+}

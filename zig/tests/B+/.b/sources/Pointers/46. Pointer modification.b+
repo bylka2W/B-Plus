@@ -1,0 +1,10 @@
+fn main()
+{
+    x = 50
+    p = &x
+
+    *p = 100
+
+    print(x)
+    print(*p)
+}

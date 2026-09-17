@@ -1,0 +1,10 @@
+fn main()
+{
+    numbers = {10, 20, 30}
+
+    x = numbers.0 + numbers.1
+    y = numbers.2 * 2
+
+    print(x)
+    print(y)
+}

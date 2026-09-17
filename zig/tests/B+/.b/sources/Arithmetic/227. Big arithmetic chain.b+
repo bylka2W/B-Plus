@@ -1,0 +1,17 @@
+fn main()
+{
+    a = 10
+    b = 20
+    c = 30
+    d = 40
+    e = 50
+
+    result =
+        (((a + b) * c) - d) * e
+        + (a * b)
+        - (c * d)
+        + (e / 5)
+        - 7
+
+    print(result)
+}

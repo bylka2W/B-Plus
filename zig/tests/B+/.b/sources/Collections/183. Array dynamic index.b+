@@ -1,0 +1,14 @@
+fn main()
+{
+    numbers = {10, 20, 30, 40, 50}
+    sum = 0
+
+    for i = 0;
+        i < 5;
+        i = i + 1
+    {
+        sum += numbers.i
+    }
+
+    print(sum)
+}

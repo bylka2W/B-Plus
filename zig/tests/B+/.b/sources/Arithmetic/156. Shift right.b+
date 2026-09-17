@@ -1,0 +1,8 @@
+fn main()
+{
+    x = 32
+
+    result = x >> 3
+
+    print(result)
+}

@@ -1,0 +1,139 @@
+{
+  "name": "vscode-bplus",
+  "displayName": "B+ Language Support",
+  "description": "Syntax highlighting, snippets and Run integration for the B+ programming language",
+  "version": "0.1.0",
+  "publisher": "bplus",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "b+",
+    "bplus",
+    "language",
+    "compiler"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:bplus"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "bplus",
+        "aliases": [
+          "B+",
+          "bplus",
+          "b+"
+        ],
+        "extensions": [
+          ".b+",
+          ".bplus",
+          ".bp"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "bplus",
+        "scopeName": "source.bplus",
+        "path": "./syntaxes/bplus.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "bplus.run",
+        "title": "B+: Run Current File",
+        "category": "B+",
+        "icon": "$(play)"
+      },
+      {
+        "command": "bplus.build",
+        "title": "B+: Build Current File (no run)",
+        "category": "B+",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "bplus.clean",
+        "title": "B+: Launch .exe in Terminal",
+        "category": "B+",
+        "icon": "$(terminal)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "bplus.run",
+        "key": "ctrl+alt+b",
+        "when": "editorLangId == bplus && editorTextFocus"
+      },
+      {
+        "command": "bplus.run",
+        "key": "f8",
+        "when": "editorLangId == bplus && editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "bplus.run",
+          "when": "editorLangId == bplus",
+          "group": "navigation@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "bplus.run",
+          "when": "editorLangId == bplus"
+        },
+        {
+          "command": "bplus.build",
+          "when": "editorLangId == bplus"
+        },
+        {
+          "command": "bplus.clean",
+          "when": "editorLangId == bplus"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "bplus.run",
+          "when": "resourceLangId == bplus",
+          "group": "B+@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "B+",
+      "properties": {
+        "bplus.compilerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to bpc.exe. If empty, searches PATH, then the default zig-out location."
+        },
+        "bplus.runInTerminal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run compiled .exe inside the integrated terminal so program output is shown."
+        },
+        "bplus.showOutputChannel": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show compiler diagnostics in the B+ output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "npx @vscode/vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0"
+  }
+}

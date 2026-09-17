@@ -1,0 +1,24 @@
+struct Position
+{
+    x: i32
+    y: i32
+}
+
+struct Player
+{
+    position: Position
+    hp: i32
+}
+
+fn main()
+{
+    player = Player{}
+
+    player.position.x = 100
+    player.position.y = 200
+    player.hp = 50
+
+    print(player.position.x)
+    print(player.position.y)
+    print(player.hp)
+}
