@@ -276,3 +276,4 @@ pub fn dumpModule(module: *const bir.Module, writer: anytype) !void {
         }
     }
 }
+

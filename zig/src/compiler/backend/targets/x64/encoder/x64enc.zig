@@ -250,7 +250,7 @@ pub fn emit(code: *std.ArrayList(u8), op: OpCode, operands: []const Operand) !vo
         },
         .MOV_MEM_R8 => {
             if (operands.len < 2) return error.MissingOperands;
-            try emitModrmSibDisp(code, 0, 0x88, operands[1].reg, operands[0], 0);
+            try emitModrmSibDisp(code, 0x40, 0x88, operands[1].reg, operands[0], 0);
         },
         .MOVZX_R64_R32 => {
             if (operands.len < 2) return error.MissingOperands;
@@ -1128,3 +1128,4 @@ pub fn disassemble(bytes: []const u8) ![]u8 {
     }
     return result.toOwnedSlice();
 }
+

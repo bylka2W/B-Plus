@@ -155,3 +155,4 @@ test "TypeEngine: type count" {
 
     try std.testing.expect(engine.typeCount() == 3);
 }
+

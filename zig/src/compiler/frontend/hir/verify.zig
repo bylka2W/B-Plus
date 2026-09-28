@@ -157,3 +157,4 @@ pub fn verifyPattern(arena: *const HirArena, pat_id: arena_mod.PatId) VerifyErro
         else => {},
     }
 }
+

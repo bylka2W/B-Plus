@@ -57,3 +57,4 @@ pub const Type = struct {
     size_bytes: ?u16,
     extra: TypeExtra = .none,
 };
+

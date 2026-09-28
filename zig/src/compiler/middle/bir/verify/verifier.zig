@@ -117,3 +117,4 @@ fn verifyInternal(module: *bir.Module, options: VerifyOptions) !VerifyResult {
 pub fn verifyModule(module: *bir.Module, _: Allocator) !VerifyResult {
     return verify(module, .{});
 }
+

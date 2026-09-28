@@ -99,3 +99,4 @@ pub fn selectGuardEval(ctx: *Ctx, m: mir.GuardEvalInst) !void {
     };
     try emitSetcc(ctx, m.result, cc_byte);
 }
+

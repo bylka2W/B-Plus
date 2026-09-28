@@ -85,3 +85,4 @@ pub const SourceSpan = struct {
         try writer.print("[{d}:{d}..{d}:{d}]", .{ self.file_id, self.start, self.file_id, self.end });
     }
 };
+

@@ -33,3 +33,4 @@ fn resolvePtrKind(func: *const bir.Function, val: bir.ValueId) PtrKind {
         else => .unknown,
     };
 }
+

@@ -66,3 +66,4 @@ pub const MachineFunction = struct {
         try self.appendInstr(block_idx, op, &.{o1});
     }
 };
+

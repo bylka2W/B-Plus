@@ -47,7 +47,9 @@ pub const AstBuilder = struct {
         if (!gop.found_existing) {
             gop.value_ptr.* = @intCast(self.symbol_map.count() - 1);
         }
-        return SymbolId.new(gop.value_ptr.*);
+        const sym = SymbolId.new(gop.value_ptr.*);
+        self.arena.registerSymbol(sym, text);
+        return sym;
     }
 
     pub fn lowerSourceFile(self: *AstBuilder, node: SyntaxNode) std.ArrayList(DeclId) {
@@ -72,6 +74,7 @@ pub const AstBuilder = struct {
             .impl_decl => self.lowerImplDecl(node),
             .type_decl => self.lowerTypeAlias(node),
             .import_decl => self.lowerImport(node),
+            .state_decl => self.lowerStateDecl(node),
             .expr_stmt, .let_stmt, .var_stmt, .const_stmt, .if_stmt, .while_stmt,
             .for_stmt, .loop_stmt, .return_stmt, .break_stmt, .continue_stmt,
             .defer_stmt, .errdefer_stmt, .block_stmt,
@@ -347,6 +350,114 @@ pub const AstBuilder = struct {
             .import = .{
                 .path = path,
                 .alias = alias,
+                .span = self.nodeSpan(node),
+            },
+        };
+        return self.arena.addDecl(decl);
+    }
+
+    pub fn lowerStateDecl(self: *AstBuilder, node: SyntaxNode) ?DeclId {
+        var name: SymbolId = SymbolId.INVALID;
+        var variables = std.ArrayList(ast_node.AstStmt.VarStmt).init(self.arena.allocator);
+        var entry: ?StmtId = null;
+        var exit: ?StmtId = null;
+        var transitions = std.ArrayList(ast_node.AstDecl.StateTransition).init(self.arena.allocator);
+
+        var iter = node.allChildren();
+        while (iter.next()) |child| {
+            switch (child.kind()) {
+                .identifier => {
+                    if (!name.isValid()) {
+                        name = self.internName(self.firstIdentifierText(child));
+                    }
+                },
+                .let_stmt, .var_stmt => {
+                    if (child.asNode()) |n| {
+                        const sid = self.lowerStmt(n);
+                        if (self.arena.getStmt(sid)) |s| {
+                            switch (s) {
+                                .let => |lv| {
+                                    variables.append(.{
+                                        .pattern = lv.pattern,
+                                        .type_annotation = lv.type_annotation,
+                                        .init = lv.init,
+                                        .span = lv.span,
+                                    }) catch break;
+                                },
+                                .@"var" => |vv| {
+                                    variables.append(.{
+                                        .pattern = vv.pattern,
+                                        .type_annotation = vv.type_annotation,
+                                        .init = vv.init,
+                                        .span = vv.span,
+                                    }) catch break;
+                                },
+                                else => {},
+                            }
+                        }
+                    }
+                },
+                .entry_body => {
+                    if (child.asNode()) |n| {
+                        var eiter = n.childNodes();
+                        while (eiter.next()) |ec| {
+                            if (ec.kind() == .block_stmt) {
+                                entry = self.lowerBlockAsStmt(ec);
+                            }
+                        }
+                    }
+                },
+                .exit_body => {
+                    if (child.asNode()) |n| {
+                        var eiter = n.childNodes();
+                        while (eiter.next()) |ec| {
+                            if (ec.kind() == .block_stmt) {
+                                exit = self.lowerBlockAsStmt(ec);
+                            }
+                        }
+                    }
+                },
+                .transition => {
+                    if (child.asNode()) |n| {
+                        var event: ?SymbolId = null;
+                        var target: SymbolId = SymbolId.INVALID;
+                        var seen_arrow = false;
+                        var titer = n.allChildren();
+                        while (titer.next()) |tc| {
+                            switch (tc.kind()) {
+                                .kw_on, .kw_always => {},
+                                .arrow => seen_arrow = true,
+                                .identifier => {
+                                    if (!seen_arrow) {
+                                        if (event == null) {
+                                            event = self.internName(self.firstIdentifierText(tc));
+                                        }
+                                    } else if (!target.isValid()) {
+                                        target = self.internName(self.firstIdentifierText(tc));
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                        transitions.append(.{
+                            .event = event,
+                            .target = target,
+                            .span = self.nodeSpan(n),
+                        }) catch break;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        const decl = AstDecl{
+            .state_decl = .{
+                .name = name,
+                .variables = variables.toOwnedSlice() catch &.{},
+                .entry = entry,
+                .exit = exit,
+                .transitions = transitions.toOwnedSlice() catch &.{},
+                .visibility = .private,
                 .span = self.nodeSpan(node),
             },
         };
@@ -688,7 +799,12 @@ pub const AstBuilder = struct {
 
     fn lowerLiteral(self: *AstBuilder, node: SyntaxNode) ExprId {
         const text = self.firstTokenText(node);
-        const kind: ast_node.LiteralKind = switch (node.kind()) {
+        const first_kind = blk: {
+            var tit = node.childTokens();
+            if (tit.next()) |tok| break :blk tok.kind();
+            break :blk node.kind();
+        };
+        const kind: ast_node.LiteralKind = switch (first_kind) {
             .true_literal, .false_literal => .boolean,
             .null_literal => .null_value,
             .int_literal => .integer,
@@ -1119,9 +1235,13 @@ pub const AstBuilder = struct {
 
     fn lowerNamedType(self: *AstBuilder, node: SyntaxNode) TypeRefId {
         var name: SymbolId = SymbolId.INVALID;
-        var iter = node.childNodes();
+        var iter = node.allChildren();
         while (iter.next()) |child| {
-            if (child.kind() == .identifier and !name.isValid()) {
+            if (child == .token) {
+                if (!name.isValid()) {
+                    name = self.internName(child.token.text());
+                }
+            } else if (child.kind() == .identifier and !name.isValid()) {
                 name = self.internName(self.firstIdentifierText(child));
             }
         }
@@ -1328,3 +1448,4 @@ pub const AstBuilder = struct {
 };
 
 const SourceSpan = @import("../source/location/span.zig").SourceSpan;
+

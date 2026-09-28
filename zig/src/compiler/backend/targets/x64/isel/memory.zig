@@ -61,45 +61,36 @@ pub fn selectLea(ctx: *Ctx, l: mir.LeaInst) !void {
 pub fn selectLoad(ctx: *Ctx, l: mir.LoadInst) !void {
     const dst_spilled = regalloc.isSpilled(ctx.ra, l.dst);
     const ptr_spilled = regalloc.isSpilled(ctx.ra, l.ptr);
-    const dst_vreg = switch (l.dst) { .vreg => |v| v, else => 0 };
-    const dtype = ctx.mfunc.getVRegType(dst_vreg) orelse .i64;
-    const is_float = dtype == .f32 or dtype == .f64;
 
     if (ptr_spilled) {
         try spill.loadSpilledOp(ctx, l.ptr, ctx.scratch);
-        if (is_float) {
-            const load_op: OpCode = if (dtype == .f64) .SSE_MOVSD_LD else .SSE_MOVSS_LD;
-            const dst_xmm: i16 = if (dst_spilled) ctx.scratch else resolveReg(ctx.ra, l.dst);
-            try append2(ctx, load_op, Operand.xmm(dst_xmm), .{ .base_reg = ctx.scratch, .disp = 0 });
-            if (dst_spilled) {
-                try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
-            }
-        } else {
-            if (dst_spilled) {
-                try append2(ctx, .MOV_R64_MEM, Operand.r(ctx.scratch), .{ .base_reg = ctx.scratch, .disp = 0 });
-                try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
-            } else {
-                const dst = resolveReg(ctx.ra, l.dst);
-                try append2(ctx, .MOV_R64_MEM, Operand.r(dst), .{ .base_reg = ctx.scratch, .disp = 0 });
-            }
+    }
+    const ptr_reg = if (ptr_spilled) ctx.scratch else resolveReg(ctx.ra, l.ptr);
+
+    const is_float = l.size == .f32 or l.size == .f64;
+    const load_op: OpCode = switch (l.size) {
+        .u8 => .MOVZX_R64_MEM8,
+        .u16 => .MOVZX_R64_MEM16,
+        .u32 => .MOV_R32_MEM,
+        .u64 => .MOV_R64_MEM,
+        .f32 => .SSE_MOVSS_LD,
+        .f64 => .SSE_MOVSD_LD,
+        .xmm128 => .SSE_MOVSD_LD,
+    };
+
+    if (is_float) {
+        const dst_xmm: i16 = if (dst_spilled) ctx.scratch else resolveReg(ctx.ra, l.dst);
+        try append2(ctx, load_op, Operand.xmm(dst_xmm), .{ .base_reg = ptr_reg, .disp = 0 });
+        if (dst_spilled) {
+            try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
         }
     } else {
-        const ptr_reg = resolveReg(ctx.ra, l.ptr);
-        if (is_float) {
-            const load_op: OpCode = if (dtype == .f64) .SSE_MOVSD_LD else .SSE_MOVSS_LD;
-            const dst_xmm: i16 = if (dst_spilled) ctx.scratch else resolveReg(ctx.ra, l.dst);
-            try append2(ctx, load_op, Operand.xmm(dst_xmm), .{ .base_reg = ptr_reg, .disp = 0 });
-            if (dst_spilled) {
-                try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
-            }
+        if (dst_spilled) {
+            try append2(ctx, load_op, Operand.r(ctx.scratch), .{ .base_reg = ptr_reg, .disp = 0 });
+            try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
         } else {
-            if (dst_spilled) {
-                try append2(ctx, .MOV_R64_MEM, Operand.r(ctx.scratch), .{ .base_reg = ptr_reg, .disp = 0 });
-                try spill.storeSpilledOp(ctx, l.dst, ctx.scratch);
-            } else {
-                const dst = resolveReg(ctx.ra, l.dst);
-                try append2(ctx, .MOV_R64_MEM, Operand.r(dst), .{ .base_reg = ptr_reg, .disp = 0 });
-            }
+            const dst = resolveReg(ctx.ra, l.dst);
+            try append2(ctx, load_op, Operand.r(dst), .{ .base_reg = ptr_reg, .disp = 0 });
         }
     }
 }
@@ -107,48 +98,49 @@ pub fn selectLoad(ctx: *Ctx, l: mir.LoadInst) !void {
 pub fn selectStore(ctx: *Ctx, s: mir.StoreInst) !void {
     const ptr_spilled = regalloc.isSpilled(ctx.ra, s.ptr);
     const src_spilled = regalloc.isSpilled(ctx.ra, s.src);
-    const src_vreg = switch (s.src) { .vreg => |v| v, else => 0 };
-    const dtype = ctx.mfunc.getVRegType(src_vreg) orelse .i64;
-    const is_float = dtype == .f32 or dtype == .f64;
 
     if (ptr_spilled) {
         try spill.loadSpilledOp(ctx, s.ptr, ctx.scratch);
-        if (is_float) {
-            const store_op: OpCode = if (dtype == .f64) .SSE_MOVSD_ST else .SSE_MOVSS_ST;
-            const src_xmm: i16 = if (src_spilled) ctx.scratch else resolveReg(ctx.ra, s.src);
-            try append2(ctx, store_op, Operand.xmm(src_xmm), .{ .base_reg = ctx.scratch, .disp = 0 });
-        } else {
-            if (s.src == .imm) {
-                try append2(ctx, .MOV_R64_IMM64, Operand.r(regalloc.SCRATCH_REG_2), .{ .imm64 = @bitCast(s.src.imm) });
-                try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ctx.scratch, .disp = 0 }, Operand.r(regalloc.SCRATCH_REG_2));
+    }
+    const ptr_reg = if (ptr_spilled) ctx.scratch else resolveReg(ctx.ra, s.ptr);
+
+const is_float = s.size == .f32 or s.size == .f64;
+    if (is_float) {
+        const store_op: OpCode = if (s.size == .f64) .SSE_MOVSD_ST else .SSE_MOVSS_ST;
+        if (s.src == .imm) {
+            try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), .{ .imm64 = @bitCast(s.src.imm) });
+            if (s.size == .f64) {
+                try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(ctx.scratch), Operand.r(ctx.scratch));
             } else {
-                const src_reg = resolveReg(ctx.ra, s.src);
-                try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ctx.scratch, .disp = 0 }, Operand.r(src_reg));
+                try append2(ctx, .SSE_MOVD_LD, Operand.xmm(ctx.scratch), Operand.r(ctx.scratch));
             }
-        }
-    } else if (src_spilled) {
-        try spill.loadSpilledOp(ctx, s.src, ctx.scratch);
-        const ptr_reg = resolveReg(ctx.ra, s.ptr);
-        if (is_float) {
-            const store_op: OpCode = if (dtype == .f64) .SSE_MOVSD_ST else .SSE_MOVSS_ST;
+            try append2(ctx, store_op, Operand.xmm(ctx.scratch), .{ .base_reg = ptr_reg, .disp = 0 });
+        } else if (src_spilled) {
+            try spill.loadSpilledOp(ctx, s.src, ctx.scratch);
             try append2(ctx, store_op, Operand.xmm(ctx.scratch), .{ .base_reg = ptr_reg, .disp = 0 });
         } else {
-            try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ptr_reg, .disp = 0 }, Operand.r(ctx.scratch));
-        }
-    } else {
-        const ptr_reg = resolveReg(ctx.ra, s.ptr);
-        if (is_float) {
-            const store_op: OpCode = if (dtype == .f64) .SSE_MOVSD_ST else .SSE_MOVSS_ST;
             const src_xmm: i16 = resolveReg(ctx.ra, s.src);
             try append2(ctx, store_op, Operand.xmm(src_xmm), .{ .base_reg = ptr_reg, .disp = 0 });
-        } else {
-            if (s.src == .imm) {
-                try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), .{ .imm64 = @bitCast(s.src.imm) });
-                try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ptr_reg, .disp = 0 }, Operand.r(ctx.scratch));
-            } else {
-                const src_reg = resolveReg(ctx.ra, s.src);
-                try append2(ctx, .MOV_MEM_R64, .{ .base_reg = ptr_reg, .disp = 0 }, Operand.r(src_reg));
-            }
         }
+        return;
+    }
+
+    const store_op: OpCode = switch (s.size) {
+        .u8 => .MOV_MEM_R8,
+        .u16 => .MOV_MEM_R16,
+        .u32 => .MOV_MEM_R32,
+        .u64 => .MOV_MEM_R64,
+        else => .MOV_MEM_R64,
+    };
+    if (s.src == .imm) {
+        try append2(ctx, .MOV_R64_IMM64, Operand.r(regalloc.SCRATCH_REG_2), .{ .imm64 = @bitCast(s.src.imm) });
+        try append2(ctx, store_op, .{ .base_reg = ptr_reg, .disp = 0 }, Operand.r(regalloc.SCRATCH_REG_2));
+    } else if (src_spilled) {
+        try spill.loadSpilledOp(ctx, s.src, ctx.scratch);
+        try append2(ctx, store_op, .{ .base_reg = ptr_reg, .disp = 0 }, Operand.r(ctx.scratch));
+    } else {
+        const src_reg = resolveReg(ctx.ra, s.src);
+        try append2(ctx, store_op, .{ .base_reg = ptr_reg, .disp = 0 }, Operand.r(src_reg));
     }
 }
+

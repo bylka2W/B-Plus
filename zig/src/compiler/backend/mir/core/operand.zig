@@ -33,3 +33,4 @@ pub const CondCode = enum(u8) {
     gt = 0xF,
     ge = 0xD,
 };
+

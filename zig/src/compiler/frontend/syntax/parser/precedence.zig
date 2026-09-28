@@ -92,3 +92,4 @@ pub fn isRightAssociative(kind: TokenKind) bool {
         else => false,
     };
 }
+

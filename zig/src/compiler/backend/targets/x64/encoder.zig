@@ -72,3 +72,4 @@ pub fn emitDisp32(code: *std.ArrayList(u8), disp: i32) !void {
 pub fn emitImm32(code: *std.ArrayList(u8), imm: u32) !void {
     try code.appendSlice(@ptrCast(&@as([4]u8, @bitCast(imm))));
 }
+

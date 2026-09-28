@@ -227,3 +227,4 @@ fn updateBranchTarget(func: *bir.Function, block_id: BlockId, old_target: BlockI
         else => {},
     }
 }
+

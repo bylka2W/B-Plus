@@ -30,3 +30,4 @@ pub fn lowerStructItem(self: *HirLowering, decl_id: AstDeclId, s: @import("../lo
         } },
     });
 }
+

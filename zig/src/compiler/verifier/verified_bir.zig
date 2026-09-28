@@ -20,3 +20,4 @@ pub const VerifiedBIR = struct {
         try writer.print("VerifiedBIR({d} funcs)", .{self.module.functions.items.len});
     }
 };
+

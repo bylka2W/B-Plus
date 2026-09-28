@@ -76,3 +76,4 @@ pub fn hasBackEdges(mfunc: *const mir.MFunction) bool {
     }
     return false;
 }
+

@@ -18,3 +18,4 @@ pub const VerifiedTHIR = struct {
         try writer.print("VerifiedTHIR({d} funcs)", .{self.module.functions.items.len});
     }
 };
+

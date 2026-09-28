@@ -125,3 +125,4 @@ pub const SourceManager = struct {
         return self.files.items.len;
     }
 };
+

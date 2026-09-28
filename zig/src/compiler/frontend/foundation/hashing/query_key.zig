@@ -38,3 +38,4 @@ pub const QueryKey = struct {
         try writer.print("Query({s}, input={d}, fp={x})", .{ @tagName(self.kind), self.input, self.fingerprint });
     }
 };
+

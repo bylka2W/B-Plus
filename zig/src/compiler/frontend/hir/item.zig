@@ -106,6 +106,7 @@ pub const HirItem = struct {
 
         pub const StateVar = struct {
             name: SymbolId,
+            def_id: DefId,
             ty: TypeId,
             default: ?ExprId,
         };
@@ -187,3 +188,4 @@ pub const HirItem = struct {
         };
     };
 };
+

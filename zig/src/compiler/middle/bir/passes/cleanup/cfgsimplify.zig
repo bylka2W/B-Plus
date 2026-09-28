@@ -58,7 +58,7 @@ fn redirectToSingleSuccessor(
         if (bid == cfg.entry) continue;
 
         const block = func.getBlock(bid);
-        if (block.instrs.items.len == 0) continue;
+        if (block.instrs.items.len != 1) continue;
 
         const last = &block.instrs.items[block.instrs.items.len - 1];
         if (last.op != .br) continue;
@@ -260,3 +260,4 @@ fn replaceAllUses(func: *bir.Function, old_val: ValueId, new_val: ValueId) void 
 
     old_vi.uses.clearRetainingCapacity();
 }
+

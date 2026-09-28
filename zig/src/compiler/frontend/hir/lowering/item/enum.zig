@@ -23,3 +23,4 @@ pub fn lowerEnumItem(self: *HirLowering, decl_id: AstDeclId, e: @import("../lowe
         } },
     });
 }
+

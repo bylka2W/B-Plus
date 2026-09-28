@@ -30,3 +30,4 @@ pub const GreenToken = struct {
         return self.kind == .error_token;
     }
 };
+

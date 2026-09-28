@@ -1,0 +1,69 @@
+extern "C" fn GetStdHandle(n: i64) -> i64
+extern "C" fn WriteFile(h: i64, buf: i64, len: i64, written: i64, ovl: i64) -> i64
+extern "C" fn ExitProcess(code: i64)
+extern "C" fn main() -> i64
+
+fn bplus_exit(code: i64) {
+    ExitProcess(code)
+}
+
+fn bplus_start() {
+    code = main()
+    bplus_exit(code)
+}
+
+fn write_byte(h: i64, b: i64) {
+    buf: u8 = 0
+    bp: *u8 = &buf
+    wr: i64 = 0
+    *bp = b
+    WriteFile(h, bp, 1, &wr, 0)
+}
+
+fn print_str(s: *u8) {
+    h = GetStdHandle(-11)
+    n: i64 = 0
+    p: *u8 = s
+    while (*p != 0) {
+        n = n + 1
+        p = p + 1
+    }
+    wr: i64 = 0
+    if (n > 0) {
+        WriteFile(h, s, n, &wr, 0)
+    }
+    write_byte(h, 10)
+}
+
+fn print_i64(val: i64) {
+    h = GetStdHandle(-11)
+    v: i64 = val
+    if (v < 0) {
+        write_byte(h, 45)
+        v = 0 - v
+    }
+    if (v == 0) {
+        write_byte(h, 48)
+        write_byte(h, 10)
+        return
+    }
+    n: i64 = 0
+    t: i64 = v
+    while (t > 0) {
+        n = n + 1
+        t = t / 10
+    }
+    place: i64 = 1
+    i: i64 = 1
+    while (i < n) {
+        place = place * 10
+        i = i + 1
+    }
+    while (place > 0) {
+        d: i64 = (v / place) % 10
+        write_byte(h, d + 48)
+        place = place / 10
+    }
+    write_byte(h, 10)
+}
+

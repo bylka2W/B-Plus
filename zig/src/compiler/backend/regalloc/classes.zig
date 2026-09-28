@@ -38,3 +38,4 @@ pub const callee_saved_xmm_win64 = [_]i16{ 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
 
 pub const SCRATCH_REG: i16 = 11;
 pub const SCRATCH_REG_2: i16 = 10;
+

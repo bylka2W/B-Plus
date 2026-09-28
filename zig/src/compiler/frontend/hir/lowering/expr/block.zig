@@ -19,3 +19,4 @@ pub fn lowerBlockExpr(self: *HirLowering, ast_eid: @import("../lower.zig").AstEx
         else => return self.missingExpr(.{ .file_id = 0, .start = 0, .end = 0 }),
     }
 }
+

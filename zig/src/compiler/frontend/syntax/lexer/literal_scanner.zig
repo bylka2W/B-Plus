@@ -198,3 +198,4 @@ fn scanOctalDigits(cursor: *Cursor) void {
         }
     }
 }
+

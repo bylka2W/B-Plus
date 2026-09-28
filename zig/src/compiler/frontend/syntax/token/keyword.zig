@@ -152,3 +152,4 @@ pub fn lookupKeyword(text: []const u8) ?TokenKind {
 pub fn isKeyword(text: []const u8) bool {
     return keywords.has(text);
 }
+

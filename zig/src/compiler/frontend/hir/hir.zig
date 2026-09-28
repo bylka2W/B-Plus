@@ -32,3 +32,4 @@ pub const KernelEntry = item.HirItem.HirItemKind.KernelEntry;
 pub const KernelBinding = item.HirItem.HirItemKind.KernelBinding;
 pub const KernelContextVar = item.HirItem.HirItemKind.KernelContextVar;
 pub const DispatchSize = item.HirItem.HirItemKind.DispatchSize;
+

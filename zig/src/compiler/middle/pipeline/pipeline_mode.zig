@@ -19,3 +19,4 @@ test "PipelineMode: metal" {
     const m = PipelineMode.metal;
     try std.testing.expectEqualStrings("metal", m.name());
 }
+

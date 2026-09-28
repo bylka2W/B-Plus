@@ -398,3 +398,4 @@ pub const ThirModule = struct {
         return &self.functions.items[idx];
     }
 };
+

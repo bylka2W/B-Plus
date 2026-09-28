@@ -102,3 +102,4 @@ fn addUse(op: @import("../../core/operand.zig").MOperand, used: *std.AutoHashMap
         else => {},
     }
 }
+

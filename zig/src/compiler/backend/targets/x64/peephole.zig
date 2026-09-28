@@ -42,3 +42,4 @@ pub fn foldMovAdd(mfunc: *mir.MFunction) void {
         }
     }
 }
+

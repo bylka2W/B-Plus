@@ -38,6 +38,7 @@ pub const Resolver = struct {
     global_scope: u32,
     current_owner: DefId,
     refs: std.ArrayList(ResolvedRef),
+    builtin_print_def: DefId,
 
     pub fn init(allocator: std.mem.Allocator) Resolver {
         var scopes = ScopeChain.init(allocator);
@@ -49,6 +50,7 @@ pub const Resolver = struct {
             .global_scope = global_scope,
             .current_owner = DefId.INVALID,
             .refs = std.ArrayList(ResolvedRef).init(allocator),
+            .builtin_print_def = DefId.INVALID,
         };
     }
 
@@ -56,6 +58,16 @@ pub const Resolver = struct {
         self.defs.deinit();
         self.scopes.deinit();
         self.refs.deinit();
+    }
+
+    pub fn registerBuiltinPrint(self: *Resolver, name: SymbolId) void {
+        if (!name.isValid()) return;
+        const def_id = self.addDef(.function, name, DefId.INVALID);
+        self.builtin_print_def = def_id;
+    }
+
+    pub fn builtinPrintDefId(self: *const Resolver) DefId {
+        return self.builtin_print_def;
     }
 
     pub fn resolve(self: *Resolver, arena: *AstArena) void {
@@ -96,6 +108,7 @@ pub const Resolver = struct {
             .type_alias => |t| self.resolveTypeAlias(t),
             .import => |i| self.resolveImport(i),
             .extern_fn => |e| self.resolveExternFn(e),
+            .state_decl => |s| self.resolveStateDecl(arena, s),
             .module, .missing => {},
         }
     }
@@ -203,6 +216,50 @@ pub const Resolver = struct {
     fn resolveExternFn(self: *Resolver, e: AstDecl.ExternFnDecl) void {
         if (!e.name.isValid()) return;
         _ = self.addDef(.function, e.name, DefId.INVALID);
+    }
+
+    fn resolveStateDecl(self: *Resolver, arena: *AstArena, s: AstDecl.StateDecl) void {
+        if (!s.name.isValid()) return;
+
+        const def_id = self.addDef(.state, s.name, DefId.INVALID);
+        if (self.defs.getDef(def_id)) |d| {
+            d.owner = def_id;
+        }
+
+        const prev_scope = self.current_scope;
+        const prev_owner = self.current_owner;
+        const state_scope = self.scopes.pushScope(.block, self.current_scope, def_id);
+        self.current_scope = state_scope;
+        self.current_owner = def_id;
+
+        for (s.variables) |v| {
+            var vname: SymbolId = SymbolId.INVALID;
+            if (arena.getPattern(v.pattern)) |pat| {
+                switch (pat) {
+                    .identifier => |i| vname = i.name,
+                    else => {},
+                }
+            }
+            if (vname.isValid()) {
+                _ = self.addDef(.state_field, vname, def_id);
+            }
+        }
+
+        for (s.variables) |v| {
+            if (v.init) |init_id| {
+                self.resolveExpr(arena, init_id);
+            }
+        }
+
+        if (s.entry) |body_id| {
+            self.resolveStmt(arena, body_id);
+        }
+        if (s.exit) |body_id| {
+            self.resolveStmt(arena, body_id);
+        }
+
+        self.current_scope = prev_scope;
+        self.current_owner = prev_owner;
     }
 
     fn resolveStmt(self: *Resolver, arena: *AstArena, stmt_id: StmtId) void {
@@ -394,8 +451,22 @@ pub const Resolver = struct {
         }
     }
 
+    pub fn resolveDefForExpr(self: *const Resolver, expr_id: ExprId) DefId {
+        for (self.refs.items) |r| {
+            if (r.expr_id.eql(expr_id)) return r.def_id;
+        }
+        return DefId.INVALID;
+    }
+
     pub fn lookupDef(self: *const Resolver, name: SymbolId) ?DefId {
         return self.scopes.lookupInScope(self.current_scope, name);
+    }
+
+    pub fn lookupDefInOwner(self: *const Resolver, name: SymbolId, owner: DefId) ?DefId {
+        for (self.defs.defs.items) |d| {
+            if (d.name.eql(name) and d.owner.eql(owner)) return d.id;
+        }
+        return null;
     }
 
     pub fn resolvedCount(self: *const Resolver) usize {
@@ -406,3 +477,4 @@ pub const Resolver = struct {
         return self.defs.defs.items.len;
     }
 };
+

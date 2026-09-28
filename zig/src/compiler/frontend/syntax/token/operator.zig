@@ -95,3 +95,4 @@ pub fn isPrefixOperator(kind: TokenKind) bool {
         else => false,
     };
 }
+

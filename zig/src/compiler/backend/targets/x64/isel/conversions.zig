@@ -143,3 +143,4 @@ pub fn selectTrunc(ctx: *Ctx, c: mir.ConvInst) !void {
         try spill.storeSpilledOp(ctx, c.dst, ctx.scratch);
     }
 }
+

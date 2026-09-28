@@ -74,6 +74,7 @@ pub const HirExpr = struct {
         pub const FieldExpr = struct {
             object: ExprId,
             field: DefId,
+            name: ids.SymbolId,
         };
 
         pub const IndexExpr = struct {
@@ -182,3 +183,4 @@ pub const BinOp = enum {
 pub const UnaryOp = enum {
     negate, not, bitwise_not, borrow, address_of, dereference,
 };
+

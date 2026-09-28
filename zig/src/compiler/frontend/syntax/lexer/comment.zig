@@ -36,3 +36,4 @@ pub fn skipDocCommentLine(cursor: *Cursor) Comment {
     cursor.skipLineComment();
     return .{ .kind = .doc_line, .start = start, .end = @intCast(cursor.pos) };
 }
+

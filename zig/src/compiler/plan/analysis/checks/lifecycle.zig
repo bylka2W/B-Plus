@@ -46,3 +46,4 @@ fn checkInitialDeadEnd(graph: plan_ir.PlanGraph, diagnostics: *diag.DiagnosticLi
 
     diagnostics.push(.initial_state_dead_end, .@"warning", graph.initial_state, "PLAN102: initial state has no outgoing transitions");
 }
+

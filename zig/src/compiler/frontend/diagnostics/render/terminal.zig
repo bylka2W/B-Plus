@@ -50,3 +50,4 @@ pub fn renderTerminal(writer: anytype, diagnostics: []const Diagnostic, files: a
         try writer.print("\n", .{});
     }
 }
+

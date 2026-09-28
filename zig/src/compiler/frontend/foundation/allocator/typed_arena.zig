@@ -52,3 +52,4 @@ pub fn TypedArena(comptime T: type) type {
         }
     };
 }
+

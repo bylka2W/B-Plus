@@ -69,3 +69,4 @@ pub fn isXidContinue(codepoint: u21) bool {
         (codepoint >= 0x300 and codepoint <= 0x36F) or
         (codepoint >= 0x203F and codepoint <= 0x2040);
 }
+

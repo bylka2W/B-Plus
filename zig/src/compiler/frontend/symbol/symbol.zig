@@ -35,3 +35,4 @@ pub const Symbol = struct {
         is_comptime: bool = false,
     } = .{},
 };
+

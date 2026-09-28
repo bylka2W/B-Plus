@@ -62,3 +62,4 @@ pub const StringPool = struct {
         return @intCast(self.entries.items.len);
     }
 };
+

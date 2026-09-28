@@ -174,3 +174,4 @@ pub fn runFullVerifiedPipelineReport(allocator: Allocator, program: *const ast.P
         .verified_machine = verified_machine,
     };
 }
+

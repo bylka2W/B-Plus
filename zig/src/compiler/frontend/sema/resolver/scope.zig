@@ -113,3 +113,4 @@ pub const ScopeTable = struct {
         return self.current.symbols.contains(name);
     }
 };
+

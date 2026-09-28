@@ -569,3 +569,4 @@ fn cloneData(allocator: Allocator, data: *const bir.Inst.Data) bir.Inst.Data {
         else => return data.*,
     }
 }
+

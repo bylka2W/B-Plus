@@ -5,3 +5,4 @@ pub const IdentifierInterner = identifier_table.IdentifierInterner;
 pub const IdentifierId = identifier_table.IdentifierId;
 pub const StringPool = string_pool.StringPool;
 pub const StringId = string_pool.StringId;
+

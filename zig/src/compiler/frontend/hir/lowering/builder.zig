@@ -173,3 +173,4 @@ pub fn patternTuple(self: *HirLowering, elements: []const PatId, ty: TypeId, spa
         .kind = .{ .tuple = .{ .elements = elements, .ty = ty } },
     });
 }
+

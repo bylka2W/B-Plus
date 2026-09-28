@@ -53,3 +53,4 @@ pub const VRegInfo = struct {
         return .{ .ty = ty, .class = VRegClass.forType(ty) };
     }
 };
+

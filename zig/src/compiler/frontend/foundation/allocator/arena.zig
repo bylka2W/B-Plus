@@ -35,3 +35,4 @@ test "arena basic" {
     const buf = try a.alloc(u8, 100);
     try std.testing.expectEqual(@as(usize, 100), buf.len);
 }
+

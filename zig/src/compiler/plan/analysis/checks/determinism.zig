@@ -56,3 +56,4 @@ pub fn checkDeterminism(graph: plan_ir.PlanGraph, diagnostics: *diag.DiagnosticL
         i = j;
     }
 }
+

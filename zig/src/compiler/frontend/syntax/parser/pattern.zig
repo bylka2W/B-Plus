@@ -81,3 +81,4 @@ pub const PatternParser = struct {
         stream.skipTrivia();
     }
 };
+

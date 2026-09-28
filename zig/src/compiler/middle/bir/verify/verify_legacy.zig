@@ -1086,3 +1086,4 @@ fn isTerminator(op: Op) bool {
         else => false,
     };
 }
+

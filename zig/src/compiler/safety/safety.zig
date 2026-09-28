@@ -67,3 +67,4 @@ pub fn reportSafetyErrors(writer: anytype, result: *const SafetyResult) !void {
         try writer.print("error[{s}]: {s}\n", .{ tag, d.message });
     }
 }
+

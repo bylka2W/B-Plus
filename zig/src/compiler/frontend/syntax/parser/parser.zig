@@ -123,3 +123,4 @@ pub fn parseFile(allocator: std.mem.Allocator, source: []const u8, file_id: u32,
 
     return parser.parse(tree);
 }
+

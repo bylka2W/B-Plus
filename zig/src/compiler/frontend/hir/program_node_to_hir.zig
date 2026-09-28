@@ -221,6 +221,7 @@ pub const ProgramNodeToHir = struct {
         for (state.variables.items) |*v| {
             try fields.append(.{
                 .name = self.allocSym(),
+                .def_id = DefId.INVALID,
                 .ty = self.typeNameToId(v.type_name),
                 .default = null,
             });
@@ -838,3 +839,4 @@ fn findParenEnd(line: []const u8, open: usize) ?usize {
     }
     return null;
 }
+

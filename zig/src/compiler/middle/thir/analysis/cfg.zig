@@ -629,3 +629,4 @@ test "Cfg: edges have correct kinds" {
     try std.testing.expectEqual(EdgeKind.normal, cfg.edges[2].kind);
     try std.testing.expectEqual(EdgeKind.normal, cfg.edges[3].kind);
 }
+

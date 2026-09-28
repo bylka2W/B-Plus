@@ -300,3 +300,4 @@ fn replaceShiftAmount(map: std.AutoHashMap(u32, CopyEntry), inst: *mir.MInst) vo
         else => {},
     }
 }
+

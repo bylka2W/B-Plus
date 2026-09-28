@@ -60,3 +60,4 @@ pub export fn print_str(ptr: i64) void {
 pub export fn bplus_exit(code: i64) void {
     ExitProcess(@as(u32, @intCast(code)));
 }
+

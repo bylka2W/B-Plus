@@ -46,3 +46,4 @@ pub const HirParamId = typedId(struct {});
 
 pub const DefId = typedId(struct {});
 pub const SymbolId = typedId(struct {});
+

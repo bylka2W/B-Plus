@@ -120,3 +120,4 @@ pub fn selectFunction(mfunc: *const mir.MFunction, ra: *const regalloc.RegAllocR
 }
 
 pub const resolveReg = ctx_mod.resolveReg;
+

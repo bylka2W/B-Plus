@@ -21,3 +21,4 @@ pub fn checkIds(graph: plan_ir.PlanGraph, diagnostics: *diag.DiagnosticList) voi
         diagnostics.push(.no_states_defined, .@"error", null, "PLAN013: no states defined in PLAN graph");
     }
 }
+

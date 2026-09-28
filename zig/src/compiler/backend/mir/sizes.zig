@@ -19,3 +19,4 @@ pub fn main() void {
     std.debug.print("AllocatorVtbl: {d}\n", .{@sizeOf(d3d.ID3D12CommandAllocatorVtbl)});
     std.debug.print("InfoQueueVtbl: {d}\n", .{@sizeOf(d3d.ID3D12InfoQueueVtbl)});
 }
+

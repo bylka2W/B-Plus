@@ -59,7 +59,7 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
         }
     }
 
-    for (emit.call_fixups.items) |cf| 
+    for (emit.call_fixups.items) |cf|
     {
         const sym_idx = sym_map.get(cf.name) orelse {
             const idx = @as(u32, @intCast(symbols.items.len));
@@ -121,7 +121,7 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
 
     try writeSectionHeader(&out, ".text",
         raw_data_size,
-        raw_data_size, 
+        raw_data_size,
         raw_data_start,
         reloc_start,
         num_relocs,
@@ -158,19 +158,19 @@ pub fn emitCoff(mfuncs: []const mir.MFunction) !CoffResult {
     return .{ .bytes = out };
 }
 
-const RelocType = enum(u16) 
+const RelocType = enum(u16)
 {
     rel32 = 0x0004,
 };
 
-const Reloc = struct 
+const Reloc = struct
 {
     offset: usize,
     sym_idx: u32,
     type: RelocType,
 };
 
-const SymInfo = struct 
+const SymInfo = struct
 {
     name: []const u8,
     offset: usize,
@@ -204,3 +204,4 @@ fn writeSectionHeader(out: *std.ArrayList(u8), name: []const u8, virtual_size: u
     try w.writeInt(u16, 0, .little);
     try w.writeInt(u32, characteristics, .little);
 }
+

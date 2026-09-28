@@ -100,3 +100,4 @@ pub fn findUnreachableBlocks(allocator: Allocator, function: *const thir.ThirFun
 
     return unreachable_blocks;
 }
+

@@ -379,13 +379,31 @@ pub fn emitCode(mfuncs: []const mir.MFunction) !EmitCodeResult {
         try emitSingleFunction(&code, &all_call_fixups, &string_pool, &string_disp_fixups, mf);
     }
 
-    if (true) {
+var needs_dispatch = false;
+    for (all_call_fixups.items) |cf| {
+        if (std.mem.eql(u8, cf.name, "__plan_event_dispatch")) {
+            needs_dispatch = true;
+            break;
+        }
+    }
+    if (needs_dispatch) {
         const rt_start = code.items.len;
         try name_to_offset.put("__plan_event_dispatch", rt_start);
         try code.append(0x48);
         try code.append(0x31);
         try code.append(0xC0);
         try code.append(0xC3);
+    }
+
+    var needs_plan_runtime = false;
+    for (all_call_fixups.items) |cf| {
+        if (isPlanRuntimeName(cf.name)) {
+            needs_plan_runtime = true;
+            break;
+        }
+    }
+    if (needs_plan_runtime) {
+        try appendPlanRuntime(&code, &name_to_offset);
     }
 
     const string_data_start = code.items.len;
@@ -401,7 +419,7 @@ pub fn emitCode(mfuncs: []const mir.MFunction) !EmitCodeResult {
         for (0..sf.str_idx) |j| {
             str_off += string_pool.items[j].len + 1;
         }
-        const lea_end = sf.disp_pos + 4; 
+        const lea_end = sf.disp_pos + 4;
         const disp: i32 = @intCast(@as(i64, @intCast(str_off)) - @as(i64, @intCast(lea_end)));
         @memcpy(code.items[sf.disp_pos..][0..4], &@as([4]u8, @bitCast(disp)));
     }
@@ -427,3 +445,226 @@ fn isNoOptEnabled() bool {
     defer std.heap.page_allocator.free(val);
     return val.len > 0;
 }
+
+const PLAN_FIXED_SIZE = 40;                                             
+const PLAN_QUEUE_ENTRY = 32;                                
+const PLAN_QUEUE_CAP = 64;
+const PLAN_QUEUE_BYTES = PLAN_QUEUE_CAP * PLAN_QUEUE_ENTRY;
+const PLAN_STATE_DATA_SIZE = 4096;
+
+fn isPlanRuntimeName(name: []const u8) bool {
+    const names = [_][]const u8{
+        "__plan_event_post",
+        "__plan_event_pop",
+        "__plan_set_state",
+        "__plan_get_state",
+        "__plan_set_goto",
+        "__plan_consume_goto",
+        "__state_base",
+    };
+    for (names) |n| {
+        if (std.mem.eql(u8, name, n)) return true;
+    }
+    return false;
+}
+
+fn planRel32(code: *std.ArrayList(u8), pos_after: usize, target: usize) void {
+    const disp: i32 = @intCast(@as(i64, @intCast(target)) - @as(i64, @intCast(pos_after)));
+    @memcpy(code.items[pos_after - 4 ..][0..4], &@as([4]u8, @bitCast(disp)));
+}
+
+fn appendPlanRuntime(code: *std.ArrayList(u8), name_to_offset: *std.StringHashMap(usize)) !void {
+    const data_base = code.items.len;
+    try code.appendNTimes(0, PLAN_FIXED_SIZE + PLAN_QUEUE_BYTES + PLAN_STATE_DATA_SIZE);
+    const q_state = data_base + 0;
+    const q_goto = data_base + 8;
+    const q_head = data_base + 16;
+    const q_tail = data_base + 24;
+    const q_count = data_base + 32;
+    const q_buf = data_base + 40;
+    const q_state_data = data_base + PLAN_FIXED_SIZE + PLAN_QUEUE_BYTES;
+
+                                                        
+    {
+        const start = code.items.len;
+        try code.append(0x48);
+        try code.append(0x89);
+        try code.append(0x0D);
+        const pd = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, pd, q_state);
+        try code.append(0xC3);
+        try name_to_offset.put("__plan_set_state", start);
+    }
+
+                                                    
+    {
+        const start = code.items.len;
+        try code.append(0x48);
+        try code.append(0x8B);
+        try code.append(0x05);
+        const pd = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, pd, q_state);
+        try code.append(0xC3);
+        try name_to_offset.put("__plan_get_state", start);
+    }
+
+                                                      
+    {
+        const start = code.items.len;
+        try code.append(0x48);
+        try code.append(0x89);
+        try code.append(0x0D);
+        const pd = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, pd, q_goto);
+        try code.append(0xC3);
+        try name_to_offset.put("__plan_set_goto", start);
+    }
+
+                                                        
+    {
+        const start = code.items.len;
+        try code.append(0x48);
+        try code.append(0x8B);
+        try code.append(0x05);
+        const pd = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, pd, q_goto);
+        try code.append(0x49);
+        try code.append(0xC7);
+        try code.append(0xC0);
+        try code.appendSlice(&.{ 0xFF, 0xFF, 0xFF, 0xFF });
+        try code.append(0x4C);
+        try code.append(0x89);
+        try code.append(0x05);
+        const pd2 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, pd2, q_goto);
+        try code.append(0xC3);
+        try name_to_offset.put("__plan_consume_goto", start);
+    }
+
+                                               
+    {
+        const start = code.items.len;
+        try code.appendSlice(&.{ 0x48, 0x8B, 0x05 });
+        const p0 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p0, q_count);
+        try code.appendSlice(&.{ 0x48, 0x83, 0xF8, 0x40 });              
+        const jge_pos = code.items.len;
+        try code.append(0x7D);
+        try code.append(0x00);                       
+        try code.appendSlice(&.{ 0x4C, 0x8B, 0x05 });
+        const p2 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p2, q_head);
+        try code.appendSlice(&.{ 0x4C, 0x01, 0xC0 });                    
+        try code.appendSlice(&.{ 0x48, 0x83, 0xE0, 0x3F });              
+        try code.appendSlice(&.{ 0x48, 0xC1, 0xE0, 0x05 });             
+        try code.appendSlice(&.{ 0x4C, 0x8D, 0x0D });
+        const p3 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p3, q_buf);
+        try code.appendSlice(&.{ 0x49, 0x01, 0xC1 });              
+        try code.appendSlice(&.{ 0x49, 0x89, 0x09 });                
+        try code.appendSlice(&.{ 0x49, 0x89, 0x51, 0x08 });                  
+        try code.appendSlice(&.{ 0x49, 0x89, 0x41, 0x10 });                  
+        try code.appendSlice(&.{ 0x48, 0x8B, 0x05 });
+        const p4 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p4, q_count);
+        try code.appendSlice(&.{ 0x48, 0xFF, 0xC0 });           
+        try code.appendSlice(&.{ 0x48, 0x89, 0x05 });
+        const p5 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p5, q_count);
+        try code.appendSlice(&.{ 0x48, 0x8B, 0x05 });
+        const p6 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p6, q_tail);
+        try code.appendSlice(&.{ 0x48, 0xFF, 0xC0 });           
+        try code.appendSlice(&.{ 0x48, 0x83, 0xE0, 0x3F });              
+        try code.appendSlice(&.{ 0x48, 0x89, 0x05 });
+        const p7 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p7, q_tail);
+        try code.append(0xC3);              
+        const drop_after = code.items.len;
+        const disp8: i8 = @intCast(@as(i32, @intCast(drop_after)) - @as(i32, @intCast(jge_pos + 2)));
+        code.items[jge_pos + 1] = @bitCast(disp8);
+        try name_to_offset.put("__plan_event_post", start);
+    }
+
+                                                    
+    {
+        const start = code.items.len;
+        try code.appendSlice(&.{ 0x48, 0x8B, 0x05 });
+        const p1 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p1, q_count);
+        try code.appendSlice(&.{ 0x48, 0x85, 0xC0 });                
+        const jle_pos = code.items.len;
+        try code.append(0x7E);
+        try code.append(0x00);                        
+        try code.appendSlice(&.{ 0x4C, 0x8B, 0x05 });
+        const p2 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p2, q_head);
+        try code.appendSlice(&.{ 0x4D, 0x8D, 0x0D });
+        const p3 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p3, q_buf);
+        try code.appendSlice(&.{ 0x49, 0xC1, 0xE0, 0x05 });            
+        try code.appendSlice(&.{ 0x4D, 0x01, 0xC1 });             
+        try code.appendSlice(&.{ 0x49, 0x8B, 0x01 });                
+        try code.appendSlice(&.{ 0x48, 0x89, 0x01 });                 
+        try code.appendSlice(&.{ 0x49, 0x8B, 0x41, 0x08 });                  
+        try code.appendSlice(&.{ 0x48, 0x89, 0x41, 0x08 });                   
+        try code.appendSlice(&.{ 0x49, 0x8B, 0x41, 0x10 });                   
+        try code.appendSlice(&.{ 0x48, 0x89, 0x41, 0x10 });                    
+        try code.appendSlice(&.{ 0x48, 0x8B, 0x05 });
+        const p4 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p4, q_count);
+        try code.appendSlice(&.{ 0x48, 0xFF, 0xC8 });           
+        try code.appendSlice(&.{ 0x48, 0x89, 0x05 });
+        const p5 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p5, q_count);
+        try code.appendSlice(&.{ 0x48, 0x8B, 0x05 });
+        const p6 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p6, q_head);
+        try code.appendSlice(&.{ 0x48, 0xFF, 0xC0 });           
+        try code.appendSlice(&.{ 0x48, 0x83, 0xE0, 0x3F });              
+        try code.appendSlice(&.{ 0x48, 0x89, 0x05 });
+        const p7 = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, p7, q_head);
+        try code.appendSlice(&.{ 0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00 });             
+        try code.append(0xC3);       
+        const empty_after = code.items.len;
+        try code.appendSlice(&.{ 0x31, 0xC0 });                       
+        try code.append(0xC3);
+        const disp8: i8 = @intCast(@as(i32, @intCast(empty_after)) - @as(i32, @intCast(jle_pos + 2)));
+        code.items[jle_pos + 1] = @bitCast(disp8);
+        try name_to_offset.put("__plan_event_pop", start);
+    }
+
+                                                       
+    {
+        const start = code.items.len;
+        try code.append(0x48);
+        try code.append(0x8D);
+        try code.append(0x05);
+        const pd = code.items.len + 4;
+        try code.appendNTimes(0, 4);
+        planRel32(code, pd, q_state_data);
+        try code.append(0xC3);
+        try name_to_offset.put("__state_base", start);
+    }
+}
+

@@ -87,19 +87,19 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
             }
         }
 
-        
+
         try ed.appendNTimes(0, 4);
         try ed.appendNTimes(0, 4);
         try ed.appendNTimes(0, 2);
-        try ed.appendNTimes(0, 2); 
+        try ed.appendNTimes(0, 2);
         const dll_name_rva = export_base_rva + dll_name_off;
-        try ed.appendSlice(&@as([4]u8, @bitCast(dll_name_rva)));  
-        try ed.appendSlice(&@as([4]u8, @bitCast(base)));         
-        try ed.appendSlice(&@as([4]u8, @bitCast(n)));            
-        try ed.appendSlice(&@as([4]u8, @bitCast(n)));            
-        try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + eat_off)));  
-        try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + enpt_off))); 
-        try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + eot_off)));  
+        try ed.appendSlice(&@as([4]u8, @bitCast(dll_name_rva)));
+        try ed.appendSlice(&@as([4]u8, @bitCast(base)));
+        try ed.appendSlice(&@as([4]u8, @bitCast(n)));
+        try ed.appendSlice(&@as([4]u8, @bitCast(n)));
+        try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + eat_off)));
+        try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + enpt_off)));
+        try ed.appendSlice(&@as([4]u8, @bitCast(export_base_rva + eot_off)));
 
         for (exports, 0..) |e, i| {
             if (e.forward_to) |_| {
@@ -116,7 +116,7 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
         for (indices) |si| {
             try ed.appendSlice(&@as([2]u8, @bitCast(@as(u16, @intCast(si)))));
         }
-        
+
         while (ed.items.len < names_off) try ed.append(0);
         for (indices) |si| {
             try ed.appendSlice(exports[si].name);
@@ -156,12 +156,12 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
     try pe.appendSlice(&[_]u8{ 0x50, 0x45, 0x00, 0x00 });
 
     const characteristics: u16 = if (is_dll) 0x2022 else 0x0022;
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x8664)))); 
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 1))));      
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x8664))));
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 1))));
     try pe.appendNTimes(0, 4);
     try pe.appendNTimes(0, 4);
     try pe.appendNTimes(0, 4);
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0xF0))));   
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0xF0))));
     try pe.appendSlice(&@as([2]u8, @bitCast(characteristics)));
 
     try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x020B))));
@@ -174,23 +174,23 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
     try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x18000000))));
     try pe.appendSlice(&@as([4]u8, @bitCast(sect_align)));
     try pe.appendSlice(&@as([4]u8, @bitCast(file_align)));
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 6))));   
-    try pe.appendNTimes(0, 2);                                   
-    try pe.appendNTimes(0, 2);                                   
-    try pe.appendNTimes(0, 2);                                   
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 6))));  
-    try pe.appendNTimes(0, 2);                                
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 6))));
+    try pe.appendNTimes(0, 2);
+    try pe.appendNTimes(0, 2);
+    try pe.appendNTimes(0, 2);
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 6))));
+    try pe.appendNTimes(0, 2);
     try pe.appendNTimes(0, 4);
     try pe.appendSlice(&@as([4]u8, @bitCast(image_size)));
     try pe.appendSlice(&@as([4]u8, @bitCast(headers_size)));
     try pe.appendNTimes(0, 4);
     const subsystem: u16 = if (is_dll) 2 else 3;
     try pe.appendSlice(&@as([2]u8, @bitCast(subsystem)));
-    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x0160)))); 
-    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x100000)))); 
-    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x10000))));  
-    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x100000)))); 
-    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x1000))));  
+    try pe.appendSlice(&@as([2]u8, @bitCast(@as(u16, 0x0160))));
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x100000))));
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x10000))));
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x100000))));
+    try pe.appendSlice(&@as([8]u8, @bitCast(@as(u64, 0x1000))));
     try pe.appendNTimes(0, 4);
     try pe.appendSlice(&@as([4]u8, @bitCast(@as(u32, 16))));
 
@@ -238,3 +238,4 @@ fn writePE(allocator: std.mem.Allocator, code: []const u8, import_dir_rva: u32, 
 fn alignUp(v: u32, a: u32) u32 {
     return (v + a - 1) / a * a;
 }
+

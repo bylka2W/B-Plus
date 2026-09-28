@@ -237,3 +237,4 @@ pub fn lowerPlan(allocator: std.mem.Allocator, program: *const ast.ProgramNode) 
     defer lowering.deinit();
     return try lowering.lower(program);
 }
+

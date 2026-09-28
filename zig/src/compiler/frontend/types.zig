@@ -7,3 +7,4 @@ pub const TypeId = @"type".TypeId;
 pub const Type = @"type".Type;
 pub const TypeTable = type_table.TypeTable;
 pub const invalid_type_id = @"type".invalid_type_id;
+

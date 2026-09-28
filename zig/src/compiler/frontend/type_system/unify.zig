@@ -175,3 +175,4 @@ test "UnificationTable: conflict" {
     const result = table.unify(v0, v1);
     try std.testing.expectError(error.TypeMismatch, result);
 }
+

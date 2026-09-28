@@ -9,15 +9,15 @@
 > 📖 [docs.html — наглядная документация](https://htmlpreview.github.io/?https://github.com/bylka2W/B-Plus/blob/main/html/docs.html)
 
 **B+** компилирует файлы `.b+` (принимаются также `.plan` / `.metal`) напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
-Кодогенератор, IR-оптимизаторы и упаковщик PE написаны с нуля на Zig. Для финальной линковки PE используется `lld-link.exe` (из LLVM).
-> Лабораторные тесты компилятора: `zig\tests\B+\.b\sources\` — 262 теста, из них ~259 проходят.
+Кодогенератор, IR-оптимизаторы и PE-линкер для `.exe` написаны с нуля на Zig — внешний линкер не нужен. Режим `.dll` использует `lld-link.exe` (из LLVM).
+> Лабораторные тесты компилятора: `zig\tests\B+\.b\sources\` — 262 теста, из них 171 исполняются успешно, ещё 53 — негативные (корректно отклоняются компилятором).
 
 ---
 
 ## Что такое B+
 
 **B+** — это язык программирования, который превращает написанный код прямо в готовую программу для Windows (.exe или .dll).
-Компилятор B+ полностью сам генерирует машинный код, оптимизирует IR и собирает PE; на финальном шаге для линковки вызывается `lld-link.exe`.
+Компилятор B+ полностью сам генерирует машинный код, оптимизирует IR и собирает PE. Сборка `.exe` выполняется собственным линкером на Zig; `lld-link.exe` подключается только для режима `.dll`.
 
 Код B+ хранится в файлах с расширением: `example.b+`
 
@@ -125,6 +125,13 @@ hello.b+
    - [4.13 Сообщения об ошибках](#413-сообщения-об-ошибках)
    - [4.14 CLI](#414-cli)
 5. [Типы данных](#5-типы-данных)
+   - [5.1 Вывод типов](#51-вывод-типов)
+   - [5.2 Смешивание целых и дробных](#52-смешивание-целых-и-дробных)
+   - [5.3 Неявные преобразования](#53-неявные-преобразования)
+   - [5.4 Структуры — копирование при присваивании](#54-структуры--копирование-при-присваивании)
+   - [5.5 Структуры — передача в функцию по ссылке](#55-структуры--передача-в-функцию-по-ссылке)
+   - [5.6 Массивы](#56-массивы)
+   - [5.7 Перечисления](#57-перечисления)
 6. [Примеры](#6-примеры)
 7. [Оптимизатор BIR — бенчмарки и архитектура](#7-оптимизатор-bir--бенчмарки-и-архитектура)
 8. [Сборка из исходников](#8-сборка-из-исходников)
@@ -279,7 +286,7 @@ bpc check hello.b+    — проверить программу, не компи
 
 #### `bpc doctor`
 
-Health-check компилятора: наличие встроенного рантайма (`minrt.obj`), наличие линкера (`lld-link`), прогон встроенной программы через полный верифицируемый pipeline.
+Health-check компилятора: наличие встроенного рантайма (`minrt.obj`), проверка собственного PE-линкера, прогон встроенной программы через полный верифицируемый pipeline.
 
 ```bash
 bpc doctor            — проверка здоровья компилятора
@@ -295,7 +302,7 @@ bpc doctor            — проверка здоровья компилятор
 
 ### Примечания
 
-- Компилятор **сам** генерирует весь машинный код x64 (без ассемблеров и внешнего кодогенератора); для линковки PE-файла используется `lld-link.exe`.
+- Компилятор **сам** генерирует весь машинный код x64 (без ассемблеров и внешнего кодогенератора) и **сам** собирает `.exe` собственным PE-линкером; `lld-link.exe` используется только для режима `.dll`.
 - Команда `bpc run` компилирует в `.exe` и сразу запускает. Перед пересборкой компилятор сам завершает зависший старый `.exe`, чтобы не было `permission denied`.
 
 ---
@@ -731,6 +738,115 @@ bpc mir   <input.b+> [-o <output.obj>]
 > Проверено на тестах `zig\tests\B+\.b\sources\`: все типы из таблицы работают, включая `f32`.
 > Алиасов `int8/.../byte/short/uint/float/half` нет. `ptr` объявляется; работа с ним — хранить и передавать в параметры.
 
+### 5.1 Вывод типов
+
+Типы определяются автоматически. Целый литерал без аннотации получает тип `i64`,
+дробный — `f64`:
+
+```rust
+fn main() {
+    x = 5          // x: i64
+    y: i64 = 7     // явная аннотация
+    z = 2.5        // z: f64
+    print(x + y + 7)
+}
+```
+
+### 5.2 Смешивание целых и дробных
+
+В арифметике `i64` и `f64` приводятся к `f64`, результат — `f64`:
+
+```rust
+fn main() {
+    a = 5
+    b = 2.5
+    print(a + b)   // 7.5
+}
+```
+
+### 5.3 Неявные преобразования
+
+Автоматического приведения типов **нет** — вызов функции с аргументом несовместимого
+типа отклоняется на этапе компиляции (тест `191. No implicit convert error.b+`).
+
+Константные переполнения отлавливаются компилятором: `x: i8 = 127; x += 1` — ошибка
+(тесты `122. i8 overflow.b+`, `184. i8 overflow checked.b+`).
+
+> Узкое присваивание **переменных** проверяется не всегда: `a: i64 = 300; b: i8 = a`
+> молча truncирует до `44`. Это известное несоответствие константной проверки и
+> рантайм-проверки.
+
+### 5.4 Структуры — копирование при присваивании
+
+`struct` — агрегатный тип, объявляется на верхнем уровне, поля задаются по одному.
+Присваивание структуры создаёт **копию**:
+
+```rust
+struct P { hp: i64 }
+
+fn main() {
+    a = P{}
+    a.hp = 10
+
+    b = a        // копия
+    b.hp = 99
+
+    print(a.hp)  // 10  — a не изменилась
+    print(b.hp)  // 99
+}
+```
+
+### 5.5 Структуры — передача в функцию по ссылке
+
+При передаче структуры в параметр функции передаётся **адрес** (ссылка), поэтому
+изменение полей видно вызывающему коду:
+
+```rust
+struct Player { health: i64, damage: i64 }
+
+fn attack(player) {
+    player.health = player.health - player.damage
+}
+
+fn main() {
+    p = Player{}
+    p.health = 100
+    p.damage = 25
+
+    attack(p)
+    attack(p)
+    attack(p)
+
+    print(p.health)   // 25
+}
+```
+
+> Важно: присваивание копирует (§5.4), а вызов функции передаёт по ссылке (§5.5).
+> Тесты: `258. Struct pass semantics.b+`, `231. Two struct combat.b+`,
+> `238. Machine process loop.b+`, `105. Struct function field modification.b+`.
+
+### 5.6 Массивы
+
+Массив задаётся фигурными скобками, элемент читается по индексу через точку.
+Индексы нумеруются с нуля. Присваивание копирует массив целиком:
+
+```rust
+fn main() {
+    a = {1, 2, 3}
+    b = a
+    b.0 = 99
+
+    print(a.0)   // 1  — a не изменилась
+    print(b.0)   // 99
+    print(a.2)   // 3
+}
+```
+
+### 5.7 Перечисления
+
+Члены `enum` — целые числа с нуля: `Color.Red` → `0`, `Color.Green` → `1`,
+`Color.Blue` → `2`. Значение члена можно вывести в `print` как число.
+
 ---
 
 ## 6. Примеры
@@ -1099,7 +1215,7 @@ No assemblers, linkers, or LLVM — the entire code generator and optimizer are 
 ## What is B+
 
 **B+** is a programming language that turns written code directly into a ready Windows program (.exe or .dll).
-B+ generates all x64 machine code and IR optimizations itself; `lld-link.exe` (from LLVM) is used for the final PE linking step. `bpc run` automatically terminates a lingering old `.exe` before relinking.
+B+ generates all x64 machine code and IR optimizations itself, and links `.exe` files with its own PE linker written in Zig; `lld-link.exe` (from LLVM) is used only for `.dll` mode. `bpc run` automatically terminates a lingering old `.exe` before relinking.
 
 B+ code is stored in files with the extension: `example.b+`
 
@@ -1194,6 +1310,13 @@ B+ combines the simplicity of high-level languages with the control of systems p
    - [4.13 Error Messages](#413-error-messages)
    - [4.14 CLI](#414-cli)
 5. [Data Types](#5-data-types)
+   - [5.1 Type inference](#51-type-inference)
+   - [5.2 Mixing integers and floats](#52-mixing-integers-and-floats)
+   - [5.3 Implicit conversions](#53-implicit-conversions)
+   - [5.4 Structs — copy on assignment](#54-structs--copy-on-assignment)
+   - [5.5 Structs — passed to functions by reference](#55-structs--passed-to-functions-by-reference)
+   - [5.6 Arrays](#56-arrays)
+   - [5.7 Enums](#57-enums)
 6. [Examples](#6-examples)
 7. [BIR Optimizer — Benchmarks & Architecture](#7-bir-optimizer--benchmarks--architecture)
 8. [Building from Source](#8-building-from-source)
@@ -1326,7 +1449,7 @@ bpc run hello.b+      — compiles and runs immediately
 
 ### Notes
 
-- The compiler self-generates all x64 machine code; `lld-link.exe` is used for the final PE linking step.
+- The compiler self-generates all x64 machine code and links `.exe` files with its own PE linker; `lld-link.exe` is used only for `.dll` mode.
 - `bpc run` compiles to `.exe` and runs it immediately.
 
 ---
@@ -1756,6 +1879,115 @@ bpc mir   <input.b+> [-o <output.obj>]
 
 > Supported (verified against `zig\tests\B+\.b\sources\`): `i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool string ptr void int`.
 > The aliases `int8/int16/int32/int64`, `byte`, `short`, `uint`, `float`, `half` do not exist in the language.
+
+### 5.1 Type inference
+
+Types are inferred automatically. An integer literal without an annotation gets type
+`i64`, a fractional literal gets `f64`:
+
+```rust
+fn main() {
+    x = 5          // x: i64
+    y: i64 = 7     // explicit annotation
+    z = 2.5        // z: f64
+    print(x + y + 7)
+}
+```
+
+### 5.2 Mixing integers and floats
+
+In arithmetic, `i64` and `f64` are promoted to `f64`, and the result is `f64`:
+
+```rust
+fn main() {
+    a = 5
+    b = 2.5
+    print(a + b)   // 7.5
+}
+```
+
+### 5.3 Implicit conversions
+
+There are **no** implicit conversions — calling a function with an argument of an
+incompatible type is rejected at compile time (test `191. No implicit convert error.b+`).
+
+Constant overflow is caught by the compiler: `x: i8 = 127; x += 1` is an error
+(tests `122. i8 overflow.b+`, `184. i8 overflow checked.b+`).
+
+> Narrowing assignment of **variables** is not always checked: `a: i64 = 300; b: i8 = a`
+> silently truncates to `44`. This is a known gap between the constant check and the
+> runtime check.
+
+### 5.4 Structs — copy on assignment
+
+A `struct` is an aggregate type declared at the top level, with fields assigned one
+at a time. Assigning a struct creates a **copy**:
+
+```rust
+struct P { hp: i64 }
+
+fn main() {
+    a = P{}
+    a.hp = 10
+
+    b = a        // copy
+    b.hp = 99
+
+    print(a.hp)  // 10  — a is unchanged
+    print(b.hp)  // 99
+}
+```
+
+### 5.5 Structs — passed to functions by reference
+
+When a struct is passed as a function parameter, its **address** is passed (by
+reference), so field mutations are visible to the caller:
+
+```rust
+struct Player { health: i64, damage: i64 }
+
+fn attack(player) {
+    player.health = player.health - player.damage
+}
+
+fn main() {
+    p = Player{}
+    p.health = 100
+    p.damage = 25
+
+    attack(p)
+    attack(p)
+    attack(p)
+
+    print(p.health)   // 25
+}
+```
+
+> Important: assignment copies (§5.4), while a function call passes by reference
+> (§5.5). Tests: `258. Struct pass semantics.b+`, `231. Two struct combat.b+`,
+> `238. Machine process loop.b+`, `105. Struct function field modification.b+`.
+
+### 5.6 Arrays
+
+An array is written with curly braces, and elements are read by an index after a dot.
+Indices start at zero. Assignment copies the whole array:
+
+```rust
+fn main() {
+    a = {1, 2, 3}
+    b = a
+    b.0 = 99
+
+    print(a.0)   // 1  — a is unchanged
+    print(b.0)   // 99
+    print(a.2)   // 3
+}
+```
+
+### 5.7 Enums
+
+`enum` members are plain integers starting at zero: `Color.Red` → `0`,
+`Color.Green` → `1`, `Color.Blue` → `2`. A member's value can be printed as a number.
 
 ---
 

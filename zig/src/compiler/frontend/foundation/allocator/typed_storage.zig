@@ -89,3 +89,4 @@ pub fn IndexedArena(comptime T: type) type {
         }
     };
 }
+

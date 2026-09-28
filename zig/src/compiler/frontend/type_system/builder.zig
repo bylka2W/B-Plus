@@ -150,3 +150,4 @@ test "TypeBuilder: inference var unification" {
     try engine.unify(v, bt.i64_ty, 0);
     try std.testing.expect(engine.resolve(v).eql(bt.i64_ty));
 }
+

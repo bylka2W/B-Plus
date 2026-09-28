@@ -44,3 +44,4 @@ pub fn renderJson(writer: anytype, diagnostics: []const Diagnostic) !void {
     }
     try writer.print("\n]\n", .{});
 }
+

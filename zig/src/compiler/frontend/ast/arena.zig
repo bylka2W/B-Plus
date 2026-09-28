@@ -8,6 +8,7 @@ pub const AstDecl = ast_node.AstDecl;
 pub const AstTypeRef = ast_node.AstTypeRef;
 pub const AstPattern = ast_node.AstPattern;
 pub const ExprId = ast_node.ExprId;
+pub const SymbolId = ast_node.SymbolId;
 pub const StmtId = ast_node.StmtId;
 pub const DeclId = ast_node.DeclId;
 pub const PatId = ast_node.PatId;
@@ -27,6 +28,7 @@ pub const AstArena = struct {
     pat_id_list: std.ArrayList(PatId),
     type_ref_id_list: std.ArrayList(TypeRefId),
     match_arm_list: std.ArrayList(AstExpr.MatchArm),
+    symbols: std.ArrayList([]const u8),
     backing_allocator: std.mem.Allocator,
     arena_ptr: ?*std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
@@ -49,6 +51,7 @@ pub const AstArena = struct {
             .pat_id_list = std.ArrayList(PatId).init(aa_alloc),
             .type_ref_id_list = std.ArrayList(TypeRefId).init(aa_alloc),
             .match_arm_list = std.ArrayList(AstExpr.MatchArm).init(aa_alloc),
+            .symbols = std.ArrayList([]const u8).init(aa_alloc),
             .backing_allocator = backing,
             .arena_ptr = aa_ptr,
             .allocator = aa_alloc,
@@ -79,6 +82,27 @@ pub const AstArena = struct {
         const idx: u32 = @intCast(self.decls.items.items.len);
         self.decls.items.append(decl) catch return DeclId.INVALID;
         return DeclId.new(idx);
+    }
+
+    pub fn registerSymbol(self: *AstArena, sym: SymbolId, text: []const u8) void {
+        if (!sym.isValid()) return;
+        const need: u32 = sym.index + 1;
+        while (self.symbols.items.len < need) {
+            self.symbols.append("") catch return;
+        }
+        if (self.symbols.items[sym.index].len == 0) {
+            self.symbols.items[sym.index] = self.allocator.dupe(u8, text) catch "";
+        }
+    }
+
+    pub fn symbolText(self: *const AstArena, sym: SymbolId) []const u8 {
+        if (!sym.isValid()) return "";
+        if (sym.index >= self.symbols.items.len) return "";
+        return self.symbols.items[sym.index];
+    }
+
+    pub fn symbolsSlice(self: *const AstArena) []const []const u8 {
+        return self.symbols.items;
     }
 
     pub fn addTypeRef(self: *AstArena, type_ref: AstTypeRef) TypeRefId {
@@ -171,3 +195,4 @@ pub const AstArena = struct {
         return @intCast(self.decls.items.items.len);
     }
 };
+

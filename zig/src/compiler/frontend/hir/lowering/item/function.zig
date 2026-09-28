@@ -14,7 +14,7 @@ pub fn lowerFnItem(self: *HirLowering, decl_id: AstDeclId, f: @import("../lower.
         const param_ty = if (p.type_ref) |tr| try self.lowerTypeRefId(tr) else UNK;
         params.append(.{
             .name = p.name,
-            .def_id = self.resolveName(p.name),
+            .def_id = self.resolveNameInOwner(p.name, def),
             .ty = param_ty,
             .span = p.span,
         }) catch return error.OutOfMemory;
@@ -35,3 +35,4 @@ pub fn lowerFnItem(self: *HirLowering, decl_id: AstDeclId, f: @import("../lower.
         } },
     });
 }
+

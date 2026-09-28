@@ -297,3 +297,4 @@ pub const Lexer = struct {
         return Token.init(kind, .{ .file_id = self.file_id, .start = start, .end = @intCast(self.cursor.pos) }, 0, text);
     }
 };
+

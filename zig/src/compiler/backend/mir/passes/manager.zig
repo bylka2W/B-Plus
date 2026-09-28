@@ -156,3 +156,4 @@ pub fn optimize(mfunc: *mir.MFunction) !void {
     try mir_dce.dce(mfunc);
     if (debug) dumpMIR(mfunc, "FINAL");
 }
+

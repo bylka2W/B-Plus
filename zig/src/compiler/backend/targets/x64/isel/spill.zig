@@ -38,3 +38,4 @@ pub fn storeSpilledOp(ctx: *Ctx, op: mir.MOperand, scratch: i16) !void {
     const mem = Operand{ .base_reg = 5, .disp = off };
     try append2(ctx, .MOV_MEM_R64, mem, Operand.r(scratch));
 }
+

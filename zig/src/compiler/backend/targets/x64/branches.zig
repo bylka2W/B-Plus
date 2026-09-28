@@ -37,3 +37,4 @@ pub fn emitLongJmp(code: *std.ArrayList(u8), target_label: usize) !void {
     _ = target_label;
     try emit(code, .JMP_REL32, &.{.{ .imm64 = 0 }});
 }
+

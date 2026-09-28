@@ -51,3 +51,4 @@ pub fn verifyCFG(func: *const machine.MFunction) VerifyError!void {
         if (!reachable.contains(@intCast(i))) return error.UnreachableBlock;
     }
 }
+

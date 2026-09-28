@@ -109,3 +109,4 @@ fn hexDigit(ch: u8) ?u8 {
     else if (ch >= 'A' and ch <= 'F') ch - 'A' + 10
     else null;
 }
+

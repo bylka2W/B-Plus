@@ -77,3 +77,4 @@ pub const PathInterner = struct {
         return @intCast(self.segments.items.len);
     }
 };
+

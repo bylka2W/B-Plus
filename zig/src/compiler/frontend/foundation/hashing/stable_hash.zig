@@ -55,3 +55,4 @@ pub const StableHasher = struct {
         return .{ .hash = self.finish() };
     }
 };
+

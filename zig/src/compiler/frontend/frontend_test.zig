@@ -8,9 +8,12 @@ const token_stream_mod = @import("syntax/token/token_stream.zig");
 const green_tree_mod = @import("syntax/green/green_tree.zig");
 const parser_mod = @import("syntax/parser/parser.zig");
 const legacy_parser = @import("parser/parser.zig");
+pub const legacy_parser_pub = legacy_parser;
+pub const legacy_sema = @import("sema/sema.zig");
 const ast_arena_mod = @import("ast/arena.zig");
 const ast_builder_mod = @import("ast/builder.zig");
 const ast_dump_mod = @import("ast/dump.zig");
+pub const ast_dump_pub = ast_dump_mod;
 const ast_node = @import("ast/ast_node.zig");
 const syntax_node_mod = @import("syntax/red/syntax_node.zig");
 const resolver_mod = @import("resolver/resolver.zig");
@@ -23,7 +26,7 @@ const AstArena = ast_arena_mod.AstArena;
 const AstBuilder = ast_builder_mod.AstBuilder;
 const SyntaxNode = syntax_node_mod.SyntaxNode;
 
-fn parseAndBuild(source: []const u8, allocator: std.mem.Allocator) !struct { arena: AstArena, decls: std.ArrayList(ast_node.DeclId) } {
+pub fn parseAndBuild(source: []const u8, allocator: std.mem.Allocator) !struct { arena: AstArena, decls: std.ArrayList(ast_node.DeclId) } {
     var lexer = Lexer.init(source, 0, allocator);
     defer lexer.deinit();
 
@@ -51,6 +54,33 @@ fn parseAndBuild(source: []const u8, allocator: std.mem.Allocator) !struct { are
     const decls = builder.lowerSourceFile(syntax_root);
 
     return .{ .arena = arena, .decls = decls };
+}
+
+pub fn parseAndDumpGreen(source: []const u8, allocator: std.mem.Allocator) ![]const u8 {
+    var lexer = Lexer.init(source, 0, allocator);
+    defer lexer.deinit();
+
+    const tokens = try lexer.lex();
+    var stream = TokenStream.init(allocator);
+    defer stream.deinit();
+
+    for (tokens.items) |tok| {
+        try stream.append(tok);
+    }
+
+    var green = GreenTree.init(allocator);
+    defer green.deinit();
+
+    var parser = Parser.init(&stream, allocator);
+    defer parser.deinit();
+
+    const green_root = try parser.parse(&green);
+    green.setRoot(green_root);
+
+    var buf = std.ArrayList(u8).init(allocator);
+    defer buf.deinit();
+    try green.dump(buf.writer());
+    return buf.toOwnedSlice();
 }
 
 test "lexer: simple tokens" {
@@ -425,9 +455,11 @@ test "resolver: enum variants" {
 const hir_mod = @import("hir/arena.zig");
 const hir_lower = @import("hir/lowering/lower.zig");
 const hir_dump = @import("hir/dump.zig");
+pub const hir_dump_pub = hir_dump;
 const hir_verify = @import("hir/verify.zig");
 
 const HirArena = hir_mod.HirArena;
+pub const hir_item_id = hir_mod.ItemId;
 const HirLowering = hir_lower.HirLowering;
 
 fn lowerSource(source: []const u8, allocator: std.mem.Allocator) !struct {
@@ -621,7 +653,9 @@ pub fn typeCheckSource(source: []const u8, allocator: std.mem.Allocator) !struct
     const syntax_root = SyntaxNode.init(green_root, 0);
     _ = builder.lowerSourceFile(syntax_root);
 
+    const print_sym = builder.internName("print");
     var resolver = resolver_mod.Resolver.init(allocator);
+    resolver.registerBuiltinPrint(print_sym);
     resolver.resolve(&ast_arena);
 
     var hir_arena = HirArena.init(allocator);
@@ -632,9 +666,22 @@ pub fn typeCheckSource(source: []const u8, allocator: std.mem.Allocator) !struct
     engine.initInference();
     var errors = ErrorList.init(allocator);
 
-    var checker = TypeChecker.init(&hir_arena, &engine, &errors, &resolver.defs);
+    var checker = TypeChecker.init(&hir_arena, &engine, &errors, &resolver.defs, ast_arena.symbolsSlice());
+    checker.setBuiltinPrint(resolver.builtinPrintDefId());
     try checker.check();
     checker.deinit();
+
+    var di: u32 = 0;
+    while (di < ast_arena.declCount()) : (di += 1) {
+        const d = ast_arena.getDecl(ast_node.DeclId.new(di)) orelse continue;
+        const tag = std.meta.activeTag(d);
+        if (tag == .import or tag == .module) {
+            const span = switch (d) {
+                inline else => |decl| decl.span,
+            };
+            errors.report(.{ .import_not_found = .{ .name = "import not supported" } }, span);
+        }
+    }
 
     return .{
         .hir_arena = hir_arena,
@@ -1384,4 +1431,5 @@ test "program architecture: all three sections populated" {
     try std.testing.expectEqualStrings("Idle", program.plan.states.items[0].name);
     try std.testing.expectEqualStrings("Render", program.metal.kernels.items[0].name);
 }
+
 

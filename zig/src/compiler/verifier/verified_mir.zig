@@ -20,3 +20,4 @@ pub const VerifiedMIR = struct {
         try writer.print("VerifiedMIR({d} funcs)", .{self.module.functions.items.len});
     }
 };
+

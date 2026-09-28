@@ -68,3 +68,4 @@ pub const SourceManager = struct {
         return @intCast(self.files.items.len);
     }
 };
+

@@ -83,3 +83,4 @@ pub const DiagnosticsEngine = struct {
         render.renderJson(writer, self.diagnostics.items) catch {};
     }
 };
+

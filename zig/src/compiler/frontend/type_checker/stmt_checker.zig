@@ -12,7 +12,13 @@ pub fn checkStmt(self: *TypeChecker, stmt_id: HirStmtId) TypeCheckError!void {
     switch (stmt.kind) {
         .local_decl => |ld| try self.checkLocalDecl(ld, stmt.span),
         .expr => |es| {
-            _ = try self.checkExpr(es.expr);
+            const expr_ty = try self.checkExpr(es.expr);
+            if (self.hir.getExpr(es.expr)) |e| {
+                if (e.kind == .literal) {
+                    self.reportError(.{ .bare_literal_expression = {} }, stmt.span);
+                }
+            }
+            _ = expr_ty;
         },
         .block => |bs| {
             for (bs.stmts) |sid| {
@@ -21,7 +27,7 @@ pub fn checkStmt(self: *TypeChecker, stmt_id: HirStmtId) TypeCheckError!void {
         },
         .if_stmt => |ifs| {
             const cond_ty = try self.checkExpr(ifs.condition);
-            _ = self.engine.unify(cond_ty, self.engine.builtin(.bool_type), 0) catch {};
+            _ = self.unifyBool(cond_ty, ifs.condition);
             try self.checkStmt(ifs.then_branch);
             if (ifs.else_branch) |eb| {
                 try self.checkStmt(eb);
@@ -29,7 +35,7 @@ pub fn checkStmt(self: *TypeChecker, stmt_id: HirStmtId) TypeCheckError!void {
         },
         .while_stmt => |ws| {
             const cond_ty = try self.checkExpr(ws.condition);
-            _ = self.engine.unify(cond_ty, self.engine.builtin(.bool_type), 0) catch {};
+            _ = self.unifyBool(cond_ty, ws.condition);
             self.pushLoop();
             try self.checkStmt(ws.body);
             self.popLoop();
@@ -47,13 +53,26 @@ pub fn checkStmt(self: *TypeChecker, stmt_id: HirStmtId) TypeCheckError!void {
             self.popLoop();
         },
         .return_stmt => |rs| {
+            if (!self.in_fn_body) {
+                self.reportError(.{ .return_outside_function = {} }, stmt.span);
+            }
             if (rs.value) |val| {
                 const val_ty = try self.checkExpr(val);
                 if (self.current_return_type.isValid()) {
-                    _ = self.engine.unify(self.current_return_type, val_ty, 0) catch {};
+                    _ = self.engine.unify(self.current_return_type, val_ty, 0) catch {
+                        self.reportError(.{ .return_type_mismatch = .{
+                            .expected = self.builtinTypeName(self.current_return_type),
+                            .found = self.builtinTypeName(val_ty),
+                        } }, stmt.span);
+                    };
+                } else {
+                    self.reportError(.{ .return_value_without_declared_type = {} }, stmt.span);
                 }
+                self.fn_has_return = true;
             } else if (self.current_return_type.isValid()) {
                 _ = self.engine.unify(self.current_return_type, self.engine.builtin(.void_type), 0) catch {};
+            } else {
+                self.fn_has_return = true;
             }
         },
         .break_stmt => |bs| {
@@ -84,7 +103,6 @@ pub fn checkStmt(self: *TypeChecker, stmt_id: HirStmtId) TypeCheckError!void {
 }
 
 fn checkLocalDecl(self: *TypeChecker, ld: anytype, span: anytype) TypeCheckError!void {
-    _ = span;
     const init_ty = if (ld.init) |init_expr|
         try self.checkExpr(init_expr)
     else
@@ -92,7 +110,12 @@ fn checkLocalDecl(self: *TypeChecker, ld: anytype, span: anytype) TypeCheckError
 
     if (ld.type_annotation) |ann_ty| {
         const ann = self.hirTypeToTypeId(ann_ty);
-        _ = self.engine.unify(ann, init_ty, 0) catch {};
+        _ = self.engine.unify(ann, init_ty, 0) catch {
+            self.reportError(.{ .type_mismatch = .{
+                .expected = self.builtinTypeName(ann),
+                .found = self.builtinTypeName(init_ty),
+            } }, span);
+        };
     }
 
     self.checkPatternAndDefine(ld.pattern, init_ty);
@@ -125,3 +148,4 @@ fn checkPatternAndDefine(self: *TypeChecker, pat_id: HirPatId, ty: TypeId) void 
         else => {},
     }
 }
+

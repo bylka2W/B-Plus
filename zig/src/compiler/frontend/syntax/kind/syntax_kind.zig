@@ -268,6 +268,10 @@ pub const SyntaxKind = enum(u16) {
     type_param_list = 716,
     type_param = 717,
     use_item = 718,
+    state_decl = 719,
+    entry_body = 720,
+    exit_body = 721,
+    transition = 722,
 
     list = 800,
     tuple = 801,
@@ -523,6 +527,10 @@ pub const SyntaxKind = enum(u16) {
             .variant => "VARIANT",
             .variant_list => "VARIANT_LIST",
             .list => "LIST",
+            .state_decl => "STATE_DECL",
+            .entry_body => "ENTRY_BODY",
+            .exit_body => "EXIT_BODY",
+            .transition => "TRANSITION",
             .tuple => "TUPLE",
             else => "unknown",
         };
@@ -712,3 +720,4 @@ pub fn tokenKindToSyntaxKind(kind: TokenKind) SyntaxKind {
         .doc_comment_multi => .block_doc_comment,
     };
 }
+

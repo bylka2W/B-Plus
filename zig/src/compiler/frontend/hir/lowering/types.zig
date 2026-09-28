@@ -37,3 +37,4 @@ pub fn lowerTypeRefId(self: *HirLowering, tr_id: TypeRefId) LowerError!TypeId {
     const ast_tr = self.ast.getTypeRef(tr_id) orelse return UNK;
     return self.lowerTypeRef(ast_tr);
 }
+

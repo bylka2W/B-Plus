@@ -11,3 +11,4 @@ pub const ScopeGraph = scope.ScopeGraph;
 pub const ScopeKind = scope.ScopeKind;
 pub const SymbolTable = symbol_table.SymbolTable;
 pub const IdentifierId = symbol.IdentifierId;
+

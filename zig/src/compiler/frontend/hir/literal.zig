@@ -17,3 +17,4 @@ pub const HirLiteral = union(enum) {
         }
     }
 };
+

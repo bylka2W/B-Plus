@@ -26,3 +26,4 @@ pub const BirVerifier = struct {
         return VerifiedBIR{ .module = module, .allocator = self.allocator };
     }
 };
+

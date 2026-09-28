@@ -83,6 +83,7 @@ pub const HirLowering = struct {
             .impl_decl => |im| self.lowerImplItem(decl_id, im),
             .type_alias => |ta| self.lowerTypeAliasItem(decl_id, ta),
             .extern_fn => |ef| self.lowerExternFnItem(decl_id, ef),
+            .state_decl => |s| self.lowerStateItem(decl_id, s),
             .import, .module, .missing => ItemId.INVALID,
         };
     }
@@ -96,11 +97,12 @@ pub const HirLowering = struct {
                     .integer => .{ .int = 0 },
                     .float => .{ .float = 0.0 },
                     .boolean => .{ .boolean = false },
-                    .string, .char, .byte, .byte_string, .null_value => .{ .int = 0 },
+                    .string => .{ .string = self.ast.symbolText(SymbolId.new(l.symbol_id)) },
+                    .char, .byte, .byte_string, .null_value => .{ .int = 0 },
                 };
                 return try self.literal(lit_val, l.span);
             },
-            .identifier => |id| return try self.path(self.lookupDef(id.name), id.span),
+            .identifier => |id| return try self.path(self.resolveDefForExpr(ast_eid), id.span),
             .binary => |b| {
                 const left = try self.lowerExpr(b.left);
                 const right = try self.lowerExpr(b.right);
@@ -120,7 +122,7 @@ pub const HirLowering = struct {
             },
             .member => |m| {
                 const object = try self.lowerExpr(m.object);
-                return self.hir.addExpr(.{ .span = m.span, .ty = UNK, .kind = .{ .field = .{ .object = object, .field = DefId.INVALID } } });
+                return self.hir.addExpr(.{ .span = m.span, .ty = UNK, .kind = .{ .field = .{ .object = object, .field = DefId.INVALID, .name = m.member } } });
             },
             .index => |i| {
                 const object = try self.lowerExpr(i.object);
@@ -148,12 +150,16 @@ pub const HirLowering = struct {
                 const body = try self.lowerExpr(l.body);
                 return try self.loopExpr(body, l.span);
             },
-            .block => |b| {
-                const stmts = try self.lowerStmtSlice(b.stmts);
+.block => |b| {
+                var stmts = try self.lowerStmtSlice(b.stmts);
                 const last = if (stmts.len > 0) blk: {
                     const last_sid = stmts[stmts.len - 1];
                     const stmt = self.hir.getStmt(last_sid) orelse break :blk try self.missingExpr(b.span);
-                    if (stmt.kind == .expr) break :blk stmt.kind.expr.expr;
+                    if (stmt.kind == .expr) {
+                        const result_expr = stmt.kind.expr.expr;
+                        stmts = stmts[0 .. stmts.len - 1];
+                        break :blk result_expr;
+                    }
                     break :blk try self.missingExpr(b.span);
                 } else try self.missingExpr(b.span);
                 return try self.block(stmts, last, b.span);
@@ -219,6 +225,17 @@ pub const HirLowering = struct {
         return DefId.INVALID;
     }
 
+    pub fn resolveDefForExpr(self: *const HirLowering, ast_eid: AstExprId) DefId {
+        return self.resolver.resolveDefForExpr(ast_eid);
+    }
+
+    pub fn resolveNameInOwner(self: *const HirLowering, name: SymbolId, owner: DefId) DefId {
+        if (self.resolver.lookupDefInOwner(name, owner)) |def_id| {
+            return def_id;
+        }
+        return DefId.INVALID;
+    }
+
     pub usingnamespace @import("common.zig");
     pub usingnamespace @import("builder.zig");
     pub usingnamespace @import("types.zig");
@@ -240,3 +257,4 @@ pub const HirLowering = struct {
     pub usingnamespace @import("stmt/control.zig");
     pub usingnamespace @import("stmt/expr.zig");
 };
+

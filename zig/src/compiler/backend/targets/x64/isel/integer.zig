@@ -579,3 +579,4 @@ pub fn selectCmp(ctx: *Ctx, c: mir.CmpInst) !void {
 pub fn selectCmpFlags(ctx: *Ctx, cf: mir.CmpFlagsInst) !void {
     try emitCmp(ctx, cf.a, cf.b);
 }
+

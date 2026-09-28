@@ -131,7 +131,7 @@ pub fn verifySSA(
                             .message = "value definition index out of range within same block",
                         });
                     }
-                } else {
+} else {
                     if (!dom_tree.dominates(def_block, block_id)) {
                         try errs.push(.{
                             .code = .value_does_not_dominate_use,
@@ -150,7 +150,7 @@ pub fn verifySSA(
 }
 
 pub fn verifyPhis(
-    module: *const bir.Module,
+    module: *bir.Module,
     func: *const bir.Function,
     func_id: FunctionId,
     _: *const bir_cfg.CFG,
@@ -358,7 +358,7 @@ fn collectDataRefs(inst: bir.Inst, result: *std.ArrayList(ValueId)) !void {
     }
 }
 
-fn getTypeOfValue(_: *const bir.Module, func: *const bir.Function, val: ValueId) ?bir.TypeId {
+fn getTypeOfValue(module: *bir.Module, func: *const bir.Function, val: ValueId) ?bir.TypeId {
     if (val == NO_VALUE) return null;
     if (val == 0 or val > func.value_info.items.len) return null;
     const vi = &func.value_info.items[val - 1];
@@ -366,10 +366,15 @@ fn getTypeOfValue(_: *const bir.Module, func: *const bir.Function, val: ValueId)
     if (vi.def.block >= func.blocks.items.len) return null;
     const blk = &func.blocks.items[vi.def.block];
     if (vi.def.idx >= blk.instrs.items.len) return null;
-    return blk.instrs.items[vi.def.idx].ty;
+    const inst = &blk.instrs.items[vi.def.idx];
+    if (inst.op == .alloca) {
+        return module.types.pointerType(inst.ty, .generic) catch null;
+    }
+    return inst.ty;
 }
 
 fn typesEqual(module: *const bir.Module, a: bir.TypeId, b: bir.TypeId) bool {
     _ = module;
     return a == b;
 }
+

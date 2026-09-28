@@ -73,3 +73,4 @@ pub const DiagnosticList = struct {
         return count;
     }
 };
+

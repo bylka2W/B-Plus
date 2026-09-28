@@ -41,6 +41,8 @@ pub const DeclarationParser = struct {
             self.parseImportDecl(stream);
         } else if (kind == .kw_extern) {
             self.parseExternDecl(stream);
+        } else if (kind == .kw_state) {
+            self.parseStateDecl(stream);
         } else {
             self.stmt_parser.parseStatement(stream);
         }
@@ -278,8 +280,60 @@ pub const DeclarationParser = struct {
             stream.at(.kw_u64) or stream.at(.kw_f32) or stream.at(.kw_f64) or
             stream.at(.kw_string) or stream.at(.kw_void) or stream.at(.kw_any))
         {
+            _ = self.events.startNode(.named_type);
+            self.eatToken(stream);
+            self.events.finishNode();
+        }
+    }
+
+    fn parseStateDecl(self: *DeclarationParser, stream: anytype) void {
+        _ = self.events.startNode(.state_decl);
+        self.eatToken(stream);
+
+        if (stream.at(.identifier)) self.eatToken(stream);
+
+        if (stream.at(.lbrace)) {
+            self.eatToken(stream);
+            while (!stream.at(.rbrace) and !stream.at(.eof)) {
+                const before = stream.positionAsU32();
+                if (stream.at(.kw_var) or stream.at(.kw_let)) {
+                    self.stmt_parser.parseVarDecl(stream);
+                } else if (stream.at(.kw_entry)) {
+                    _ = self.events.startNode(.entry_body);
+                    self.eatToken(stream);
+                    self.stmt_parser.parseBlockStatement(stream);
+                    self.events.finishNode();
+                } else if (stream.at(.kw_exit)) {
+                    _ = self.events.startNode(.exit_body);
+                    self.eatToken(stream);
+                    self.stmt_parser.parseBlockStatement(stream);
+                    self.events.finishNode();
+                } else if (stream.at(.kw_on) or stream.at(.kw_always)) {
+                    self.parseTransition(stream);
+                } else {
+                    self.eatToken(stream);
+                }
+                _ = stream.recoverProgress(before);
+            }
+            if (stream.at(.rbrace)) self.eatToken(stream);
+        } else if (stream.at(.semicolon)) {
             self.eatToken(stream);
         }
+
+        self.events.finishNode();
+    }
+
+    fn parseTransition(self: *DeclarationParser, stream: anytype) void {
+        _ = self.events.startNode(.transition);
+        self.eatToken(stream);
+
+        if (stream.at(.identifier)) self.eatToken(stream);
+
+        if (stream.at(.arrow)) self.eatToken(stream);
+
+        if (stream.at(.identifier)) self.eatToken(stream);
+
+        self.events.finishNode();
     }
 
     fn eatToken(self: *DeclarationParser, stream: anytype) void {
@@ -289,3 +343,4 @@ pub const DeclarationParser = struct {
         stream.skipTrivia();
     }
 };
+

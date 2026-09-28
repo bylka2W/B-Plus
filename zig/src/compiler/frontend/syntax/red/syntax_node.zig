@@ -240,3 +240,4 @@ pub const SyntaxElement = union(enum) {
         return self == .token;
     }
 };
+

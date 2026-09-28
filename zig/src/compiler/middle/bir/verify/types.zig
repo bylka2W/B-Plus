@@ -8,9 +8,10 @@ const Op = bir.Op;
 const ScalarKind = bir.ScalarKind;
 const diagnostics = @import("diagnostics.zig");
 const DiagnosticList = diagnostics.DiagnosticList;
+const addressing = @import("addressing.zig");
 
 pub fn verifyTypes(
-    module: *const bir.Module,
+    module: *bir.Module,
     func: *const bir.Function,
     func_id: FunctionId,
     errs: *DiagnosticList,
@@ -28,7 +29,7 @@ pub fn verifyTypes(
 }
 
 fn verifyInstTypes(
-    module: *const bir.Module,
+    module: *bir.Module,
     func: *const bir.Function,
     inst: bir.Inst,
     func_id: FunctionId,
@@ -40,10 +41,16 @@ fn verifyInstTypes(
     switch (inst.op) {
         .add, .sub, .mul, .div, .mod => {
             if (inst.operands.len < 2) return;
-            const ty_a = getTypeOfValue(module, func, inst.operands[0]);
-            const ty_b = getTypeOfValue(module, func, inst.operands[1]);
-            if (ty_a) |ta| {
-                if (!isIntType(module, ta) and !isFloatType(module, ta)) {
+            const ty_a = addressing.getTypeOfValue(module, func, inst.operands[0]);
+            const ty_b = addressing.getTypeOfValue(module, func, inst.operands[1]);
+            const a_ptr = ty_a != null and addressing.isPtrType(module, ty_a.?);
+            const b_ptr = ty_b != null and addressing.isPtrType(module, ty_b.?);
+
+            if (a_ptr or b_ptr) {
+                                                                               
+                                                                                 
+                                           
+                if (inst.op != .add and inst.op != .sub) {
                     try errs.push(.{
                         .code = .type_not_numeric,
                         .func_id = func_id,
@@ -52,17 +59,47 @@ fn verifyInstTypes(
                         .block_name = block_name,
                         .inst_idx = idx,
                         .value_id = inst.result,
-                        .type_id = ta,
                         .op = inst.op,
-                        .message = "arithmetic operand is not numeric",
+                        .message = "pointer arithmetic only allows + and -",
                     });
+                } else if (a_ptr and b_ptr) {
+                    try errs.push(.{
+                        .code = .type_mismatch,
+                        .func_id = func_id,
+                        .func_name = func.name,
+                        .block_id = block_id,
+                        .block_name = block_name,
+                        .inst_idx = idx,
+                        .value_id = inst.result,
+                        .type_id = ty_a.?,
+                        .other_type_id = ty_b.?,
+                        .op = inst.op,
+                        .message = "pointer + pointer / pointer - pointer is not allowed",
+                    });
+                } else {
+                    const other_ty = if (b_ptr) ty_a else ty_b;
+                    if (other_ty) |ot| {
+                        if (!addressing.isIntType(module, ot)) {
+                            try errs.push(.{
+                                .code = .type_not_numeric,
+                                .func_id = func_id,
+                                .func_name = func.name,
+                                .block_id = block_id,
+                                .block_name = block_name,
+                                .inst_idx = idx,
+                                .value_id = inst.result,
+                                .type_id = ot,
+                                .op = inst.op,
+                                .message = "pointer +/- requires an integer offset",
+                            });
+                        }
+                    }
                 }
-            }
-            if (ty_a) |ta| {
-                if (ty_b) |tb| {
-                    if (!typesEqual(module, ta, tb)) {
+            } else {
+                if (ty_a) |ta| {
+                    if (!addressing.isIntType(module, ta) and !addressing.isFloatType(module, ta)) {
                         try errs.push(.{
-                            .code = .type_mismatch,
+                            .code = .type_not_numeric,
                             .func_id = func_id,
                             .func_name = func.name,
                             .block_id = block_id,
@@ -70,10 +107,28 @@ fn verifyInstTypes(
                             .inst_idx = idx,
                             .value_id = inst.result,
                             .type_id = ta,
-                            .other_type_id = tb,
                             .op = inst.op,
-                            .message = "arithmetic operands have different types",
+                            .message = "arithmetic operand is not numeric",
                         });
+                    }
+                }
+                if (ty_a) |ta| {
+                    if (ty_b) |tb| {
+                        if (!typesEqual(module, ta, tb)) {
+                            try errs.push(.{
+                                .code = .type_mismatch,
+                                .func_id = func_id,
+                                .func_name = func.name,
+                                .block_id = block_id,
+                                .block_name = block_name,
+                                .inst_idx = idx,
+                                .value_id = inst.result,
+                                .type_id = ta,
+                                .other_type_id = tb,
+                                .op = inst.op,
+                                .message = "arithmetic operands have different types",
+                            });
+                        }
                     }
                 }
             }
@@ -144,10 +199,10 @@ fn verifyInstTypes(
         },
         .store => {
             if (inst.operands.len < 2) return;
-            const ty_target = getTypeOfValue(module, func, inst.operands[0]);
-            const ty_val = getTypeOfValue(module, func, inst.operands[1]);
+            const ty_target = addressing.getTypeOfValue(module, func, inst.operands[0]);
+            const ty_val = addressing.getTypeOfValue(module, func, inst.operands[1]);
             if (ty_target) |tt| {
-                if (!isPtrType(module, tt)) {
+                if (!addressing.isPtrType(module, tt) and !addressing.isAddressValue(module, func, inst.operands[0], 0)) {
                     try errs.push(.{
                         .code = .store_target_not_pointer,
                         .func_id = func_id,
@@ -160,9 +215,9 @@ fn verifyInstTypes(
                         .message = "store target is not a pointer",
                     });
                 } else if (ty_val) |tv| {
-                    const pointee = getPointeeType(module, tt);
+                    const pointee = addressing.getPointeeType(module, tt);
                     if (pointee) |pe| {
-                        if (!typesEqual(module, pe, tv)) {
+                        if (!storeValueCompatible(module, func, pe, inst.operands[1], tv)) {
                             try errs.push(.{
                                 .code = .store_type_mismatch,
                                 .func_id = func_id,
@@ -182,9 +237,9 @@ fn verifyInstTypes(
         },
         .load => {
             if (inst.operands.len < 1) return;
-            const ty_ptr = getTypeOfValue(module, func, inst.operands[0]);
+            const ty_ptr = addressing.getTypeOfValue(module, func, inst.operands[0]);
             if (ty_ptr) |tp| {
-                if (!isPtrType(module, tp)) {
+                if (!addressing.isPtrType(module, tp) and !addressing.isAddressValue(module, func, inst.operands[0], 0)) {
                     try errs.push(.{
                         .code = .type_not_pointer,
                         .func_id = func_id,
@@ -198,9 +253,9 @@ fn verifyInstTypes(
                         .message = "load source is not a pointer",
                     });
                 } else if (inst.ty != 0) {
-                    const pointee = getPointeeType(module, tp);
+                    const pointee = addressing.getPointeeType(module, tp);
                     if (pointee) |pe| {
-                        if (!typesEqual(module, pe, inst.ty)) {
+                        if (!typesCompatible(module, pe, inst.ty)) {
                             try errs.push(.{
                                 .code = .load_type_mismatch,
                                 .func_id = func_id,
@@ -367,63 +422,32 @@ fn verifyInstTypes(
     }
 }
 
-fn getTypeOfValue(_: *const bir.Module, func: *const bir.Function, val: ValueId) ?TypeId {
-    if (val == bir.NO_VALUE) return null;
-    if (val == 0 or val > func.value_info.items.len) return null;
-    const vi = &func.value_info.items[val - 1];
-    if (vi.def.block == INVALID_ID) return null;
-    if (vi.def.block >= func.blocks.items.len) return null;
-    const blk = &func.blocks.items[vi.def.block];
-    if (vi.def.idx >= blk.instrs.items.len) return null;
-    return blk.instrs.items[vi.def.idx].ty;
+fn getTypeOfValue(module: *bir.Module, func: *const bir.Function, val: ValueId) ?TypeId {
+    return addressing.getTypeOfValue(module, func, val);
 }
 
 fn isIntType(module: *const bir.Module, tid: TypeId) bool {
-    const t = module.types.get(tid);
-    return switch (t.kind) {
-        .scalar => |sk| switch (sk) {
-            .i1, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => true,
-            else => false,
-        },
-        else => false,
-    };
+    return addressing.isIntType(module, tid);
 }
 
 fn isFloatType(module: *const bir.Module, tid: TypeId) bool {
-    const t = module.types.get(tid);
-    return switch (t.kind) {
-        .scalar => |sk| switch (sk) {
-            .f16, .bf16, .f32, .f64 => true,
-            else => false,
-        },
-        else => false,
-    };
+    return addressing.isFloatType(module, tid);
 }
 
 fn isBoolType(module: *const bir.Module, tid: TypeId) bool {
-    const t = module.types.get(tid);
-    return switch (t.kind) {
-        .scalar => |sk| sk == .i1,
-        else => false,
-    };
+    return addressing.isBoolType(module, tid);
 }
 
 fn isPtrType(module: *const bir.Module, tid: TypeId) bool {
-    const t = module.types.get(tid);
-    return t.kind == .pointer;
+    return addressing.isPtrType(module, tid);
 }
 
 fn isVoidType(module: *const bir.Module, tid: TypeId) bool {
-    const t = module.types.get(tid);
-    return t.kind == .void;
+    return addressing.isVoidType(module, tid);
 }
 
 fn getPointeeType(module: *const bir.Module, tid: TypeId) ?TypeId {
-    const t = module.types.get(tid);
-    return switch (t.kind) {
-        .pointer => |p| p.elem,
-        else => null,
-    };
+    return addressing.getPointeeType(module, tid);
 }
 
 fn typesEqual(module: *const bir.Module, a: TypeId, b: TypeId) bool {
@@ -431,4 +455,28 @@ fn typesEqual(module: *const bir.Module, a: TypeId, b: TypeId) bool {
     return a == b;
 }
 
-const INVALID_ID = bir.INVALID_ID;
+fn typesCompatible(module: *const bir.Module, a: TypeId, b: TypeId) bool {
+    if (typesEqual(module, a, b)) return true;
+    if (isIntType(module, a) and isIntType(module, b)) return true;
+    if (isPtrType(module, a) and isPtrType(module, b)) return true;
+    return false;
+}
+
+fn storeValueCompatible(module: *bir.Module, func: *const bir.Function, pe: TypeId, val: bir.ValueId, tv: TypeId) bool {
+    if (typesCompatible(module, pe, tv)) return true;
+    if (isAggregateType(module, pe) and addressing.isAddressValue(module, func, val, 0)) return true;
+    return false;
+}
+
+fn isAggregateType(module: *const bir.Module, tid: TypeId) bool {
+    const t = module.types.get(tid);
+    return switch (t.kind) {
+        .struct_type, .array, .vector, .matrix => true,
+        else => false,
+    };
+}
+
+fn isScalarType(module: *const bir.Module, tid: TypeId) bool {
+    return isIntType(module, tid) or isFloatType(module, tid) or isPtrType(module, tid) or isVoidType(module, tid);
+}
+

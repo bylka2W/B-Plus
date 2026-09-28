@@ -124,8 +124,8 @@ pub fn dumpStmt(arena: *const HirArena, stmt_id: arena_mod.StmtId, writer: anyty
         .local_decl => |l| {
             try writer.print("  kind={s}\n", .{@tagName(l.kind)});
             try writer.print("  pat=PatId({d})\n", .{l.pattern.index});
-            if (l.type_annotation.isValid()) try writer.print("  ty=TypeId({d})\n", .{l.type_annotation.index});
-            if (l.init.isValid()) try writer.print("  init=ExprId({d})\n", .{l.init.index});
+            if (l.type_annotation) |_| try writer.print("  ty=TypeId({d})\n", .{l.type_annotation.?.index});
+            if (l.init) |_| try writer.print("  init=ExprId({d})\n", .{l.init.?.index});
         },
         .expr => |e| try writer.print("  expr=ExprId({d})\n", .{e.expr.index}),
         .block => |b| try writer.print("  stmts={d}\n", .{b.stmts.len}),
@@ -158,3 +158,4 @@ pub fn dumpPattern(arena: *const HirArena, pat_id: arena_mod.PatId, writer: anyt
         .missing => try writer.print("  <<missing>>\n", .{}),
     }
 }
+

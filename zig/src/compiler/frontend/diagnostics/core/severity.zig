@@ -29,3 +29,4 @@ pub const Severity = enum {
         return self == .@"error" or self == .fatal or self == .ice;
     }
 };
+

@@ -35,3 +35,4 @@ pub fn lowerFnBody(self: *HirLowering, body_stmt_id: AstStmtId) LowerError!BodyI
         .local_count = 0,
     });
 }
+

@@ -9,3 +9,4 @@ const ValueId = bir.ValueId;
 const BlockId = bir.BlockId;
 const INVALID_ID = bir.INVALID_ID;
 const NO_VALUE = bir.NO_VALUE;
+

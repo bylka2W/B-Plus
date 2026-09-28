@@ -248,3 +248,4 @@ fn insertSortedByEnd(list: *std.ArrayList(LiveInterval), item: LiveInterval) !vo
     }
     try list.insert(i, item);
 }
+

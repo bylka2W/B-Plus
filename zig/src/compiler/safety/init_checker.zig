@@ -69,7 +69,7 @@ pub const InitChecker = struct {
             var bs = try BlockState.init(self.allocator, slot_ids.len);
             errdefer bs.deinit(self.allocator);
             for (slot_ids, 0..) |_, i| {
-                bs.initialized[i] = false;
+                bs.initialized[i] = true;
             }
             block_states.appendAssumeCapacity(bs);
         }
@@ -233,3 +233,4 @@ const BlockState = struct {
         allocator.free(self.initialized);
     }
 };
+

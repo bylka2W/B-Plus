@@ -5,26 +5,16 @@ const BlockId = bir.BlockId;
 const ValueId = bir.ValueId;
 const diagnostics = @import("diagnostics.zig");
 const DiagnosticList = diagnostics.DiagnosticList;
+const addressing = @import("addressing.zig");
 
 pub fn verifyMemory(
-    _: *const bir.Module,
+    module: *bir.Module,
     func: *const bir.Function,
     func_id: FunctionId,
     errs: *DiagnosticList,
 ) !void {
     const nblocks = func.blocks.items.len;
     if (nblocks == 0) return;
-
-    var allocas = std.AutoHashMap(ValueId, void).init(errs.allocator);
-    defer allocas.deinit();
-
-    for (func.blocks.items) |block| {
-        for (block.instrs.items) |inst| {
-            if (inst.op == .alloca and inst.result != bir.NO_VALUE) {
-                try allocas.put(inst.result, {});
-            }
-        }
-    }
 
     for (func.blocks.items, 0..) |block, bid| {
         const block_id = @as(BlockId, @intCast(bid));
@@ -36,15 +26,9 @@ pub fn verifyMemory(
                     const ptr_val = inst.operands[0];
                     if (ptr_val == bir.NO_VALUE) continue;
 
-                    if (ptr_val > func.value_info.items.len) continue;
-                    const vi = &func.value_info.items[ptr_val - 1];
-                    if (vi.def.block == bir.INVALID_ID) continue;
-                    if (vi.def.block >= func.blocks.items.len) continue;
-                    const def_block = &func.blocks.items[vi.def.block];
-                    if (vi.def.idx >= def_block.instrs.items.len) continue;
-                    const def_inst = def_block.instrs.items[vi.def.idx];
-
-                    if (def_inst.op != .alloca and def_inst.op != .getelementptr and def_inst.op != .ptr_offset) {
+                    const ptr_ty = addressing.getTypeOfValue(module, func, ptr_val);
+                    const is_ptr = if (ptr_ty) |pt| addressing.isPtrType(module, pt) else false;
+                    if (!is_ptr and !addressing.isAddressValue(module, func, ptr_val, 0)) {
                         try errs.push(.{
                             .code = .type_not_pointer,
                             .func_id = func_id,
@@ -63,15 +47,9 @@ pub fn verifyMemory(
                     const target_val = inst.operands[0];
                     if (target_val == bir.NO_VALUE) continue;
 
-                    if (target_val > func.value_info.items.len) continue;
-                    const vi = &func.value_info.items[target_val - 1];
-                    if (vi.def.block == bir.INVALID_ID) continue;
-                    if (vi.def.block >= func.blocks.items.len) continue;
-                    const def_block = &func.blocks.items[vi.def.block];
-                    if (vi.def.idx >= def_block.instrs.items.len) continue;
-                    const def_inst = def_block.instrs.items[vi.def.idx];
-
-                    if (def_inst.op != .alloca and def_inst.op != .getelementptr and def_inst.op != .ptr_offset) {
+                    const target_ty = addressing.getTypeOfValue(module, func, target_val);
+                    const is_ptr = if (target_ty) |tt| addressing.isPtrType(module, tt) else false;
+                    if (!is_ptr and !addressing.isAddressValue(module, func, target_val, 0)) {
                         try errs.push(.{
                             .code = .store_target_not_pointer,
                             .func_id = func_id,

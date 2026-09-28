@@ -16,3 +16,4 @@ pub const HirBody = struct {
     pub const ParamIndex = u32;
     pub const LocalIndex = u32;
 };
+

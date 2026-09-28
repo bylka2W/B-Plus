@@ -121,3 +121,4 @@ test "StateMachine guard rejects" {
     sm.fire(0);
     try std.testing.expectEqual(@as(StateId, 0), sm.current_state);
 }
+

@@ -347,3 +347,4 @@ pub const Module = struct {
         _ = blk.instrs.orderedRemove(idx);
     }
 };
+

@@ -32,6 +32,13 @@ pub const TypeError = struct {
         match_arm_type_mismatch: TypeMismatchData,
         unresolved_inference_var: UnresolvedInferenceData,
         arg_count_mismatch: WrongArgCountData,
+        condition_not_bool: void,
+        return_outside_function: void,
+        return_value_without_declared_type: void,
+        missing_state_entry: void,
+        undefined_state_target: void,
+        bare_literal_expression: void,
+        import_not_found: UnresolvedTypeData,
     };
 
     pub const TypeMismatchData = struct {
@@ -118,3 +125,4 @@ pub const ErrorList = struct {
         return self.errors.items[idx];
     }
 };
+

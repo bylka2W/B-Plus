@@ -58,3 +58,4 @@ pub const Diagnostic = struct {
         return null;
     }
 };
+

@@ -54,7 +54,7 @@ pub const StatementParser = struct {
         }
     }
 
-    fn parseVarDecl(self: *StatementParser, stream: anytype) void {
+    pub fn parseVarDecl(self: *StatementParser, stream: anytype) void {
         const is_const = stream.at(.kw_const);
         _ = self.events.startNode(if (is_const) .const_stmt else .let_stmt);
         self.eatToken(stream);
@@ -179,7 +179,9 @@ pub const StatementParser = struct {
             stream.at(.kw_f32) or stream.at(.kw_f64) or stream.at(.kw_string) or
             stream.at(.kw_void) or stream.at(.kw_any))
         {
+            _ = self.events.startNode(.named_type);
             self.eatToken(stream);
+            self.events.finishNode();
         }
     }
 
@@ -190,3 +192,4 @@ pub const StatementParser = struct {
         stream.skipTrivia();
     }
 };
+

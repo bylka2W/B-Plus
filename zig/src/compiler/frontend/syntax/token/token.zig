@@ -68,3 +68,4 @@ pub const Token = struct {
         return self.kind.isTrivia();
     }
 };
+

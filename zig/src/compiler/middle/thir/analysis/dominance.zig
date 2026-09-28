@@ -175,3 +175,4 @@ test "DominanceTree: idom values" {
     try std.testing.expectEqual(BlockId.new(0), tree.idom(BlockId.new(2)));
     try std.testing.expectEqual(BlockId.new(0), tree.idom(BlockId.new(3)));
 }
+

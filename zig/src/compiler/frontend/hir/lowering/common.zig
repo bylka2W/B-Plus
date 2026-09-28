@@ -89,3 +89,4 @@ pub fn missingType(self: *HirLowering) LowerError!TypeId {
         .builtin = .{ .kind = .void_type },
     });
 }
+

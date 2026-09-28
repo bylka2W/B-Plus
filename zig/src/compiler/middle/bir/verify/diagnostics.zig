@@ -176,3 +176,4 @@ pub const DiagnosticList = struct {
         }
     }
 };
+

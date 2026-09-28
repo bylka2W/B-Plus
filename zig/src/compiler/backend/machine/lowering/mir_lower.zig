@@ -138,3 +138,4 @@ fn convertCC(cc: mir.CondCode) machine.CondCode {
 fn convertMemSize(ms: mir.MemSize) machine.instruction.MemSize {
     return @enumFromInt(@intFromEnum(ms));
 }
+

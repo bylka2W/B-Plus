@@ -154,3 +154,4 @@ pub fn loadFloatOpToXmm(ctx: *Ctx, op: mir.MOperand, into_xmm: i16, dtype: mir.D
         else => {},
     }
 }
+

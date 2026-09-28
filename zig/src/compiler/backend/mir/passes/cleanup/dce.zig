@@ -239,3 +239,4 @@ pub fn dce(mf: *mir.MFunction) !void {
         }
     }
 }
+

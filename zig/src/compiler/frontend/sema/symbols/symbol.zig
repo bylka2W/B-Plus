@@ -59,3 +59,4 @@ pub const SymbolTable = struct {
         return .{ .items = result.items };
     }
 };
+

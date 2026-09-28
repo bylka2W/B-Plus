@@ -206,3 +206,4 @@ pub fn scalarBitSize(sk: ScalarKind) u32 {
         .i64, .u64, .f64 => 64,
     };
 }
+

@@ -176,3 +176,4 @@ pub const TokenStream = struct {
         return Token.eof(0);
     }
 };
+

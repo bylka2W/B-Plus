@@ -35,3 +35,4 @@ pub const StringInterner = struct {
         return self.pool.count();
     }
 };
+

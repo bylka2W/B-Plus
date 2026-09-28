@@ -89,6 +89,9 @@ pub fn canBinOp(op: anytype, lhs: BuiltinKind, rhs: BuiltinKind) ?BuiltinKind {
             if (@intFromEnum(lhs) >= @intFromEnum(rhs)) return lhs;
             return rhs;
         }
+        if (lhs == .str_type and rhs == .str_type and std.mem.eql(u8, op_name, "add")) {
+            return .str_type;
+        }
         return null;
     }
 
@@ -175,3 +178,4 @@ test "canUnaryOp: not bool" {
     try std.testing.expect(result != null);
     try std.testing.expect(result.? == .bool_type);
 }
+

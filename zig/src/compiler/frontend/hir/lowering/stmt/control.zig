@@ -82,3 +82,4 @@ pub fn lowerIfStmt(self: *HirLowering, ast_sid: @import("../lower.zig").AstStmtI
         else => return self.missingStmt(.{ .file_id = 0, .start = 0, .end = 0 }),
     }
 }
+

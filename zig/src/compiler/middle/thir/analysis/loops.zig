@@ -173,3 +173,4 @@ test "LoopNest: no loop in linear CFG" {
 
     try std.testing.expectEqual(@as(usize, 0), nest.loops.len);
 }
+

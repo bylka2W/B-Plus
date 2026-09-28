@@ -401,3 +401,4 @@ fn getIVType(func: *bir.Function, phi_val: ValueId) bir.TypeId {
     if (vi.def.idx >= block.instrs.items.len) return bir.types.INVALID_TYPE;
     return block.instrs.items[vi.def.idx].ty;
 }
+

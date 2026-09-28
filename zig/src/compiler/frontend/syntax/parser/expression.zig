@@ -41,7 +41,9 @@ pub const ExpressionParser = struct {
 
             if (precedence_mod.postfixPrecedence(kind)) |post_bp| {
                 if (post_bp.lowerOrEqual(min_bp)) break;
+                self.events.insertStartNode(self.postfixNodeKind(kind), checkpoint);
                 self.parsePostfix(stream, kind);
+                self.events.finishNode();
                 if (!stream.recoverProgress(before)) continue;
                 continue;
             }
@@ -105,6 +107,9 @@ pub const ExpressionParser = struct {
         if (kind == .kw_break) {
             _ = self.events.startNode(.break_expr);
             self.eatToken(stream);
+            if (!stream.at(.semicolon) and !stream.at(.rbrace) and !stream.at(.eof)) {
+                self.parseExpression(stream);
+            }
             self.events.finishNode();
             return;
         }
@@ -173,7 +178,7 @@ pub const ExpressionParser = struct {
             return;
         }
 
-        if (kind == .identifier) {
+        if (kind == .identifier or kind == .kw_print) {
             _ = self.events.startNode(.identifier_expr);
             self.eatToken(stream);
             self.events.finishNode();
@@ -189,10 +194,20 @@ pub const ExpressionParser = struct {
         self.events.finishNode();
     }
 
+    fn postfixNodeKind(self: *ExpressionParser, kind: TokenKind) SyntaxKind {
+        _ = self;
+        return switch (kind) {
+            .lparen => .call_expr,
+            .lbracket => .index_expr,
+            .dot => .member_expr,
+            .question => .try_expr,
+            else => .error_token,
+        };
+    }
+
     fn parsePostfix(self: *ExpressionParser, stream: anytype, kind: TokenKind) void {
         switch (kind) {
             .lparen => {
-                _ = self.events.startNode(.call_expr);
                 self.eatToken(stream);
                 while (!stream.at(.rparen) and !stream.at(.eof)) {
                     const before = stream.positionAsU32();
@@ -201,20 +216,15 @@ pub const ExpressionParser = struct {
                     _ = stream.recoverProgress(before);
                 }
                 if (stream.at(.rparen)) self.eatToken(stream);
-                self.events.finishNode();
             },
             .lbracket => {
-                _ = self.events.startNode(.index_expr);
                 self.eatToken(stream);
                 self.parseExpression(stream);
                 if (stream.at(.rbracket)) self.eatToken(stream);
-                self.events.finishNode();
             },
             .dot => {
-                _ = self.events.startNode(.member_expr);
                 self.eatToken(stream);
                 if (stream.at(.identifier)) self.eatToken(stream);
-                self.events.finishNode();
             },
             .float_literal => {
                 const text = stream.current().text;
@@ -227,16 +237,12 @@ pub const ExpressionParser = struct {
                         }
                     }
                     if (all_digits) {
-                        _ = self.events.startNode(.member_expr);
                         self.eatToken(stream);
-                        self.events.finishNode();
                     }
                 }
             },
             .question => {
-                _ = self.events.startNode(.try_expr);
                 self.eatToken(stream);
-                self.events.finishNode();
             },
             else => {},
         }
@@ -306,7 +312,7 @@ pub const ExpressionParser = struct {
 
     fn parseArrayLiteral(self: *ExpressionParser, stream: anytype) void {
         _ = self.events.startNode(.array_literal_expr);
-        self.eatToken(stream); // {
+        self.eatToken(stream);
         while (!stream.at(.rbrace) and !stream.at(.eof)) {
             self.parseExpression(stream);
             if (stream.at(.comma)) self.eatToken(stream);
@@ -380,3 +386,4 @@ pub const ExpressionParser = struct {
         stream.skipTrivia();
     }
 };
+

@@ -56,7 +56,7 @@ pub const Tier = enum(u8) {
 };
 
 
-pub const CHUNK_SIZE = 256; 
+pub const CHUNK_SIZE = 256;
 
 pub const Chunk = struct {
     tier: Tier,
@@ -165,7 +165,7 @@ pub const ChunkStore = struct {
         var ci: u32 = 0;
         while (ci < n) : (ci += 1) {
             const chunk_id = buf[ci];
-          
+
             const cap = handles.capacity();
             var si: u32 = 0;
             while (si < cap) : (si += 1) {
@@ -173,19 +173,19 @@ pub const ChunkStore = struct {
                     handles.invalidateSlot(si);
                 }
             }
-           
+
             cs.chunks[chunk_id].slot_count = 0;
         }
-       
+
         if (n > 0) {
             var write: u32 = buf[0];
             var read: u32 = buf[0] + 1;
             while (read < cs.count) : (read += 1) {
                 if (cs.chunks[read].tier == tier) {
-                    
+
                     continue;
                 }
-                
+
                 const cap = handles.capacity();
                 var si: u32 = 0;
                 while (si < cap) : (si += 1) {
@@ -1022,3 +1022,4 @@ pub fn unmmapFile(mmap: struct { data: []u8, handle: windows.HANDLE, mapping: wi
     windows.CloseHandle(mmap.mapping);
     windows.CloseHandle(mmap.handle);
 }
+

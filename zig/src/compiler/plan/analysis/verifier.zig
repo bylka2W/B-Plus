@@ -60,3 +60,4 @@ pub fn verifyPlan(allocator: std.mem.Allocator, graph: plan_ir.PlanGraph) Verifi
     const verifier = Verifier.init(allocator);
     return verifier.verify(graph);
 }
+

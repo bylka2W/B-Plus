@@ -153,7 +153,7 @@ pub fn verifyInst(inst: ir.Instruction) !void {
         .SUB_R64_R64, .SUB_R32_R32, .CMP_R64_R64, .CMP_R32_R32,
         .TEST_R64_R64, .TEST_R32_R32, .XOR_R64_R64, .XOR_R32_R32,
         .IMUL_R64_R64, .IMUL_R32_R32, .AND_R64_R64, .AND_R32_R32,
-        .OR_R64_R64, .OR_R32_R32, .MOVSX_R64_R32,
+        .OR_R64_R64, .OR_R32_R32, .MOVSX_R64_R32, .MOVZX_R64_R32,
         .IMUL_R64_IMM32,
         => try verifyRR(inst),
 
@@ -170,7 +170,6 @@ pub fn verifyInst(inst: ir.Instruction) !void {
         .CMP_R64_MEM, .LEA_R64_MEM,
         .MOVZX_R64_MEM8, .MOVZX_R64_MEM16,
         .MOVSX_R64_MEM8, .MOVSX_R64_MEM16,
-        .MOVZX_R64_R32,
         => try verifyRM(inst),
 
         .MOV_MEM_R64, .MOV_MEM_R32, .MOV_MEM_R16, .MOV_MEM_R8,
@@ -358,3 +357,4 @@ test "verifies valid function" {
     try mf.appendInstr1(0, .RET, .{});
     _ = try verifyFunction(&mf);
 }
+

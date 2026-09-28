@@ -44,3 +44,4 @@ pub fn lowerImplItem(self: *HirLowering, decl_id: AstDeclId, im: @import("../low
         } },
     });
 }
+

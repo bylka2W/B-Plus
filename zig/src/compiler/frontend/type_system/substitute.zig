@@ -127,3 +127,4 @@ test "Substitution: apply to compound type" {
     try std.testing.expect(data.referent.eql(i32_ty));
     try std.testing.expect(data.mutable == .@"const");
 }
+

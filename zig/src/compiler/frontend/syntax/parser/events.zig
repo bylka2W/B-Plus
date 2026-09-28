@@ -178,3 +178,4 @@ pub fn buildFromEvents(tree: *GreenTree, events: []const Event, root_kind: Synta
     const result = try tree.allocNode(root.kind, root.children.items);
     return result;
 }
+

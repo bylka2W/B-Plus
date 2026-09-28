@@ -89,3 +89,4 @@ test "finalize: inference var detection" {
         try std.testing.expect(data == .infer_var);
     }
 }
+

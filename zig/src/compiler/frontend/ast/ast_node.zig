@@ -297,6 +297,7 @@ pub const AstDecl = union(enum) {
     import: ImportDecl,
     module: ModuleDecl,
     extern_fn: ExternFnDecl,
+    state_decl: StateDecl,
     missing: MissingDecl,
 
     pub const FnDecl = struct {
@@ -359,6 +360,22 @@ pub const AstDecl = union(enum) {
         name: SymbolId,
         params: []const ParamDef,
         return_type: ?TypeRefId,
+        span: SourceSpan,
+    };
+
+    pub const StateDecl = struct {
+        name: SymbolId,
+        variables: []const AstStmt.VarStmt,
+        entry: ?StmtId,
+        exit: ?StmtId,
+        transitions: []const StateTransition,
+        visibility: Visibility,
+        span: SourceSpan,
+    };
+
+    pub const StateTransition = struct {
+        event: ?SymbolId,
+        target: SymbolId,
         span: SourceSpan,
     };
 
@@ -550,3 +567,4 @@ pub const AstItem = union(enum) {
     module_item: AstDecl.ModuleDecl,
     statement: StmtId,
 };
+

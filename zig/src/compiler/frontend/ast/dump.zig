@@ -97,6 +97,10 @@ pub fn dumpDecl(arena: *const AstArena, id: DeclId, writer: anytype, indent: u32
             try writeIndent(writer, indent);
             try writer.writeAll("MissingDecl\n");
         },
+        .state_decl => |d| {
+            try writeIndent(writer, indent);
+            try writer.print("StateDecl {s}\n", .{d.name});
+        },
     }
 }
 
@@ -466,3 +470,4 @@ fn writeIndent(writer: anytype, indent: u32) !void {
         try writer.writeAll("  ");
     }
 }
+

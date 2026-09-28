@@ -108,3 +108,4 @@ test "ConstraintSet: add and query" {
     try std.testing.expect(c0.kind == .eq);
     try std.testing.expect(c0.span == 10);
 }
+

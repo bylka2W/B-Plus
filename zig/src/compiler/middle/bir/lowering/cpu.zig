@@ -6,13 +6,17 @@ const Op = bir.Op;
 
 const CmpDef = struct { op0: u32, op1: u32, cc: mir.CondCode };
 
-fn sizeToMemSize(size: u32) mir.MemSize {
-    return switch (size) {
-        1 => .u8,
-        2 => .u16,
-        4 => .u32,
-        8 => .u64,
-        else => .u64,
+fn memSizeOfType(types: *const bir.types.TypeTable, ty: bir.types.TypeId) mir.MemSize {
+    return switch (birTypeToDataType(types, ty)) {
+        .f32 => .f32,
+        .f64 => .f64,
+        else => switch (types.sizeOf(ty)) {
+            1 => .u8,
+            2 => .u16,
+            4 => .u32,
+            8 => .u64,
+            else => .u64,
+        },
     };
 }
 
@@ -44,6 +48,40 @@ fn birTypeToDataType(types: *const bir.types.TypeTable, ty: bir.types.TypeId) mi
         .void => .void,
         else => .i64,
     };
+}
+
+fn birValType(bir_func: *const bir.Function, val: u32) ?bir.types.TypeId {
+    if (val == 0) return null;
+    for (bir_func.param_values, 0..) |pv, i| {
+        if (pv == val) return bir_func.params[i].ty;
+    }
+    if (val - 1 >= bir_func.value_info.items.len) return null;
+    const vi = &bir_func.value_info.items[val - 1];
+    if (vi.def.block == bir.INVALID_ID or vi.def.idx == bir.INVALID_ID) return null;
+    if (vi.def.block >= bir_func.blocks.items.len) return null;
+    const def_block = &bir_func.blocks.items[vi.def.block];
+    if (vi.def.idx >= def_block.instrs.items.len) return null;
+    return def_block.instrs.items[vi.def.idx].ty;
+}
+
+fn isAggregateType(types: *const bir.types.TypeTable, ty: bir.types.TypeId) bool {
+    return switch (types.get(ty).kind) {
+        .array, .struct_type => true,
+        else => false,
+    };
+}
+
+fn aggregateLoadPointer(bir_func: *const bir.Function, val: u32) ?u32 {
+    if (val == 0) return null;
+    if (val - 1 >= bir_func.value_info.items.len) return null;
+    const vi = &bir_func.value_info.items[val - 1];
+    if (vi.def.block == bir.INVALID_ID or vi.def.idx == bir.INVALID_ID) return null;
+    if (vi.def.block >= bir_func.blocks.items.len) return null;
+    const def_block = &bir_func.blocks.items[vi.def.block];
+    if (vi.def.idx >= def_block.instrs.items.len) return null;
+    const inst = def_block.instrs.items[vi.def.idx];
+    if (inst.op == .load and inst.operands.len >= 1) return inst.operands[0];
+    return null;
 }
 
 fn findCmpDef(bir_func: *const bir.Function, val: u32) ?CmpDef {
@@ -89,67 +127,199 @@ fn allocVreg(next: *u32) u32 {
     return v;
 }
 
+const PLAN_EVENT_ARGS = 2;
+const PLAN_BUF_SIZE = (1 + PLAN_EVENT_ARGS) * 8;
+
+fn planCallArgs(args: *[14]mir.MOperand, count: u32, a0: mir.MOperand, a1: mir.MOperand) void {
+    for (0..count) |i| {
+        if (i == 0) {
+            args[i] = a0;
+        } else if (i == 1) {
+            args[i] = a1;
+        } else {
+            args[i] = .{ .imm = 0 };
+        }
+    }
+}
+
 pub fn lowerStateMachine(allocator: std.mem.Allocator, mod: *const bir.Module, sm: *const bir.StateMachine) !mir.MFunction {
     var mfunc = mir.MFunction.init(allocator, sm.name);
     errdefer mfunc.deinit();
-    var next_vreg: u32 = 1;
+    var next_vreg: u32 = 2;
+    mfunc.setParams(&.{.{ .vreg = 1 }});
+    try mfunc.putVReg(1, .i64);
 
-    const state_slot = allocVreg(&next_vreg);
+    const v_buf = allocVreg(&next_vreg);
+    const v_new = allocVreg(&next_vreg);
+    const v_ok = allocVreg(&next_vreg);
+    const v_ev = allocVreg(&next_vreg);
+    const v_a0 = allocVreg(&next_vreg);
+    const v_a1 = allocVreg(&next_vreg);
+    const v_p8 = allocVreg(&next_vreg);
+    const v_p16 = allocVreg(&next_vreg);
+    const v_cur = allocVreg(&next_vreg);
+    const v_g = allocVreg(&next_vreg);
 
-    const init_st = &sm.states.items[sm.initial_state_idx];
+    const n_t: u32 = @intCast(sm.transitions.items.len);
+    const n_s: u32 = @intCast(sm.states.items.len);
+    const has_trans = n_t > 0;
+
+                                     
+                
+                   
+                                                
+                                                                             
+                                               
+                                                   
+                                                 
+                                               
+                                          
+    const trans_base: u32 = if (has_trans) 2 else 0;
+    const after_base: u32 = if (has_trans) trans_base + n_t else 0;
+    const life_base: u32 = if (has_trans) after_base + n_t else 0;
+    const disp_base: u32 = if (has_trans) life_base + n_t else 0;
+    const enter_idx: u32 = if (has_trans) disp_base + n_t else 2;
+    const call_base: u32 = enter_idx + 1;
+    const done_idx: u32 = call_base + n_s;
+    const loop_target: u32 = 1;
 
     {
         var block = mir.MBlock{ .label = try allocator.dupe(u8, "entry"), .instrs = std.ArrayList(mir.MInst).init(allocator) };
         errdefer { allocator.free(block.label); block.instrs.deinit(); }
 
-        try block.instrs.append(.{ .alloca = .{ .size = 8, .dst = .{ .vreg = state_slot } } });
-        try block.instrs.append(.{ .state_init = .{ .initial_state = .{ .imm = @as(i64, @intCast(sm.initial_state_idx)) } } });
-        try block.instrs.append(.{ .state_enter = .{ .state_id = .{ .imm = @as(i64, @intCast(sm.initial_state_idx)) } } });
-
-        const entry_name = try std.fmt.allocPrint(allocator, "state_{s}_entry", .{init_st.name});
-        const cargs: [14]mir.MOperand = @splat(.{ .imm = 0 });
-        try block.instrs.append(.{ .call = .{ .name = entry_name, .args = cargs, .arg_count = 0, .dst = .{ .imm = 0 }, .is_void = true } });
-
-        try block.instrs.append(.{ .jmp = .{ .target = 1 } });
+        try block.instrs.append(.{ .alloca = .{ .size = PLAN_BUF_SIZE, .dst = .{ .vreg = v_buf } } });
+        {
+            var cargs: [14]mir.MOperand = @splat(.{ .imm = 0 });
+            cargs[0] = .{ .vreg = 1 };
+            try block.instrs.append(.{ .call = .{ .name = try allocator.dupe(u8, "__plan_set_state"), .args = cargs, .arg_count = 1, .dst = .{ .imm = 0 }, .is_void = true } });
+        }
+        try block.instrs.append(.{ .call = .{ .name = try allocator.dupe(u8, "__plan_consume_goto"), .args = @splat(.{ .imm = 0 }), .arg_count = 0, .dst = .{ .imm = 0 }, .is_void = true } });
+        try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = v_new }, .src = .{ .vreg = 1 } } });
+        try block.instrs.append(.{ .jmp = .{ .target = enter_idx } });
         try mfunc.blocks.append(block);
     }
 
     {
-        var block = mir.MBlock{ .label = try allocator.dupe(u8, "event_loop"), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+        var block = mir.MBlock{ .label = try allocator.dupe(u8, "pump_top"), .instrs = std.ArrayList(mir.MInst).init(allocator) };
         errdefer { allocator.free(block.label); block.instrs.deinit(); }
 
-        const event_val = allocVreg(&next_vreg);
-        const buf_val = allocVreg(&next_vreg);
-        const size_val = allocVreg(&next_vreg);
-        try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = buf_val }, .src = .{ .imm = 0 } } });
-        try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = size_val }, .src = .{ .imm = 0 } } });
-        try block.instrs.append(.{ .event_dispatch = .{ .dst = .{ .vreg = event_val }, .buf = .{ .vreg = buf_val }, .size = .{ .vreg = size_val } } });
-
-        for (sm.transitions.items, 0..) |t, ti| {
-            const block_idx: u32 = @as(u32, @intCast(2 + ti));
-            _ = try allocator.dupe(u8, "");
-            try block.instrs.append(.{ .cmp = .{ .cc = .eq, .a = .{ .vreg = event_val }, .b = .{ .imm = @as(i64, @intCast(t.event_id)) } } });
-            try block.instrs.append(.{ .jcc = .{ .cc = .eq, .target = block_idx } });
+        {
+            var cargs: [14]mir.MOperand = @splat(.{ .imm = 0 });
+            cargs[0] = .{ .vreg = v_buf };
+            try block.instrs.append(.{ .call = .{ .name = try allocator.dupe(u8, "__plan_event_pop"), .args = cargs, .arg_count = 1, .dst = .{ .vreg = v_ok }, .is_void = false } });
         }
+        try block.instrs.append(.{ .cmp = .{ .cc = .eq, .a = .{ .vreg = v_ok }, .b = .{ .imm = 0 } } });
+        try block.instrs.append(.{ .jcc = .{ .cc = .eq, .target = done_idx } });
 
-        try block.instrs.append(.{ .jmp = .{ .target = 1 } });
+        try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = v_p8 }, .src = .{ .vreg = v_buf } } });
+        try block.instrs.append(.{ .add = .{ .dst = .{ .vreg = v_p8 }, .src = .{ .imm = 8 } } });
+        try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = v_p16 }, .src = .{ .vreg = v_buf } } });
+        try block.instrs.append(.{ .add = .{ .dst = .{ .vreg = v_p16 }, .src = .{ .imm = 16 } } });
+        try block.instrs.append(.{ .load = .{ .dst = .{ .vreg = v_ev }, .ptr = .{ .vreg = v_buf }, .size = .u64 } });
+        try block.instrs.append(.{ .load = .{ .dst = .{ .vreg = v_a0 }, .ptr = .{ .vreg = v_p8 }, .size = .u64 } });
+        try block.instrs.append(.{ .load = .{ .dst = .{ .vreg = v_a1 }, .ptr = .{ .vreg = v_p16 }, .size = .u64 } });
+        try block.instrs.append(.{ .call = .{ .name = try allocator.dupe(u8, "__plan_get_state"), .args = @splat(.{ .imm = 0 }), .arg_count = 0, .dst = .{ .vreg = v_cur }, .is_void = false } });
+        try block.instrs.append(.{ .jmp = .{ .target = if (has_trans) disp_base else 1 } });
         try mfunc.blocks.append(block);
     }
 
-    for (sm.transitions.items, 0..) |t, ti| {
-        var block = mir.MBlock{ .label = try std.fmt.allocPrint(allocator, "trans_{d}", .{ti}), .instrs = std.ArrayList(mir.MInst).init(allocator) };
-        errdefer { allocator.free(block.label); block.instrs.deinit(); }
+    if (has_trans) {
+        for (sm.transitions.items, 0..) |t, ti| {
+            var block = mir.MBlock{ .label = try std.fmt.allocPrint(allocator, "trans_{d}", .{ti}), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+            errdefer { allocator.free(block.label); block.instrs.deinit(); }
 
-        try block.instrs.append(.{ .state_exit = .{ .state_id = .{ .imm = @as(i64, @intCast(t.from_state_idx)) } } });
-        try block.instrs.append(.{ .state_enter = .{ .state_id = .{ .imm = @as(i64, @intCast(t.to_state_idx)) } } });
+            if (t.action_fn) |af| {
+                const af_fn = &mod.functions.items[af];
+                const nparams: u32 = @intCast(af_fn.params.len);
+                var aargs: [14]mir.MOperand = @splat(.{ .imm = 0 });
+                if (nparams > 0) aargs[0] = .{ .vreg = v_a0 };
+                if (nparams > 1) aargs[1] = .{ .vreg = v_a1 };
+                try block.instrs.append(.{ .call = .{ .name = try allocator.dupe(u8, af_fn.name), .args = aargs, .arg_count = @min(nparams, 14), .dst = .{ .imm = 0 }, .is_void = true } });
+            }
 
-        if (t.action_fn) |af| {
-            const act_name = try allocator.dupe(u8, mod.functions.items[af].name);
-            const aargs: [14]mir.MOperand = @splat(.{ .imm = 0 });
-            try block.instrs.append(.{ .call = .{ .name = act_name, .args = aargs, .arg_count = 0, .dst = .{ .imm = 0 }, .is_void = true } });
+            try block.instrs.append(.{ .call = .{ .name = try allocator.dupe(u8, "__plan_consume_goto"), .args = @splat(.{ .imm = 0 }), .arg_count = 0, .dst = .{ .vreg = v_g }, .is_void = false } });
+            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = v_new }, .src = .{ .imm = @as(i64, @intCast(t.to_state_idx)) } } });
+            try block.instrs.append(.{ .cmp = .{ .cc = .eq, .a = .{ .vreg = v_g }, .b = .{ .imm = -1 } } });
+            try block.instrs.append(.{ .jcc = .{ .cc = .eq, .target = after_base + @as(u32, @intCast(ti)) } });
+            try block.instrs.append(.{ .mov = .{ .dst = .{ .vreg = v_new }, .src = .{ .vreg = v_g } } });
+            try block.instrs.append(.{ .jmp = .{ .target = after_base + @as(u32, @intCast(ti)) } });
+            try mfunc.blocks.append(block);
         }
+    }
 
-        try block.instrs.append(.{ .jmp = .{ .target = 1 } });
+    if (has_trans) {
+        for (sm.transitions.items, 0..) |t, ti| {
+            var block = mir.MBlock{ .label = try std.fmt.allocPrint(allocator, "after_{d}", .{ti}), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+            errdefer { allocator.free(block.label); block.instrs.deinit(); }
+
+            try block.instrs.append(.{ .cmp = .{ .cc = .ne, .a = .{ .vreg = v_new }, .b = .{ .imm = @as(i64, @intCast(t.from_state_idx)) } } });
+            try block.instrs.append(.{ .jcc = .{ .cc = .ne, .target = life_base + @as(u32, @intCast(ti)) } });
+            try block.instrs.append(.{ .jmp = .{ .target = 1 } });
+            try mfunc.blocks.append(block);
+        }
+    }
+
+    if (has_trans) {
+        for (sm.transitions.items, 0..) |t, ti| {
+            var block = mir.MBlock{ .label = try std.fmt.allocPrint(allocator, "life_{d}", .{ti}), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+            errdefer { allocator.free(block.label); block.instrs.deinit(); }
+
+            if (sm.states.items[t.from_state_idx].exit_fn) |exf| {
+                const ex = &mod.functions.items[exf];
+                try block.instrs.append(.{ .call = .{ .name = try allocator.dupe(u8, ex.name), .args = @splat(.{ .imm = 0 }), .arg_count = 0, .dst = .{ .imm = 0 }, .is_void = true } });
+            }
+            {
+                var cargs: [14]mir.MOperand = @splat(.{ .imm = 0 });
+                cargs[0] = .{ .vreg = v_new };
+                try block.instrs.append(.{ .call = .{ .name = try allocator.dupe(u8, "__plan_set_state"), .args = cargs, .arg_count = 1, .dst = .{ .imm = 0 }, .is_void = true } });
+            }
+            try block.instrs.append(.{ .jmp = .{ .target = enter_idx } });
+            try mfunc.blocks.append(block);
+        }
+    }
+
+    if (has_trans) {
+        for (sm.transitions.items, 0..) |t, ti| {
+            var block = mir.MBlock{ .label = try std.fmt.allocPrint(allocator, "dispatch_{d}", .{ti}), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+            errdefer { allocator.free(block.label); block.instrs.deinit(); }
+            const next_target: u32 = if (ti + 1 < n_t) disp_base + @as(u32, @intCast(ti + 1)) else 1;
+
+            try block.instrs.append(.{ .cmp = .{ .cc = .eq, .a = .{ .vreg = v_cur }, .b = .{ .imm = @as(i64, @intCast(t.from_state_idx)) } } });
+            try block.instrs.append(.{ .jcc = .{ .cc = .ne, .target = next_target } });
+            if (t.event_id != 0) {
+                try block.instrs.append(.{ .cmp = .{ .cc = .eq, .a = .{ .vreg = v_ev }, .b = .{ .imm = @as(i64, @intCast(t.event_id)) } } });
+                try block.instrs.append(.{ .jcc = .{ .cc = .ne, .target = next_target } });
+            }
+            try block.instrs.append(.{ .jmp = .{ .target = trans_base + @as(u32, @intCast(ti)) } });
+            try mfunc.blocks.append(block);
+        }
+    }
+
+    {
+        var block = mir.MBlock{ .label = try allocator.dupe(u8, "enter_chain"), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+        errdefer { allocator.free(block.label); block.instrs.deinit(); }
+        for (0..n_s) |si| {
+            try block.instrs.append(.{ .cmp = .{ .cc = .eq, .a = .{ .vreg = v_new }, .b = .{ .imm = @as(i64, @intCast(si)) } } });
+            try block.instrs.append(.{ .jcc = .{ .cc = .eq, .target = call_base + @as(u32, @intCast(si)) } });
+        }
+        try block.instrs.append(.{ .jmp = .{ .target = loop_target } });
+        try mfunc.blocks.append(block);
+    }
+
+    for (sm.states.items, 0..) |st, si| {
+        var block = mir.MBlock{ .label = try std.fmt.allocPrint(allocator, "call_{s}", .{st.name}), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+        errdefer { allocator.free(block.label); block.instrs.deinit(); }
+        _ = si;
+        const ename = mod.functions.items[st.entry_fn].name;
+        try block.instrs.append(.{ .call = .{ .name = try allocator.dupe(u8, ename), .args = @splat(.{ .imm = 0 }), .arg_count = 0, .dst = .{ .imm = 0 }, .is_void = true } });
+        try block.instrs.append(.{ .jmp = .{ .target = loop_target } });
+        try mfunc.blocks.append(block);
+    }
+
+    {
+        var block = mir.MBlock{ .label = try allocator.dupe(u8, "done"), .instrs = std.ArrayList(mir.MInst).init(allocator) };
+        errdefer { allocator.free(block.label); block.instrs.deinit(); }
+        try block.instrs.append(.{ .ret = .void_ret });
         try mfunc.blocks.append(block);
     }
 
@@ -371,6 +541,17 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     const count = @min(@as(u32, @intCast(info.args.len)), 14);
                     var arg_t: [14]mir.DataType = @splat(.i64);
                     for (0..count) |i| {
+                        if (birValType(bir_func, info.args[i])) |arg_ty| {
+                            if (isAggregateType(types, arg_ty)) {
+                                if (aggregateLoadPointer(bir_func, info.args[i])) |ptr| {
+                                    args[i] = .{ .vreg = ptr };
+                                } else {
+                                    args[i] = .{ .vreg = info.args[i] };
+                                }
+                                arg_t[i] = .i64;
+                                continue;
+                            }
+                        }
                         args[i] = .{ .vreg = info.args[i] };
                         arg_t[i] = birValDataType(bir_func, types, info.args[i]);
                     }
@@ -397,7 +578,7 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
 
                 .load => {
                     if (result == NO_VALUE or inst.operands.len < 1) continue;
-                    const load_size = sizeToMemSize(types.sizeOf(inst.ty));
+                    const load_size = memSizeOfType(types, inst.ty);
                     try mblock.instrs.append(.{ .load = .{ .dst = .{ .vreg = result }, .ptr = .{ .vreg = inst.operands[0] }, .size = load_size } });
                     const dt = birTypeToDataType(types, inst.ty);
                     try mfunc.putVReg(result, dt);
@@ -406,7 +587,7 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                 .store => {
                     if (inst.operands.len < 2) continue;
                     const val_ty = inst.ty;
-                    const store_size = sizeToMemSize(types.sizeOf(val_ty));
+                    const store_size = memSizeOfType(types, val_ty);
                     try mblock.instrs.append(.{ .store = .{ .ptr = .{ .vreg = inst.operands[0] }, .src = .{ .vreg = inst.operands[1] }, .size = store_size } });
                 },
 
@@ -544,6 +725,27 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
                     try mblock.instrs.append(.trap);
                 },
 
+                .zext => {
+                    if (result == NO_VALUE or inst.operands.len < 1) continue;
+                    try mblock.instrs.append(.{ .zext_op = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = inst.operands[0] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .sext => {
+                    if (result == NO_VALUE or inst.operands.len < 1) continue;
+                    try mblock.instrs.append(.{ .sext_op = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = inst.operands[0] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
+                .trunc => {
+                    if (result == NO_VALUE or inst.operands.len < 1) continue;
+                    try mblock.instrs.append(.{ .trunc_op = .{ .dst = .{ .vreg = result }, .src = .{ .vreg = inst.operands[0] } } });
+                    const dt = birTypeToDataType(types, inst.ty);
+                    try mfunc.putVReg(result, dt);
+                },
+
                 else => {
                     if (@import("builtin").mode == .Debug) {
                         std.debug.print("Unsupported BIR operation in CPU backend: {s}\n", .{@tagName(inst.op)});
@@ -558,3 +760,4 @@ pub fn lowerToMir(allocator: std.mem.Allocator, types: *const bir.types.TypeTabl
 
     return mfunc;
 }
+

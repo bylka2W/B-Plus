@@ -36,3 +36,4 @@ pub fn verifyModule(module: *const bir.Module, errs: *DiagnosticList) !void {
         }
     }
 }
+

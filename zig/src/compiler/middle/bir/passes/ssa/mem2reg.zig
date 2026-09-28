@@ -337,3 +337,4 @@ fn replaceAllUses(func: *bir.Function, old_val: ValueId, new_val: ValueId) void 
 
     old_vi.uses.clearRetainingCapacity();
 }
+

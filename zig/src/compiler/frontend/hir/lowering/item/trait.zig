@@ -41,3 +41,4 @@ pub fn lowerTraitItem(self: *HirLowering, decl_id: AstDeclId, t: @import("../low
         } },
     });
 }
+

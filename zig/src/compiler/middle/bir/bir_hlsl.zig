@@ -644,3 +644,4 @@ fn emitNamedCallNoResult(w: anytype, nc: anytype, var_names: *const std.AutoHash
         try w.writeAll(";\n");
     }
 }
+

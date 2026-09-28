@@ -94,9 +94,9 @@ pub const StackAlignment = 16;
 pub const win64_int_regs = [_]i16{ 1, 2, 8, 9 };
 pub const win64_float_regs = [_]i16{ 0, 1, 2, 3 };
 
-pub const win64_callee_saved_gpr = [_]i16{ 3, 12, 13, 14, 15 }; 
+pub const win64_callee_saved_gpr = [_]i16{ 3, 12, 13, 14, 15 };
 
-pub const win64_callee_saved_xmm = [_]i16{ 6, 7, 8, 9, 10, 11, 12, 13, 14 }; 
+pub const win64_callee_saved_xmm = [_]i16{ 6, 7, 8, 9, 10, 11, 12, 13, 14 };
 
 pub fn win64Classify(ty: DataType) ArgClass {
     return if (ty.isFloat()) .sse else .integer;
@@ -109,7 +109,7 @@ pub fn win64AssignArgs(
     var result = std.BoundedArray(ArgLocation, 16){};
     var int_idx: usize = 0;
     var float_idx: usize = 0;
-    var stack_off: i32 = @intCast(ShadowSize); 
+    var stack_off: i32 = @intCast(ShadowSize);
 
     for (types) |ty| {
         const cls = win64Classify(ty);
@@ -286,3 +286,4 @@ test "win64 float return" {
     const loc = win64RetLoc(.f64);
     try std.testing.expectEqual(@as(i16, 16), loc.xmm);
 }
+

@@ -344,3 +344,4 @@ fn resolveShiftAmount(amount: MOperand, origin: *const std.AutoHashMap(u32, Orig
     }
     return null;
 }
+

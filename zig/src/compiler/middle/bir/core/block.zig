@@ -30,3 +30,4 @@ pub const BasicBlock = struct {
         if (self.label.len > 0) allocator.free(self.label);
     }
 };
+

@@ -16,7 +16,7 @@ pub const X64Reg = enum(i16) {
         return @intFromEnum(self);
     }
 
- 
+
     pub fn fromPhys(pr: mir.PhysReg) X64Reg {
         return @enumFromInt(pr);
     }
@@ -29,3 +29,4 @@ pub const X64Reg = enum(i16) {
         return @intFromEnum(self) >= 16;
     }
 };
+

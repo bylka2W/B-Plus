@@ -14,3 +14,4 @@ pub fn lowerBinaryExpr(self: *HirLowering, ast_eid: @import("../lower.zig").AstE
         else => return self.missingExpr(.{ .file_id = 0, .start = 0, .end = 0 }),
     }
 }
+

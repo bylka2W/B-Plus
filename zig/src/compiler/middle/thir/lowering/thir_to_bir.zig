@@ -744,3 +744,4 @@ const Builder = struct {
         return try self.mod.addBlock(self.fid, label);
     }
 };
+

@@ -63,3 +63,4 @@ pub fn createRuntimeMain(bir_module: *bir_mod.Module) !void {
         .data = .none,
     });
 }
+

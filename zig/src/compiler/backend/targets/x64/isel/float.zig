@@ -126,3 +126,4 @@ pub fn selectFCmp(ctx: *Ctx, c: mir.FCmpInst) !void {
     try append2(ctx, .SETCC_R8, Operand.r(dst), .{ .imm64 = setcc_op });
     try append2(ctx, .MOVZX_R64_R32, Operand.r(dst), Operand.r(dst));
 }
+

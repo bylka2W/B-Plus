@@ -66,3 +66,4 @@ pub fn isTerminatorOp(op: Op) bool {
         else => false,
     };
 }
+

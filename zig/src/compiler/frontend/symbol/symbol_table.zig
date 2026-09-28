@@ -170,3 +170,4 @@ pub const SymbolTable = struct {
         return self.interner.resolve(id);
     }
 };
+

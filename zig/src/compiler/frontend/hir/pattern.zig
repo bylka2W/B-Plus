@@ -59,3 +59,4 @@ pub const HirPattern = struct {
         };
     };
 };
+

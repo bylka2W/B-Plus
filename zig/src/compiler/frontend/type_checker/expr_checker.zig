@@ -118,7 +118,7 @@ fn checkBlockExpr(self: *TypeChecker, b: HirExpr.HirExprKind.BlockExpr) TypeChec
 
 fn checkIfExpr(self: *TypeChecker, i: HirExpr.HirExprKind.IfExpr) TypeCheckError!TypeId {
     const cond_ty = try self.checkExpr(i.condition);
-    _ = self.engine.unify(cond_ty, self.engine.builtin(.bool_type), 0) catch {};
+    _ = self.unifyBool(cond_ty, i.condition);
     const then_ty = try self.checkExpr(i.then_branch);
     if (i.else_branch.isValid()) {
         const else_ty = try self.checkExpr(i.else_branch);
@@ -141,6 +141,9 @@ fn checkAssign(self: *TypeChecker, a: HirExpr.HirExprKind.AssignExpr, span: anyt
 }
 
 fn checkReturn(self: *TypeChecker, r: HirExpr.HirExprKind.ReturnExpr, span: anytype) TypeCheckError!TypeId {
+    if (!self.in_fn_body) {
+        self.reportError(.{ .return_outside_function = {} }, span);
+    }
     if (r.value.isValid()) {
         const val_ty = try self.checkExpr(r.value);
         if (self.current_return_type.isValid()) {
@@ -150,9 +153,14 @@ fn checkReturn(self: *TypeChecker, r: HirExpr.HirExprKind.ReturnExpr, span: anyt
                     .found = self.builtinTypeName(val_ty),
                 } }, span);
             };
+        } else {
+            self.reportError(.{ .return_value_without_declared_type = {} }, span);
         }
+        self.fn_has_return = true;
     } else if (self.current_return_type.isValid()) {
         _ = self.engine.unify(self.current_return_type, self.engine.builtin(.void_type), 0) catch {};
+    } else {
+        self.fn_has_return = true;
     }
     return self.engine.builtin(.never_type);
 }
@@ -169,15 +177,26 @@ fn checkCall(self: *TypeChecker, c: HirExpr.HirExprKind.CallExpr, span: anytype)
                     .expected = @intCast(param_count),
                     .found = @intCast(arg_count),
                 } }, span);
-                return data.fn_ptr.ret;
             }
+            const is_print = self.calleeIsPrint(c.callee);
             for (c.args, 0..) |arg, i| {
                 const arg_ty = try self.checkExpr(arg);
-                if (!data.fn_ptr.params[i].eql(arg_ty)) {
-                    self.reportError(.{ .type_mismatch = .{
-                        .expected = self.builtinTypeName(data.fn_ptr.params[i]),
-                        .found = self.builtinTypeName(arg_ty),
-                    } }, span);
+                if (is_print) {
+                    if (!self.isScalar(arg_ty)) {
+                        self.reportError(.{ .type_mismatch = .{
+                            .expected = "scalar",
+                            .found = self.builtinTypeName(arg_ty),
+                        } }, span);
+                    }
+                    continue;
+                }
+                if (i < param_count) {
+                    _ = self.engine.unify(data.fn_ptr.params[i], arg_ty, 0) catch {
+                        self.reportError(.{ .type_mismatch = .{
+                            .expected = self.builtinTypeName(data.fn_ptr.params[i]),
+                            .found = self.builtinTypeName(arg_ty),
+                        } }, span);
+                    };
                 }
             }
             return data.fn_ptr.ret;
@@ -187,10 +206,19 @@ fn checkCall(self: *TypeChecker, c: HirExpr.HirExprKind.CallExpr, span: anytype)
     return self.engine.freshVar();
 }
 
+fn calleeIsPrint(self: *TypeChecker, callee_id: HirExprId) bool {
+    if (self.hir.getExpr(callee_id)) |expr| {
+        if (expr.kind == .path) {
+            return expr.kind.path.def.eql(self.builtin_print);
+        }
+    }
+    return false;
+}
+
 fn checkWhileExpr(self: *TypeChecker, w: HirExpr.HirExprKind.WhileExpr, span: anytype) TypeCheckError!TypeId {
     _ = span;
     const cond_ty = try self.checkExpr(w.condition);
-    _ = self.engine.unify(cond_ty, self.engine.builtin(.bool_type), 0) catch {};
+    _ = self.unifyBool(cond_ty, w.condition);
     self.pushLoop();
     _ = try self.checkExpr(w.body);
     self.popLoop();
@@ -287,14 +315,47 @@ fn checkPatternAndDefineTy(self: *TypeChecker, pat_id: HirPatId, ty: TypeId) voi
 
 fn checkField(self: *TypeChecker, f: HirExpr.HirExprKind.FieldExpr, span: anytype) TypeCheckError!TypeId {
     const obj_ty = try self.checkExpr(f.object);
-    _ = self.engine.resolve(obj_ty);
-    _ = span;
+    const resolved = self.engine.resolve(obj_ty);
+    if (self.engine.get(resolved)) |data| {
+        if (data == .adt) {
+            const obj_def = data.adt.def_id;
+            if (self.struct_items.get(obj_def)) |s| {
+                for (s.fields) |field| {
+                    if (field.name.eql(f.name)) {
+                        return self.hirTypeToTypeId(field.ty);
+                    }
+                }
+                self.reportError(.{ .field_not_found = .{
+                    .field = self.symbolText(f.name),
+                } }, span);
+                return self.engine.freshVar();
+            }
+            if (self.enum_items.get(obj_def)) |e| {
+                for (e.variants) |variant| {
+                    if (variant.name.eql(f.name)) {
+                        return obj_ty;
+                    }
+                }
+                self.reportError(.{ .field_not_found = .{
+                    .field = self.symbolText(f.name),
+                } }, span);
+                return self.engine.freshVar();
+            }
+        }
+    }
+    self.reportError(.{ .not_struct_for_field = {} }, span);
     return self.engine.freshVar();
 }
 
 fn checkIndex(self: *TypeChecker, i: HirExpr.HirExprKind.IndexExpr, span: anytype) TypeCheckError!TypeId {
     const obj_ty = try self.checkExpr(i.object);
     const idx_ty = try self.checkExpr(i.index);
+    const resolved_obj = self.engine.resolve(obj_ty);
+    if (self.engine.get(resolved_obj)) |data| {
+        if (data == .builtin) {
+            self.reportError(.{ .not_indexable = {} }, span);
+        }
+    }
     const resolved_idx = self.engine.resolve(idx_ty);
     if (self.engine.get(resolved_idx)) |data| {
         if (data == .builtin) {
@@ -303,7 +364,6 @@ fn checkIndex(self: *TypeChecker, i: HirExpr.HirExprKind.IndexExpr, span: anytyp
             }
         }
     }
-    _ = obj_ty;
     return self.engine.freshVar();
 }
 
@@ -363,3 +423,4 @@ fn checkMethodCall(self: *TypeChecker, mc: HirExpr.HirExprKind.MethodCallExpr, s
     _ = span;
     return self.engine.freshVar();
 }
+

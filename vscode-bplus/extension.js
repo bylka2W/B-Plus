@@ -3,10 +3,10 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-/** @type {vscode.OutputChannel} */
+
 let outputChannel = null;
 
-// Common Windows locations for bpc.exe and the B+ toolchain.
+
 const DEFAULT_CANDIDATES = [
     process.env.BPC_PATH ? path.join(process.env.BPC_PATH, 'bpc.exe') : null,
     'C:\\B-Plus\\zig\\zig-out\\bin\\bpc.exe',
@@ -14,12 +14,12 @@ const DEFAULT_CANDIDATES = [
     'C:\\B-Plus\\bpc.exe',
 ];
 
-/**
- * Resolve the bpc.exe absolute path:
- * 1. user setting `bplus.compilerPath`
- * 2. PATH search
- * 3. well-known candidates
- */
+
+
+
+
+
+
 function findCompiler() {
     const cfg = vscode.workspace.getConfiguration('bplus');
     const explicit = cfg.get('compilerPath', '');
@@ -27,7 +27,7 @@ function findCompiler() {
         return path.isAbsolute(explicit) ? explicit : path.resolve(vscode.workspace.rootPath || '', explicit);
     }
 
-    // PATH search via `where` on Windows, `which` elsewhere.
+
     const whereCmd = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['bpc'], { encoding: 'utf-8' });
     if (whereCmd.status === 0 && whereCmd.stdout) {
         const first = whereCmd.stdout.split(/\r?\n/).find((l) => l.trim().length > 0);
@@ -50,7 +50,7 @@ function buildCommandLine(bin, file) {
     };
 }
 
-/** Kill any running instance of the target exe and remove a stale copy so linking can overwrite it. */
+
 function clearRunningExe(exePath) {
     try {
         const { spawnSync } = require('child_process');
@@ -60,11 +60,11 @@ function clearRunningExe(exePath) {
             try {
                 fs.unlinkSync(exePath);
             } catch (_) {
-                // still locked; linker will report it, but we tried.
+
             }
         }
     } catch (_) {
-        // ignore
+
     }
 }
 

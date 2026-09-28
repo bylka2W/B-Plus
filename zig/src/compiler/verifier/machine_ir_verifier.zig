@@ -16,3 +16,4 @@ pub const MachineIrVerifier = struct {
         return VerifiedMachineIR{ .module = module, .allocator = self.allocator };
     }
 };
+

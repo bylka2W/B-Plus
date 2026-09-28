@@ -309,3 +309,4 @@ const ScopeContext = struct {
 fn initCheck(arena: *const HirArena) HirVerifyError!void {
     _ = arena;
 }
+

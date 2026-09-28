@@ -432,3 +432,4 @@ fn dstOf(inst: mir.MInst) ?u32 {
         else => null,
     };
 }
+

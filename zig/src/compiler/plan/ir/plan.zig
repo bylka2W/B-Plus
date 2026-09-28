@@ -168,3 +168,4 @@ pub const PlanMetadata = struct {
         allocator.free(self.event_names);
     }
 };
+

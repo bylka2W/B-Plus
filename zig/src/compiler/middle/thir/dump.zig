@@ -138,3 +138,4 @@ fn dumpTerminator(term: thir.BasicBlock.Terminator, writer: anytype) !void {
         },
     }
 }
+

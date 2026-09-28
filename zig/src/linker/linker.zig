@@ -18,8 +18,12 @@ pub const LinkOptions = struct {
 };
 
 pub fn link(allocator: std.mem.Allocator, options: LinkOptions) !void {
-    if (builtin.os.tag == .windows) {
+    if (options.mode == .dll and builtin.os.tag == .windows) {
         return @import("windows.zig").linkWithLld(allocator, options);
+    }
+    if (builtin.os.tag == .windows) {
+        return @import("selfhost.zig").linkSelfHost(allocator, options);
     }
     return error.UnsupportedPlatform;
 }
+

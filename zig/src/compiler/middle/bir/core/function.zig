@@ -167,3 +167,4 @@ pub fn unregisterDataUses(func: *Function, data: *const Inst.Data, removed_val: 
         else => {},
     }
 }
+

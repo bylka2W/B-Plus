@@ -51,3 +51,4 @@ pub fn lowerExternFnItem(self: *HirLowering, decl_id: AstDeclId, ef: @import("..
         } },
     });
 }
+

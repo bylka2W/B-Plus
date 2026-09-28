@@ -499,13 +499,10 @@ pub const Parser = struct {
                     var_type = p.identText();
                     p.advance();
                 }
-                var default: ?[]const u8 = null;
+var default: ?[]const u8 = null;
                 if (p.peek(.eq)) {
                     p.advance();
-                    if (p.isNumeric() or p.peek(.string_literal)) {
-                        default = p.src[p.cur_tok.start..p.cur_tok.end];
-                        p.advance();
-                    }
+                    default = try p.parseStateVarDefault();
                 }
                 try variables.append(.{
                     .name = name,
@@ -531,10 +528,7 @@ pub const Parser = struct {
                     var d: ?[]const u8 = null;
                     if (p.peek(.eq)) {
                         p.advance();
-                        if (p.isNumeric() or p.peek(.string_literal)) {
-                            d = p.src[p.cur_tok.start..p.cur_tok.end];
-                            p.advance();
-                        }
+                        d = try p.parseStateVarDefault();
                     }
                     try variables.append(.{
                         .name = n,
@@ -577,10 +571,10 @@ pub const Parser = struct {
 
     fn parseVarDecls(p: *Parser) !std.ArrayList(ast.VariableNode) {
         var vars = std.ArrayList(ast.VariableNode).init(p.allocator);
-        
+
         const has_var_kw = p.peek(.kw_var);
         if (has_var_kw) {
-            p.advance();  
+            p.advance();
         }
 
         const is_fast_path = false;
@@ -588,15 +582,15 @@ pub const Parser = struct {
         const name = p.identText();
         p.advance();
 
-  
+
         var type_name: ?[]const u8 = null;
         if (p.peek(.colon)) {
-            p.advance();  
+            p.advance();
             type_name = p.identText();
             p.advance();
         }
 
-        
+
         var default: ?[]const u8 = null;
         if (p.peek(.eq)) {
             p.advance();
@@ -609,30 +603,30 @@ pub const Parser = struct {
         const cp = parseVarCacheAnnotation(p);
         try vars.append(.{
             .name = name,
-            .type_name = type_name,  
+            .type_name = type_name,
             .default_value = default,
             .is_fast_path = is_fast_path,
             .cache_policy = cp,
             .cache_align = null,
         });
 
-        
+
         while (p.peek(.comma)) {
             p.advance();
             const n = p.identText();
             p.advance();
-            
+
             var t: ?[]const u8 = null;
             if (p.peek(.colon)) {
                 p.advance();
                 t = p.identText();
                 p.advance();
             }
-            
+
             const cp2 = parseVarCacheAnnotation(p);
             try vars.append(.{
                 .name = n,
-                .type_name = t,  
+                .type_name = t,
                 .default_value = null,
                 .is_fast_path = false,
                 .cache_policy = cp2,
@@ -655,17 +649,64 @@ pub const Parser = struct {
         return null;
     }
 
-    fn parseTransition(p: *Parser) !ast.TransitionNode {
+    fn parseStateVarDefault(p: *Parser) !?[]const u8 {
+        if (p.isNumeric() or p.peek(.string_literal)) {
+            const d = p.src[p.cur_tok.start..p.cur_tok.end];
+            p.advance();
+            return d;
+        }
+        if (p.peek(.identifier)) {
+            const name = p.identText();
+            p.advance();
+            if (!p.peek(.lbrace)) {
+                if (std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false")) return name;
+                return null;
+            }
+            return p.parseBalancedBraceLiteralFromStart(name);
+        }
+        if (p.peek(.lbrace)) return p.parseBalancedBraceLiteralFromStart(null);
+        return null;
+    }
+
+    fn parseBalancedBraceLiteralFromStart(p: *Parser, leading: ?[]const u8) !?[]const u8 {
+        const start = p.cur_tok.start;
+        var depth: i32 = 0;
+        while (p.cur_tok.kind != .eof) {
+            switch (p.cur_tok.kind) {
+                .lbrace => depth += 1,
+                .rbrace => {
+                    depth -= 1;
+                    p.advance();
+                    if (depth <= 0) break;
+                    continue;
+                },
+                else => {},
+            }
+            p.advance();
+        }
+        if (depth != 0) return null;
+        const span = p.src[start..p.cur_tok.start];
+        if (leading) |l| {
+            const full = try p.allocator.alloc(u8, l.len + span.len);
+            @memcpy(full[0..l.len], l);
+            @memcpy(full[l.len..], span);
+            return full;
+        }
+        return span;
+    }
+
+fn parseTransition(p: *Parser) !ast.TransitionNode {
         var is_always = false;
         var event: ?[]const u8 = null;
         var guard: ?[]const u8 = null;
         var hot_weight: ?f64 = null;
+        var params: []const u8 = "";
 
         if (p.peek(.kw_always)) {
             is_always = true;
             p.advance();
 
-            
+
             if (p.peek(.lbracket)) {
                 p.advance();
                 const guardStart = p.cur_tok.start;
@@ -673,12 +714,12 @@ pub const Parser = struct {
                 guard = std.mem.trim(u8, p.src[guardStart..p.cur_tok.start], " \t");
                 if (p.peek(.rbracket)) p.advance();
             }
-        } else {
+} else {
             try p.expect(.kw_on);
             event = p.identText();
             p.advance();
 
-            
+
             if (p.peek(.lbracket)) {
                 p.advance();
                 const guardStart = p.cur_tok.start;
@@ -687,7 +728,24 @@ pub const Parser = struct {
                 if (p.peek(.rbracket)) p.advance();
             }
 
-            
+            if (p.peek(.lparen)) {
+                p.advance();
+                var pdepth: i32 = 1;
+                const pstart = p.cur_tok.start;
+                while (p.cur_tok.kind != .eof) {
+                    if (p.cur_tok.kind == .lparen) pdepth += 1;
+                    if (p.cur_tok.kind == .rparen) {
+                        pdepth -= 1;
+                        if (pdepth <= 0) break;
+                    }
+                    p.advance();
+                }
+                const pend = p.cur_tok.start;
+                params = std.mem.trim(u8, p.src[pstart..pend], " \t\r\n");
+                p.advance();
+            }
+
+
             while (p.peek(.at)) {
                 const full_a = p.readAnnotationFull();
                 if (std.mem.eql(u8, full_a, "hot")) { hot_weight = 0.9; }
@@ -699,12 +757,23 @@ pub const Parser = struct {
             }
         }
 
-        try p.expect(.arrow);
-        const target = p.identText();
-        p.advance();
+        var transition_body: ?[]const u8 = null;
+        const transition_params: []const u8 = params;
+        p.consumeNewlines();
+        if (p.peek(.lbrace)) {
+            transition_body = try p.parseBraceBody();
+            if (transition_body != null) p.advance();
+        }
 
-        if (p.peek(.newline)) p.advance();
-        if (p.peek(.semicolon)) p.advance();
+        var target: []const u8 = "";
+        if (p.peek(.arrow)) {
+            p.advance();
+            target = p.identText();
+            p.advance();
+
+            if (p.peek(.newline)) p.advance();
+            if (p.peek(.semicolon)) p.advance();
+        }
 
         return ast.TransitionNode{
             .event_name = event,
@@ -712,13 +781,14 @@ pub const Parser = struct {
             .is_always = is_always,
             .hot_weight = hot_weight,
             .guard = guard,
-            .body = null,
+            .body = transition_body,
+            .params = transition_params,
         };
     }
 
     fn tryParseFunction(p: *Parser) !?ast.EntryDecl {
-        
-       
+
+
         const save_pos = p.lexer.pos;
         const save_char = p.lexer.char;
         const save_tok = p.cur_tok;
@@ -742,8 +812,14 @@ pub const Parser = struct {
             p.advance();
             if (p.peek(.colon)) {
                 p.advance();
-                const ptype = try p.allocator.dupe(u8, p.identText());
+                var ptype_buf: []const u8 = "";
+                if (p.peek(.star)) {
+                    ptype_buf = try p.allocator.dupe(u8, "*");
+                    p.advance();
+                }
+                const ptype_start = p.identText();
                 p.advance();
+                const ptype = if (ptype_buf.len > 0) try std.mem.concat(p.allocator, u8, &.{ ptype_buf, ptype_start }) else try p.allocator.dupe(u8, ptype_start);
                 try params.append(.{ .name = pname, .type_name = ptype });
             } else {
                 try params.append(.{ .name = pname, .type_name = try p.allocator.dupe(u8, "int") });
@@ -769,7 +845,7 @@ pub const Parser = struct {
             p.consumeNewlines();
         }
 
-        
+
         if (!p.peek(.lbrace)) {
             params.deinit();
             p.lexer.pos = save_pos;
@@ -899,7 +975,7 @@ pub const Parser = struct {
                     if (t.len > 0) try body_lines.append(try p.allocator.dupe(u8, t));
                 }
             }
-           
+
             p.lexer.pos = scan_pos - 1;
             p.lexer.char = if (scan_pos - 1 < p.src.len) p.src[scan_pos - 1] else 0;
             p.cur_tok = p.lexer.next();
@@ -966,8 +1042,8 @@ pub const Parser = struct {
     }
 
     fn skipGpuKernelBlock(p: *Parser) !void {
-        p.advance(); 
-        p.advance(); 
+        p.advance();
+        p.advance();
         p.consumeNewlines();
         try p.expect(.lbrace);
         var depth: u32 = 1;
@@ -1115,5 +1191,6 @@ pub const Parser = struct {
         return null;
     }
 };
+
 
 

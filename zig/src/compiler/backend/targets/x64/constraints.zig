@@ -90,3 +90,4 @@ const xmm_unop_constraints = [_]RegRequirement{
 const conversion_constraints = [_]RegRequirement{
     .{ .operand = .dst, .constraint = .xmm_register, .message = "Float conversion destination must be XMM" },
 };
+

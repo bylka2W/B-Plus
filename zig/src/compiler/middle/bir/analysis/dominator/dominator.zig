@@ -310,3 +310,4 @@ pub fn buildDominanceFrontiers(allocator: Allocator, cfg: *const bir_cfg.CFG, fu
 
     return DominanceFrontier{ .allocator = allocator, .offsets = offsets, .nodes = nodes };
 }
+

@@ -127,3 +127,4 @@ pub const DiagnosticSink = struct {
         return count;
     }
 };
+

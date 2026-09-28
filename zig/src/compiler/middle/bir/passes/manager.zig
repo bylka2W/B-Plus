@@ -1182,10 +1182,13 @@ fn runVerify(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
     defer result.deinit();
     if (!result.isValid()) {
         if (@import("builtin").mode == .Debug) {
-            for (result.diagnostics.list.items) |d| {
+for (result.diagnostics.list.items) |d| {
                 const code_str = @tagName(d.code);
                 const msg = if (d.message) |m| m else "";
-                std.debug.print("VERIFY: [{s}] {s}\n", .{ code_str, msg });
+                const fn_name = if (d.func_name) |fname| fname else @as([]const u8, "?");
+                const bn = if (d.block_name) |b| b else @as([]const u8, "?");
+                const vid = if (d.value_id) |v| v else 0;
+                std.debug.print("VERIFY: [{s}] {s} @block[{s}] val#{d} inst#{?}: {s}\n", .{ code_str, fn_name, bn, vid, d.inst_idx, msg });
             }
         }
         return error.VerificationFailed;
@@ -1226,4 +1229,5 @@ pub const StandardPasses = struct {
         return pm;
     }
 };
+
 

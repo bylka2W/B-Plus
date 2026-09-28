@@ -74,3 +74,4 @@ pub const LineTable = struct {
         return "";
     }
 };
+

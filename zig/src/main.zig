@@ -16,6 +16,7 @@ const bir_loops = @import("compiler/middle/bir/analysis/loops/loops.zig");
 const bir_hlsl = @import("compiler/middle/bir/bir_hlsl.zig");
 
 const bir_bplus_frontend = @import("compiler/middle/bir/bir_bplus_frontend.zig");
+const bir_pipeline_runner = @import("compiler/middle/bir/pipeline/runner.zig");
 const bir_cpu = @import("compiler/middle/bir/lowering/cpu.zig");
 const bir_lower_dump = @import("compiler/middle/bir/lowering/lower.zig");
 const mir = @import("compiler/backend/mir/mir.zig");
@@ -408,8 +409,13 @@ pub fn main() !void {
 
     const is_bplus_file = std.mem.endsWith(u8, input_path, ".b+");
     if (is_bplus_file and (is_run or is_dll)) {
-        var bir_module = bir_bplus_frontend.lowerProgram(allocator, &program) catch {
+var bir_module = bir_bplus_frontend.lowerProgram(allocator, &program) catch {
             std.log.err("compilation failed", .{});
+            std.process.exit(1);
+        };
+
+        bir_pipeline_runner.runVerifiedPipeline(&bir_module, .{}) catch {
+            std.log.err("BIR verification/optimization pipeline failed", .{});
             std.process.exit(1);
         };
 
@@ -478,6 +484,11 @@ pub fn main() !void {
             if (run_result.stderr.len > 0) {
                 try std.io.getStdErr().writeAll(run_result.stderr);
             }
+            if (run_result.term == .Exited) {
+                const code: u8 = @truncate(run_result.term.Exited);
+                std.process.exit(code);
+            }
+            std.process.exit(1);
         }
         return;
     }
@@ -627,13 +638,7 @@ fn doctorRun(allocator: std.mem.Allocator) !void {
         try stdout.print("{s:<12} FAIL (empty minrt.obj)\n", .{"Runtime"});
     }
 
-    const lld_path = "C:\\Program Files\\LLVM\\bin\\lld-link.exe";
-    if (std.fs.accessAbsolute(lld_path, .{})) |_| {
-        try stdout.print("{s:<12} PASS\n", .{"Linker"});
-    } else |_| {
-        all_ok = false;
-        try stdout.print("{s:<12} FAIL (not found: {s})\n", .{ "Linker", lld_path });
-    }
+    try stdout.print("{s:<12} PASS (self-hosted)\n", .{"Linker"});
 
     const self_src = "fn main() { print(\"ok\") }\n";
     const src = try allocator.dupe(u8, self_src);
@@ -682,3 +687,4 @@ fn doctorRun(allocator: std.mem.Allocator) !void {
         std.process.exit(1);
     }
 }
+

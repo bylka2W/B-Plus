@@ -20,3 +20,4 @@ pub const VerifiedMachineIR = struct {
         try writer.print("VerifiedMachineIR({d} funcs)", .{self.module.functions.items.len});
     }
 };
+

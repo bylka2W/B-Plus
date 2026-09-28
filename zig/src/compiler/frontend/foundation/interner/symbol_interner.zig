@@ -31,3 +31,4 @@ pub const SymbolInterner = struct {
         return self.pool.count();
     }
 };
+

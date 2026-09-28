@@ -156,3 +156,4 @@ test "TypeInference: constrain equal with var" {
     try std.testing.expect(resolved.eql(i32_ty));
     try std.testing.expect(inf.isResolved(var_ty));
 }
+

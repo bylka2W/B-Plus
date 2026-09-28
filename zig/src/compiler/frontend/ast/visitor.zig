@@ -200,6 +200,7 @@ pub fn AstVisitor(comptime Context: type) type {
                 .import => |d| self.onImportDecl(d),
                 .module => |d| self.onModuleDecl(d),
                 .extern_fn => |d| self.onExternFnDecl(d),
+                .state_decl => |d| self.onStateDecl(d),
                 .missing => |d| self.onMissingDecl(d),
             }
         }
@@ -304,6 +305,7 @@ pub fn AstVisitor(comptime Context: type) type {
         fn onImportDecl(self: *Self, d: ast_node.AstDecl.ImportDecl) void { _ = self; _ = d; }
         fn onModuleDecl(self: *Self, d: ast_node.AstDecl.ModuleDecl) void { _ = self; _ = d; }
         fn onExternFnDecl(self: *Self, d: ast_node.AstDecl.ExternFnDecl) void { _ = self; _ = d; }
+        fn onStateDecl(self: *Self, d: ast_node.AstDecl.StateDecl) void { _ = self; _ = d; }
         fn onMissingDecl(self: *Self, d: ast_node.AstDecl.MissingDecl) void { _ = self; _ = d; }
 
         fn onIdentifierPat(self: *Self, p: ast_node.AstPattern.IdentifierPattern) void { _ = self; _ = p; }
@@ -323,3 +325,4 @@ pub fn AstVisitor(comptime Context: type) type {
         fn onMissingType(self: *Self, t: ast_node.AstTypeRef.MissingType) void { _ = self; _ = t; }
     };
 }
+

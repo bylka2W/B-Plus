@@ -85,3 +85,4 @@ pub fn allocRegs(mfunc: *const mir.MFunction, allocator: std.mem.Allocator) !Reg
         .remat = remat,
     };
 }
+

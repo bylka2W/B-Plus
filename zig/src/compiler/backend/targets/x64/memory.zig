@@ -64,3 +64,4 @@ pub fn isMem(op: Operand) bool {
 pub fn isImm(op: Operand) bool {
     return op.imm64 != 0 or (op.reg < 0 and op.base_reg < 0 and !op.is_xmm);
 }
+

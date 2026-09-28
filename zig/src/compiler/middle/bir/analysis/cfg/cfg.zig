@@ -245,3 +245,4 @@ pub fn removeBlockFromCFG(_: *CFG, func: *bir.Function, bid: bir.BlockId) void {
     block.preds.clearRetainingCapacity();
     block.succs.clearRetainingCapacity();
 }
+

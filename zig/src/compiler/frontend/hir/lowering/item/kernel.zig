@@ -45,3 +45,4 @@ pub fn lowerKernelItem(self: *HirLowering, kernel: ast.KernelDecl) LowerError!It
         } },
     });
 }
+

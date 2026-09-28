@@ -24,3 +24,4 @@ pub fn checkDispatch(graph: plan_ir.PlanGraph, diagnostics: *diag.DiagnosticList
         diagnostics.push(.invalid_dispatch_range, .@"error", null, "PLAN022: dispatch table size mismatch");
     }
 }
+

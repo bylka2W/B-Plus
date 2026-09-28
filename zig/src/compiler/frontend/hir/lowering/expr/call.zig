@@ -17,3 +17,4 @@ pub fn lowerCallExpr(self: *HirLowering, ast_eid: @import("../lower.zig").AstExp
         else => return self.missingExpr(.{ .file_id = 0, .start = 0, .end = 0 }),
     }
 }
+

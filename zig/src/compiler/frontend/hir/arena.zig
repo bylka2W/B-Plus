@@ -160,3 +160,4 @@ pub const ItemId = @import("../foundation/ids/ids.zig").ItemId;
 pub const BodyId = @import("../foundation/ids/ids.zig").BodyId;
 pub const PatId = @import("../foundation/ids/ids.zig").PatId;
 pub const TypeId = @import("../foundation/ids/ids.zig").TypeId;
+

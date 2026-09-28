@@ -20,3 +20,4 @@ pub const lookupMachine = machine.lookupMachine;
 pub const unregisterMachine = machine.unregisterMachine;
 pub const CliAdapter = @import("cli_adapter.zig").CliAdapter;
 pub const EventEntry = @import("cli_adapter.zig").EventEntry;
+

@@ -17,3 +17,4 @@ pub const Note = struct {
         return .{ .message = msg, .span = s };
     }
 };
+

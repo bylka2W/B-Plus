@@ -9,3 +9,4 @@ pub const RegClass = enum {
         return if (ty.isFloat()) .xmm else .gpr;
     }
 };
+

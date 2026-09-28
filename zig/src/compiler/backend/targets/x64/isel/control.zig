@@ -41,6 +41,8 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
     var gpr_dst: [14]i16 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
     var xmm_dst: [14]i16 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
     var arg_count: usize = 0;
+    var stack_count: usize = 0;
+    var stack_slot: [14]i32 = .{ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 
     for (0..c.arg_count) |i| {
         const arg = c.args[i];
@@ -69,6 +71,11 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
                     gpr_dst[arg_count] = dst;
                     int_idx += 1;
                 }
+            }
+            if (is_float) {
+                if (xmm_dst[arg_count] == -1) { stack_slot[arg_count] = @intCast(stack_count); stack_count += 1; }
+            } else {
+                if (gpr_dst[arg_count] == -1) { stack_slot[arg_count] = @intCast(stack_count); stack_count += 1; }
             }
             arg_count += 1;
             continue;
@@ -113,7 +120,50 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
             }
         }
 
+        if (is_float) {
+            if (xmm_dst[arg_count] == -1) { stack_slot[arg_count] = @intCast(stack_count); stack_count += 1; }
+        } else {
+            if (gpr_dst[arg_count] == -1) { stack_slot[arg_count] = @intCast(stack_count); stack_count += 1; }
+        }
+
         arg_count += 1;
+    }
+
+    const raw_alloc: u32 = 32 + @as(u32, @intCast(stack_count)) * 8;
+    const call_alloc: u32 = (raw_alloc + 15) & ~@as(u32, 15);
+    try append2(ctx, .SUB_R64_IMM32, Operand.r(4), Operand.immU32(call_alloc));
+
+    for (0..arg_count) |i| {
+        const slot = stack_slot[i];
+        if (slot < 0) continue;
+        const sarg = c.args[i];
+        const sdtype = c.arg_types[i];
+        const disp: i32 = @intCast(32 + @as(u32, @intCast(slot)) * 8);
+        if (sdtype.isFloat()) {
+            const xs: i16 = 15;
+            if (sarg == .imm) {
+                try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), .{ .imm64 = @bitCast(sarg.imm) });
+                if (sdtype == .f64) try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(xs), Operand.r(ctx.scratch)) else try append2(ctx, .SSE_MOVD_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
+            } else if (regalloc.isSpilled(ctx.ra, sarg)) {
+                try spill.loadSpilledOp(ctx, sarg, ctx.scratch);
+                if (sdtype == .f64) try append2(ctx, .SSE_MOVQ_LD, Operand.xmm(xs), Operand.r(ctx.scratch)) else try append2(ctx, .SSE_MOVD_LD, Operand.xmm(xs), Operand.r(ctx.scratch));
+            } else {
+                const rr = resolveReg(ctx.ra, sarg);
+                if (sdtype == .f64) try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(xs), Operand.xmm(rr)) else try append2(ctx, .SSE_MOVSS_LD, Operand.xmm(xs), Operand.xmm(rr));
+            }
+            if (sdtype == .f64) try append2(ctx, .SSE_MOVSD_ST, Operand.xmm(xs), Operand.mem(4, disp)) else try append2(ctx, .SSE_MOVSS_ST, Operand.xmm(xs), Operand.mem(4, disp));
+        } else {
+            if (sarg == .imm) {
+                try append2(ctx, .MOV_R64_IMM64, Operand.r(ctx.scratch), .{ .imm64 = @bitCast(sarg.imm) });
+                try append2(ctx, .MOV_MEM_R64, Operand.mem(4, disp), Operand.r(ctx.scratch));
+            } else if (regalloc.isSpilled(ctx.ra, sarg)) {
+                try spill.loadSpilledOp(ctx, sarg, ctx.scratch);
+                try append2(ctx, .MOV_MEM_R64, Operand.mem(4, disp), Operand.r(ctx.scratch));
+            } else {
+                const rr = resolveReg(ctx.ra, sarg);
+                try append2(ctx, .MOV_MEM_R64, Operand.mem(4, disp), Operand.r(rr));
+            }
+        }
     }
 
     for (0..arg_count) |i| {
@@ -159,12 +209,10 @@ pub fn selectCall(ctx: *Ctx, c: mir.CallInst) !void {
         try append2(ctx, .SSE_MOVSD_LD, Operand.xmm(dst), Operand.xmm(src));
     }
 
-    try append2(ctx, .SUB_R64_IMM32, Operand.r(4), Operand.imm(32));
-
     try ctx.call_fixups.append(ctx.mf.allocator, .{ .name = c.name, .disp_pos = 0 });
     try append1(ctx, .CALL_REL32, Operand.imm(0));
 
-    try append2(ctx, .ADD_R64_IMM32, Operand.r(4), Operand.imm(32));
+    try append2(ctx, .ADD_R64_IMM32, Operand.r(4), Operand.immU32(call_alloc));
 
     if (!c.is_void) {
         const dst_spilled = regalloc.isSpilled(ctx.ra, c.dst);
@@ -309,3 +357,4 @@ pub fn selectSelect(ctx: *Ctx, s: mir.SelectInst) !void {
         try append3(ctx, .CMOV_R64_R64, Operand.r(dst_reg), Operand.r(src_reg), .{ .imm64 = @intFromEnum(s.cc) });
     }
 }
+

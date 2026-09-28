@@ -47,6 +47,17 @@ var g_struct_registry_ready: bool = false;
 var g_func_param_types: std.StringHashMap(std.ArrayList(TypeId)) = undefined;
 var g_func_param_ready: bool = false;
 
+const StateSlot = struct { offset: u32 };
+var g_plan_event_ids: std.StringHashMap(u32) = undefined;
+var g_plan_event_ready: bool = false;
+var g_plan_state_indices: std.StringHashMap(u32) = undefined;
+var g_plan_state_ready: bool = false;
+var g_state_offsets: std.StringHashMap(StateSlot) = undefined;
+var g_state_offsets_ready: bool = false;
+var g_state_data_size: u32 = 0;
+
+const PLAN_EVENT_ID_OFFSET: u32 = 1;
+
 fn ptrInfoKey(b: *Builder, name: []const u8) ![]const u8 {
     return b.alloc.dupe(u8, name);
 }
@@ -78,6 +89,13 @@ fn isIntScalarType(mod: *bir.Module, ty: TypeId) bool {
             .i1, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => true,
             else => false,
         },
+        else => false,
+    };
+}
+
+fn isPtrType(mod: *bir.Module, ty: TypeId) bool {
+    return switch (mod.types.get(ty).kind) {
+        .pointer => true,
         else => false,
     };
 }
@@ -131,6 +149,8 @@ fn checkAssignableToVar(b: *Builder, var_ty: TypeId, expr_ty: TypeId) bool {
     if (expr_ty == t_i64 and isNumericOrFloat(b.mod, var_ty)) return true;
     if (isFloatType(b.mod, var_ty) and isNumericOrFloat(b.mod, expr_ty)) return true;
     if (isIntScalarType(b.mod, expr_ty) and isIntScalarType(b.mod, var_ty)) return true;
+    if (isPtrType(b.mod, var_ty) and (isPtrType(b.mod, expr_ty) or expr_ty == t_ptr or isIntScalarType(b.mod, expr_ty))) return true;
+    if (expr_ty == t_ptr and isPtrType(b.mod, var_ty)) return true;
     return false;
 }
 
@@ -198,7 +218,7 @@ fn splitTopLevel(alloc: Allocator, text: []const u8, seps: []const u8) !std.Arra
     return out;
 }
 
-fn structNameLiteral(b: *Builder, text: []const u8) ?[]const u8 {
+fn structNameLiteral(b: ?*Builder, text: []const u8) ?[]const u8 {
     _ = b;
     const t = std.mem.trim(u8, text, " \t\r\n");
     if (t.len == 0 or t[t.len - 1] != '}') return null;
@@ -238,6 +258,24 @@ fn ensureTypes(module: *bir.Module) !void {
     }
 }
 
+fn resetTypeIds() void {
+    t_void = bir_types.INVALID_TYPE;
+    t_i1 = bir_types.INVALID_TYPE;
+    t_i8 = bir_types.INVALID_TYPE;
+    t_i16 = bir_types.INVALID_TYPE;
+    t_i32 = bir_types.INVALID_TYPE;
+    t_i64 = bir_types.INVALID_TYPE;
+    t_u8 = bir_types.INVALID_TYPE;
+    t_u16 = bir_types.INVALID_TYPE;
+    t_u32 = bir_types.INVALID_TYPE;
+    t_u64 = bir_types.INVALID_TYPE;
+    t_f32 = bir_types.INVALID_TYPE;
+    t_f64 = bir_types.INVALID_TYPE;
+    t_ptr = bir_types.INVALID_TYPE;
+    g_struct_registry_ready = false;
+    g_enum_registry_ready = false;
+}
+
 fn mapType(module: *bir.Module, type_name: []const u8) !TypeId {
     if (std.mem.eql(u8, type_name, "void")) return t_void;
     if (std.mem.eql(u8, type_name, "bool")) return t_i1;
@@ -251,6 +289,12 @@ fn mapType(module: *bir.Module, type_name: []const u8) !TypeId {
     if (std.mem.eql(u8, type_name, "u64")) return t_u64;
     if (std.mem.eql(u8, type_name, "f32")) return t_f32;
     if (std.mem.eql(u8, type_name, "f64")) return t_f64;
+    if (type_name.len > 1 and type_name[0] == '*') {
+        const inner_name = std.mem.trim(u8, type_name[1..], " \t\r\n");
+        if (inner_name.len == 0) return t_ptr;
+        const inner = try mapType(module, inner_name);
+        return module.types.pointerType(inner, .generic);
+    }
     if (std.mem.eql(u8, type_name, "string")) return t_ptr;
     if (std.mem.eql(u8, type_name, "ptr")) return t_ptr;
     if (g_struct_registry_ready) {
@@ -385,18 +429,46 @@ fn lowerMatch(b: *Builder, rest: []const u8) anyerror!void {
 }
 
 pub fn lowerProgram(allocator: Allocator, program: *const ast.ProgramNode) !bir.Module {
+    resetTypeIds();
     var module = bir.Module.init(allocator);
     errdefer module.deinit();
 
-    try ensureTypes(&module);
+try ensureTypes(&module);
     try buildStructRegistry(allocator, &module, program);
     try buildEnumRegistry(allocator, program);
 
-    var func_sig_map = std.StringHashMap(TypeId).init(allocator);
+    if (!g_plan_event_ready) {
+        g_plan_event_ids = std.StringHashMap(u32).init(allocator);
+        g_plan_event_ready = true;
+    } else g_plan_event_ids.clearRetainingCapacity();
+    if (!g_plan_state_ready) {
+        g_plan_state_indices = std.StringHashMap(u32).init(allocator);
+        g_plan_state_ready = true;
+    } else g_plan_state_indices.clearRetainingCapacity();
+    if (!g_state_offsets_ready) {
+        g_state_offsets = std.StringHashMap(StateSlot).init(allocator);
+        g_state_offsets_ready = true;
+    } else g_state_offsets.clearRetainingCapacity();
+    g_state_data_size = 0;
+    for (program.plan.states.items, 0..) |state, si| {
+        try g_plan_state_indices.put(try allocator.dupe(u8, state.name), @intCast(si));
+        for (state.transitions.items) |t| {
+            const ename = t.event_name orelse continue;
+            if (g_plan_event_ids.contains(ename)) continue;
+            const eid: u32 = PLAN_EVENT_ID_OFFSET + @as(u32, @intCast(g_plan_event_ids.count()));
+            try g_plan_event_ids.put(try allocator.dupe(u8, ename), eid);
+        }
+    }
+
+var func_sig_map = std.StringHashMap(TypeId).init(allocator);
     defer func_sig_map.deinit();
     for (program.metal.func_defs.items) |func| {
         const ret_type = if (func.return_type) |rt| try mapType(&module, rt) else inferReturnType(&module, func);
         try func_sig_map.put(func.name, ret_type);
+    }
+    for (program.metal.entries.items) |entry| {
+        const ret_type = if (entry.return_type) |rt| try mapType(&module, rt) else inferReturnType(&module, entry);
+        try func_sig_map.put(entry.name, ret_type);
     }
 
     for (program.metal.extern_cpp_fns.items) |ext| {
@@ -414,22 +486,76 @@ pub fn lowerProgram(allocator: Allocator, program: *const ast.ProgramNode) !bir.
             }
             try g_func_param_types.put(cand.name, plist);
         }
-        for (program.metal.extern_cpp_fns.items) |ext| {
+for (program.metal.extern_cpp_fns.items) |ext| {
             var plist = std.ArrayList(TypeId).init(allocator);
             for (ext.parameters.items) |p| {
                 try plist.append(try mapType(&module, p.type_name));
             }
             try g_func_param_types.put(ext.name, plist);
         }
+        for (program.metal.entries.items) |entry| {
+            var plist = std.ArrayList(TypeId).init(allocator);
+            for (entry.params.items) |p| {
+                try plist.append(try mapType(&module, p.type_name));
+            }
+            try g_func_param_types.put(entry.name, plist);
+        }
     }
 
     for (program.metal.func_defs.items) |func| {
         try lowerFunction(allocator, &module, func, &func_sig_map);
     }
+    for (program.metal.entries.items) |entry| {
+        try lowerFunction(allocator, &module, entry, &func_sig_map);
+    }
     if (program.plan.states.items.len > 0) {
         try lowerStateMachine(allocator, &module, program.plan.states.items);
+if (!hasUserMain(program)) {
+            try lowerPlanMain(allocator, &module);
+        }
     }
     return module;
+}
+
+fn hasUserMain(program: *const ast.ProgramNode) bool {
+    for (program.metal.func_defs.items) |func| {
+        if (std.mem.eql(u8, func.name, "main")) return true;
+    }
+    for (program.metal.entries.items) |entry| {
+        if (std.mem.eql(u8, entry.name, "main")) return true;
+    }
+    return false;
+}
+
+fn lowerPlanMain(allocator: Allocator, module: *bir.Module) !void {
+    try ensureTypes(module);
+    const fid = try module.addFunction("main", t_i32, .internal);
+    const eid = try module.addBlock(fid, "entry");
+    var b = Builder{
+        .alloc = allocator,
+        .mod = module,
+        .fid = fid,
+        .blk = eid,
+        .vars = std.StringHashMap(VarInfo).init(allocator),
+        .ret_type = t_i32,
+        .func_return_types = std.StringHashMap(TypeId).init(allocator),
+        .loop_stack = std.ArrayList(LoopCtx).init(allocator),
+        .ptr_map = std.StringHashMap(PtrInfo).init(allocator),
+        .const_vals = std.StringHashMap(i64).init(allocator),
+        .const_vars = std.StringHashMap(void).init(allocator),
+        .declared_ret = false,
+    };
+    defer b.vars.deinit();
+    defer b.func_return_types.deinit();
+    defer b.loop_stack.deinit();
+    defer b.ptr_map.deinit();
+    defer b.const_vals.deinit();
+    defer b.const_vars.deinit();
+
+const init_c = try b.emitConstInt(0);
+    _ = try b.emitCall("plan", &.{init_c});
+    const zero = try b.emitOp(.@"const", t_i32, &.{}, .{ .const_data = .{ .int = 0 } });
+    try b.emitRet(zero, t_i32);
 }
 
 fn makeInst(allocator: Allocator, op: Op, ty: TypeId, ops: []const ValueId, data: Inst.Data) !Inst {
@@ -445,7 +571,7 @@ fn buildStructRegistry(allocator: Allocator, module: *bir.Module, program: *cons
     g_struct_registry = std.StringHashMap(StructLayout).init(allocator);
     g_struct_registry_ready = true;
 
-    // Pass A: create every struct TypeId so nested references resolve in any order.
+                                                                                    
     {
         var it = program.metal.struct_defs.iterator();
         while (it.next()) |entry| {
@@ -464,7 +590,7 @@ fn buildStructRegistry(allocator: Allocator, module: *bir.Module, program: *cons
         }
     }
 
-    // Pass B: compute 8-aligned layouts (struct fields sized by their own struct size).
+                                                                                        
     var sizes = std.StringHashMap(u32).init(allocator);
     defer sizes.deinit();
 
@@ -561,6 +687,7 @@ fn inferReturnType(module: *bir.Module, func: ast.EntryDecl) TypeId {
         }
         return t_i64;
     }
+    if (std.mem.eql(u8, func.name, "main")) return t_i32;
     return t_void;
 }
 
@@ -617,6 +744,14 @@ defer b.const_vals.deinit();
         const param_ty = try mapType(module, param.type_name);
         const pval = module.getFunction(func_id).param_values[i];
         try b.vars.put(param.name, .{ .value = pval, .type_id = param_ty, .is_param = true });
+        switch (module.types.get(param_ty).kind) {
+            .pointer => |pk| {
+                if (pk.elem != t_void) {
+                    try b.ptr_map.put(try ptrInfoKey(&b, param.name), .{ .access_ty = pk.elem, .inner = null });
+                }
+            },
+            else => {},
+        }
         {
             const fn_mut = module.getFunctionMut(func_id);
             const owned_name = try allocator.dupe(u8, param.name);
@@ -631,7 +766,14 @@ defer b.const_vals.deinit();
         try body_joined.appendSlice(line);
     }
     if (body_joined.items.len > 0) try lowerBodyStr(&b, body_joined.items, ';');
-    if (!b.terminated()) try b.retVoid();
+if (!b.terminated()) {
+        if (std.mem.eql(u8, func.name, "main") and ret_type != t_void) {
+            const zero = try b.emitOp(.@"const", ret_type, &.{}, .{ .const_data = .{ .int = 0 } });
+            try b.emitRet(zero, ret_type);
+        } else {
+            try b.retVoid();
+        }
+    }
 }
 
 fn lowerStateMachine(
@@ -641,7 +783,27 @@ fn lowerStateMachine(
 ) !void {
     try ensureTypes(module);
 
-    var sm = try module.addStateMachine("plan", @intCast(states.len));
+var sm = try module.addStateMachine("plan", @intCast(states.len));
+
+    for (states) |state| {
+        for (state.variables.items) |v| {
+            if (g_state_offsets.contains(v.name)) continue;
+            const resolved_type = v.type_name orelse blk: {
+                if (v.default_value) |dv| {
+                    const dv_t = std.mem.trim(u8, dv, " \t\r\n");
+                    if (structNameLiteral(null, dv_t) != null) break :blk dv_t;
+                    if (dv_t.len > 0 and dv_t[0] == '"') break :blk "string";
+                    if (dv_t.len > 0 and dv_t[0] == '{') break :blk "i64";
+                }
+                break :blk "i64";
+            };
+            const vt = try mapType(module, resolved_type);
+            const raw_size: u32 = module.types.sizeOf(vt);
+            const aligned = @max(raw_size, 8);
+            try g_state_offsets.put(try allocator.dupe(u8, v.name), .{ .offset = g_state_data_size });
+            g_state_data_size += aligned;
+        }
+    }
 
     for (states, 0..) |state, si| {
         const entry_fn = try lowerStateEntry(allocator, module, state);
@@ -652,24 +814,26 @@ fn lowerStateMachine(
             .exit_fn = exit_fn,
             .variables_count = @intCast(state.variables.items.len),
         });
-        for (state.transitions.items) |t| {
+for (state.transitions.items) |t| {
             const target_idx = blk: {
-                for (states, 0..) |s, ti| {
-                    if (std.mem.eql(u8, s.name, t.target)) break :blk @as(u32, @intCast(ti));
+                if (t.target.len > 0) {
+                    for (states, 0..) |s, ti| {
+                        if (std.mem.eql(u8, s.name, t.target)) break :blk @as(u32, @intCast(ti));
+                    }
                 }
-                break :blk 0;
+                break :blk @as(u32, @intCast(si));
             };
 
             var event_id: u32 = 0;
             if (t.is_always) {
                 event_id = 0;
-            } else if (t.event_name) |ename| {
+} else if (t.event_name) |ename| {
                 if (sm.event_id_map.get(ename)) |existing| {
                     event_id = existing;
                 } else {
-                    event_id = @intCast(sm.event_names.items.len);
+                    event_id = @intCast(sm.event_names.items.len + PLAN_EVENT_ID_OFFSET);
                     try sm.event_names.append(try allocator.dupe(u8, ename));
-                    try sm.event_id_map.put(sm.event_names.items[event_id], event_id);
+                    try sm.event_id_map.put(sm.event_names.items[event_id - PLAN_EVENT_ID_OFFSET], event_id);
                 }
             }
 
@@ -679,9 +843,14 @@ fn lowerStateMachine(
                 guard_expr_owned = try allocator.dupe(u8, guard_expr);
             }
 
-            var action_fn: ?bir.FunctionId = null;
+var action_fn: ?bir.FunctionId = null;
             if (t.body) |action_body| {
-                const act_name = try std.fmt.allocPrint(allocator, "action_{s}_{s}", .{ state.name, t.target });
+                const act_name = if (t.target.len > 0)
+                    try std.fmt.allocPrint(allocator, "action_{s}_{s}", .{ state.name, t.target })
+                else if (t.event_name) |ename|
+                    try std.fmt.allocPrint(allocator, "action_{s}_{s}", .{ state.name, ename })
+                else
+                    try std.fmt.allocPrint(allocator, "action_{s}_on", .{state.name});
                 defer allocator.free(act_name);
                 const afid = try module.addFunction(act_name, t_void, .internal);
                 const aeid = try module.addBlock(afid, "entry");
@@ -694,7 +863,7 @@ fn lowerStateMachine(
                     .ret_type = t_void,
                     .func_return_types = std.StringHashMap(TypeId).init(allocator),
                     .loop_stack = std.ArrayList(LoopCtx).init(allocator),
-.ptr_map = std.StringHashMap(PtrInfo).init(allocator),
+                .ptr_map = std.StringHashMap(PtrInfo).init(allocator),
     .const_vals = std.StringHashMap(i64).init(allocator),
     .const_vars = std.StringHashMap(void).init(allocator),
     .declared_ret = false,
@@ -705,6 +874,36 @@ fn lowerStateMachine(
                 defer ab.ptr_map.deinit();
     defer ab.const_vals.deinit();
     defer ab.const_vars.deinit();
+                if (t.params.len > 0) {
+                    var param_names = std.ArrayList([]const u8).init(allocator);
+                    defer param_names.deinit();
+                    var pit = std.mem.splitScalar(u8, t.params, ',');
+                    while (pit.next()) |pr| {
+                        const pn = std.mem.trim(u8, pr, " \t\r\n");
+                        if (pn.len > 0) try param_names.append(pn);
+                    }
+                    {
+                        const fn_mut = module.getFunctionMut(afid);
+                        const owned_params = try allocator.alloc(bir.FuncParam, param_names.items.len);
+                        const owned_values = try allocator.alloc(ValueId, param_names.items.len);
+                        for (param_names.items, 0..) |pn, pi| {
+                            owned_params[pi] = .{ .name = try allocator.dupe(u8, pn), .ty = t_i64 };
+                            owned_values[pi] = try fn_mut.createValue();
+                        }
+                        fn_mut.params = owned_params;
+                        fn_mut.param_values = owned_values;
+                    }
+                    for (param_names.items, 0..) |pn, pi| {
+                        const pval = module.getFunction(afid).param_values[pi];
+                        try ab.vars.put(pn, .{ .value = pval, .type_id = t_i64, .is_param = true });
+                        {
+                            const fn_mut = module.getFunctionMut(afid);
+                            const owned_name = try allocator.dupe(u8, pn);
+                            try fn_mut.value_debug_names.put(pval, owned_name);
+                        }
+                    }
+                }
+                try lowerStateVars(allocator, module, &ab, state);
                 try lowerBodyStr(&ab, action_body, ';');
                 if (!ab.terminated()) try ab.retVoid();
                 action_fn = afid;
@@ -718,6 +917,69 @@ fn lowerStateMachine(
                 .action_fn = action_fn,
                 .guard_expr = guard_expr_owned,
             });
+        }
+    }
+}
+
+fn lowerStateVars(_: Allocator, module: *bir.Module, b: *Builder, state: ast.StateDefNode) !void {
+    for (state.variables.items) |v| {
+        const resolved_type = v.type_name orelse blk: {
+            if (v.default_value) |dv| {
+                if (dv.len > 0) {
+                    const dv_t = std.mem.trim(u8, dv, " \t\r\n");
+                    if (structNameLiteral(b, dv)) |sname| break :blk sname;
+                    if (dv_t.len > 0 and dv_t[0] == '"') break :blk "string";
+                    if (dv_t.len > 0 and dv_t[0] == '{') break :blk "i64";
+                    var is_num = true;
+                    var has_dot = false;
+                    for (dv, 0..) |ch, i| {
+                        if (i == 0 and (ch == '-' or ch == '+')) continue;
+                        if (ch == '.') { if (has_dot) { is_num = false; break; } has_dot = true; continue; }
+                        if (ch < '0' or ch > '9') { is_num = false; break; }
+                    }
+                    if (is_num) break :blk if (has_dot) "f64" else "i64";
+                    if (std.mem.eql(u8, dv, "true") or std.mem.eql(u8, dv, "false")) break :blk "bool";
+                }
+            }
+            break :blk "i64";
+        };
+        const vt = try mapType(module, resolved_type);
+        const slot_info = g_state_offsets.get(v.name) orelse blk: {
+            const off = g_state_data_size;
+            g_state_data_size += @max(module.types.sizeOf(vt), 8);
+            break :blk StateSlot{ .offset = off };
+        };
+        try b.func_return_types.put(try b.alloc.dupe(u8, "__state_base"), t_ptr);
+        const base = try b.emitCall("__state_base", &.{});
+        const off_c = try b.emitConstInt(@as(i64, @intCast(slot_info.offset)));
+        const addr = try b.emitOp(.add, t_i64, &.{ base, off_c }, .{ .none = {} });
+        try b.vars.put(v.name, .{ .value = addr, .type_id = vt });
+    }
+}
+
+fn lowerStateVarDefaults(_: Allocator, module: *bir.Module, b: *Builder, state: ast.StateDefNode) !void {
+    for (state.variables.items) |v| {
+        const slot_info = g_state_offsets.get(v.name) orelse continue;
+        try b.func_return_types.put(try b.alloc.dupe(u8, "__state_base"), t_ptr);
+        const base = try b.emitCall("__state_base", &.{});
+        const off_c = try b.emitConstInt(@as(i64, @intCast(slot_info.offset)));
+        const addr = try b.emitOp(.add, t_i64, &.{ base, off_c }, .{ .none = {} });
+        if (v.default_value) |dv| {
+            if (structNameLiteral(b, dv)) |sn| {
+                _ = sn;
+            } else if (std.mem.indexOfScalar(u8, dv, '{') == null) {
+                const val = try lowerExpr(b, dv);
+                if (val != NO_VALUE) {
+                    const vt = if (v.type_name) |tn|
+                        try mapType(module, tn)
+                    else blk: {
+                        const dvt = std.mem.trim(u8, dv, " \t\r\n");
+                        if (dvt.len > 0 and dvt[0] == '"') break :blk t_ptr;
+                        break :blk t_i64;
+                    };
+                    try b.emitStore(vt, addr, val);
+                }
+            }
         }
     }
 }
@@ -753,32 +1015,8 @@ fn lowerStateEntry(
     defer b.const_vals.deinit();
     defer b.const_vars.deinit();
 
-    for (state.variables.items) |v| {
-        const resolved_type = v.type_name orelse blk: {
-            if (v.default_value) |dv| {
-                if (dv.len > 0) {
-                    var is_num = true;
-                    var has_dot = false;
-                    for (dv, 0..) |ch, i| {
-                        if (i == 0 and (ch == '-' or ch == '+')) continue;
-                        if (ch == '.') { if (has_dot) { is_num = false; break; } has_dot = true; continue; }
-                        if (ch < '0' or ch > '9') { is_num = false; break; }
-                    }
-                    if (is_num) break :blk if (has_dot) "f64" else "i64";
-                    if (dv[0] == '"') break :blk "string";
-                    if (std.mem.eql(u8, dv, "true") or std.mem.eql(u8, dv, "false")) break :blk "bool";
-                }
-            }
-            break :blk "i64";
-        };
-        const vt = try mapType(module, resolved_type);
-        const slot = try b.emitOp(.alloca, vt, &.{}, .{ .none = {} });
-        try b.vars.put(v.name, .{ .value = slot, .type_id = vt });
-        if (v.default_value) |dv| {
-            const val = try lowerExpr(&b, dv);
-            if (val != NO_VALUE) try b.emitStore(vt, slot, val);
-        }
-    }
+try lowerStateVars(allocator, module, &b, state);
+    try lowerStateVarDefaults(allocator, module, &b, state);
     if (state.enter_body) |body| {
         try lowerBodyStr(&b, body, ';');
     }
@@ -940,8 +1178,14 @@ const Builder = struct {
         return self.emitOp(.not, t_i1, &.{val}, .{ .none = {} });
     }
 
-    fn emitCall(self: *Builder, name: []const u8, args: []const ValueId) !ValueId {
-        const ret_ty = self.func_return_types.get(name) orelse t_void;
+fn emitCall(self: *Builder, name: []const u8, args: []const ValueId) !ValueId {
+        const ret_ty = blk: {
+            if (self.func_return_types.get(name)) |rt| break :blk rt;
+            for (self.mod.functions.items) |f| {
+                if (std.mem.eql(u8, f.name, name)) break :blk f.return_type;
+            }
+            break :blk t_void;
+        };
         const owned_name = try self.alloc.dupe(u8, name);
         const owned_args = try self.alloc.dupe(ValueId, args);
         return self.emitOp(.call, ret_ty, &.{}, .{ .named_call = .{ .name = owned_name, .args = owned_args } });
@@ -1054,8 +1298,11 @@ fn inferExprType(b: *Builder, expr: []const u8) !TypeId {
 
     if (std.mem.indexOfScalar(u8, t, '(')) |pp| {
         if (pp > 0) {
-            const nm = std.mem.trim(u8, t[0..pp], " \t\r\n");
+const nm = std.mem.trim(u8, t[0..pp], " \t\r\n");
             if (b.func_return_types.get(nm)) |ret_ty| return ret_ty;
+            for (b.mod.functions.items) |f| {
+                if (std.mem.eql(u8, f.name, nm)) return f.return_type;
+            }
             if (std.mem.eql(u8, nm, "print")) return t_void;
             if (std.mem.eql(u8, nm, "malloc")) return t_ptr;
             if (std.mem.eql(u8, nm, "addr")) return t_ptr;
@@ -1097,6 +1344,12 @@ fn inferExprType(b: *Builder, expr: []const u8) !TypeId {
             const lf = lty == t_f32 or lty == t_f64;
             const rf = rty == t_f32 or rty == t_f64;
             if (lf or rf) return if (lf) lty else rty;
+            const l_ptr = isPtrType(b.mod, lty);
+            const r_ptr = isPtrType(b.mod, rty);
+            if ((l_ptr and isIntScalarType(b.mod, rty)) or (r_ptr and isIntScalarType(b.mod, lty))) {
+                return t_i64;
+            }
+            if (isIntScalarType(b.mod, lty) and isIntScalarType(b.mod, rty)) return t_i64;
             std.log.err("type mismatch: incompatible types in binary operation (different types must match in B+)", .{});
             return BIRError.TypeError;
         }
@@ -1156,7 +1409,6 @@ fn isAccessPath(lhs: []const u8) bool {
 }
 
 fn emitAddConst(b: *Builder, base: ValueId, off: i64) !ValueId {
-    if (off == 0) return base;
     const c = try b.emitConstInt(off);
     return b.emitOp(.add, t_i64, &.{ base, c }, .{ .none = {} });
 }
@@ -1218,11 +1470,11 @@ fn resolveAccess(b: *Builder, text: []const u8) anyerror!?LValue {
         if (part.len == 0) return BIRError.UnknownExpression;
         pos = end;
 
-        if (isArrayType(b.mod, cur_ty)) {
+if (isArrayType(b.mod, cur_ty)) {
             var off_val: ValueId = undefined;
+            const arr_kind = b.mod.types.get(cur_ty).kind.array;
             if (isSignedInt(part)) {
                 const idx = std.fmt.parseInt(i64, part, 10) catch -1;
-                const arr_kind = b.mod.types.get(cur_ty).kind.array;
                 if (idx < 0) {
                     std.log.err("error: array index is out of bounds", .{});
                     return BIRError.UnknownExpression;
@@ -1231,15 +1483,15 @@ fn resolveAccess(b: *Builder, text: []const u8) anyerror!?LValue {
                     std.log.err("error: array index is out of bounds", .{});
                     return BIRError.UnknownExpression;
                 }
-                off_val = try b.emitConstInt(idx * 8);
+off_val = try b.emitConstInt(idx * @as(i64, b.mod.types.sizeOf(arr_kind.elem)));
             } else {
                 const idx_vi = b.getVar(part) orelse {
                     std.log.err("error: unknown variable '{s}' in BIR lowering", .{part});
                     return BIRError.UnknownExpression;
                 };
                 const idx_val = if (idx_vi.is_param) idx_vi.value else try b.emitLoad(idx_vi.value, idx_vi.type_id);
-                const eight = try b.emitConstInt(8);
-                off_val = try b.emitOp(.mul, t_i64, &.{ idx_val, eight }, .{ .none = {} });
+                const elem_size = try b.emitConstInt(@as(i64, b.mod.types.sizeOf(arr_kind.elem)));
+                off_val = try b.emitOp(.mul, t_i64, &.{ idx_val, elem_size }, .{ .none = {} });
             }
             addr_val = try b.emitOp(.add, t_i64, &.{ addr_val, off_val }, .{ .none = {} });
             cur_ty = b.mod.types.get(cur_ty).kind.array.elem;
@@ -1347,8 +1599,8 @@ fn lowerArrayElemStores(b: *Builder, slot: ValueId, rhs: []const u8) anyerror!vo
     for (elems.items, 0..) |e, i| {
         const tr = std.mem.trim(u8, e, " \t\r\n");
         if (tr.len == 0) continue;
-        const val = try lowerExpr(b, tr);
-        const off = try b.emitConstInt(@as(i64, @intCast(i)) * 8);
+const val = try lowerExpr(b, tr);
+        const off = try b.emitConstInt(@as(i64, b.mod.types.sizeOf(elem_ty)) * @as(i64, @intCast(i)));
         const addr = try b.emitOp(.add, t_i64, &.{ slot, off }, .{ .none = {} });
         try b.emitStore(elem_ty, addr, val);
     }
@@ -1386,7 +1638,7 @@ fn lowerArrayLiteral(b: *Builder, text: []const u8) anyerror!ValueId {
         const tr = std.mem.trim(u8, e, " \t\r\n");
         if (tr.len == 0) continue;
         const val = try lowerExpr(b, tr);
-        const off = try b.emitConstInt(@as(i64, @intCast(i)) * 8);
+const off = try b.emitConstInt(@as(i64, b.mod.types.sizeOf(elem_ty)) * @as(i64, @intCast(i)));
         const addr = try b.emitOp(.add, t_i64, &.{ slot, off }, .{ .none = {} });
         try b.emitStore(elem_ty, addr, val);
     }
@@ -1465,7 +1717,7 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
         var var_type: TypeId = t_i64;
         if (extractVarType(rest)) |vt| {
             var_type = try mapType(b.mod, vt);
-        } else if (std.mem.indexOfScalar(u8, rest, '=')) |eq| {
+        } else if (findOutsideStrings("=", rest)) |eq| {
             const expr_str = std.mem.trim(u8, rest[eq + 1 ..], " \t\r\n");
             if (try lowerAggregateInit(b, name, expr_str)) return;
         }
@@ -1478,7 +1730,7 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
             try fn_mut.value_debug_names.put(slot, owned_name);
         }
 
-        if (std.mem.indexOfScalar(u8, rest, '=')) |eq| {
+        if (findOutsideStrings("=", rest)) |eq| {
             const expr_str = std.mem.trim(u8, rest[eq + 1 ..], " \t\r\n");
             const val = try lowerExpr(b, expr_str);
             if (val != NO_VALUE) {
@@ -1505,8 +1757,63 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
         return;
     }
 
-    if (std.mem.eql(u8, line, "break")) {
+if (std.mem.startsWith(u8, line, "break")) {
         try lowerBreak(b);
+        return;
+    }
+
+    if (std.mem.startsWith(u8, line, "start ")) {
+        const st_name = std.mem.trim(u8, line["start ".len..], " \t\r\n");
+        const sidx = g_plan_state_indices.get(st_name) orelse {
+            std.log.err("error: unknown state '{s}' in start", .{st_name});
+            return BIRError.UnknownExpression;
+        };
+        const sidx_c = try b.emitConstInt(@as(i64, @intCast(sidx)));
+        _ = try b.emitCall("plan", &.{sidx_c});
+        return;
+    }
+
+    if (std.mem.startsWith(u8, line, "emit ")) {
+        const rest = std.mem.trimLeft(u8, line["emit ".len..], " \t");
+        const open = std.mem.indexOfScalar(u8, rest, '(') orelse {
+            std.log.err("error: emit expects 'event(args)'", .{});
+            return BIRError.UnknownExpression;
+        };
+        const name = std.mem.trim(u8, rest[0..open], " \t\r\n");
+        const close = std.mem.lastIndexOfScalar(u8, rest, ')') orelse rest.len;
+        var va: [2]ValueId = .{ 0, 0 };
+        if (close > open + 1) {
+            var it = std.mem.splitScalar(u8, rest[open + 1 .. close], ',');
+            var argc: usize = 0;
+            while (it.next()) |part| {
+                const a_str = std.mem.trim(u8, part, " \t\r\n");
+                if (a_str.len == 0) continue;
+                if (argc >= va.len) break;
+                const v = try lowerExpr(b, a_str);
+                if (v != NO_VALUE) va[argc] = v;
+                argc += 1;
+            }
+        }
+        const eid = g_plan_event_ids.get(name) orelse {
+            std.log.err("error: unknown event '{s}' in emit", .{name});
+            return BIRError.UnknownExpression;
+        };
+        const id_c = try b.emitConstInt(@as(i64, @intCast(eid)));
+        const zero0 = try b.emitConstInt(0);
+        const a1 = if (va[1] != 0) va[1] else zero0;
+        const cargs = [3]ValueId{ id_c, if (va[0] != 0) va[0] else zero0, a1 };
+        _ = try b.emitCall("__plan_event_post", &cargs);
+        return;
+    }
+
+    if (std.mem.startsWith(u8, line, "goto ")) {
+        const st_name = std.mem.trim(u8, line["goto ".len..], " \t\r\n");
+        const sidx = g_plan_state_indices.get(st_name) orelse {
+            std.log.err("error: unknown state '{s}' in goto", .{st_name});
+            return BIRError.UnknownExpression;
+        };
+        const sidx_c = try b.emitConstInt(@as(i64, @intCast(sidx)));
+        _ = try b.emitCall("__plan_set_goto", &.{sidx_c});
         return;
     }
 
@@ -1522,7 +1829,7 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
 
     const compound_ops = [_][]const u8{ "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=" };
     for (compound_ops) |cop| {
-        if (std.mem.indexOf(u8, line, cop)) |idx| {
+        if (findOutsideStrings(cop, line)) |idx| {
             if (idx == 0) continue;
             const lhs = std.mem.trim(u8, line[0..idx], " \t\r\n");
             const rhs = std.mem.trim(u8, line[idx + 2 ..], " \t\r\n");
@@ -1582,7 +1889,7 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
         }
     }
 
-    if (std.mem.indexOfScalar(u8, line, '=')) |eq_idx| {
+    if (findOutsideStrings("=", line)) |eq_idx| {
         const lhs = std.mem.trim(u8, line[0..eq_idx], " \t\r\n");
         const rhs = std.mem.trim(u8, line[eq_idx + 1 ..], " \t\r\n");
         if (lhs.len > 0 and rhs.len > 0) {
@@ -1614,6 +1921,14 @@ fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
                     if (try lowerAggregateInit(b, var_name, rhs)) return;
                     const slot = try b.emitAlloca(var_type);
                     try b.vars.put(var_name, .{ .value = slot, .type_id = var_type });
+                    switch (b.mod.types.get(var_type).kind) {
+                        .pointer => |pk| {
+                            if (pk.elem != t_void) {
+                                try b.ptr_map.put(try ptrInfoKey(b, var_name), .{ .access_ty = pk.elem, .inner = null });
+                            }
+                        },
+                        else => {},
+                    }
                     {
                         const fn_mut = b.mod.getFunctionMut(b.fid);
                         const owned_name = try b.alloc.dupe(u8, var_name);
@@ -1737,8 +2052,12 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
     if (std.mem.eql(u8, t, "true")) return b.emitConstBool(true);
     if (std.mem.eql(u8, t, "false")) return b.emitConstBool(false);
 
-    if (t[0] == '"') {
-        const eq = std.mem.lastIndexOfScalar(u8, t, '"') orelse t.len;
+if (t[0] == '"') {
+        const eq = std.mem.lastIndexOfScalar(u8, t, '"') orelse 0;
+        if (eq < 1) {
+            std.log.err("error: unterminated string literal", .{});
+            return BIRError.TypeError;
+        }
         return b.emitConstStr(t[1..eq]);
     }
 
@@ -1908,6 +2227,34 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
                 const rv2 = if (lf) promoted else r;
                 return b.emitOp(fop, fty, &.{ lv2, rv2 }, .{ .none = {} });
             }
+            const l_ptr = isPtrType(b.mod, lty);
+            const r_ptr = isPtrType(b.mod, rty);
+            if (l_ptr and isIntScalarType(b.mod, rty) and
+                (std.mem.eql(u8, op_str, "+") or std.mem.eql(u8, op_str, "-")))
+            {
+                const elem = b.mod.types.get(lty).kind.pointer.elem;
+                const esz = if (elem == t_void) 1 else b.mod.types.sizeOf(elem);
+                const sz = try b.emitConstInt(esz);
+                const scaled = try b.emitOp(.mul, t_i64, &.{ r, sz }, .{ .none = {} });
+                if (std.mem.eql(u8, op_str, "-")) {
+                    const neg = try b.emitNeg(scaled, t_i64);
+                    return b.emitOp(.add, t_i64, &.{ l, neg }, .{ .none = {} });
+                }
+                return b.emitOp(.add, t_i64, &.{ l, scaled }, .{ .none = {} });
+            }
+            if (r_ptr and isIntScalarType(b.mod, lty) and std.mem.eql(u8, op_str, "+")) {
+                const elem = b.mod.types.get(rty).kind.pointer.elem;
+                const esz = if (elem == t_void) 1 else b.mod.types.sizeOf(elem);
+                const sz = try b.emitConstInt(esz);
+                const scaled = try b.emitOp(.mul, t_i64, &.{ l, sz }, .{ .none = {} });
+                return b.emitOp(.add, t_i64, &.{ r, scaled }, .{ .none = {} });
+            }
+            if (isIntScalarType(b.mod, lty) and isIntScalarType(b.mod, rty)) {
+                const l64 = try b.emitOp(.zext, t_i64, &.{l}, .{ .none = {} });
+                const r64 = try b.emitOp(.zext, t_i64, &.{r}, .{ .none = {} });
+                const bir_op = try resolveBinOp(op_str, t_i64);
+                return b.emitOp(bir_op, t_i64, &.{ l64, r64 }, .{ .none = {} });
+            }
             std.log.err("type mismatch: binary operand types must match (got different types)", .{});
             return BIRError.TypeError;
         }
@@ -1934,6 +2281,25 @@ fn isBareName(n: []const u8) bool {
         if (!std.ascii.isAlphanumeric(ch) and ch != '_') return false;
     }
     return true;
+}
+
+fn findOutsideStrings(op: []const u8, line: []const u8) ?usize {
+    var in_str = false;
+    var i: usize = 0;
+    while (i < line.len) : (i += 1) {
+        const c = line[i];
+        if (in_str) {
+            if (c == '\\') i += 1;
+            if (c == '"') in_str = false;
+            continue;
+        }
+        if (c == '"') {
+            in_str = true;
+            continue;
+        }
+        if (i + op.len <= line.len and std.mem.eql(u8, line[i .. i + op.len], op)) return i;
+    }
+    return null;
 }
 
 fn lowerCallExpr(b: *Builder, name: []const u8, args_str: []const u8) anyerror!ValueId {
@@ -1996,10 +2362,15 @@ fn lowerCallExpr(b: *Builder, name: []const u8, args_str: []const u8) anyerror!V
                 const p_int = isIntScalarType(b.mod, pty);
                 const a_int = isIntScalarType(b.mod, aty);
                 const p_float = isFloatType(b.mod, pty);
+                const p_ptr = isPtrType(b.mod, pty);
+                const a_ptr = isPtrType(b.mod, aty);
+                const a_int2 = isIntScalarType(b.mod, aty);
                 const ok = (pty == aty) or
                     isAggregate(b.mod, aty) or
                     (aty == t_i64 and (p_int or p_float)) or
-                    (aty == t_ptr and p_int) or
+                    (aty == t_ptr and (p_int or p_ptr)) or
+                    (p_ptr and (a_ptr or a_int2 or aty == t_ptr)) or
+                    (p_int and (a_int or a_ptr)) or
                     (p_int and a_int);
                 if (!ok) {
                     std.log.err("type mismatch: function '{s}' argument {d}: expected '{s}' but got a different type", .{ name, ai + 1, plistTypeName(pty) });
@@ -2386,3 +2757,4 @@ fn extractVarType(rest: []const u8) ?[]const u8 {
     if (type_str.len == 0) return null;
     return type_str;
 }
+

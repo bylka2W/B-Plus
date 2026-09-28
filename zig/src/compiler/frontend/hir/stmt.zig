@@ -95,3 +95,4 @@ pub const LocalKind = enum {
     @"var",
     const_val,
 };
+

@@ -64,6 +64,9 @@ pub const TypeArena = struct {
     }
 
     pub fn builtin(self: *TypeArena, kind: types_mod.BuiltinKind) TypeId {
+        for (self.types.items, 0..) |td, idx| {
+            if (td == .builtin and td.builtin == kind) return TypeId.new(@intCast(idx));
+        }
         return self.intern(.{ .builtin = kind });
     }
 
@@ -210,3 +213,4 @@ test "TypeArena: never and error" {
     try std.testing.expect(arena.get(never_ty).? == .never);
     try std.testing.expect(arena.get(err_ty).? == .error_type);
 }
+

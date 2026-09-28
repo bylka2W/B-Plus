@@ -48,3 +48,4 @@ pub const StringPool = struct {
         return self.strings.items.len;
     }
 };
+

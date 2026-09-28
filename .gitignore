@@ -1,4 +1,3 @@
-#сборка
 zig-out/
 .zig-cache/
 **/.zig-cache/
@@ -13,7 +12,6 @@ zig-cache/
 *.ilk
 *.bin
 
-#тесты
 zig/tests/bugfix/
 zig/tests/fuzz/
 zig/tests/programs/
@@ -24,23 +22,18 @@ zig/tests/semantic/
 zig/tests/unit/
 zig/tests/B+/zig-cache/
 zig/tests/B+/.zig-cache/
-# B+ language test sources — пушить
 !zig/tests/B+/.b/sources/
 !zig/src/**/*.zig
 
-#IDE
 .vscode/
 .vs/
 .idea/
 *.swp
 *.swo
 
-#OS
 Thumbs.db
 .DS_Store
 
-#профилирование
 zig/prof/
 
-#временные тесты
 test_tmp/

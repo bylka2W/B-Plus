@@ -14,3 +14,4 @@ pub const VerifiedHIR = struct {
         self.arena.deinit();
     }
 };
+

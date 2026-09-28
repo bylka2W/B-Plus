@@ -8,3 +8,4 @@ pub fn checkBody(self: *TypeChecker, body: hir_mod.HirBody) TypeCheckError!void 
         _ = try self.checkExpr(body.entry);
     }
 }
+

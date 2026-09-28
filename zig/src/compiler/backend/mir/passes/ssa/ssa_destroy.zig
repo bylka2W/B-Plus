@@ -473,3 +473,4 @@ fn vregOf(op: mir.MOperand) ?u32 {
         else => null,
     };
 }
+

@@ -21,6 +21,8 @@ pub const DefKind = enum {
     parameter,
     field,
     loop_label,
+    state,
+    state_field,
 };
 
 pub const Def = struct {
@@ -75,3 +77,4 @@ pub const DefTable = struct {
         return self.by_name.get(name);
     }
 };
+

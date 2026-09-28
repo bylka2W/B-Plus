@@ -206,7 +206,7 @@ pub fn verifyMir(mfunc: *const mir.MFunction) !void {
         }
     }
 
-    for (mfunc.blocks.items) |*block| {
+for (mfunc.blocks.items) |*block| {
         for (block.instrs.items) |inst| {
             try checkUsedVRegs(inst, &defs);
         }
@@ -249,3 +249,4 @@ pub fn verifyNoPhis(mfunc: *const mir.MFunction) !void {
         }
     }
 }
+

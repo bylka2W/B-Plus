@@ -102,3 +102,4 @@ pub const ScopeGraph = struct {
         return self.scopes.items.len;
     }
 };
+

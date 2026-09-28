@@ -46,13 +46,22 @@ pub const TypeChecker = struct {
     errors: *ErrorList,
     def_table: *const @import("../resolver/def.zig").DefTable,
 
+    symbols: []const []const u8,
+    builtin_print: DefId,
+
     def_types: std.AutoHashMap(DefId, TypeId),
+    nominal_types: std.AutoHashMap(DefId, TypeId),
+    struct_items: std.AutoHashMap(DefId, HirItem.HirItemKind.StructItem),
+    enum_items: std.AutoHashMap(DefId, HirItem.HirItemKind.EnumItem),
 
     current_return_type: TypeId,
 
     in_loop: bool,
     loop_stack: std.ArrayList(LoopContext),
     loop_depth: u32,
+
+    in_fn_body: bool,
+    fn_has_return: bool,
 
     pub usingnamespace @import("expr_checker.zig");
     pub usingnamespace @import("stmt_checker.zig");
@@ -63,6 +72,7 @@ pub const TypeChecker = struct {
         engine: *TypeEngine,
         errors: *ErrorList,
         def_table: *const @import("../resolver/def.zig").DefTable,
+        symbols: []const []const u8,
     ) TypeChecker {
         return .{
             .hir = hir,
@@ -70,7 +80,19 @@ pub const TypeChecker = struct {
             .errors = errors,
             .def_table = def_table,
 
+            .symbols = symbols,
+            .builtin_print = DefId.INVALID,
+
             .def_types = std.AutoHashMap(DefId, TypeId).init(
+                engine.backing_alloc,
+            ),
+            .nominal_types = std.AutoHashMap(DefId, TypeId).init(
+                engine.backing_alloc,
+            ),
+            .struct_items = std.AutoHashMap(DefId, HirItem.HirItemKind.StructItem).init(
+                engine.backing_alloc,
+            ),
+            .enum_items = std.AutoHashMap(DefId, HirItem.HirItemKind.EnumItem).init(
                 engine.backing_alloc,
             ),
 
@@ -81,11 +103,17 @@ pub const TypeChecker = struct {
                 engine.backing_alloc,
             ),
             .loop_depth = 0,
+
+            .in_fn_body = false,
+            .fn_has_return = false,
         };
     }
 
     pub fn deinit(self: *TypeChecker) void {
         self.def_types.deinit();
+        self.nominal_types.deinit();
+        self.struct_items.deinit();
+        self.enum_items.deinit();
         self.loop_stack.deinit();
     }
 
@@ -97,7 +125,58 @@ pub const TypeChecker = struct {
 
             const item = self.hir.getItem(item_id) orelse continue;
 
+            self.registerItemType(item);
+        }
+
+        i = 0;
+        while (i < self.hir.itemCount()) : (i += 1) {
+            const item_id = HirItemId.new(i);
+
+            const item = self.hir.getItem(item_id) orelse continue;
+
             try self.checkItem(item);
+        }
+    }
+
+    fn registerItemType(
+        self: *TypeChecker,
+        item: HirItem,
+    ) void {
+        switch (item.kind) {
+.fn_decl => |f| {
+                var params = std.ArrayList(TypeId).init(self.engine.backing_alloc);
+                defer params.deinit();
+                for (f.params) |param| {
+                    params.append(self.hirTypeToTypeId(param.ty)) catch return;
+                }
+const ret_ty = if (f.return_type.isValid()) self.hirTypeToTypeId(f.return_type) else TypeId.INVALID;
+                self.defineDef(
+                    f.def_id,
+                    self.engine.type_arena.fnPtr(params.items, ret_ty, false),
+                );
+            },
+            .struct_item => |s| {
+                self.struct_items.put(s.def_id, s) catch {};
+                const ty = self.engine.type_arena.adt(s.def_id, &.{});
+                self.nominal_types.put(s.def_id, ty) catch {};
+                self.defineDef(s.def_id, ty);
+            },
+            .enum_item => |e| {
+                self.enum_items.put(e.def_id, e) catch {};
+                const ty = self.engine.type_arena.adt(e.def_id, &.{});
+                self.nominal_types.put(e.def_id, ty) catch {};
+                self.defineDef(e.def_id, ty);
+            },
+            .state_item => |st| {
+                self.defineDef(st.def_id, self.engine.freshVar());
+            },
+            .kernel_item,
+            .trait_item,
+            .impl_item,
+            .const_item,
+            .type_alias,
+            .extern_fn,
+            .missing => {},
         }
     }
 
@@ -110,7 +189,10 @@ pub const TypeChecker = struct {
                 try self.checkFnItem(f);
             },
 
-            .state_item,
+            .state_item => |st| {
+                try self.checkStateItem(st);
+            },
+
             .kernel_item,
             .struct_item,
             .enum_item,
@@ -129,17 +211,20 @@ pub const TypeChecker = struct {
     ) TypeCheckError!void {
         for (f.params) |param| {
             const param_ty = self.hirTypeToTypeId(param.ty);
-
-            if (self.def_table.lookupName(param.name)) |def_id| {
-                self.defineDef(def_id, param_ty);
+            if (param.def_id.isValid()) {
+                self.defineDef(param.def_id, param_ty);
             }
         }
 
-        const ret_ty = self.hirTypeToTypeId(f.return_type);
+        const ret_ty = if (f.return_type.isValid()) self.hirTypeToTypeId(f.return_type) else TypeId.INVALID;
 
         const prev_return = self.current_return_type;
+        const prev_in_fn = self.in_fn_body;
+        const prev_has_return = self.fn_has_return;
 
         self.current_return_type = ret_ty;
+        self.in_fn_body = true;
+        self.fn_has_return = false;
 
         if (f.body.isValid()) {
             if (self.hir.getBody(f.body)) |body| {
@@ -147,7 +232,76 @@ pub const TypeChecker = struct {
             }
         }
 
+        const has_declared_ret = f.return_type.isValid();
+        if (has_declared_ret and !self.fn_has_return) {
+            if (!self.isVoid(ret_ty)) {
+                self.reportError(.{ .missing_return = .{} }, SourceSpan{ .file_id = 0, .start = 0, .end = 0 });
+            }
+        }
+
         self.current_return_type = prev_return;
+        self.in_fn_body = prev_in_fn;
+        self.fn_has_return = prev_has_return;
+    }
+
+    pub fn checkStateItem(
+        self: *TypeChecker,
+        state: HirItem.HirItemKind.StateItem,
+    ) TypeCheckError!void {
+        const span = SourceSpan{ .file_id = 0, .start = 0, .end = 0 };
+        self.defineDef(state.def_id, self.engine.freshVar());
+
+        for (state.fields) |field| {
+            const field_ty = self.hirTypeToTypeId(field.ty);
+            if (field.default) |init_id| {
+                const init_ty = try self.checkExpr(init_id);
+                _ = self.engine.unify(field_ty, init_ty, 0) catch {
+                    self.reportError(.{ .type_mismatch = .{
+                        .expected = self.builtinTypeName(field_ty),
+                        .found = self.builtinTypeName(init_ty),
+                    } }, span);
+                };
+            }
+            self.defineDef(field.def_id, field_ty);
+        }
+
+        for (state.transitions) |t| {
+            if (!t.target.isValid()) {
+                self.reportError(.{ .undefined_state_target = {} }, span);
+                continue;
+            }
+            const is_state = if (self.def_table.getDef(t.target)) |d|
+                d.kind == .state
+            else
+                false;
+            if (!is_state) {
+                self.reportError(.{ .undefined_state_target = {} }, span);
+            }
+        }
+
+        if (state.entry == null) {
+            self.reportError(.{ .missing_state_entry = {} }, span);
+        }
+
+        const prev_return = self.current_return_type;
+        const prev_in_fn = self.in_fn_body;
+
+        self.current_return_type = self.engine.builtin(.void_type);
+        self.in_fn_body = false;
+
+        if (state.entry) |body_id| {
+            if (self.hir.getBody(body_id)) |body| {
+                try self.checkBody(body);
+            }
+        }
+        if (state.exit) |body_id| {
+            if (self.hir.getBody(body_id)) |body| {
+                try self.checkBody(body);
+            }
+        }
+
+        self.current_return_type = prev_return;
+        self.in_fn_body = prev_in_fn;
     }
 
     pub fn defineDef(
@@ -156,6 +310,20 @@ pub const TypeChecker = struct {
         ty: TypeId,
     ) void {
         self.def_types.put(def, ty) catch return;
+    }
+
+    pub fn setBuiltinPrint(
+        self: *TypeChecker,
+        def: DefId,
+    ) void {
+        if (!def.isValid()) return;
+        self.builtin_print = def;
+        const fn_ty = self.engine.type_arena.fnPtr(
+            &.{self.engine.freshVar()},
+            self.engine.builtin(.void_type),
+            false,
+        );
+        self.defineDef(def, fn_ty);
     }
 
     pub fn lookupDef(
@@ -207,9 +375,7 @@ pub const TypeChecker = struct {
             },
 
             .named => |n| {
-                return self.engine.builtin(
-                    self.symbolToBuiltin(n.name),
-                );
+                return self.namedTypeToTypeId(n.name);
             },
 
             .pointer => |p| {
@@ -293,13 +459,99 @@ pub const TypeChecker = struct {
         };
     }
 
-    pub fn symbolToBuiltin(
-        _: *const TypeChecker,
-        sym: ids.SymbolId,
-    ) BuiltinKind {
-        _ = sym;
+    pub fn builtinFromName(text: []const u8) ?BuiltinKind {
+        const map = .{
+            .{ "bool", BuiltinKind.bool_type },
+            .{ "i8", BuiltinKind.i8_type },
+            .{ "i16", BuiltinKind.i16_type },
+            .{ "i32", BuiltinKind.i32_type },
+            .{ "i64", BuiltinKind.i64_type },
+            .{ "u8", BuiltinKind.u8_type },
+            .{ "u16", BuiltinKind.u16_type },
+            .{ "u32", BuiltinKind.u32_type },
+            .{ "u64", BuiltinKind.u64_type },
+            .{ "f32", BuiltinKind.f32_type },
+            .{ "f64", BuiltinKind.f64_type },
+            .{ "void", BuiltinKind.void_type },
+            .{ "string", BuiltinKind.str_type },
+            .{ "str", BuiltinKind.str_type },
+            .{ "char", BuiltinKind.char_type },
+            .{ "int", BuiltinKind.i32_type },
+        };
+        inline for (map) |entry| {
+            if (std.mem.eql(u8, text, entry[0])) return entry[1];
+        }
+        return null;
+    }
 
-        return .i32_type;
+    fn namedTypeToTypeId(
+        self: *TypeChecker,
+        name: ids.SymbolId,
+    ) TypeId {
+        if (TypeChecker.builtinFromName(self.symbolText(name))) |b| {
+            return self.engine.builtin(b);
+        }
+        if (self.def_table.lookupName(name)) |def_id| {
+            if (self.nominal_types.get(def_id)) |ty| {
+                return ty;
+            }
+            if (self.def_table.getDef(def_id)) |d| {
+                if (d.kind == .struct_type or d.kind == .enum_type) {
+                    const ty = self.engine.type_arena.adt(def_id, &.{});
+                    self.nominal_types.put(def_id, ty) catch {};
+                    return ty;
+                }
+            }
+        }
+        self.reportError(.{ .unresolved_type = .{
+            .name = self.symbolText(name),
+        } }, .{ .file_id = 0, .start = 0, .end = 0 });
+        return self.engine.freshVar();
+    }
+
+    pub fn symbolText(
+        self: *const TypeChecker,
+        sym: ids.SymbolId,
+    ) []const u8 {
+        if (!sym.isValid()) return "";
+        if (sym.index >= self.symbols.len) return "";
+        return self.symbols[sym.index];
+    }
+
+    pub fn isVoid(
+        self: *const TypeChecker,
+        ty: TypeId,
+    ) bool {
+        const resolved = self.engine.resolve(ty);
+        if (self.engine.get(resolved)) |data| {
+            return data == .builtin and data.builtin == .void_type;
+        }
+        return false;
+    }
+
+    pub fn isScalar(
+        self: *const TypeChecker,
+        ty: TypeId,
+    ) bool {
+        const resolved = self.engine.resolve(ty);
+        if (self.engine.get(resolved)) |data| {
+            return data == .builtin;
+        }
+        return false;
+    }
+
+    pub fn unifyBool(
+        self: *TypeChecker,
+        cond_ty: TypeId,
+        expr_id: HirExprId,
+    ) bool {
+        if (self.engine.unify(cond_ty, self.engine.builtin(.bool_type), 0)) |_| {
+            return true;
+        } else |_| {
+            const span = if (self.hir.getExpr(expr_id)) |e| e.span else SourceSpan{ .file_id = 0, .start = 0, .end = 0 };
+            self.reportError(.{ .condition_not_bool = {} }, span);
+            return false;
+        }
     }
 
     fn hirBuiltinToTypeSys(

@@ -1,20 +1,20 @@
 const std = @import("std");
 const mir = @import("../../mir/core/mir.zig");
 
-pub const RegAllocResult = struct 
+pub const RegAllocResult = struct
 {
     regs: std.AutoHashMap(u32, mir.PhysReg),
     spills: std.AutoHashMap(u32, SpillSlot),
     allocator: std.mem.Allocator,
 };
 
-pub const SpillSlot = struct 
+pub const SpillSlot = struct
 {
     offset: i32,
     size: u8,
 };
 
-pub const Target = struct 
+pub const Target = struct
 {
     name: []const u8,
 
@@ -23,7 +23,7 @@ pub const Target = struct
         inst: mir.MInst,
     ) anyerror!void,
 
-    
+
     allocateRegisters: *const fn (
         mfunc: *const mir.MFunction,
         allocator: std.mem.Allocator,
@@ -41,3 +41,4 @@ pub const TargetContext = struct {
     code: *std.ArrayList(u8),
     target: *const Target,
 };
+

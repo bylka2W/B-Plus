@@ -109,6 +109,7 @@ pub const TransitionNode = struct {
     hot_weight: ?f64,
     guard: ?[]const u8,
     body: ?[]const u8,
+    params: []const u8 = "",
 };
 
 pub const ImportNode = struct {
@@ -223,12 +224,13 @@ pub const ProgramNode = struct {
             }
         }
         self.metal.struct_defs.deinit();
-        for (self.metal.func_defs.items) |*f| {
+for (self.metal.func_defs.items) |*f| {
             for (f.params.items) |*p| {
                 a.free(p.name);
                 a.free(p.type_name);
             }
             f.params.deinit();
+            a.free(f.name);
             for (f.body_lines.items) |line| a.free(line);
             f.body_lines.deinit();
             if (f.return_type) |rt| a.free(rt);
@@ -286,3 +288,4 @@ pub const ErrorTransitionNode = struct {
     from: []const u8,
     to: []const u8,
 };
+

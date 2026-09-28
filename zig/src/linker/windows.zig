@@ -4,9 +4,9 @@ const LinkMode = @import("linker.zig").LinkMode;
 
 const lld_link_path = "C:\\Program Files\\LLVM\\bin\\lld-link.exe";
 
-/// Remove a stale output file that a previous crashed/lingering process may still hold.
-/// If the file is locked by a running process, terminate that process (by image name)
-/// and retry, so `bpc run` never dies with "permission denied" on re-builds.
+
+
+
 fn ensureOutputDeletable(output_path: []const u8) void {
     std.fs.cwd().deleteFile(output_path) catch {};
     if (std.fs.cwd().openFile(output_path, .{ .mode = .read_only })) |f| {
@@ -82,3 +82,4 @@ pub fn linkWithLld(allocator: std.mem.Allocator, options: LinkOptions) !void {
         return error.LinkFailed;
     }
 }
+

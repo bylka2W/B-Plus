@@ -118,3 +118,4 @@ pub const TypeParser = struct {
         stream.skipTrivia();
     }
 };
+

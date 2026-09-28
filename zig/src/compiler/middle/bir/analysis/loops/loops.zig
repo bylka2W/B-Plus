@@ -161,3 +161,4 @@ pub fn findLoops(allocator: Allocator, _: *const bir_cfg.CFG, func: *const Funct
         .depth_map = depth_map,
     };
 }
+

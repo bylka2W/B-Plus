@@ -291,3 +291,4 @@ pub fn collectDataRefs(data: *const Inst.Data, result: *std.ArrayList(ValueId)) 
         else => {},
     }
 }
+

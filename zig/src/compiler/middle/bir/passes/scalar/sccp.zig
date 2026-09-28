@@ -511,3 +511,4 @@ fn runSCCP(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
     }
     return PreservedAnalyses.none();
 }
+

@@ -41,3 +41,4 @@ pub fn lowerPatternNode(self: *HirLowering, ast_pat: AstPattern) LowerError!PatI
 pub fn resolveName(self: *HirLowering, name: SymbolId) DefId {
     return self.lookupDef(name);
 }
+

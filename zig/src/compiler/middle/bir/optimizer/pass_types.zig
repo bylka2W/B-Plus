@@ -81,3 +81,4 @@ pub const ChangeSet = struct {
         return self.analyses_cleared;
     }
 };
+

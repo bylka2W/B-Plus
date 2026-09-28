@@ -32,3 +32,4 @@ pub fn checkReachability(graph: plan_ir.PlanGraph, diagnostics: *diag.Diagnostic
         }
     }
 }
+

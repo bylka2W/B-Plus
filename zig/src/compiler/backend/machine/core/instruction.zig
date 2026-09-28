@@ -169,3 +169,4 @@ fn vregOf(op: @import("operand.zig").MOperand) ?u32 {
         else => null,
     };
 }
+
