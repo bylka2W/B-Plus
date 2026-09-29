@@ -95,6 +95,30 @@ void print_str(long long ptr) {
 
 void bplus_exit(long long code) { ExitProcess((unsigned int)code); }
 
+void puts(const char *s) {
+    HANDLE h = (HANDLE)GetStdHandle(-11);
+    DWORD w; int len = 0;
+    while (s[len]) len++;
+    WriteFile(h, s, (DWORD)len, &w, 0);
+    char nl = '\n'; WriteFile(h, &nl, 1, &w, 0);
+}
+
+void *memcpy(void *d, const void *s, unsigned long long n) {
+    char *dd = (char *)d; const char *ss = (const char *)s;
+    for (unsigned long long i = 0; i < n; i++) dd[i] = ss[i];
+    return d;
+}
+
+void *memmove(void *d, const void *s, unsigned long long n) {
+    char *dd = (char *)d; const char *ss = (const char *)s;
+    if (dd < ss) {
+        for (unsigned long long i = 0; i < n; i++) dd[i] = ss[i];
+    } else {
+        for (unsigned long long i = n; i > 0; i--) dd[i - 1] = ss[i - 1];
+    }
+    return d;
+}
+
 void print_f64(double val) {
     char buf[64]; int L = 0;
     unsigned long long bits;

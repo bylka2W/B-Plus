@@ -674,6 +674,7 @@ fn inferReturnType(module: *bir.Module, func: ast.EntryDecl) TypeId {
         const rest = std.mem.trim(u8, trimmed["return".len..], " \t\r\n");
         if (rest.len == 0) continue;
         if (rest[0] == '"') return t_ptr;
+        if (rest[0] == '&' and rest.len > 1) return t_ptr;
         if (std.mem.eql(u8, rest, "true") or std.mem.eql(u8, rest, "false")) return t_i1;
         var is_num = true;
         var has_dot = false;
@@ -2364,16 +2365,15 @@ fn lowerCallExpr(b: *Builder, name: []const u8, args_str: []const u8) anyerror!V
                 const p_float = isFloatType(b.mod, pty);
                 const p_ptr = isPtrType(b.mod, pty);
                 const a_ptr = isPtrType(b.mod, aty);
-                const a_int2 = isIntScalarType(b.mod, aty);
                 const ok = (pty == aty) or
                     isAggregate(b.mod, aty) or
                     (aty == t_i64 and (p_int or p_float)) or
                     (aty == t_ptr and (p_int or p_ptr)) or
-                    (p_ptr and (a_ptr or a_int2 or aty == t_ptr)) or
+                    (p_ptr and a_ptr) or
                     (p_int and (a_int or a_ptr)) or
                     (p_int and a_int);
                 if (!ok) {
-                    std.log.err("type mismatch: function '{s}' argument {d}: expected '{s}' but got a different type", .{ name, ai + 1, plistTypeName(pty) });
+                    std.log.err("type mismatch: function '{s}' argument {d}: expected '{s}' but got '{s}'", .{ name, ai + 1, plistTypeName(pty), plistTypeName(aty) });
                     return BIRError.TypeError;
                 }
             }
@@ -2398,6 +2398,7 @@ fn lowerIf(b: *Builder, line: []const u8) anyerror!void {
 
     b.blk = then_id;
     try lowerBodyStr(b, body_str, ';');
+    const then_cont = b.blk;
     const then_term = b.terminated();
 
     b.blk = else_id;
@@ -2415,23 +2416,25 @@ fn lowerIf(b: *Builder, line: []const u8) anyerror!void {
         }
     }
     const else_term = b.terminated();
+    const cont_id = b.blk;
 
     if (then_term and else_term) {
-        b.blk = else_id;
+        b.blk = cont_id;
     } else if (then_term and !else_term) {
         const merge_id = try b.newBlock("if_merge");
+        b.blk = cont_id;
         try b.emitBr(merge_id);
         b.blk = merge_id;
     } else if (!then_term and else_term) {
         const merge_id = try b.newBlock("if_merge");
-        b.blk = then_id;
+        b.blk = then_cont;
         try b.emitBr(merge_id);
         b.blk = merge_id;
     } else {
         const merge_id = try b.newBlock("if_merge");
-        b.blk = then_id;
+        b.blk = then_cont;
         try b.emitBr(merge_id);
-        b.blk = else_id;
+        b.blk = cont_id;
         try b.emitBr(merge_id);
         b.blk = merge_id;
     }

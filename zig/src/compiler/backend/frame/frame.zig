@@ -67,10 +67,10 @@ pub const FrameManager = struct {
         const local_area = (raw_local + 15) & ~@as(u32, 15);
 
         const combined = push_area + xmm_spill_area + local_area;
-        const pad: u32 = (16 - (combined % 16)) % 16;
+        const pad: u32 = (8 + 16 - (combined % 16)) % 16;
         const total_frame = xmm_spill_area + local_area + pad;
 
-        std.debug.assert((push_area + total_frame) % 16 == 0);
+        std.debug.assert((push_area + total_frame) % 16 == 8);
 
         return .{
             .push_area = push_area,

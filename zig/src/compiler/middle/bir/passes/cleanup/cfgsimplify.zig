@@ -17,6 +17,7 @@ pub const CFGSimplifyPass = bir.Pass{
 fn runCFGSimplify(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
     const module = ctx.module;
     const allocator = ctx.allocator;
+    module.rebuildUses();
     var changed = true;
     while (changed) {
         changed = false;
@@ -106,6 +107,7 @@ fn mergeStraightLine(
 
         const target_block = func.getBlock(bid);
         if (target_block.instrs.items.len == 0) continue;
+        if (target_block.instrs.items[0].op == .phi) continue;
 
         const term_idx = pred_block.instrs.items.len - 1;
         _ = pred_block.instrs.orderedRemove(term_idx);
@@ -123,6 +125,9 @@ fn mergeStraightLine(
 
             replaceAllUses(func, src_inst.result, new_val);
         }
+
+        target_block.instrs.deinit();
+        target_block.instrs = std.ArrayList(bir.Inst).init(module.allocator);
 
         changed = true;
     }
@@ -192,13 +197,15 @@ fn cloneInstData(allocator: Allocator, data: *const bir.Inst.Data) bir.Inst.Data
 
 fn replaceAllUses(func: *bir.Function, old_val: ValueId, new_val: ValueId) void {
     if (old_val == new_val) return;
-    if (old_val > func.locals_count) return;
+    if (old_val == NO_VALUE or old_val == INVALID_ID) return;
+    if (old_val > func.value_info.items.len) return;
     const old_vi = func.getValueInfo(old_val);
     const uses_copy = func.allocator.dupe(ValueId, old_vi.uses.items) catch return;
     defer func.allocator.free(uses_copy);
 
     for (uses_copy) |user_val| {
-        if (user_val == NO_VALUE or user_val > func.locals_count) continue;
+        if (user_val == NO_VALUE or user_val == INVALID_ID) continue;
+        if (user_val > func.value_info.items.len) continue;
         const user_vi = func.getValueInfo(user_val);
         if (user_vi.def.block == INVALID_ID) continue;
         if (user_vi.def.block >= func.blocks.items.len) continue;
@@ -223,6 +230,14 @@ fn replaceAllUses(func: *bir.Function, old_val: ValueId, new_val: ValueId) void 
                 for (ci.args) |*arg| {
                     if (arg.* == old_val) arg.* = new_val;
                 }
+            },
+            .named_call => |*nc| {
+                for (nc.args) |*arg| {
+                    if (arg.* == old_val) arg.* = new_val;
+                }
+            },
+            .branch_on_bit => |*bb| {
+                if (bb.bit == old_val) bb.bit = new_val;
             },
             .gep_info => |*gi| {
                 if (gi.ptr == old_val) gi.ptr = new_val;

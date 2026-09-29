@@ -100,6 +100,14 @@ fn runDeadBlockElim(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
             }
         }
 
+        for (func.value_info.items) |*vi| {
+            if (vi.def.block < n) {
+                vi.def.block = new_ids[vi.def.block];
+            } else {
+                vi.def.block = INVALID_ID;
+            }
+        }
+
         var new_blocks = std.ArrayList(BasicBlock).init(allocator);
         var moved = false;
         defer if (!moved) new_blocks.deinit();
@@ -113,6 +121,7 @@ fn runDeadBlockElim(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
 
         func.blocks.deinit();
         func.blocks = new_blocks;
+        func.next_block_id = @as(bir.BlockId, @intCast(func.blocks.items.len));
         moved = true;
 
         var cfg = try bir_cfg.buildCFG(allocator, func);

@@ -312,7 +312,8 @@ fn verifyInstTypes(
             if (inst.operands.len > 0 and func.return_type != 0) {
                 const ty_ret = getTypeOfValue(module, func, inst.operands[0]);
                 if (ty_ret) |tr| {
-                    if (!typesEqual(module, func.return_type, tr)) {
+                    const rt = func.return_type;
+                    if (!typesEqual(module, rt, tr) and !(isPtrType(module, rt) and isPtrType(module, tr))) {
                         try errs.push(.{
                             .code = .type_mismatch,
                             .func_id = func_id,
@@ -465,6 +466,7 @@ fn typesCompatible(module: *const bir.Module, a: TypeId, b: TypeId) bool {
 fn storeValueCompatible(module: *bir.Module, func: *const bir.Function, pe: TypeId, val: bir.ValueId, tv: TypeId) bool {
     if (typesCompatible(module, pe, tv)) return true;
     if (isAggregateType(module, pe) and addressing.isAddressValue(module, func, val, 0)) return true;
+    if (isPtrType(module, pe) and isIntType(module, tv) and addressing.isAddressValue(module, func, val, 0)) return true;
     return false;
 }
 

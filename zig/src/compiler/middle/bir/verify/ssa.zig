@@ -131,7 +131,8 @@ pub fn verifySSA(
                             .message = "value definition index out of range within same block",
                         });
                     }
-} else {
+                } else {
+                    if (!dom_tree.dominates(0, block_id)) continue;
                     if (!dom_tree.dominates(def_block, block_id)) {
                         try errs.push(.{
                             .code = .value_does_not_dominate_use,
