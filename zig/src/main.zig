@@ -56,6 +56,23 @@ pub fn main() !void {
     const command = args[1];
     const input_path: []const u8 = if (args.len > 2) args[2] else "";
 
+    {
+        const known = [_][]const u8{ "doctor", "check", "test", "hlsl", "ir", "cfg", "dom", "loops", "mir", "link", "bpl", "run", "dll" };
+        var known_cmd = false;
+        for (known) |c| {
+            if (std.mem.eql(u8, command, c)) {
+                known_cmd = true;
+                break;
+            }
+        }
+        if (!known_cmd) {
+            const stderr = std.io.getStdErr().writer();
+            try stderr.print("error: unknown command '{s}'\n", .{command});
+            try stderr.writeAll("Run 'bpc' with no arguments for the full command list.\n");
+            std.process.exit(1);
+        }
+    }
+
     if (std.mem.eql(u8, command, "doctor")) {
         return doctorRun(allocator);
     }
@@ -409,7 +426,7 @@ pub fn main() !void {
 
     const is_bplus_file = std.mem.endsWith(u8, input_path, ".b+");
     if (is_bplus_file and (is_run or is_dll)) {
-var bir_module = bir_bplus_frontend.lowerProgram(allocator, &program) catch {
+        var bir_module = bir_bplus_frontend.lowerProgram(allocator, &program) catch {
             std.log.err("compilation failed", .{});
             std.process.exit(1);
         };
@@ -418,6 +435,11 @@ var bir_module = bir_bplus_frontend.lowerProgram(allocator, &program) catch {
             std.log.err("BIR verification/optimization pipeline failed", .{});
             std.process.exit(1);
         };
+
+        if (bir_module.functions.items.len == 0) {
+            std.log.err("no functions found in '{s}'", .{input_path});
+            std.process.exit(1);
+        }
 
         const mfuncs = try bir_cpu.lowerModuleToMir(allocator, &bir_module);
 
@@ -687,4 +709,3 @@ fn doctorRun(allocator: std.mem.Allocator) !void {
         std.process.exit(1);
     }
 }
-

@@ -1836,7 +1836,7 @@ if (std.mem.startsWith(u8, line, "break")) {
             const rhs = std.mem.trim(u8, line[idx + 2 ..], " \t\r\n");
             if (lhs.len == 0 or rhs.len == 0) break;
             if (b.const_vars.contains(lhs)) {
-                std.log.err("error: cannot modify const variable '{s}'", .{lhs});
+                std.log.err("cannot modify const variable '{s}'", .{lhs});
                 return BIRError.TypeError;
             }
             var lv: ?LValue = null;
@@ -1938,11 +1938,29 @@ if (std.mem.startsWith(u8, line, "break")) {
                     const val = try lowerExpr(b, rhs);
                     if (val != NO_VALUE) {
                         const expr_ty = try inferExprType(b, rhs);
-                        const store_ty = if (expr_ty != t_i64) expr_ty else var_type;
-                        if (var_type != t_i64 and var_type != store_ty and !checkAssignableToVar(b, var_type, store_ty)) {
-                            std.log.err("type mismatch: cannot assign '{s}' to variable of type '{s}'", .{ type_name, type_name });
+                        const st: ?TypeId = blk: {
+                            if (expr_ty == t_i64) {
+                                if (!isNumericOrFloat(b.mod, var_type)) break :blk null;
+                                break :blk var_type;
+                            }
+                            if (isIntScalarType(b.mod, expr_ty) or isFloatType(b.mod, expr_ty)) {
+                                if (!isNumericOrFloat(b.mod, var_type)) break :blk null;
+                                break :blk expr_ty;
+                            }
+                            if (isPtrType(b.mod, expr_ty) or expr_ty == t_ptr) {
+                                if (!isPtrType(b.mod, var_type)) break :blk null;
+                                break :blk expr_ty;
+                            }
+                            if (isAggregate(b.mod, expr_ty)) {
+                                if (!isAggregate(b.mod, var_type)) break :blk null;
+                                break :blk expr_ty;
+                            }
+                            break :blk if (var_type == expr_ty) expr_ty else null;
+                        };
+                        const store_ty = st orelse {
+                            std.log.err("type mismatch: cannot assign '{s}' to variable of type '{s}'", .{ plistTypeName(expr_ty), plistTypeName(var_type) });
                             return BIRError.TypeError;
-                        }
+                        };
                         try b.emitStore(store_ty, slot, val);
                     }
                     return;
@@ -2016,14 +2034,14 @@ if (std.mem.startsWith(u8, line, "break")) {
             }
             if (b.getVar(lhs)) |vi| {
                 if (b.const_vars.contains(lhs)) {
-                    std.log.err("error: cannot assign to const variable '{s}'", .{lhs});
+                    std.log.err("cannot assign to const variable '{s}'", .{lhs});
                     return BIRError.TypeError;
                 }
                 const val = try lowerExpr(b, rhs);
                 const expr_ty = try inferExprType(b, rhs);
                 const store_ty = if (expr_ty != t_i64) expr_ty else vi.type_id;
                 if (store_ty != vi.type_id and store_ty != t_i64 and !checkAssignableToVar(b, vi.type_id, store_ty)) {
-                    std.log.err("type mismatch: cannot assign '{s}' to variable of type '{s}'", .{ "rhs", "lhs" });
+                    std.log.err("type mismatch: cannot assign '{s}' to variable of type '{s}'", .{ plistTypeName(store_ty), plistTypeName(vi.type_id) });
                     return BIRError.TypeError;
                 }
                 try b.emitStore(store_ty, vi.value, val);
