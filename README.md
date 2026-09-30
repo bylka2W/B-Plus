@@ -1203,8 +1203,6 @@ npx @vscode/vsce package        # → vscode-bplus-<версия>.vsix
 
 Подробности — в [README расширения](vscode-bplus/README.md). Полная English-версия этого README — ниже, [вторая часть документа](#b-v464-beta--compiled-b-language-frontend--hir--bir--mir--targets).
 
-> 📖 [docs.html — наглядная документация](https://htmlpreview.github.io/?https://github.com/bylka2W/B-Plus/blob/main/html/docs.html)
-
 ---
 
 ---
@@ -2432,5 +2430,3 @@ npx @vscode/vsce package        # → vscode-bplus-<version>.vsix
 The compiler is located in this order: `bplus.compilerPath` setting → bundled `bin\bpc.exe` → `PATH` → well-known default locations.
 
 Details: the [extension README](vscode-bplus/README.md). The Russian version of this README is the first part of this document.
-
-> 📖 [docs.html — visual documentation](https://htmlpreview.github.io/?https://github.com/bylka2W/B-Plus/blob/main/html/docs.html)
