@@ -53,6 +53,16 @@ const Lexer = struct {
             if (self.char == '\n') { self.advance(); return self.token(.newline); }
             return self.token(.eof);
         }
+        if (self.char == '/' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '*') {
+            self.advance();
+            self.advance();
+            while (self.char != 0 and !(self.char == '*' and self.pos + 1 < self.src.len and self.src[self.pos + 1] == '/')) self.advance();
+            if (self.char != 0) {
+                self.advance();
+                self.advance();
+            }
+            return self.next();
+        }
 
         if (self.char == '@') {
             self.advance();
@@ -891,8 +901,10 @@ fn parseTransition(p: *Parser) !ast.TransitionNode {
             const body_text = p.src[lbrace_start + 1 .. scan_pos - 1];
             var lines_iter = std.mem.splitScalar(u8, body_text, '\n');
             while (lines_iter.next()) |raw_line| {
-                const t = std.mem.trim(u8, raw_line, " \t\r");
-                if (t.len > 0) try body_lines.append(try p.allocator.dupe(u8, t));
+                const t0 = std.mem.trim(u8, raw_line, " \t\r");
+                if (t0.len == 0) continue;
+                const st = try stripComments(p.allocator, t0);
+                if (st.len > 0) try body_lines.append(st);
             }
         }
         p.lexer.pos = scan_pos - 1;
@@ -971,8 +983,10 @@ fn parseTransition(p: *Parser) !ast.TransitionNode {
                 const body_text = p.src[lbrace_start + 1 .. scan_pos - 1];
                 var lines_iter = std.mem.splitScalar(u8, body_text, '\n');
                 while (lines_iter.next()) |raw_line| {
-                    const t = std.mem.trim(u8, raw_line, " \t\r");
-                    if (t.len > 0) try body_lines.append(try p.allocator.dupe(u8, t));
+                    const t0 = std.mem.trim(u8, raw_line, " \t\r");
+                    if (t0.len == 0) continue;
+                    const st = try stripComments(p.allocator, t0);
+                    if (st.len > 0) try body_lines.append(st);
                 }
             }
 
@@ -984,7 +998,8 @@ fn parseTransition(p: *Parser) !ast.TransitionNode {
                 const start = p.lexer.tok_start;
                 while (p.cur_tok.kind != .newline and p.cur_tok.kind != .eof) p.advance();
                 const line = std.mem.trim(u8, p.src[start..p.lexer.pos], " \t");
-                if (line.len > 0) try body_lines.append(try p.allocator.dupe(u8, line));
+                const st = try stripComments(p.allocator, line);
+                if (st.len > 0) try body_lines.append(st);
                 if (p.peek(.newline)) p.advance();
                 p.consumeNewlines();
             }
@@ -1152,11 +1167,12 @@ fn parseTransition(p: *Parser) !ast.TransitionNode {
             const body_text = p.src[lbrace_start + 1 .. scan_pos - 1];
             var lines_iter = std.mem.splitScalar(u8, body_text, '\n');
             while (lines_iter.next()) |raw_line| {
-                const line = std.mem.trim(u8, raw_line, " \t\r");
-                if (line.len > 0) {
-                    if (buf.items.len > 0) try buf.append(';');
-                    try buf.appendSlice(line);
-                }
+                const t0 = std.mem.trim(u8, raw_line, " \t\r");
+                if (t0.len == 0) continue;
+                const st = try stripComments(p.allocator, t0);
+                if (st.len == 0) continue;
+                if (buf.items.len > 0) try buf.append(';');
+                try buf.appendSlice(st);
             }
         }
         p.lexer.pos = scan_pos - 1;
@@ -1188,9 +1204,45 @@ fn parseTransition(p: *Parser) !ast.TransitionNode {
             p.advance();
             return s;
         }
-        return null;
+return null;
     }
 };
+
+fn stripComments(alloc: Allocator, line: []const u8) ![]const u8 {
+    var out = std.ArrayList(u8).init(alloc);
+    defer out.deinit();
+    var i: usize = 0;
+    var in_str = false;
+    while (i < line.len) {
+        const c = line[i];
+        if (c == '"') {
+            in_str = !in_str;
+            try out.append(c);
+            i += 1;
+            continue;
+        }
+        if (in_str) {
+            try out.append(c);
+            if (c == '\\' and i + 1 < line.len) {
+                try out.append(line[i + 1]);
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if (c == '/' and i + 1 < line.len and line[i + 1] == '/') break;
+        if (c == '/' and i + 1 < line.len and line[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < line.len and !(line[i] == '*' and line[i + 1] == '/')) i += 1;
+            i += 2;
+            continue;
+        }
+        try out.append(c);
+        i += 1;
+    }
+    return try out.toOwnedSlice();
+}
 
 
 
