@@ -9,6 +9,7 @@ let outputChannel = null;
 
 const DEFAULT_CANDIDATES = [
     process.env.BPC_PATH ? path.join(process.env.BPC_PATH, 'bpc.exe') : null,
+    path.join(__dirname, 'bin', 'bpc.exe'),
     'C:\\B-Plus\\zig\\zig-out\\bin\\bpc.exe',
     'D:\\B-Plus\\zig\\zig-out\\bin\\bpc.exe',
     'C:\\B-Plus\\bpc.exe',

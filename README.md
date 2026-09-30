@@ -136,6 +136,7 @@ hello.b+
 9. [Структура проекта](#9-структура-проекта)
 10. [Лицензия](#10-лицензия)
 11. [Контакты](#11-контакты)
+12. [Расширение для VS Code](#12-расширение-для-vs-code)
 
 ---
 
@@ -1152,6 +1153,60 @@ SOFTWARE.
 
 ---
 
+## 12. Расширение для VS Code
+
+Готовое расширение **B+ Language Support** — **v0.2.0 уже включает компилятор `bpc.exe` внутри себя**. Пользователю не нужно ничего дополнительно устанавливать: поставил расширение, написал код, нажал запуск — всё работает.
+
+> **Умение запускать код — у всех под рукой.** Файл для установки лежит прямо в репозитории: `vscode-bplus\vscode-bplus-0.2.0.vsix`.
+
+### Установка (без сборки)
+
+1. Скачайте `vscode-bplus-0.2.0.vsix` из репозитория.
+2. Установите одной командой:
+
+   ```powershell
+   code --install-extension vscode-bplus-0.2.0.vsix
+   ```
+
+   (или в VS Code: меню **Extensions** → **…** → **Install from VSIX…**)
+
+### Запуск первого кода
+
+1. Создайте файл `hello.b+`:
+
+   ```rust
+   fn main() {
+       print("Hello, B+!\n")
+   }
+   ```
+
+2. Нажмите **`F8`** (или `Ctrl+Alt+B`, или кнопку **▶** в строке заголовка редактора) — расширение скомпилирует файл встроенным `bpc.exe` и запустит `.exe` в терминале.
+
+### Возможности
+
+- подсветка синтаксиса для `.b+`, `.bplus`, `.bp` (комментарии `//` и `/* */`);
+- сниппеты: `fn`, `main`, `for`, `while`, `struct`, `enum`, `if`;
+- запуск и сборка текущего файла (`B+: Run Current File`, `B+: Build Current File`);
+- свёртка `{}`-блоков, автозакрытие скобок.
+
+### Свой вариант компилятора
+
+Если нужна собственная сборка `bpc.exe` — задайте её в настройке `bplus.compilerPath` (или добавьте `bpc` в `PATH`). Чтобы пересобрать расширение со свежим компилятором:
+
+```powershell
+cd vscode-bplus
+Copy-Item ..\zig\zig-out\bin\bpc.exe bin\bpc.exe
+npx @vscode/vsce package        # → vscode-bplus-<версия>.vsix
+```
+
+Компилятор ищется в порядке: настройка `bplus.compilerPath` → встроенный `bin\bpc.exe` → `PATH` → стандартные пути.
+
+Подробности — в [README расширения](vscode-bplus/README.md). Полная English-версия этого README — ниже, [вторая часть документа](#b-v464-beta--compiled-b-language-frontend--hir--bir--mir--targets).
+
+> 📖 [docs.html — наглядная документация](https://htmlpreview.github.io/?https://github.com/bylka2W/B-Plus/blob/main/html/docs.html)
+
+---
+
 ---
 
 # B+ v4.6.4-beta — Compiled `.b+` Language (Frontend → HIR → BIR → MIR → Targets)
@@ -1321,6 +1376,7 @@ B+ combines the simplicity of high-level languages with the control of systems p
 9. [Project Structure](#9-project-structure)
 10. [License](#10-license)
 11. [Contact](#11-contact)
+12. [VS Code Extension](#12-vs-code-extension)
 
 ---
 
@@ -2324,3 +2380,57 @@ SOFTWARE.
 - **GitFlic**: [gitflic.ru/project/bylka2w/b-plus](https://gitflic.ru/project/bylka2w/b-plus)
 - **GitLab**: [gitlab.com/bylka2W/b-plus](https://gitlab.com/bylka2W/b-plus)
 - **Author**: bylka2W
+
+---
+
+## 12. VS Code Extension
+
+The ready-made **B+ Language Support** extension — **v0.2.0 ships the `bpc.exe` compiler inside itself**. There is nothing to install separately: install the extension, write code, press run.
+
+> **Run ability is bundled.** The installable file lives right in this repository: `vscode-bplus\vscode-bplus-0.2.0.vsix`.
+
+### Install (no build)
+
+1. Download `vscode-bplus-0.2.0.vsix` from this repository.
+2. Install with one command:
+
+   ```powershell
+   code --install-extension vscode-bplus-0.2.0.vsix
+   ```
+
+   (or in VS Code: **Extensions** → **…** → **Install from VSIX…**)
+
+### Run your first code
+
+1. Create `hello.b+`:
+
+   ```rust
+   fn main() {
+       print("Hello, B+!\n")
+   }
+   ```
+
+2. Press **`F8`** (or `Ctrl+Alt+B`, or the **▶** button in the editor title bar) — the extension compiles the file with the bundled `bpc.exe` and runs the `.exe` in the integrated terminal.
+
+### Features
+
+- syntax highlighting for `.b+`, `.bplus`, `.bp` (`//` and `/* */` comments);
+- snippets: `fn`, `main`, `for`, `while`, `struct`, `enum`, `if`;
+- run / build of the current file (`B+: Run Current File`, `B+: Build Current File`);
+- `{}` block folding, bracket auto-closing.
+
+### Using your own compiler
+
+To use a custom `bpc.exe` set the `bplus.compilerPath` setting (or put `bpc` on `PATH`). To repackage the extension with a fresh compiler:
+
+```powershell
+cd vscode-bplus
+Copy-Item ..\zig\zig-out\bin\bpc.exe bin\bpc.exe
+npx @vscode/vsce package        # → vscode-bplus-<version>.vsix
+```
+
+The compiler is located in this order: `bplus.compilerPath` setting → bundled `bin\bpc.exe` → `PATH` → well-known default locations.
+
+Details: the [extension README](vscode-bplus/README.md). The Russian version of this README is the first part of this document.
+
+> 📖 [docs.html — visual documentation](https://htmlpreview.github.io/?https://github.com/bylka2W/B-Plus/blob/main/html/docs.html)

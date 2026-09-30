@@ -1,0 +1,66 @@
+{
+  "Function declaration": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:args}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Declare a function"
+  },
+  "Program entry point": {
+    "prefix": "main",
+    "body": [
+      "fn main() {",
+      "\tprint(\"${1:Hello, B+!}\\\\n\")",
+      "$0",
+      "}"
+    ],
+    "description": "Program entry point with a print"
+  },
+  "For loop": {
+    "prefix": "for",
+    "body": [
+      "for ${1:i = 0}; ${2:i < 10}; ${3:i = i + 1} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "C-style for loop"
+  },
+  "While loop": {
+    "prefix": "while",
+    "body": [
+      "while ${1:condition} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "While loop"
+  },
+  "Struct": {
+    "prefix": "struct",
+    "body": [
+      "struct ${1:Name} {",
+      "\t${2:field}: ${3:i64},$0",
+      "}"
+    ],
+    "description": "Struct declaration"
+  },
+  "Enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:Member},$0",
+      "}"
+    ],
+    "description": "Enum declaration"
+  },
+  "If statement": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If statement"
+  }
+}

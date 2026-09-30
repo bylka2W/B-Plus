@@ -1,10 +1,15 @@
 {
   "name": "vscode-bplus",
   "displayName": "B+ Language Support",
-  "description": "Syntax highlighting, snippets and Run integration for the B+ programming language",
-  "version": "0.1.0",
+  "description": "Syntax highlighting, snippets and Run integration for the B+ programming language. Bundles the bpc.exe compiler — write code and run it, nothing else to install.",
+  "version": "0.2.0",
   "publisher": "bplus",
   "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bylka2W/B-Plus.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -45,6 +50,12 @@
         "language": "bplus",
         "scopeName": "source.bplus",
         "path": "./syntaxes/bplus.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "bplus",
+        "path": "./snippets/bplus-snippets.json"
       }
     ],
     "commands": [
@@ -115,7 +126,7 @@
         "bplus.compilerPath": {
           "type": "string",
           "default": "",
-          "description": "Path to bpc.exe. If empty, searches PATH, then the default zig-out location."
+          "description": "Path to bpc.exe. Empty = use the compiler bundled with the extension, then search PATH and the default zig-out location."
         },
         "bplus.runInTerminal": {
           "type": "boolean",
