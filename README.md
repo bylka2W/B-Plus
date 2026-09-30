@@ -6,8 +6,6 @@
 
 > [English version ↓]((#b-v464-beta--compiled-b-language-frontend--hir--bir--mir--targets))
 
-> 📖 [docs.html — наглядная документация](https://htmlpreview.github.io/?https://github.com/bylka2W/B-Plus/blob/main/html/docs.html)
-
 **B+** компилирует файлы `.b+` (принимаются также `.plan` / `.metal`) напрямую в машинный код x64 и упаковывает в Windows PE (.exe/.dll).
 Кодогенератор, IR-оптимизаторы и PE-линкер для `.exe` написаны с нуля на Zig — внешний линкер не нужен. Режим `.dll` использует `lld-link.exe` (из LLVM).
 > Лабораторные тесты компилятора: `zig\tests\B+\.b\sources\` — 262 теста, из них 207 исполняются успешно, ещё 55 — негативные (корректно отклоняются компилятором: 54 ошибки компиляции и 1 отклонение верификатора).
