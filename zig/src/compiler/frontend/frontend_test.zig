@@ -1432,4 +1432,145 @@ test "program architecture: all three sections populated" {
     try std.testing.expectEqualStrings("Render", program.metal.kernels.items[0].name);
 }
 
+// --- numeric type policy (single source of truth: sema/numeric.zig) ------
+
+const numeric_policy = @import("sema/numeric.zig");
+const numeric_TypeId = @import("ast.zig").TypeId;
+
+fn semaRun(src: []const u8) !?legacy_sema.SemaResult {
+    var p = legacy_parser.Parser.init(std.testing.allocator, src, "numeric_policy.bp");
+    const program = try p.parse();
+    defer {
+        var prog = program;
+        prog.deinit();
+    }
+    return legacy_sema.analyze(std.testing.allocator, program, src, "numeric_policy.bp") catch null;
+}
+
+fn semaAccepts(src: []const u8) !bool {
+    if (try semaRun(src)) |result| {
+        var res = result;
+        res.deinit();
+        return true;
+    }
+    return false;
+}
+
+fn semaRejects(src: []const u8) !bool {
+    return (try semaRun(src)) == null;
+}
+
+test "numeric policy: assignable rejects narrowing of a typed value" {
+    // `var a = 300` makes `a` an i64, so these are the exact triples sema
+    // sees for `var b: i8 = a`.
+    try testing.expect(!numeric_policy.assignable(.i8_type, .i64_type, "a"));
+    try testing.expect(!numeric_policy.assignable(.i32_type, .i64_type, "a"));
+    try testing.expect(!numeric_policy.assignable(.u8_type, .i64_type, "a"));
+    try testing.expect(!numeric_policy.assignable(.f32_type, .f64_type, "a"));
+    try testing.expect(!numeric_policy.assignable(.i64_type, .f64_type, "a"));
+    try testing.expect(!numeric_policy.assignable(.f64_type, .i64_type, "a"));
+}
+
+test "numeric policy: assignable lets an annotated literal take the annotation" {
+    try testing.expect(numeric_policy.assignable(.i32_type, .i64_type, "10"));
+    try testing.expect(numeric_policy.assignable(.i8_type, .i64_type, "100"));
+    try testing.expect(numeric_policy.assignable(.u8_type, .i64_type, "255"));
+    try testing.expect(numeric_policy.assignable(.f32_type, .f64_type, "1.5"));
+}
+
+test "numeric policy: assignable rejects an out-of-range or mistyped literal" {
+    try testing.expect(!numeric_policy.assignable(.i8_type, .i64_type, "300"));
+    try testing.expect(!numeric_policy.assignable(.u8_type, .i64_type, "-1"));
+    try testing.expect(!numeric_policy.assignable(.i64_type, .f64_type, "20.5"));
+    try testing.expect(!numeric_policy.assignable(.u8_type, .i64_type, "256"));
+    // Identical types short-circuit, so a compound right-hand side is fine.
+    try testing.expect(numeric_policy.assignable(.i64_type, .i64_type, "a + 1"));
+}
+
+test "numeric policy: assignable allows lossless widening and identical types" {
+    try testing.expect(numeric_policy.assignable(.i64_type, .i8_type, "a"));
+    try testing.expect(numeric_policy.assignable(.u64_type, .u8_type, "a"));
+    try testing.expect(numeric_policy.assignable(.f64_type, .f32_type, "a"));
+    try testing.expect(numeric_policy.assignable(.i64_type, .i64_type, "a"));
+}
+
+test "numeric policy: assignable only tolerates unknown on either side" {
+    try testing.expect(numeric_policy.assignable(.unknown, .i64_type, "a"));
+    try testing.expect(numeric_policy.assignable(.i8_type, .unknown, "a"));
+    try testing.expect(!numeric_policy.assignable(.bool_type, .i64_type, "a"));
+    try testing.expect(!numeric_policy.assignable(.string_type, .i64_type, "\"x\""));
+}
+
+test "numeric policy: literal defaults are i64 and f64" {
+    try testing.expectEqual(numeric_TypeId.i64_type, numeric_policy.defaultIntType());
+    try testing.expectEqual(numeric_TypeId.f64_type, numeric_policy.defaultFloatType());
+}
+
+test "numeric policy: same-type arithmetic and lossless widening are accepted" {
+    const arith =
+        \\fn main() {
+        \\    var a = 10
+        \\    var b = 20
+        \\    var c = a + b
+        \\    print(c)
+        \\}
+    ;
+    try testing.expect(try semaAccepts(arith));
+
+    const widen_decl =
+        \\fn main() {
+        \\    var a: i8 = 100
+        \\    var b: i64 = a
+        \\    print(b)
+        \\}
+    ;
+    try testing.expect(try semaAccepts(widen_decl));
+
+    const widen_assign =
+        \\fn main() {
+        \\    var a: i8 = 7
+        \\    var b: i64 = 0
+        \\    b = a
+        \\    print(b)
+        \\}
+    ;
+    try testing.expect(try semaAccepts(widen_assign));
+
+    const widen_binop =
+        \\fn main() {
+        \\    var a: i8 = 1
+        \\    var b: i64 = 2
+        \\    var c = a + b
+        \\    print(c)
+        \\}
+    ;
+    try testing.expect(try semaAccepts(widen_binop));
+
+    const annotated_literals =
+        \\fn main() {
+        \\    var a: i32 = 10
+        \\    var b: i8 = 100
+        \\    var c: u8 = 255
+        \\    var d: f32 = 1.5
+        \\    print(a)
+        \\}
+    ;
+    try testing.expect(try semaAccepts(annotated_literals));
+
+    const fields =
+        \\struct User {
+        \\    id: i64,
+        \\    score: i64,
+        \\}
+        \\
+        \\fn main() {
+        \\    var u: User
+        \\    u.id = 7
+        \\    u.score = 500
+        \\    print(u.score)
+        \\}
+    ;
+    try testing.expect(try semaAccepts(fields));
+}
+
 

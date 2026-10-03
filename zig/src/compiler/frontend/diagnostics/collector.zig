@@ -227,12 +227,14 @@ test "spanOf finds a needle and reports 1-based positions" {
     c.setSource("t.b+", src, 0);
 
     const span = c.spanOf("unknown_variable").?;
-    try std.testing.expectEqual(@as(u32, 18), span.start);
-    try std.testing.expectEqual(@as(u32, 34), span.end);
+    // "unknown_variable" starts after "fn main()\n{\n    print(" (22 bytes) and
+    // is 16 bytes long, so the span is [22, 38) on line 3, column 11.
+    try std.testing.expectEqual(@as(u32, 22), span.start);
+    try std.testing.expectEqual(@as(u32, 38), span.end);
 
     const p = c.positionAt(span.start);
     try std.testing.expectEqual(@as(u32, 3), p.line);
-    try std.testing.expectEqual(@as(u32, 12), p.col);
+    try std.testing.expectEqual(@as(u32, 11), p.col);
 }
 
 test "spanOf returns null for absent needle instead of guessing" {
