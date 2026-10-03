@@ -63,8 +63,9 @@ pub const LineTable = struct {
 
     pub fn spanToLineCol(self: *const LineTable, s: span.SourceSpan) span.Position {
         const line = self.offsetToLine(s.start);
-        const col = s.start - self.lineStart(line + 1);
-        return .{ .line = line + 1, .col = col + 1 };
+        const line_start = self.lineStart(line);
+        const col = if (s.start > line_start) s.start - line_start else 0;
+        return .{ .line = line, .col = col + 1 };
     }
 
     pub fn getLineText(self: *const LineTable, line: u32, content: []const u8) []const u8 {

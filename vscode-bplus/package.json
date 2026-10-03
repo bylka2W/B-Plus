@@ -1,8 +1,8 @@
 {
   "name": "vscode-bplus",
   "displayName": "B+ Language Support",
-  "description": "Syntax highlighting, snippets and Run integration for the B+ programming language. Bundles the bpc.exe compiler — write code and run it, nothing else to install.",
-  "version": "0.2.0",
+  "description": "Complete B+ toolchain in one box: syntax highlighting, inline diagnostics, and the bundled bpc compiler — install the extension, write a .b+ file, press F8. Nothing else to download or configure.",
+  "version": "0.3.0",
   "publisher": "bplus",
   "license": "MIT",
   "icon": "icon.png",
@@ -15,6 +15,7 @@
   },
   "categories": [
     "Programming Languages",
+    "Debuggers",
     "Linters",
     "Other"
   ],
@@ -22,11 +23,22 @@
     "b+",
     "bplus",
     "language",
-    "compiler"
+    "compiler",
+    "metal",
+    "plan"
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:bplus"
+    "onLanguage:bplus",
+    "workspaceContains:**/*.b+",
+    "onCommand:bplus.run",
+    "onCommand:bplus.build",
+    "onCommand:bplus.runExe",
+    "onCommand:bplus.clean",
+    "onCommand:bplus.check",
+    "onCommand:bplus.doctor",
+    "onCommand:bplus.selectCompiler",
+    "onCommand:bplus.showOutput"
   ],
   "contributes": {
     "languages": [
@@ -61,32 +73,77 @@
     "commands": [
       {
         "command": "bplus.run",
-        "title": "B+: Run Current File",
+        "title": "Run Current File",
         "category": "B+",
         "icon": "$(play)"
       },
       {
         "command": "bplus.build",
-        "title": "B+: Build Current File (no run)",
+        "title": "Build Current File",
         "category": "B+",
         "icon": "$(tools)"
       },
       {
-        "command": "bplus.clean",
-        "title": "B+: Launch .exe in Terminal",
+        "command": "bplus.runExe",
+        "title": "Launch .exe in Terminal",
         "category": "B+",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "bplus.check",
+        "title": "Check Current File (diagnostics only)",
+        "category": "B+",
+        "icon": "$(check)"
+      },
+      {
+        "command": "bplus.clean",
+        "title": "Clean (delete built .exe)",
+        "category": "B+",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "bplus.doctor",
+        "title": "Compiler Health Check",
+        "category": "B+",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "bplus.selectCompiler",
+        "title": "Select Compiler Path...",
+        "category": "B+",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "bplus.showOutput",
+        "title": "Show Output Channel",
+        "category": "B+",
+        "icon": "$(output)"
       }
     ],
     "keybindings": [
+      {
+        "command": "bplus.run",
+        "key": "f8",
+        "when": "editorLangId == bplus && editorTextFocus"
+      },
+      {
+        "command": "bplus.run",
+        "key": "f5",
+        "when": "editorLangId == bplus && editorTextFocus"
+      },
       {
         "command": "bplus.run",
         "key": "ctrl+alt+b",
         "when": "editorLangId == bplus && editorTextFocus"
       },
       {
-        "command": "bplus.run",
-        "key": "f8",
+        "command": "bplus.build",
+        "key": "ctrl+alt+shift+b",
+        "when": "editorLangId == bplus && editorTextFocus"
+      },
+      {
+        "command": "bplus.check",
+        "key": "ctrl+alt+k",
         "when": "editorLangId == bplus && editorTextFocus"
       }
     ],
@@ -96,6 +153,11 @@
           "command": "bplus.run",
           "when": "editorLangId == bplus",
           "group": "navigation@1"
+        },
+        {
+          "command": "bplus.check",
+          "when": "editorLangId == bplus",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
@@ -108,6 +170,14 @@
           "when": "editorLangId == bplus"
         },
         {
+          "command": "bplus.runExe",
+          "when": "editorLangId == bplus"
+        },
+        {
+          "command": "bplus.check",
+          "when": "editorLangId == bplus"
+        },
+        {
           "command": "bplus.clean",
           "when": "editorLangId == bplus"
         }
@@ -117,6 +187,11 @@
           "command": "bplus.run",
           "when": "resourceLangId == bplus",
           "group": "B+@1"
+        },
+        {
+          "command": "bplus.build",
+          "when": "resourceLangId == bplus",
+          "group": "B+@2"
         }
       ]
     },
@@ -126,23 +201,45 @@
         "bplus.compilerPath": {
           "type": "string",
           "default": "",
-          "description": "Path to bpc.exe. Empty = use the compiler bundled with the extension, then search PATH and the default zig-out location."
+          "markdownDescription": "Path to `bpc.exe`. Leave empty to use the compiler **bundled with this extension** (`bin/bpc.exe`), falling back to `PATH` and the default `zig-out` folder."
+        },
+        "bplus.outputDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Where to put the built .exe. Empty = next to the .b+ source file."
+        },
+        "bplus.checkOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Compile the file in the background on every save and show errors as red squiggles."
+        },
+        "bplus.keepObjectFile": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep the intermediate .obj next to the .exe instead of deleting it after a successful build."
         },
         "bplus.runInTerminal": {
           "type": "boolean",
           "default": true,
-          "description": "Run compiled .exe inside the integrated terminal so program output is shown."
+          "description": "Run the built .exe inside the integrated terminal so its output is interactive."
+        },
+        "bplus.clearTerminalBeforeRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "Clear the B+ Run terminal before launching the program."
         },
         "bplus.showOutputChannel": {
           "type": "boolean",
           "default": true,
-          "description": "Show compiler diagnostics in the B+ output channel."
+          "description": "Reveal the B+ output channel on every build."
         }
       }
     }
   },
   "scripts": {
-    "package": "npx @vscode/vsce package --allow-missing-repository"
+    "sync-compiler": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/sync-compiler.ps1",
+    "package": "npm run sync-compiler && npx @vscode/vsce package --allow-missing-repository",
+    "vscode:prepublish": "npm run sync-compiler"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0"

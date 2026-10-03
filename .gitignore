@@ -12,6 +12,11 @@ zig-cache/
 *.ilk
 *.bin
 
+# The VS Code extension must ship a working compiler, so it is force-tracked
+# even though build artifacts (*.exe) are ignored repo-wide.
+!vscode-bplus/bin/
+!vscode-bplus/bin/*.exe
+
 zig/tests/bugfix/
 zig/tests/fuzz/
 zig/tests/integration/

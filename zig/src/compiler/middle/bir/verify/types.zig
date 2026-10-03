@@ -346,7 +346,7 @@ fn verifyInstTypes(
             }
         },
         .@"const" => {
-            if (inst.ty != 0 and isVoidType(module, inst.ty)) {
+            if (inst.ty != 0 and inst.ty != bir.types.INVALID_TYPE and isVoidType(module, inst.ty)) {
                 try errs.push(.{
                     .code = .const_type_void,
                     .func_id = func_id,

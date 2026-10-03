@@ -96,7 +96,11 @@ const Lexer = struct {
                 if (self.char == '\\') self.advance();
                 self.advance();
             }
-            if (self.char == '"') self.advance();
+            if (self.char != '"') {
+                std.log.err("syntax error: unterminated string literal (missing closing quote)", .{});
+                return self.token(.error_token);
+            }
+            self.advance();
             return self.token(.string_literal);
         }
 
@@ -191,6 +195,33 @@ pub const Parser = struct {
     }
 
     fn peek(p: *Parser, kind: TokenKind) bool { return p.cur_tok.kind == kind; }
+
+    /// `fn score() i64 { ... }` puts the return type straight after the closing
+    /// paren, with no `->` or `:` in front of it, so the function parser has to
+    /// recognise the type token itself. Without this every `fn name() T { ... }`
+    /// was rejected and reported as a stray `fn` keyword, which also left the
+    /// function missing from the symbol table.
+    fn isTypeToken(kind: TokenKind) bool {
+        return switch (kind) {
+            .identifier,
+            .kw_void,
+            .kw_bool,
+            .kw_i8,
+            .kw_i16,
+            .kw_i32,
+            .kw_i64,
+            .kw_u8,
+            .kw_u16,
+            .kw_u32,
+            .kw_u64,
+            .kw_f32,
+            .kw_f64,
+            .kw_string,
+            .kw_any,
+            => true,
+            else => false,
+        };
+    }
     fn expect(p: *Parser, kind: TokenKind) !void {
         if (p.cur_tok.kind != kind) {
             const found = p.src[p.cur_tok.start..p.cur_tok.end];
@@ -850,6 +881,10 @@ fn parseTransition(p: *Parser) !ast.TransitionNode {
         var ret_type: ?[]const u8 = null;
         if (p.peek(.arrow) or p.peek(.colon)) {
             p.advance();
+            ret_type = try p.allocator.dupe(u8, p.identText());
+            p.advance();
+            p.consumeNewlines();
+        } else if (isTypeToken(p.cur_tok.kind)) {
             ret_type = try p.allocator.dupe(u8, p.identText());
             p.advance();
             p.consumeNewlines();

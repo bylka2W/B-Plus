@@ -1,4 +1,8 @@
 node_modules/
-*.vsix
-.vscode-test/
 *.log
+.vscode-test/
+
+# The bundled compiler IS tracked on purpose: the published .vsix must contain
+# a working bpc.exe so installing the extension is enough to compile and run.
+!bin/
+!bin/*.exe

@@ -194,12 +194,12 @@ fn splitTopLevel(alloc: Allocator, text: []const u8, seps: []const u8) !std.Arra
     var start: usize = 0;
     for (text, 0..) |c, i| {
         if (c == '"') {
-            in_str = !in_str;
+            if (!quoteAtIsEscaped(text, i)) in_str = !in_str;
             continue;
         }
         if (in_str) continue;
-        if (c == '(' or c == '{') depth += 1;
-        if (c == ')' or c == '}') depth -= 1;
+        if (c == '(' or c == '{' or c == '[') depth += 1;
+        if (c == ')' or c == '}' or c == ']') depth -= 1;
         var is_sep = false;
         for (seps) |s| {
             if (s == c) {
@@ -1319,7 +1319,7 @@ const nm = std.mem.trim(u8, t[0..pp], " \t\r\n");
 
     if (t[0] == '&' and t.len > 1) return t_ptr;
 
-    if (isPureAccessText(t) and (t[0] == '*' or lookLikeDotted(t))) {
+    if (isPureAccessText(t) and (t[0] == '*' or lookLikeDotted(t) or std.mem.indexOfScalar(u8, t, '[') != null)) {
         return try inferAccessType(b, t);
     }
 
@@ -1393,20 +1393,30 @@ fn isPureAccessText(text: []const u8) bool {
     while (j < t.len and (std.ascii.isAlphanumeric(t[j]) or t[j] == '_')) j += 1;
     if (j == i) return false;
     var consumed = j;
-    while (consumed < t.len and t[consumed] == '.') {
-        j = consumed + 1;
-        while (j < t.len and (std.ascii.isAlphanumeric(t[j]) or t[j] == '_' or t[j] == '-')) j += 1;
-        if (j == consumed + 1) return false;
-        consumed = j;
+    while (consumed < t.len) {
+        if (t[consumed] == '[') {
+            const close = findClosingBracket(t, consumed) orelse return false;
+            if (std.mem.trim(u8, t[consumed + 1 .. close], " \t\r\n").len == 0) return false;
+            consumed = close + 1;
+            continue;
+        }
+        if (t[consumed] == '.') {
+            var k = consumed + 1;
+            while (k < t.len and (std.ascii.isAlphanumeric(t[k]) or t[k] == '_' or t[k] == '-')) k += 1;
+            if (k == consumed + 1) return false;
+            consumed = k;
+            continue;
+        }
+        return false;
     }
-    return consumed == t.len;
+    return true;
 }
 
 fn isAccessPath(lhs: []const u8) bool {
     const t = std.mem.trim(u8, lhs, " \t\r\n");
     if (t.len == 0) return false;
     if (t[0] == '*') return true;
-    return isPureAccessText(t) and lookLikeDotted(t);
+    return isPureAccessText(t) and (lookLikeDotted(t) or std.mem.indexOfScalar(u8, t, '[') != null);
 }
 
 fn emitAddConst(b: *Builder, base: ValueId, off: i64) !ValueId {
@@ -1430,6 +1440,79 @@ fn derefChain(b: *Builder, base_name: []const u8, cur: ValueId, depth: usize) an
     return .{ .addr = target, .ty = leaf };
 }
 
+const IntExprParser = struct {
+    s: []const u8,
+    i: usize = 0,
+
+    fn ws(self: *IntExprParser) void {
+        while (self.i < self.s.len and (self.s[self.i] == ' ' or self.s[self.i] == '\t' or self.s[self.i] == '\r' or self.s[self.i] == '\n')) self.i += 1;
+    }
+
+    fn add(self: *IntExprParser) ?i64 {
+        var lhs = self.mul() orelse return null;
+        while (true) {
+            self.ws();
+            if (self.i >= self.s.len) return lhs;
+            const op = self.s[self.i];
+            if (op != '+' and op != '-') return lhs;
+            self.i += 1;
+            const rhs = self.mul() orelse return null;
+            lhs = if (op == '+') lhs +% rhs else lhs -% rhs;
+        }
+    }
+
+    fn mul(self: *IntExprParser) ?i64 {
+        var lhs = self.atom() orelse return null;
+        while (true) {
+            self.ws();
+            if (self.i >= self.s.len) return lhs;
+            const op = self.s[self.i];
+            if (op != '*' and op != '/' and op != '%') return lhs;
+            self.i += 1;
+            const rhs = self.atom() orelse return null;
+            if (op == '*') {
+                lhs = lhs *% rhs;
+            } else {
+                if (rhs == 0) return null;
+                lhs = if (op == '/') @divTrunc(lhs, rhs) else @rem(lhs, rhs);
+            }
+        }
+    }
+
+    fn atom(self: *IntExprParser) ?i64 {
+        self.ws();
+        if (self.i >= self.s.len) return null;
+        const c = self.s[self.i];
+        if (c == '(') {
+            self.i += 1;
+            const v = self.add() orelse return null;
+            self.ws();
+            if (self.i >= self.s.len or self.s[self.i] != ')') return null;
+            self.i += 1;
+            return v;
+        }
+        if (c == '-' or c == '+') {
+            self.i += 1;
+            const v = self.atom() orelse return null;
+            return if (c == '-') -%v else v;
+        }
+        if (!std.ascii.isDigit(c)) return null;
+        var v: i64 = 0;
+        while (self.i < self.s.len and std.ascii.isDigit(self.s[self.i])) : (self.i += 1) {
+            v = v *% 10 +% @as(i64, self.s[self.i] - '0');
+        }
+        return v;
+    }
+};
+
+fn constEvalIntExpr(text: []const u8) ?i64 {
+    var p = IntExprParser{ .s = text };
+    const v = p.add() orelse return null;
+    p.ws();
+    if (p.i != p.s.len) return null;
+    return v;
+}
+
 fn resolveAccess(b: *Builder, text: []const u8) anyerror!?LValue {
     const t = std.mem.trim(u8, text, " \t\r\n");
     if (t.len == 0) return null;
@@ -1449,7 +1532,11 @@ fn resolveAccess(b: *Builder, text: []const u8) anyerror!?LValue {
         return der;
     }
 
-    const t_trim_end = std.mem.indexOfAny(u8, t, ". ") orelse t.len;
+    var base_end: usize = t.len;
+    if (std.mem.indexOfScalar(u8, t, '.')) |di| base_end = @min(base_end, di);
+    if (std.mem.indexOfScalar(u8, t, '[')) |bi| base_end = @min(base_end, bi);
+    if (std.mem.indexOfScalar(u8, t, ' ')) |si| base_end = @min(base_end, si);
+    const t_trim_end = base_end;
     const base = std.mem.trim(u8, t[0..t_trim_end], " \t\r\n");
     const base_vi = b.getVar(base) orelse return null;
 
@@ -1464,7 +1551,43 @@ fn resolveAccess(b: *Builder, text: []const u8) anyerror!?LValue {
 
     while (pos < t.len) {
         if (t[pos] == ' ') pos += 1;
-        if (pos >= t.len or t[pos] != '.') break;
+        if (pos >= t.len) break;
+        if (t[pos] == '[') {
+            const close = findClosingBracket(t, pos) orelse {
+                std.log.err("unterminated '[' in access path", .{});
+                return BIRError.UnknownExpression;
+            };
+            const inner = std.mem.trim(u8, t[pos + 1 .. close], " \t\r\n");
+            if (inner.len == 0) {
+                std.log.err("empty array index '[]'", .{});
+                return BIRError.UnknownExpression;
+            }
+            if (!isArrayType(b.mod, cur_ty)) {
+                std.log.err("cannot index value with '[]': only arrays support indexing", .{});
+                return BIRError.UnknownExpression;
+            }
+            const arr_kind = b.mod.types.get(cur_ty).kind.array;
+            const elem_size = @as(i64, b.mod.types.sizeOf(arr_kind.elem));
+            var off_val: ValueId = undefined;
+            if (constEvalIntExpr(inner)) |idx| {
+                if (idx < 0 or idx >= @as(i64, @intCast(arr_kind.len))) {
+                    std.log.err("array index is out of bounds", .{});
+                    return BIRError.UnknownExpression;
+                }
+                off_val = try b.emitConstInt(idx * elem_size);
+            } else {
+                const idx_val = try lowerExpr(b, inner);
+                if (idx_val == NO_VALUE) return BIRError.UnknownExpression;
+                const esz = try b.emitConstInt(elem_size);
+                off_val = try b.emitOp(.mul, t_i64, &.{ idx_val, esz }, .{ .none = {} });
+            }
+            addr_val = try b.emitOp(.add, t_i64, &.{ addr_val, off_val }, .{ .none = {} });
+            cur_ty = arr_kind.elem;
+            cur_layout = null;
+            pos = close + 1;
+            continue;
+        }
+        if (t[pos] != '.') break;
         var end = pos + 1;
         while (end < t.len and (std.ascii.isAlphanumeric(t[end]) or t[end] == '_' or t[end] == '-')) : (end += 1) {}
         const part = std.mem.trim(u8, t[pos + 1 .. end], " \t\r\n");
@@ -1549,14 +1672,27 @@ fn inferAccessType(b: *Builder, text: []const u8) anyerror!TypeId {
         return leaf;
     }
 
-    const t_trim_end = std.mem.indexOfAny(u8, t, ". ") orelse return t_i64;
+    var base_end_local: usize = t.len;
+    if (std.mem.indexOfScalar(u8, t, '.')) |di| base_end_local = @min(base_end_local, di);
+    if (std.mem.indexOfScalar(u8, t, '[')) |bi| base_end_local = @min(base_end_local, bi);
+    if (std.mem.indexOfScalar(u8, t, ' ')) |si| base_end_local = @min(base_end_local, si);
+    const t_trim_end = base_end_local;
     const base = std.mem.trim(u8, t[0..t_trim_end], " \t\r\n");
     const base_vi = b.getVar(base) orelse return t_i64;
     var cur_ty = base_vi.type_id;
     var pos = t_trim_end;
     while (pos < t.len) {
         if (t[pos] == ' ') pos += 1;
-        if (pos >= t.len or t[pos] != '.') break;
+        if (pos >= t.len) break;
+        if (t[pos] == '[') {
+            const close = findClosingBracket(t, pos) orelse return t_i64;
+            const inner = std.mem.trim(u8, t[pos + 1 .. close], " \t\r\n");
+            if (inner.len == 0 or !isArrayType(b.mod, cur_ty)) return t_i64;
+            cur_ty = b.mod.types.get(cur_ty).kind.array.elem;
+            pos = close + 1;
+            continue;
+        }
+        if (t[pos] != '.') break;
         var end = pos + 1;
         while (end < t.len and (std.ascii.isAlphanumeric(t[end]) or t[end] == '_' or t[end] == '-')) : (end += 1) {}
         const part = std.mem.trim(u8, t[pos + 1 .. end], " \t\r\n");
@@ -1679,11 +1815,49 @@ fn lowerAggregateInit(b: *Builder, name: []const u8, rhs: []const u8) anyerror!b
     return false;
 }
 
+fn findUnterminatedString(text: []const u8) bool {
+    var i: usize = 0;
+    while (i < text.len) {
+        if (text[i] == '/' and i + 1 < text.len and text[i + 1] == '/') return false;
+        if (text[i] != '"') {
+            i += 1;
+            continue;
+        }
+        var j = i + 1;
+        var closed = false;
+        while (j < text.len) {
+            if (text[j] == '\\') {
+                j += 2;
+                continue;
+            }
+            if (text[j] == '"') {
+                closed = true;
+                break;
+            }
+            j += 1;
+        }
+        if (!closed) return true;
+        i = j + 1;
+    }
+    return false;
+}
+
 fn lowerStmt(b: *Builder, line: []const u8) anyerror!void {
     if (b.terminated()) return;
 
-    if (std.mem.startsWith(u8, std.mem.trimLeft(u8, line, " \t"), "const ")) {
-        const rest = std.mem.trimLeft(u8, line, " \t")["const ".len..];
+    if (findUnterminatedString(line)) {
+        std.log.err("error: unterminated string literal (missing closing quote)", .{});
+        return BIRError.UnknownExpression;
+    }
+
+    const stmt_head = std.mem.trimLeft(u8, line, " \t");
+    if (std.mem.startsWith(u8, stmt_head, "on ") or std.mem.eql(u8, stmt_head, "on")) {
+        std.log.err("error: 'on' block is only allowed inside a state or machine declaration", .{});
+        return BIRError.UnknownExpression;
+    }
+
+    if (std.mem.startsWith(u8, stmt_head, "const ")) {
+        const rest = stmt_head["const ".len..];
         const cname = extractName(rest);
         if (cname.len > 0) try b.const_vars.put(cname, {});
         try lowerStmt(b, rest);
@@ -1890,7 +2064,7 @@ if (std.mem.startsWith(u8, line, "break")) {
         }
     }
 
-    if (findOutsideStrings("=", line)) |eq_idx| {
+    if (findAssignOp(line)) |eq_idx| {
         const lhs = std.mem.trim(u8, line[0..eq_idx], " \t\r\n");
         const rhs = std.mem.trim(u8, line[eq_idx + 1 ..], " \t\r\n");
         if (lhs.len > 0 and rhs.len > 0) {
@@ -2074,10 +2248,16 @@ fn lowerExpr(b: *Builder, expr: []const u8) anyerror!ValueId {
 if (t[0] == '"') {
         const eq = std.mem.lastIndexOfScalar(u8, t, '"') orelse 0;
         if (eq < 1) {
-            std.log.err("error: unterminated string literal", .{});
+            std.log.err("unterminated string literal", .{});
             return BIRError.TypeError;
         }
-        return b.emitConstStr(t[1..eq]);
+        const raw = t[1..eq];
+        if (std.mem.indexOfScalar(u8, raw, '\\') != null) {
+            const decoded = try decodeStringLiteral(b.alloc, raw);
+            defer b.alloc.free(decoded);
+            return b.emitConstStr(decoded);
+        }
+        return b.emitConstStr(raw);
     }
 
     if (t[0] == '\'' and t.len >= 3 and t[t.len - 1] == '\'') {
@@ -2199,7 +2379,7 @@ if (t[0] == '"') {
         }
     }
 
-    if (isPureAccessText(t) and lookLikeDotted(t)) {
+    if (isPureAccessText(t) and (lookLikeDotted(t) or std.mem.indexOfScalar(u8, t, '[') != null)) {
         if (try resolveAccess(b, t)) |lv| {
             return if (isAggregate(b.mod, lv.ty)) lv.addr else b.emitLoad(lv.addr, lv.ty);
         }
@@ -2308,7 +2488,10 @@ fn findOutsideStrings(op: []const u8, line: []const u8) ?usize {
     while (i < line.len) : (i += 1) {
         const c = line[i];
         if (in_str) {
-            if (c == '\\') i += 1;
+            if (c == '\\') {
+                i += 1;
+                continue;
+            }
             if (c == '"') in_str = false;
             continue;
         }
@@ -2317,6 +2500,36 @@ fn findOutsideStrings(op: []const u8, line: []const u8) ?usize {
             continue;
         }
         if (i + op.len <= line.len and std.mem.eql(u8, line[i .. i + op.len], op)) return i;
+    }
+    return null;
+}
+
+fn findAssignOp(line: []const u8) ?usize {
+    var depth: i32 = 0;
+    var i: usize = 0;
+    while (i < line.len) {
+        const c = line[i];
+        if (c == '"') {
+            i = skipStringLiteral(line, i);
+            continue;
+        }
+        if (c == '(' or c == '[' or c == '{') depth += 1;
+        if (c == ')' or c == ']' or c == '}') depth -= 1;
+        if (c == '=' and depth == 0) {
+            if (i + 1 < line.len and (line[i + 1] == '=' or line[i + 1] == '>')) {
+                i += 2;
+                continue;
+            }
+            if (i > 0) {
+                const p = line[i - 1];
+                if (p == '!' or p == '<' or p == '>' or p == '+' or p == '-' or p == '*' or p == '/' or p == '%' or p == '&' or p == '|' or p == '=') {
+                    i += 1;
+                    continue;
+                }
+            }
+            return i;
+        }
+        i += 1;
     }
     return null;
 }
@@ -2340,7 +2553,7 @@ fn lowerCallExpr(b: *Builder, name: []const u8, args_str: []const u8) anyerror!V
         var in_str = false;
         var start: usize = 0;
         for (args_str, 0..) |c, i| {
-            if (c == '"') in_str = !in_str;
+            if (c == '"' and !quoteAtIsEscaped(args_str, i)) in_str = !in_str;
             if (in_str) continue;
             if (c == '(') depth += 1;
             if (c == ')') depth -= 1;
@@ -2497,7 +2710,7 @@ fn lowerFor(b: *Builder, line: []const u8) anyerror!void {
     var start: usize = 0;
     var in_str = false;
     for (header_str, 0..) |c, i| {
-        if (c == '"') in_str = !in_str;
+        if (c == '"' and !quoteAtIsEscaped(header_str, i)) in_str = !in_str;
         if (in_str) continue;
         if (c == '(') depth += 1;
         if (c == ')') depth -= 1;
@@ -2574,7 +2787,7 @@ fn mergeContinuations(alloc: Allocator, body: []const u8, sep: u8) ![]u8 {
     var i: usize = 0;
     while (i < body.len) {
         const c = body[i];
-        if (c == '"') in_str = !in_str;
+        if (c == '"' and !quoteAtIsEscaped(body, i)) in_str = !in_str;
         if (in_str or (c != sep and c != '{' and c != '}' and c != '(' and c != ')')) {
             try merged.append(c);
             i += 1;
@@ -2613,6 +2826,80 @@ fn mergeContinuations(alloc: Allocator, body: []const u8, sep: u8) ![]u8 {
     return merged.items;
 }
 
+fn quoteAtIsEscaped(text: []const u8, i: usize) bool {
+    var bs: usize = 0;
+    var j: usize = i;
+    while (j > 0 and text[j - 1] == '\\') {
+        bs += 1;
+        j -= 1;
+    }
+    return (bs % 2) == 1;
+}
+
+fn decodeStringLiteral(alloc: Allocator, raw: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, raw, '\\') == null) return alloc.dupe(u8, raw);
+    var out = std.ArrayList(u8).init(alloc);
+    var i: usize = 0;
+    while (i < raw.len) {
+        const c = raw[i];
+        if (c != '\\' or i + 1 >= raw.len) {
+            try out.append(c);
+            i += 1;
+            continue;
+        }
+        const e = raw[i + 1];
+        const val: ?u8 = switch (e) {
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            '\\' => '\\',
+            '"' => '"',
+            '\'' => '\'',
+            '0' => 0,
+            else => null,
+        };
+        if (val) |v| {
+            try out.append(v);
+            i += 2;
+        } else {
+            try out.append(c);
+            i += 1;
+        }
+    }
+    return out.toOwnedSlice();
+}
+
+fn skipStringLiteral(text: []const u8, i: usize) usize {
+    var j: usize = i + 1;
+    while (j < text.len and text[j] != '"') {
+        if (text[j] == '\\' and j + 1 < text.len) j += 1;
+        j += 1;
+    }
+    return j + 1;
+}
+
+fn findClosingBracket(text: []const u8, open: usize) ?usize {
+    if (open >= text.len or text[open] != '[') return null;
+    var brace_depth: i32 = 0;
+    var paren_depth: i32 = 0;
+    var i = open;
+    while (i < text.len) {
+        if (text[i] == '"') {
+            i = skipStringLiteral(text, i);
+            continue;
+        }
+        if (text[i] == '(') paren_depth += 1;
+        if (text[i] == ')') paren_depth -= 1;
+        if (text[i] == '[') brace_depth += 1;
+        if (text[i] == ']' and paren_depth == 0) {
+            brace_depth -= 1;
+            if (brace_depth == 0) return i;
+        }
+        i += 1;
+    }
+    return null;
+}
+
 fn lowerBodyStr(b: *Builder, body_input: []const u8, sep: u8) anyerror!void {
     const body = try mergeContinuations(b.alloc, body_input, sep);
     var pos: usize = 0;
@@ -2629,7 +2916,7 @@ fn lowerBodyStr(b: *Builder, body_input: []const u8, sep: u8) anyerror!void {
         var start = pos;
         while (pos < body.len) {
             const c = body[pos];
-            if (c == '"') in_str = !in_str;
+            if (c == '"' and !quoteAtIsEscaped(body, pos)) in_str = !in_str;
             if (in_str) {
                 pos += 1;
                 continue;
@@ -2665,7 +2952,7 @@ fn lowerBodyStr(b: *Builder, body_input: []const u8, sep: u8) anyerror!void {
                         const part_start = pos;
                         while (pos < body.len) {
                             const c2 = body[pos];
-                            if (c2 == '"') in_str = !in_str;
+                            if (c2 == '"' and !quoteAtIsEscaped(body, pos)) in_str = !in_str;
                             if (in_str) { pos += 1; continue; }
                             if (c2 == '(' or c2 == '{') { depth += 1; brace_depth += 1; }
                             if (c2 == ')' or c2 == '}') { depth -= 1; brace_depth -= 1; }
@@ -2718,26 +3005,31 @@ const BinParts = struct { left: []const u8, right: []const u8 };
 
 fn findBinOp(expr: []const u8, op: []const u8) ?BinParts {
     var depth: i32 = 0;
-    var i: usize = expr.len;
-    while (i > 0) {
-        i -= 1;
-        if (expr[i] == ')') depth += 1;
-        if (expr[i] == '(') depth -= 1;
-        if (depth != 0) continue;
-        if (i + op.len > expr.len) continue;
-        if (!std.mem.eql(u8, expr[i .. i + op.len], op)) continue;
-        if (i == 0) return null;
-        if (i + op.len >= expr.len) return null;
-        if (std.mem.eql(u8, op, "=") and i + 1 < expr.len and expr[i + 1] == '=') continue;
-        if (std.mem.eql(u8, op, "!") and i + 1 < expr.len and expr[i + 1] == '=') continue;
-        if (std.mem.eql(u8, op, "<") and i + 1 < expr.len and (expr[i + 1] == '=' or expr[i + 1] == '<')) continue;
-        if (std.mem.eql(u8, op, ">") and i + 1 < expr.len and (expr[i + 1] == '=' or expr[i + 1] == '>')) continue;
-        if (std.mem.eql(u8, op, "&") and i + 1 < expr.len and expr[i + 1] == '&') continue;
-        if (std.mem.eql(u8, op, "|") and i + 1 < expr.len and expr[i + 1] == '|') continue;
-        const left = std.mem.trim(u8, expr[0..i], " \t\r\n");
-        const right = std.mem.trim(u8, expr[i + op.len ..], " \t\r\n");
-        if (left.len > 0 and right.len > 0) return .{ .left = left, .right = right };
+    var i: usize = 0;
+    var found: ?usize = null;
+    while (i < expr.len) {
+        const c = expr[i];
+        if (c == '"') {
+            i = skipStringLiteral(expr, i);
+            continue;
+        }
+        if (c == '(' or c == '[' or c == '{') depth += 1;
+        if (c == ')' or c == ']' or c == '}') depth -= 1;
+        if (depth == 0 and i != 0 and i + op.len < expr.len and std.mem.eql(u8, expr[i .. i + op.len], op)) {
+            found = i;
+        }
+        i += 1;
     }
+    const idx = found orelse return null;
+    if (std.mem.eql(u8, op, "=") and idx + 1 < expr.len and expr[idx + 1] == '=') return null;
+    if (std.mem.eql(u8, op, "!") and idx + 1 < expr.len and expr[idx + 1] == '=') return null;
+    if (std.mem.eql(u8, op, "<") and idx + 1 < expr.len and (expr[idx + 1] == '=' or expr[idx + 1] == '<')) return null;
+    if (std.mem.eql(u8, op, ">") and idx + 1 < expr.len and (expr[idx + 1] == '=' or expr[idx + 1] == '>')) return null;
+    if (std.mem.eql(u8, op, "&") and idx + 1 < expr.len and expr[idx + 1] == '&') return null;
+    if (std.mem.eql(u8, op, "|") and idx + 1 < expr.len and expr[idx + 1] == '|') return null;
+    const left = std.mem.trim(u8, expr[0..idx], " \t\r\n");
+    const right = std.mem.trim(u8, expr[idx + op.len ..], " \t\r\n");
+    if (left.len > 0 and right.len > 0) return .{ .left = left, .right = right };
     return null;
 }
 
@@ -2752,8 +3044,8 @@ fn findParenEnd(line: []const u8, open: usize) ?usize {
             if (depth == 0) return i;
         }
         if (line[i] == '"') {
-            i += 1;
-            while (i < line.len and line[i] != '"') : (i += 1) {}
+            i = skipStringLiteral(line, i);
+            continue;
         }
         i += 1;
     }
@@ -2777,5 +3069,107 @@ fn extractVarType(rest: []const u8) ?[]const u8 {
     const type_str = std.mem.trimRight(u8, after_colon[0..end], " \t\r\n");
     if (type_str.len == 0) return null;
     return type_str;
+}
+
+test "decodeStringLiteral decodes known escapes and preserves unknown ones" {
+    const cases = [_]struct { raw: []const u8, want: []const u8 }{
+        .{ .raw = "A\\nB", .want = "A\nB" },
+        .{ .raw = "A\\tB", .want = "A\tB" },
+        .{ .raw = "A\\rB", .want = "A\rB" },
+        .{ .raw = "q\\\"q", .want = "q\"q" },
+        .{ .raw = "b\\\\b", .want = "b\\b" },
+        .{ .raw = "s\\'s", .want = "s's" },
+        .{ .raw = "z\\0z", .want = "z\x00z" },
+        .{ .raw = "keep\\q", .want = "keep\\q" },
+        .{ .raw = "plain", .want = "plain" },
+    };
+    for (cases) |c| {
+        const got = try decodeStringLiteral(std.testing.allocator, c.raw);
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqualStrings(c.want, got);
+    }
+}
+
+test "quoteAtIsEscaped and skipStringLiteral honour escaped quotes" {
+    try std.testing.expect(!quoteAtIsEscaped("\"a\"", 0));
+    try std.testing.expect(!quoteAtIsEscaped("\"a\"", 2));
+    try std.testing.expect(quoteAtIsEscaped("\"a\\\"b\"", 3));
+    try std.testing.expect(!quoteAtIsEscaped("\"a\\\\\"", 4));
+    try std.testing.expectEqual(@as(usize, 6), skipStringLiteral("\"a\\\"b\" tail", 0));
+}
+
+test "findClosingBracket respects nesting, parens and string literals" {
+    try std.testing.expectEqual(@as(usize, 5), findClosingBracket("a[i+1]", 1).?);
+    try std.testing.expectEqual(@as(usize, 6), findClosingBracket("a[f(1)]", 1).?);
+    try std.testing.expectEqual(@as(usize, 5), findClosingBracket("a[\"]\"]", 1).?);
+    try std.testing.expectEqual(@as(usize, 2), findClosingBracket("a[]", 1).?);
+    try std.testing.expect(findClosingBracket("a[i", 1) == null);
+}
+
+test "constEvalIntExpr folds literals only" {
+    try std.testing.expectEqual(@as(?i64, 42), constEvalIntExpr("42"));
+    try std.testing.expectEqual(@as(?i64, 7), constEvalIntExpr("1+2*3"));
+    try std.testing.expectEqual(@as(?i64, 9), constEvalIntExpr("(1+2)*3"));
+    try std.testing.expectEqual(@as(?i64, 5), constEvalIntExpr("10-3-2"));
+    try std.testing.expectEqual(@as(?i64, -5), constEvalIntExpr("-5"));
+    try std.testing.expectEqual(@as(?i64, 4), constEvalIntExpr("8/2"));
+    try std.testing.expectEqual(@as(?i64, 1), constEvalIntExpr("7%3"));
+    try std.testing.expectEqual(@as(?i64, null), constEvalIntExpr("i"));
+    try std.testing.expectEqual(@as(?i64, null), constEvalIntExpr("i+1"));
+    try std.testing.expectEqual(@as(?i64, null), constEvalIntExpr("1 +"));
+    try std.testing.expectEqual(@as(?i64, null), constEvalIntExpr(""));
+}
+
+test "findAssignOp ignores ==, !=, <=, >=, => and nested expressions" {
+    try std.testing.expectEqual(@as(?usize, 2), findAssignOp("x = 5"));
+    try std.testing.expectEqual(@as(?usize, 5), findAssignOp("a[i] = 2"));
+    try std.testing.expectEqual(@as(?usize, null), findAssignOp("print(x == 5)"));
+    try std.testing.expectEqual(@as(?usize, null), findAssignOp("if x == 5 {"));
+    try std.testing.expectEqual(@as(?usize, null), findAssignOp("x != 5"));
+    try std.testing.expectEqual(@as(?usize, null), findAssignOp("x <= 5"));
+    try std.testing.expectEqual(@as(?usize, null), findAssignOp("when 1 => { }"));
+    try std.testing.expectEqual(@as(?usize, 2), findAssignOp("s = \"a=b\""));
+}
+
+test "findBinOp splits on the rightmost top-level operator only" {
+    const parts = findBinOp("a[i+1]*2", "*").?;
+    try std.testing.expectEqualStrings("a[i+1]", parts.left);
+    try std.testing.expectEqualStrings("2", parts.right);
+    try std.testing.expect(findBinOp("a[i*2]", "*") == null);
+    const str_parts = findBinOp("x + \"a+b\"", "+").?;
+    try std.testing.expectEqualStrings("x", str_parts.left);
+    try std.testing.expectEqualStrings("\"a+b\"", str_parts.right);
+}
+
+test "splitTopLevel ignores separators inside brackets and strings" {
+    var parts = try splitTopLevel(std.testing.allocator, "a[i], b", ",");
+    defer parts.deinit();
+    try std.testing.expectEqual(@as(usize, 2), parts.items.len);
+    try std.testing.expectEqualStrings("a[i]", parts.items[0]);
+    try std.testing.expectEqualStrings("b", parts.items[1]);
+
+    var one = try splitTopLevel(std.testing.allocator, "f(\"x,y\")", ",");
+    defer one.deinit();
+    try std.testing.expectEqual(@as(usize, 1), one.items.len);
+    try std.testing.expectEqualStrings("f(\"x,y\")", one.items[0]);
+}
+
+test "access-path recognition accepts [] and rejects malformed paths" {
+    try std.testing.expect(isPureAccessText("a[0]"));
+    try std.testing.expect(isPureAccessText("a[i].f"));
+    try std.testing.expect(!isPureAccessText("a[]"));
+    try std.testing.expect(!isPureAccessText("a[0"));
+    try std.testing.expect(!isPureAccessText("1+2"));
+    try std.testing.expect(isAccessPath("a[0]"));
+    try std.testing.expect(isAccessPath("a[i].f"));
+    try std.testing.expect(!isAccessPath("a[0] + 1"));
+}
+
+test "findUnterminatedString detects a missing closing quote" {
+    try std.testing.expect(!findUnterminatedString("print(\"ok\")"));
+    try std.testing.expect(!findUnterminatedString("print(\"esc \\\" ok\")"));
+    try std.testing.expect(!findUnterminatedString("x = 1 // \" quote in comment"));
+    try std.testing.expect(findUnterminatedString("print(\"bad)"));
+    try std.testing.expect(findUnterminatedString("print(\"line1\nprint(2)"));
 }
 

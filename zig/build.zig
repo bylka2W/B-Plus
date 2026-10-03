@@ -87,6 +87,28 @@ const test_backend_analysis_run = b.addRunArtifact(test_backend_analysis_exe);
     test_bir_pipeline_step.dependOn(&test_bir_pipeline_run.step);
     test_step.dependOn(&test_bir_pipeline_run.step);
 
+    const bir_unit_tests = b.addTest(.{
+        .name = "bir_frontend_unit_test",
+        .root_source_file = b.path("src/compiler/middle/bir/bir_bplus_frontend.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const bir_unit_run = b.addRunArtifact(bir_unit_tests);
+    test_step.dependOn(&bir_unit_run.step);
+
+    // safety/init_checker.zig is not in the import graph of any other test
+    // root, so it needs its own target to keep the definite-initialization
+    // regression tests running.
+    const init_checker_tests = b.addTest(.{
+        .name = "init_checker_unit_test",
+        .root_source_file = b.path("src/compiler/test_safety.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const init_checker_run = b.addRunArtifact(init_checker_tests);
+    test_step.dependOn(&init_checker_run.step);
+
+
     const test_fuzz_exe = b.addExecutable(.{
         .name = "test_fuzz",
         .root_source_file = b.path("tests/unit/test_mir_fuzz.zig"),

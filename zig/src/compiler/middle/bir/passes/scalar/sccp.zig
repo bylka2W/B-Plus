@@ -342,7 +342,14 @@ const SCCPSolver = struct {
 };
 
 
-fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
+fn foldedConstType(module: *Module, orig_ty: bir.TypeId) bir.TypeId {
+    if (orig_ty == bir.types.INVALID_TYPE) {
+        return module.types.scalarType(.i64) catch bir.types.INVALID_TYPE;
+    }
+    return orig_ty;
+}
+
+fn applyResults(module: *Module, func: *bir.Function, solver: *const SCCPSolver) !bool {
     var changed = false;
     var num_folded: u32 = 0;
 
@@ -361,20 +368,22 @@ fn applyResults(func: *bir.Function, solver: *const SCCPSolver) !bool {
 
             const lat = solver.lattice.items[inst.result - 1];
 
-            if (lat == .int_const and inst.op != .@"const") {
+if (lat == .int_const and inst.op != .@"const") {
+                const folded_ty = foldedConstType(module, inst.ty);
                 inst.deinit(func.allocator);
                 const ops = try func.allocator.dupe(ValueId, &.{});
                 inst.op = .@"const";
-                inst.ty = bir.types.INVALID_TYPE;
+                inst.ty = folded_ty;
                 inst.operands = ops;
                 inst.data = .{ .const_data = .{ .int = lat.int_const } };
                 changed = true;
                 num_folded += 1;
             } else if (lat == .bool_const and inst.op != .@"const") {
+                const folded_ty = foldedConstType(module, inst.ty);
                 inst.deinit(func.allocator);
                 const ops = try func.allocator.dupe(ValueId, &.{});
                 inst.op = .@"const";
-                inst.ty = bir.types.INVALID_TYPE;
+                inst.ty = folded_ty;
                 inst.operands = ops;
                 inst.data = .{ .const_data = .{ .bool = lat.bool_const } };
                 changed = true;
@@ -507,7 +516,7 @@ fn runSCCP(ctx: *bir.PassContext) anyerror!PreservedAnalyses {
 
         try solver.run();
 
-        _ = try applyResults(func, &solver);
+        _ = try applyResults(module, func, &solver);
     }
     return PreservedAnalyses.none();
 }

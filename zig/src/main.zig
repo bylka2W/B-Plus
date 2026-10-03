@@ -19,6 +19,10 @@ const bir_bplus_frontend = @import("compiler/middle/bir/bir_bplus_frontend.zig")
 const bir_pipeline_runner = @import("compiler/middle/bir/pipeline/runner.zig");
 const bir_cpu = @import("compiler/middle/bir/lowering/cpu.zig");
 const bir_lower_dump = @import("compiler/middle/bir/lowering/lower.zig");
+const capabilities = @import("compiler/capabilities.zig");
+const collector = @import("compiler/frontend/diagnostics/collector.zig");
+const diag_json = @import("compiler/frontend/diagnostics/render/diagnostics_json.zig");
+const version = @import("version.zig");
 const mir = @import("compiler/backend/mir/mir.zig");
 const machine = @import("compiler/backend/machine/machine.zig");
 const mir_lower = machine.mir_lower;
@@ -28,6 +32,39 @@ const ver_pipeline = @import("compiler/middle/pipeline/pipeline.zig");
 const settings = @import("compiler/settings.zig");
 const minrt_obj_bytes = @embedFile("runtime/minrt.obj");
 
+const usage_text =
+    \\Usage: bpc <command> [input] [flags]
+    \\
+    \\  Build / run
+    \\    bpc dll   <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]
+    \\    bpc run   <input.b+>
+    \\    bpc mir   <input.b+>        B+ source to COFF .obj
+    \\    bpc link  <input.obj> -o <output.exe>
+    \\
+    \\  Verification
+    \\    bpc check     <input.b+>     verify all IR layers without codegen
+    \\    bpc diagnose  <input.b+> [--format human|json]   structured diagnostics
+    \\    bpc doctor                    compiler health check
+    \\
+    \\  Toolchain contract (for IDEs)
+    \\    bpc capabilities [--format json]   machine-readable feature/format contract
+    \\    bpc --version
+    \\
+    \\  Tests
+    \\    bpc test  <test.bpt>
+    \\
+    \\  IR inspection
+    \\    bpc hlsl  <input.b+> [-o <output.hlsl>]
+    \\    bpc ir    <pipeline.b+>
+    \\    bpc cfg   <pipeline.b+>
+    \\    bpc dom   <pipeline.b+>
+    \\    bpc loops <pipeline.b+>
+    \\    bpc bpl   <input.b+>
+    \\
+    \\Run 'bpc capabilities' to see what this compiler supports.
+    \\
+;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -35,21 +72,19 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    if (args.len < 3 and !(args.len == 2 and std.mem.eql(u8, args[1], "doctor"))) {
+    const no_input_commands = [_][]const u8{
+        "doctor", "capabilities", "--version", "-version", "version", "--help", "-h", "help",
+    };
+    const takes_no_input = args.len >= 2 and blk: {
+        for (no_input_commands) |c| {
+            if (std.mem.eql(u8, args[1], c)) break :blk true;
+        }
+        break :blk false;
+    };
+
+    if (args.len < 3 and !takes_no_input) {
         const stderr = std.io.getStdErr().writer();
-        try stderr.writeAll("Usage: bpc dll   <input.b+> [-o <output.dll>] [-exports <name1,name2,...>]\n");
-        try stderr.writeAll("       bpc run   <input.b+>\n");
-        try stderr.writeAll("       bpc test  <test.bpt>\n");
-        try stderr.writeAll("       bpc hlsl  <input.b+> [-o <output.hlsl>]\n");
-        try stderr.writeAll("       bpc ir    <pipeline.b+>\n");
-        try stderr.writeAll("       bpc cfg   <pipeline.b+>\n");
-        try stderr.writeAll("       bpc dom   <pipeline.b+>\n");
-        try stderr.writeAll("       bpc loops <pipeline.b+>\n");
-        try stderr.writeAll("       bpc bpl   <input.b+>\n");
-        try stderr.writeAll("       bpc mir   <input.b+>        B+ source to COFF .obj\n");
-        try stderr.writeAll("       bpc link  <input.obj> -o <output.exe>\n");
-        try stderr.writeAll("       bpc check <input.b+>        verify all IR layers without codegen\n");
-        try stderr.writeAll("       bpc doctor                  compiler health check\n");
+        try stderr.writeAll(usage_text);
         std.process.exit(1);
     }
 
@@ -57,7 +92,7 @@ pub fn main() !void {
     const input_path: []const u8 = if (args.len > 2) args[2] else "";
 
     {
-        const known = [_][]const u8{ "doctor", "check", "test", "hlsl", "ir", "cfg", "dom", "loops", "mir", "link", "bpl", "run", "dll" };
+        const known = [_][]const u8{ "doctor", "check", "test", "hlsl", "ir", "cfg", "dom", "loops", "mir", "link", "bpl", "run", "dll", "capabilities", "diagnose" };
         var known_cmd = false;
         for (known) |c| {
             if (std.mem.eql(u8, command, c)) {
@@ -66,13 +101,29 @@ pub fn main() !void {
             }
         }
         if (!known_cmd) {
+            if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "-version") or std.mem.eql(u8, command, "version")) {
+                const stdout = std.io.getStdOut().writer();
+                try stdout.print("{s} {s}\n", .{ version.name, version.version });
+                return;
+            }
+            if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h") or std.mem.eql(u8, command, "help")) {
+                const stdout = std.io.getStdOut().writer();
+                try stdout.writeAll(usage_text);
+                return;
+            }
             const stderr = std.io.getStdErr().writer();
             try stderr.print("error: unknown command '{s}'\n", .{command});
-            try stderr.writeAll("Run 'bpc' with no arguments for the full command list.\n");
+            try stderr.writeAll("Run 'bpc --help' for the full command list.\n");
             std.process.exit(1);
         }
     }
 
+    if (std.mem.eql(u8, command, "capabilities")) {
+        return capabilitiesRun(allocator, args);
+    }
+    if (std.mem.eql(u8, command, "diagnose")) {
+        return diagnoseRun(allocator, args);
+    }
     if (std.mem.eql(u8, command, "doctor")) {
         return doctorRun(allocator);
     }
@@ -296,7 +347,10 @@ pub fn main() !void {
         const arena_alloc = arena.allocator();
 
         var p = parser.Parser.init(arena_alloc, src, input_path);
-        var program = try p.parse();
+        var program = p.parse() catch |err| {
+            std.log.err("syntax error in '{s}' ({s})", .{ input_path, @errorName(err) });
+            std.process.exit(1);
+        };
         const sema_result = sema_mod.analyze(arena_alloc, program, src, input_path) catch |err| {
             std.log.err("semantic analysis failed: {}", .{err});
             std.process.exit(1);
@@ -386,7 +440,10 @@ pub fn main() !void {
         const arena_alloc = arena.allocator();
 
         var p = parser.Parser.init(arena_alloc, src, input_path);
-        var program = try p.parse();
+        var program = p.parse() catch |err| {
+            std.log.err("syntax error in '{s}' ({s})", .{ input_path, @errorName(err) });
+            std.process.exit(1);
+        };
         defer program.deinit();
 
         const sema_result_bpl = sema_mod.analyze(arena_alloc, program, src, input_path) catch |err| {
@@ -412,7 +469,10 @@ pub fn main() !void {
     }
 
     var p = parser.Parser.init(allocator, src, input_path);
-    var program = try p.parse();
+    var program = p.parse() catch |err| {
+        std.log.err("syntax error in '{s}' ({s})", .{ input_path, @errorName(err) });
+        std.process.exit(1);
+    };
     defer program.deinit();
 
     const sema_result_main = sema_mod.analyze(allocator, program, src, input_path) catch |err| {
@@ -587,6 +647,142 @@ pub fn main() !void {
     }
 }
 
+/// Reads the value of `--format <x>` from argv. Default: human.
+fn formatFlag(args: [][:0]u8) []const u8 {
+    var i: usize = 1;
+    while (i + 1 < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--format")) return args[i + 1];
+        if (std.mem.eql(u8, args[i], "-f")) return args[i + 1];
+    }
+    return "human";
+}
+
+fn capabilitiesRun(allocator: std.mem.Allocator, args: [][:0]u8) !void {
+    const stdout = std.io.getStdOut().writer();
+    const fmt = formatFlag(args);
+    if (!std.mem.eql(u8, fmt, "human") and !std.mem.eql(u8, fmt, "json")) {
+        try std.io.getStdErr().writer().print("error: unknown --format '{s}' (expected human or json)\n", .{fmt});
+        std.process.exit(2);
+    }
+    if (std.mem.eql(u8, fmt, "human")) {
+        try stdout.print("{s} {s}\n", .{ version.name, version.version });
+        try stdout.writeAll("Run 'bpc capabilities --format json' for the machine-readable contract.\n");
+        try stdout.writeAll("Run 'bpc diagnose <file> --format json' for structured diagnostics.\n");
+        return;
+    }
+    try capabilities.render(stdout, allocator);
+}
+
+/// First non-flag argument after the command name.
+fn firstPositional(args: [][:0]u8) []const u8 {
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        const a = args[i];
+        if (std.mem.eql(u8, a, "--format") or std.mem.eql(u8, a, "-f")) {
+            i += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, a, "-")) continue;
+        return a;
+    }
+    return "";
+}
+
+/// `bpc diagnose <file>` — runs the frontend and reports structured
+/// diagnostics. Exits 0 when clean, 1 when anything failed, so CI can use it.
+fn diagnoseRun(allocator: std.mem.Allocator, args: [][:0]u8) !void {
+    const input_path = firstPositional(args);
+    if (input_path.len == 0) {
+        try std.io.getStdErr().writer().writeAll("error: bpc diagnose requires an input file\n");
+        std.process.exit(2);
+    }
+
+    const fmt = formatFlag(args);
+    const want_json = std.mem.eql(u8, fmt, "json");
+    if (!want_json and !std.mem.eql(u8, fmt, "human")) {
+        try std.io.getStdErr().writer().print("error: unknown --format '{s}' (expected human or json)\n", .{fmt});
+        std.process.exit(2);
+    }
+
+    const stdout = std.io.getStdOut().writer();
+
+    var src = std.fs.cwd().readFileAlloc(allocator, input_path, std.math.maxInt(u32)) catch |err| {
+        if (want_json) {
+            try stdout.writeAll("{\"schema\":\"bpc-diagnostics-v1\",\"errorCount\":0,\"diagnostics\":[]}\n");
+        } else {
+            try std.io.getStdErr().writer().print("error: cannot read {s}: {s}\n", .{ input_path, @errorName(err) });
+        }
+        std.process.exit(1);
+    };
+    defer allocator.free(src);
+    if (std.mem.startsWith(u8, src, "\xEF\xBB\xBF")) {
+        src = try allocator.dupe(u8, src[3..]);
+    }
+
+    var sink = collector.Collector.init(allocator);
+    defer sink.deinit();
+    sink.setSource(input_path, src, 0);
+    collector.active = &sink;
+    defer collector.active = null;
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var p = parser.Parser.init(aa, src, input_path);
+    var program = p.parse() catch |err| {
+        collector.reportGlobal(.parse_error, @errorName(err));
+        return finishDiagnose(&sink, input_path, src, want_json);
+    };
+    defer program.deinit();
+
+    const sema_result = sema_mod.analyze(aa, program, src, input_path) catch |err| {
+        if (sink.items.items.len == 0) collector.reportGlobal(.internal_error, @errorName(err));
+        return finishDiagnose(&sink, input_path, src, want_json);
+    };
+    defer sema_result.deinit();
+
+    var bir_module = bir_bplus_frontend.lowerProgram(aa, &program) catch |err| {
+        if (sink.items.items.len == 0) collector.reportGlobal(.backend_error, @errorName(err));
+        return finishDiagnose(&sink, input_path, src, want_json);
+    };
+
+    var safety_result = safety.runSafetyChecks(aa, &program, &bir_module) catch |err| {
+        collector.reportGlobal(.safety_error, @errorName(err));
+        return finishDiagnose(&sink, input_path, src, want_json);
+    };
+    defer safety_result.deinit();
+
+    if (safety_result.hasErrors()) {
+        if (!want_json) {
+            try safety.reportSafetyErrors(std.io.getStdErr().writer(), &safety_result);
+        }
+        for (safety_result.state_diagnostics.items) |d| {
+            sink.add(.safety_error, .@"error", sink.allocator.dupe(u8, d.message) catch return, sink.spanOf(d.state_name));
+        }
+        for (safety_result.init_diagnostics.items) |d| {
+            sink.add(.safety_error, .@"error", sink.allocator.dupe(u8, d.message) catch return, sink.spanOf(d.slot_name));
+        }
+    }
+
+    return finishDiagnose(&sink, input_path, src, want_json);
+}
+
+fn finishDiagnose(
+    sink: *collector.Collector,
+    input_path: []const u8,
+    src: []const u8,
+    want_json: bool,
+) !void {
+    const stdout = std.io.getStdOut().writer();
+    if (want_json) {
+        try diag_json.render(stdout, std.heap.page_allocator, sink, input_path, src);
+    } else if (sink.items.items.len == 0) {
+        try stdout.print("{s}: no problems detected\n", .{input_path});
+    }
+    if (sink.hasErrors()) std.process.exit(1);
+}
+
 const StageReporter = struct {
     stdout: std.fs.File.Writer,
     failed: bool = false,
@@ -620,7 +816,8 @@ fn checkRun(allocator: std.mem.Allocator, input_path: []const u8) !void {
     defer program.deinit();
 
     try stdout.print("B+ check: {s}\n", .{input_path});
-    try stdout.print("{s:<12} ", .{"Parser"});
+    try stdout.print("{s:<12} PASS\n", .{"Parser"});
+    try stdout.print("{s:<12} ", .{"Sema"});
     const sema_result = sema_mod.analyze(allocator, program, src, input_path) catch |err| {
         try stdout.print("FAIL: {s}\n", .{@errorName(err)});
         std.process.exit(1);
@@ -674,7 +871,8 @@ fn doctorRun(allocator: std.mem.Allocator) !void {
     };
     defer program.deinit();
 
-    try stdout.print("{s:<12} ", .{"Parser"});
+    try stdout.print("{s:<12} PASS\n", .{"Parser"});
+    try stdout.print("{s:<12} ", .{"Sema"});
     const sema_result = sema_mod.analyze(allocator, program, src, input_path) catch |err| {
         all_ok = false;
         try stdout.print("FAIL: {s}\n", .{@errorName(err)});

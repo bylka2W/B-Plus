@@ -1,8 +1,11 @@
 node_modules/**
 .vscode-test/**
 .vscode/**
+scripts/**
 src/**
 .gitignore
 **/*.vsix
 **/*.map
 **/.DS_Store
+**/*.pdb
+test-extension.js

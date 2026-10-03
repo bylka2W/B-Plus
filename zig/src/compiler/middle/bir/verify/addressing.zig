@@ -61,11 +61,13 @@ pub fn isBoolType(module: *const bir.Module, tid: TypeId) bool {
 }
 
 pub fn isPtrType(module: *const bir.Module, tid: TypeId) bool {
+    if (tid == bir.types.INVALID_TYPE) return false;
     const t = module.types.get(tid);
     return t.kind == .pointer;
 }
 
 pub fn isVoidType(module: *const bir.Module, tid: TypeId) bool {
+    if (tid == bir.types.INVALID_TYPE) return false;
     const t = module.types.get(tid);
     return t.kind == .void;
 }
